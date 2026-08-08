@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { resolveLocalRuntime } from "./local-runtime";
 
-const origin = "http://127.0.0.1:5173";
+const { origin } = resolveLocalRuntime();
 const session = "local-smoke-session";
 const apiKey = "local-smoke-api-key";
 const localSecret = "explicit-local-only-session-secret-v1";

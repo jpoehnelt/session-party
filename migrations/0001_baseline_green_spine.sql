@@ -1251,7 +1251,7 @@ CREATE INDEX `speaker_provisioning_claim` ON `speaker_provisioning` (`status`,`a
 DROP INDEX IF EXISTS `speaker_provisioning_submission`;--> statement-breakpoint
 CREATE INDEX `speaker_provisioning_submission` ON `speaker_provisioning` (`event_id`,`submission_id`);--> statement-breakpoint
 INSERT INTO `mail_delivery_snapshots` (
-	`id`, `event_id`, `template_id`, `recipient_user_id`, `recipient_email`, `recipient_name`, `from_email`, `reply_to_email`, `subject`, `rendered_html`, `rendered_text`, `ics_filename`, `ics_content`, `created_at`
+	`id`, `event_id`, `template_id`, `recipient_user_id`, `recipient_email`, `recipient_name`, `from_email`, `reply_to_email`, `subject`, `rendered_html`, `rendered_text`, `ics_filename`, `ics_content`, `redacted_at`, `created_at`
 )
 SELECT
 	'legacy-snapshot:' || s.id,
@@ -1262,15 +1262,15 @@ SELECT
 	u.name,
 	'legacy-import@invalid',
 	NULL,
-	s.subject,
-	coalesce(t.body, ''),
-	coalesce(t.body, ''),
+	'[legacy content unavailable]',
 	NULL,
 	NULL,
+	NULL,
+	NULL,
+	s.created_at,
 	s.created_at
 FROM `email_sends` s
-JOIN `users` u ON u.id = s.to_user_id
-LEFT JOIN `email_templates` t ON t.id = s.template_id;--> statement-breakpoint
+JOIN `users` u ON u.id = s.to_user_id;--> statement-breakpoint
 INSERT INTO `mail_deliveries` (
 	`id`, `snapshot_id`, `idempotency_key`, `status`, `scheduled_for`, `available_at`, `lease_owner`, `lease_expires_at`, `attempt_count`, `max_attempts`, `provider`, `provider_message_id`, `provider_result`, `last_error`, `sent_at`, `dead_lettered_at`, `created_at`
 )

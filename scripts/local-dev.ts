@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process";
+import { resolveLocalRuntime } from "./local-runtime";
 
-const host = process.env.HOST ?? "127.0.0.1";
-const port = process.env.PASEO_PORT ?? "5173";
+const { host, port, origin } = resolveLocalRuntime();
 const child = spawn(
   "pnpm",
-  ["vite", "dev", "--host", host, "--port", port, "--strictPort"],
-  { stdio: "inherit" },
+  ["vite", "dev", "--host", host, "--port", String(port), "--strictPort"],
+  {
+    stdio: "inherit",
+    env: { ...process.env, PASEO_BASE_URL: origin },
+  },
 );
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

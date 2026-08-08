@@ -207,7 +207,7 @@ export class EventRoom extends Server<Env> {
         rateWindowStartedAt: Date.now(),
         messagesInWindow: 0,
       });
-      this.broadcastPresence();
+      await this.broadcastPresence();
     } catch (error) {
       console.error(JSON.stringify({
         message: "event room connection authorization failed",
@@ -241,18 +241,14 @@ export class EventRoom extends Server<Env> {
       return;
     }
 
-    if (message.t === "room/hello") {
-      connection.setState({ ...state, surface: message.surface });
-      this.broadcastPresence();
-      return;
-    }
+    const refreshed = await this.refreshConnectionAuthorization(connection, state);
+    if (!refreshed) return;
 
-    const refreshed = await this.revalidateAuthorization(state);
-    if (!refreshed) {
-      connection.close(4403, "Event access expired");
+    if (message.t === "room/hello") {
+      connection.setState({ ...refreshed, surface: message.surface });
+      await this.broadcastPresence();
       return;
     }
-    connection.setState(refreshed);
 
     const requiredCapability = await this.requiredCapability(message);
     if (!requiredCapability || !refreshed.authorization.capabilities.includes(requiredCapability)) {
@@ -298,8 +294,8 @@ export class EventRoom extends Server<Env> {
     }
   }
 
-  override onClose(): void {
-    this.broadcastPresence();
+  override async onClose(): Promise<void> {
+    await this.broadcastPresence();
   }
 
   override async onRequest(request: Request): Promise<Response> {
@@ -326,7 +322,7 @@ export class EventRoom extends Server<Env> {
     }
     if (!broadcast) return new Response("Invalid broadcast", { status: 400 });
 
-    this.broadcastAuthorized(broadcast.message);
+    await this.broadcastAuthorized(broadcast.message);
     return Response.json({ ok: true });
   }
 
@@ -404,6 +400,33 @@ export class EventRoom extends Server<Env> {
     };
     return { ...state, authorization: apiKeyAuthorization(principal, scopes) };
   }
+  private async refreshConnectionAuthorization(
+    connection: Connection<EventRoomConnectionState>,
+    state: EventRoomConnectionState | null | undefined = connection.state,
+  ): Promise<EventRoomConnectionState | null> {
+    if (!state) {
+      connection.close(4401, "Authentication required");
+      return null;
+    }
+    try {
+      const refreshed = await this.revalidateAuthorization(state);
+      if (!refreshed) {
+        connection.close(4403, "Event access expired");
+        return null;
+      }
+      connection.setState(refreshed);
+      return refreshed;
+    } catch (error) {
+      console.error(JSON.stringify({
+        message: "event room authorization refresh failed",
+        room: this.name,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      connection.close(1011, "Authorization unavailable");
+      return null;
+    }
+  }
+
 
   private consumeMessageBudget(
     connection: Connection<EventRoomConnectionState>,
@@ -430,28 +453,37 @@ export class EventRoom extends Server<Env> {
     return Schema.decodeUnknownPromise(ApiScope)(`${prefix}:write`).catch(() => null);
   }
 
-  private broadcastAuthorized(message: ServerMessage): void {
+  private async broadcastAuthorized(message: ServerMessage): Promise<void> {
     const audiences = audiencesForServerMessage(message);
     if (!audiences) return;
+    const encoded = JSON.stringify(message);
     for (const connection of this.getConnections<EventRoomConnectionState>()) {
-      const state = connection.state;
-      if (!state || !audiences.some((audience) => state.authorization.audiences.includes(audience))) continue;
-      connection.send(JSON.stringify(message));
+      const state = await this.refreshConnectionAuthorization(connection);
+      if (!state || !audiences.some((audience) => state.authorization.audiences.includes(audience))) {
+        continue;
+      }
+      connection.send(encoded);
     }
   }
 
-  private broadcastPresence(): void {
+  private async broadcastPresence(): Promise<void> {
     const usersById = new Map<string, PresenceUser>();
+    const recipients: Connection<EventRoomConnectionState>[] = [];
     for (const connection of this.getConnections<EventRoomConnectionState>()) {
-      const state = connection.state;
+      const state = await this.refreshConnectionAuthorization(connection);
       if (!state || state.authorization.kind !== "browser-session") continue;
+      recipients.push(connection);
       usersById.set(state.user.userId, {
         userId: state.user.userId,
         name: state.user.name,
         surface: state.surface,
       });
     }
-    this.broadcastAuthorized({ t: "room/presence", users: [...usersById.values()] });
+    const encoded = JSON.stringify({
+      t: "room/presence",
+      users: [...usersById.values()],
+    } satisfies ServerMessage);
+    for (const connection of recipients) connection.send(encoded);
   }
 }
 

@@ -13,6 +13,7 @@
     "dev:reset": "tsx scripts/dev-reset.ts",
     "dev:seed": "tsx scripts/seed.ts",
     "dev:local": "tsx scripts/local-dev.ts",
+    "dev:service": "pnpm dev:reset && pnpm dev:local",
     "build": "vite build",
     "deploy": "pnpm build && wrangler deploy",
     "gen": "tsx scripts/gen.ts",

@@ -156,6 +156,7 @@ const seedLegacyRows = async (db: D1Database): Promise<void> => {
     "INSERT INTO auth_tokens (id, user_id, kind, expires_at, consumed_at, created_at) VALUES ('legacy-token', 'legacy-user', 'session', 1800000000000, NULL, 1700000000000)",
     "INSERT INTO email_templates (id, event_id, name, subject, body, attach_ics, created_at, updated_at) VALUES ('legacy-template', 'legacy-event', 'Legacy Mail', 'Welcome', '<p>Welcome</p>', 0, 1700000000000, 1700000000000)",
     "INSERT INTO email_sends (id, event_id, template_id, to_user_id, subject, scheduled_for, sent_at, status, error, created_at, updated_at) VALUES ('legacy-send', 'legacy-event', 'legacy-template', 'legacy-user', 'Welcome', 1700000000000, 1700000001000, 'sent', NULL, 1700000000000, 1700000001000)",
+    "UPDATE email_templates SET subject = 'Changed after send', body = '<p>Changed after send</p>', updated_at = 1700000002000 WHERE id = 'legacy-template'",
   ];
   expect(now).toBe(1_700_000_000_000);
   await db.batch(rows.map((query) => db.prepare(query)));
@@ -203,15 +204,31 @@ describe("baseline migration parity", () => {
     expect(semantics).toEqual({ draft_semantic_key: null, version_semantic_key: null });
 
     const mail = await db.prepare(
-      "SELECT id, status, provider, provider_message_id, sent_at, created_at FROM mail_deliveries WHERE id = 'legacy-send'",
+      `SELECT
+        d.id, d.status, d.provider, d.provider_message_id, d.provider_result,
+        d.sent_at, d.created_at,
+        s.subject AS snapshot_subject, s.rendered_html, s.rendered_text,
+        s.redacted_at IS NOT NULL AS snapshot_redacted,
+        t.subject AS current_template_subject, t.body AS current_template_body
+       FROM mail_deliveries d
+       JOIN mail_delivery_snapshots s ON s.id = d.snapshot_id
+       JOIN email_templates t ON t.id = s.template_id
+       WHERE d.id = 'legacy-send'`,
     ).first();
     expect(mail).toMatchObject({
       id: "legacy-send",
       status: "sent",
       provider: "legacy-import",
       provider_message_id: "legacy-unverified:legacy-send",
+      provider_result: "{\"mode\":\"legacy-import\",\"externalDeliveryUnverified\":true}",
       sent_at: 1_700_000_001_000,
       created_at: 1_700_000_000_000,
+      snapshot_subject: "[legacy content unavailable]",
+      rendered_html: null,
+      rendered_text: null,
+      snapshot_redacted: 1,
+      current_template_subject: "Changed after send",
+      current_template_body: "<p>Changed after send</p>",
     });
 
     const credentials = await db.prepare(
