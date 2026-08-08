@@ -1,14 +1,22 @@
 import { Validation } from "contracts/errors";
 import type { ToolDef } from "contracts/mcp";
+import type { Principal } from "contracts/principal";
+import { API } from "contracts/routes";
 import { Effect, JSONSchema, Schema } from "effect";
 import { Hono } from "hono";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
-import auth, { apiKeyUserFromRequest } from "./auth";
-import { runMcp } from "./adapt";
+import auth, { apiKeyUserFromRequest, userFromRequest } from "./auth";
+import { runMcp, runRestOperation, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
 import { Scheduler } from "./party/Scheduler";
-import { apiRouters, tools } from "./registry.gen";
+import {
+  apiRouters,
+  mcpTools,
+  operationById,
+  restRegistrations,
+  tools,
+} from "./registry.gen";
 import type { CurrentUserValue } from "./services";
 
 type JsonRpcId = string | number;
@@ -165,24 +173,46 @@ export class SessionPartyMcp extends McpAgent<Env> {
 
   override async init(): Promise<void> {
     this.protocol.setRequestHandler("tools/list", async () => ({
-      tools: tools.map(mcpTool),
+      tools: [
+        ...mcpTools.map(({ name, description, inputSchema, outputSchema }) => ({
+          name,
+          description,
+          inputSchema,
+          outputSchema,
+        })),
+        ...tools.map(mcpTool),
+      ],
     }));
     this.protocol.setRequestHandler("tools/call", async (rawParams) => {
       if (!this.currentUser) throw new Error("Unauthenticated: a Bearer API key is required");
       const params = objectParams(rawParams);
       const name = params.name;
-      const tool = typeof name === "string" ? tools.find((candidate) => candidate.name === name) : undefined;
-      if (!tool) throw new Error(`Unknown tool: ${String(name)}`);
-
       const args = objectParams(params.arguments);
+      const descriptor = typeof name === "string"
+        ? mcpTools.find((candidate) => candidate.name === name)
+        : undefined;
+      if (descriptor) {
+        const operation = operationById[descriptor.operationId];
+        if (!operation) throw new Error(`Unregistered operation: ${descriptor.operationId}`);
+        const result = await runTransportOperation(
+          this.env,
+          this.currentUser as Principal,
+          operation,
+          args,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      }
+
+      const tool = typeof name === "string"
+        ? tools.find((candidate) => candidate.name === name)
+        : undefined;
+      if (!tool) throw new Error(`Unknown tool: ${String(name)}`);
       const effect = Schema.decodeUnknown(tool.args)(args).pipe(
         Effect.mapError((error) => new Validation({ message: String(error) })),
         Effect.flatMap((decoded) => tool.handler(decoded)),
       );
       const result = await runMcp(this.env, this.currentUser, effect);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
     });
   }
 
@@ -199,8 +229,20 @@ export class SessionPartyMcp extends McpAgent<Env> {
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.route("/api/v1/auth", auth);
-for (const router of apiRouters) app.route("/api/v1", router);
+app.route(`${API}/auth`, auth);
+for (const registration of restRegistrations) {
+  const operation = operationById[registration.operationId];
+  if (!operation) throw new Error(`Unregistered operation: ${registration.operationId}`);
+  app.on(registration.method, `${API}${registration.path}`, async (c) =>
+    runRestOperation(
+      c,
+      await userFromRequest(c.req.raw, c.env) as Principal | null,
+      operation,
+      registration.input,
+    ),
+  );
+}
+for (const router of apiRouters) app.route(API, router);
 
 app.all("/parties/*", async (c) => {
   const response = await routePartykitRequest(c.req.raw, c.env);
