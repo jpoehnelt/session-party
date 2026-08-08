@@ -1,12 +1,34 @@
 import { Conflict, External, Forbidden, NotFound, type AppError } from "contracts/errors";
+import {
+  browserSessionAuthorization,
+  eventAuthorization,
+  type AuthorizationPolicy,
+} from "contracts/principal";
 import { eventMembers, events } from "contracts/schema";
 import { Effect, Schema } from "effect";
-import { and, eq, or } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { CurrentUser, Db } from "@/server/services";
+import { Authorizer, CurrentUser, Db } from "@/server/services";
 
 const OptionalText = Schema.optional(Schema.Union(Schema.String, Schema.Null));
 const OptionalTimestamp = Schema.optional(Schema.Union(Schema.Number, Schema.Null));
+
+const eventReadAuthorization = eventAuthorization(
+  { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
+  { kind: "api-key", scopes: ["event:read"] },
+);
+
+const eventWriteAuthorization = eventAuthorization(
+  { kind: "event-member", roles: ["owner", "admin"] },
+  { kind: "api-key", scopes: ["event:write"] },
+);
+
+const authorizeCurrent = (policy: AuthorizationPolicy, eventId: string | null) =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentUser;
+    const { authorize } = yield* Authorizer;
+    return yield* authorize({ principal, policy, eventId });
+  });
 
 export const CreateEventInput = Schema.Struct({
   name: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200)),
@@ -80,13 +102,13 @@ const findEvent = (idOrSlug: string) =>
 
 export const createEvent = (
   input: CreateEventInput,
-): Effect.Effect<EventRecord, AppError, Db | CurrentUser> =>
+): Effect.Effect<EventRecord, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const user = yield* CurrentUser;
-    if (user.eventId) {
+    const principal = yield* authorizeCurrent(browserSessionAuthorization, null);
+    if (!principal || principal.kind !== "browser-session") {
       return yield* Effect.fail(
-        new Forbidden({ reason: "Event-scoped API keys cannot create events" }),
+        new Forbidden({ reason: "This operation requires a browser session" }),
       );
     }
 
@@ -117,7 +139,7 @@ export const createEvent = (
     const memberInsert = db.insert(eventMembers).values({
       id: nanoid(),
       eventId,
-      userId: user.userId,
+      userId: principal.userId,
       role: "owner",
       createdAt: now,
       updatedAt: now,
@@ -140,29 +162,38 @@ export const createEvent = (
 
 export const getEvent = (
   idOrSlug: string,
-): Effect.Effect<EventRecord, AppError, Db | CurrentUser> =>
+): Effect.Effect<EventRecord, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
     const event = yield* findEvent(idOrSlug);
-    const user = yield* CurrentUser;
-    if (user.eventId && user.eventId !== event.id) {
-      return yield* Effect.fail(new Forbidden({ reason: "API key is scoped to another event" }));
-    }
+    yield* authorizeCurrent(eventReadAuthorization, event.id);
     return event;
   });
 
-export const listEvents = (): Effect.Effect<readonly EventRecord[], AppError, Db | CurrentUser> =>
+export const listEvents = (): Effect.Effect<
+  readonly EventRecord[],
+  AppError,
+  Authorizer | CurrentUser | Db
+> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const user = yield* CurrentUser;
-    if (user.eventId) {
-      return yield* database(() => db.select().from(events).where(eq(events.id, user.eventId!)));
+    const principal = yield* CurrentUser;
+    if (principal.kind === "api-key") {
+      const { authorize } = yield* Authorizer;
+      yield* authorize({
+        principal,
+        policy: eventReadAuthorization,
+        eventId: principal.eventId,
+      });
+      return yield* database(() =>
+        db.select().from(events).where(eq(events.id, principal.eventId)),
+      );
     }
     return yield* database(() =>
       db
         .select({ event: events })
         .from(events)
         .innerJoin(eventMembers, eq(eventMembers.eventId, events.id))
-        .where(eq(eventMembers.userId, user.userId))
+        .where(eq(eventMembers.userId, principal.userId))
         .then((rows) => rows.map(({ event }) => event)),
     );
   });
@@ -170,28 +201,11 @@ export const listEvents = (): Effect.Effect<readonly EventRecord[], AppError, Db
 export const updateEvent = (
   idOrSlug: string,
   input: UpdateEventInput,
-): Effect.Effect<EventRecord, AppError, Db | CurrentUser> =>
+): Effect.Effect<EventRecord, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const user = yield* CurrentUser;
     const event = yield* findEvent(idOrSlug);
-
-    if (user.eventId) {
-      if (user.eventId !== event.id || user.role !== "admin") {
-        return yield* Effect.fail(new Forbidden({ reason: "API key is scoped to another event" }));
-      }
-    } else {
-      const [membership] = yield* database(() =>
-        db
-          .select({ role: eventMembers.role })
-          .from(eventMembers)
-          .where(and(eq(eventMembers.eventId, event.id), eq(eventMembers.userId, user.userId)))
-          .limit(1),
-      );
-      if (!membership || membership.role === "reviewer") {
-        return yield* Effect.fail(new Forbidden({ reason: "Owner or admin role required" }));
-      }
-    }
+    yield* authorizeCurrent(eventWriteAuthorization, event.id);
 
     if (input.slug && input.slug !== event.slug) {
       const [slugOwner] = yield* database(() =>
