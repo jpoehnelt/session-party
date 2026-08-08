@@ -1,0 +1,171 @@
+import {
+  applyD1Migrations,
+  env,
+  SELF,
+  type D1Migration,
+} from "cloudflare:test";
+import type { ServerMessage } from "contracts/protocol";
+import { beforeAll, describe, expect, it } from "vitest";
+import { hashBearerMaterial } from "../auth";
+import { sessionSecret } from "../services";
+import { audiencesForServerMessage } from "./EventRoom";
+
+type TestEnv = Cloudflare.Env & {
+  readonly TEST_MIGRATIONS: readonly D1Migration[];
+};
+
+const EVENT_ID = "room-authority-event";
+const expiresAt = 4_102_444_800_000;
+
+const connect = async (credential: { cookie: string } | { bearer: string }): Promise<WebSocket> => {
+  const headers = new Headers({ Upgrade: "websocket" });
+  if ("cookie" in credential) headers.set("Cookie", `sp_session=${credential.cookie}`);
+  else headers.set("Authorization", `Bearer ${credential.bearer}`);
+  const response = await SELF.fetch(
+    `https://example.test/parties/event-room/${EVENT_ID}`,
+    { headers },
+  );
+  expect(response.status).toBe(101);
+  const socket = response.webSocket;
+  if (!socket) throw new Error("EventRoom upgrade did not return a WebSocket");
+  socket.accept();
+  return socket;
+};
+
+const waitForType = (
+  socket: WebSocket,
+  type: ServerMessage["t"],
+): Promise<ServerMessage> =>
+  new Promise((resolve) => {
+    const onMessage = (event: MessageEvent) => {
+      if (typeof event.data !== "string") return;
+      const message = JSON.parse(event.data) as ServerMessage;
+      if (message.t !== type) return;
+      socket.removeEventListener("message", onMessage);
+      resolve(message);
+    };
+    socket.addEventListener("message", onMessage);
+  });
+
+const broadcast = async (message: ServerMessage): Promise<void> => {
+  const id = env.EVENT_ROOM.idFromName(EVENT_ID);
+  const response = await env.EVENT_ROOM.get(id).fetch("https://event-room/broadcast", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-session-party-internal": sessionSecret(env),
+      "x-partykit-room": EVENT_ID,
+    },
+    body: JSON.stringify({ message }),
+  });
+  expect(response.status, await response.clone().text()).toBe(200);
+};
+
+beforeAll(async () => {
+  if (!("TEST_MIGRATIONS" in env)) {
+    throw new Error("TEST_MIGRATIONS test binding is unavailable");
+  }
+  await applyD1Migrations(env.DB, [...(env as TestEnv).TEST_MIGRATIONS]);
+  const now = 1_700_000_000_000;
+  const ownerSession = await hashBearerMaterial(env, "room-owner-session");
+  const reviewerSession = await hashBearerMaterial(env, "room-reviewer-session");
+  const agendaKey = await hashBearerMaterial(env, "room-agenda-key");
+  const submissionsKey = await hashBearerMaterial(env, "room-submissions-key");
+  const writerKey = await hashBearerMaterial(env, "room-writer-key");
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-owner', 'room-owner@example.com', 'Room Owner', 1, ?, ?)").bind(now, now),
+    env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-reviewer', 'room-reviewer@example.com', 'Room Reviewer', 1, ?, ?)").bind(now, now),
+    env.DB.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES (?, 'room-authority', 'Room Authority', 'UTC', 1, ?, ?)").bind(EVENT_ID, now, now),
+    env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-owner-member', ?, 'room-owner', 'owner', 1, ?, ?)").bind(EVENT_ID, now, now),
+    env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-reviewer-member', ?, 'room-reviewer', 'reviewer', 1, ?, ?)").bind(EVENT_ID, now, now),
+    env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-owner-session-id', ?, 'room-owner', 'session', ?, NULL, ?)").bind(ownerSession, expiresAt, now),
+    env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-reviewer-session-id', ?, 'room-reviewer', 'session', ?, NULL, ?)").bind(reviewerSession, expiresAt, now),
+    env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-agenda-key-id', ?, 'Agenda Reader', ?, '[\"agenda:read\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, agendaKey, expiresAt, now, now),
+    env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-submissions-key-id', ?, 'Submissions Reader', ?, '[\"submissions:read\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, submissionsKey, expiresAt, now, now),
+    env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-writer-key-id', ?, 'Agenda Writer', ?, '[\"agenda:write\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, writerKey, expiresAt, now, now),
+  ]);
+});
+
+describe("EventRoom live authorization", () => {
+  it("derives the fixed audience matrix from server-owned message types", () => {
+    expect(audiencesForServerMessage({ t: "room/presence", users: [] })).toEqual(["members"]);
+    expect(audiencesForServerMessage({ t: "room/error", message: "direct" })).toBeNull();
+    expect(audiencesForServerMessage({ t: "agenda/conflicts", conflicts: [] })).toEqual([
+      "role:owner", "role:admin", "role:reviewer", "scope:agenda:read",
+    ]);
+    expect(audiencesForServerMessage({
+      t: "dashboard/progress",
+      speakerId: "speaker",
+      taskId: "task",
+      completed: true,
+      tasksDone: 1,
+      tasksTotal: 1,
+    })).toEqual([
+      "role:owner", "role:admin", "scope:speakers:read", "scope:content:read",
+    ]);
+    expect(audiencesForServerMessage({
+      t: "review/scored",
+      submissionId: "submission",
+      roundId: "round",
+      score: 1,
+      reviewerName: "Reviewer",
+    })).toEqual([
+      "role:owner", "role:admin", "role:reviewer", "scope:reviews:read",
+    ]);
+    expect(audiencesForServerMessage({
+      t: "submissions/new",
+      submissionId: "submission",
+      title: "Submission",
+    })).toEqual([
+      "role:owner", "role:admin", "role:reviewer", "scope:submissions:read",
+    ]);
+  });
+
+  it("delivers live hints to matching roles/scopes without API-key presence identity", async () => {
+    const owner = await connect({ cookie: "room-owner-session" });
+    const reviewer = await connect({ cookie: "room-reviewer-session" });
+    const presenceAfterApiConnect = waitForType(owner, "room/presence");
+    const agenda = await connect({ bearer: "room-agenda-key" });
+    const presence = await presenceAfterApiConnect;
+    expect(presence).toMatchObject({
+      t: "room/presence",
+      users: expect.arrayContaining([
+        expect.objectContaining({ userId: "room-owner" }),
+        expect.objectContaining({ userId: "room-reviewer" }),
+      ]),
+    });
+    if (presence.t !== "room/presence") throw new Error("Expected presence");
+    expect(presence.users).toHaveLength(2);
+
+    const agendaReceipts = [
+      waitForType(owner, "agenda/conflicts"),
+      waitForType(reviewer, "agenda/conflicts"),
+      waitForType(agenda, "agenda/conflicts"),
+    ];
+    await broadcast({ t: "agenda/conflicts", conflicts: [] });
+    expect((await Promise.all(agendaReceipts)).every(Boolean)).toBe(true);
+
+    owner.close();
+    reviewer.close();
+    agenda.close();
+  });
+
+  it("revalidates API-key revocation before a privileged mutation", async () => {
+    const writer = await connect({ bearer: "room-writer-key" });
+    await env.DB.prepare(
+      "UPDATE api_keys SET revoked_at = ? WHERE id = 'room-writer-key-id'",
+    ).bind(Date.now()).run();
+    const closed = new Promise<CloseEvent>((resolve) => {
+      writer.addEventListener("close", resolve, { once: true });
+    });
+    writer.send(JSON.stringify({
+      t: "agenda/resize",
+      requestId: "revoked-write",
+      idempotencyKey: "revoked-write",
+      talkId: "talk",
+      durationMin: 30,
+      expectedVersion: 1,
+    }));
+    expect((await closed).code).toBe(4403);
+  });
+});

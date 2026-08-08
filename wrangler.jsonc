@@ -29,7 +29,8 @@
   ],
   "ai": { "binding": "AI" },
   "vars": {
-    "APP_URL": "http://localhost:5173"
+    "APP_URL": "http://localhost:5173",
+    "MAIL_FROM": "Session Party <onboarding@resend.dev>"
   }
   // Secrets (wrangler secret put): RESEND_API_KEY, SESSION_SECRET
 }

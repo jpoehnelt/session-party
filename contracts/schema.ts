@@ -45,9 +45,13 @@ export const authTokens = sqliteTable(
     kind: text("kind", { enum: ["magic_link", "session"] }).notNull(),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
     consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [
     uniqueIndex("auth_tokens_hash_unique").on(t.tokenHash),
+    uniqueIndex("auth_tokens_one_pending_magic_link")
+      .on(t.userId)
+      .where(sql`${t.kind} = 'magic_link' and ${t.consumedAt} is null`),
     index("auth_tokens_user_kind").on(t.userId, t.kind),
     index("auth_tokens_expiry_cleanup").on(t.expiresAt, t.consumedAt),
     check("auth_tokens_hash_format", sql`length(${t.tokenHash}) = 64 and ${t.tokenHash} = lower(${t.tokenHash}) and ${t.tokenHash} not glob '*[^0-9a-f]*'`),
@@ -123,11 +127,14 @@ export const apiKeys = sqliteTable(
   {
     id: id(),
     eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    name: text("name").notNull(),
     keyHash: text("key_hash").notNull(),
     scopes: text("scopes", { mode: "json" }).$type<readonly ApiScope[]>().notNull(),
-    expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
     revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
     createdBy: text("created_by").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    version: version(),
+    ...timestamps,
   },
   (t) => [
     uniqueIndex("api_keys_hash_unique").on(t.keyHash),
@@ -135,6 +142,8 @@ export const apiKeys = sqliteTable(
     index("api_keys_event_active").on(t.eventId, t.revokedAt, t.expiresAt),
     index("api_keys_creator").on(t.createdBy),
     check("api_keys_hash_format", sql`length(${t.keyHash}) = 64 and ${t.keyHash} = lower(${t.keyHash}) and ${t.keyHash} not glob '*[^0-9a-f]*'`),
+    check("api_keys_scopes_json", sql`json_valid(${t.scopes}) and json_type(${t.scopes}) = 'array' and json_array_length(${t.scopes}) > 0`),
+    check("api_keys_version_positive", sql`${t.version} > 0`),
   ],
 );
 
@@ -174,6 +183,9 @@ export const formFields = sqliteTable(
     }).notNull(),
     label: text("label").notNull(),
     helpText: text("help_text"),
+    semanticKey: text("semantic_key", {
+      enum: ["submissionTitle", "submissionAbstract", "speakerName", "speakerEmail"],
+    }),
     required: integer("required", { mode: "boolean" }).notNull().default(false),
     options: text("options", { mode: "json" }).$type<readonly string[]>(),
     logic: text("logic", { mode: "json" }),
@@ -184,9 +196,16 @@ export const formFields = sqliteTable(
   (t) => [
     uniqueIndex("form_fields_event_id_unique").on(t.eventId, t.id),
     uniqueIndex("form_fields_form_order_unique").on(t.eventId, t.formId, t.order),
+    uniqueIndex("form_fields_semantic_key_unique")
+      .on(t.eventId, t.formId, t.semanticKey)
+      .where(sql`${t.semanticKey} is not null`),
     index("form_fields_form").on(t.eventId, t.formId),
     foreignKey({ columns: [t.eventId, t.formId], foreignColumns: [forms.eventId, forms.id], name: "form_fields_form_fk" })
       .onDelete("cascade").onUpdate("cascade"),
+    check(
+      "form_fields_semantic_key",
+      sql`${t.semanticKey} is null or ${t.semanticKey} in ('submissionTitle', 'submissionAbstract', 'speakerName', 'speakerEmail')`,
+    ),
     check("form_fields_version_positive", sql`${t.version} > 0`),
   ],
 );
@@ -206,6 +225,7 @@ export const formVersions = sqliteTable(
   },
   (t) => [
     uniqueIndex("form_versions_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("form_versions_event_form_id_unique").on(t.eventId, t.formId, t.id),
     uniqueIndex("form_versions_number_unique").on(t.eventId, t.formId, t.versionNumber),
     index("form_versions_current").on(t.eventId, t.formId, t.retiredAt),
     foreignKey({ columns: [t.eventId, t.formId], foreignColumns: [forms.eventId, forms.id], name: "form_versions_form_fk" })
@@ -226,6 +246,9 @@ export const formVersionFields = sqliteTable(
     type: text("type").notNull(),
     label: text("label").notNull(),
     helpText: text("help_text"),
+    semanticKey: text("semantic_key", {
+      enum: ["submissionTitle", "submissionAbstract", "speakerName", "speakerEmail"],
+    }),
     required: integer("required", { mode: "boolean" }).notNull(),
     options: text("options", { mode: "json" }).$type<readonly string[]>(),
     logic: text("logic", { mode: "json" }),
@@ -234,10 +257,18 @@ export const formVersionFields = sqliteTable(
   },
   (t) => [
     uniqueIndex("form_version_fields_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("form_version_fields_event_version_id_unique").on(t.eventId, t.formVersionId, t.id),
     uniqueIndex("form_version_fields_order_unique").on(t.eventId, t.formVersionId, t.order),
+    uniqueIndex("form_version_fields_semantic_key_unique")
+      .on(t.eventId, t.formVersionId, t.semanticKey)
+      .where(sql`${t.semanticKey} is not null`),
     index("form_version_fields_version").on(t.eventId, t.formVersionId),
     foreignKey({ columns: [t.eventId, t.formVersionId], foreignColumns: [formVersions.eventId, formVersions.id], name: "form_version_fields_version_fk" })
       .onDelete("cascade").onUpdate("cascade"),
+    check(
+      "form_version_fields_semantic_key",
+      sql`${t.semanticKey} is null or ${t.semanticKey} in ('submissionTitle', 'submissionAbstract', 'speakerName', 'speakerEmail')`,
+    ),
   ],
 );
 
@@ -260,13 +291,17 @@ export const submissions = sqliteTable(
   },
   (t) => [
     uniqueIndex("submissions_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("submissions_event_id_version_unique").on(t.eventId, t.id, t.formVersionId),
     index("submissions_event_status").on(t.eventId, t.status, t.submittedAt),
     index("submissions_form").on(t.eventId, t.formId),
     index("submissions_form_version").on(t.eventId, t.formVersionId),
     foreignKey({ columns: [t.eventId, t.formId], foreignColumns: [forms.eventId, forms.id], name: "submissions_form_fk" })
       .onDelete("restrict").onUpdate("cascade"),
-    foreignKey({ columns: [t.eventId, t.formVersionId], foreignColumns: [formVersions.eventId, formVersions.id], name: "submissions_form_version_fk" })
-      .onDelete("restrict").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.formId, t.formVersionId],
+      foreignColumns: [formVersions.eventId, formVersions.formId, formVersions.id],
+      name: "submissions_form_version_fk",
+    }).onDelete("restrict").onUpdate("cascade"),
     check("submissions_version_positive", sql`${t.version} > 0`),
     check("submissions_acceptance_state", sql`(${t.status} = 'accepted' and ${t.acceptedAt} is not null) or (${t.status} <> 'accepted')`),
   ],
@@ -278,6 +313,7 @@ export const submissionAnswers = sqliteTable(
     id: id(),
     eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
     submissionId: text("submission_id").notNull(),
+    formVersionId: text("form_version_id").notNull(),
     formVersionFieldId: text("form_version_field_id").notNull(),
     value: text("value", { mode: "json" }).notNull(),
     version: version(),
@@ -285,12 +321,18 @@ export const submissionAnswers = sqliteTable(
   },
   (t) => [
     uniqueIndex("submission_answers_event_id_unique").on(t.eventId, t.id),
-    uniqueIndex("submission_answers_field_unique").on(t.eventId, t.submissionId, t.formVersionFieldId),
+    uniqueIndex("submission_answers_field_unique").on(t.eventId, t.submissionId, t.formVersionId, t.formVersionFieldId),
     index("submission_answers_submission").on(t.eventId, t.submissionId),
-    foreignKey({ columns: [t.eventId, t.submissionId], foreignColumns: [submissions.eventId, submissions.id], name: "submission_answers_submission_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
-    foreignKey({ columns: [t.eventId, t.formVersionFieldId], foreignColumns: [formVersionFields.eventId, formVersionFields.id], name: "submission_answers_version_field_fk" })
-      .onDelete("restrict").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.submissionId, t.formVersionId],
+      foreignColumns: [submissions.eventId, submissions.id, submissions.formVersionId],
+      name: "submission_answers_submission_version_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.formVersionId, t.formVersionFieldId],
+      foreignColumns: [formVersionFields.eventId, formVersionFields.formVersionId, formVersionFields.id],
+      name: "submission_answers_version_field_fk",
+    }).onDelete("restrict").onUpdate("cascade"),
     check("submission_answers_version_positive", sql`${t.version} > 0`),
   ],
 );
@@ -334,6 +376,13 @@ export const submissionSpeakers = sqliteTable(
   },
   (t) => [
     uniqueIndex("submission_speakers_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("submission_speakers_primary_parent_unique").on(
+      t.eventId,
+      t.submissionId,
+      t.id,
+      t.speakerId,
+      t.isPrimary,
+    ),
     uniqueIndex("submission_speakers_pair_unique").on(t.eventId, t.submissionId, t.speakerId),
     uniqueIndex("submission_speakers_one_primary").on(t.eventId, t.submissionId).where(sql`${t.isPrimary} = 1`),
     index("submission_speakers_speaker").on(t.eventId, t.speakerId),
@@ -351,7 +400,9 @@ export const acceptanceEvents = sqliteTable(
     id: id(),
     eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
     submissionId: text("submission_id").notNull(),
+    primarySubmissionSpeakerId: text("primary_submission_speaker_id").notNull(),
     primarySpeakerId: text("primary_speaker_id").notNull(),
+    primaryAssociationIsPrimary: integer("primary_association_is_primary", { mode: "boolean" }).notNull().default(true),
     type: text("type", { enum: ["accepted", "revoked"] }).notNull(),
     submissionVersion: integer("submission_version").notNull(),
     actorUserId: text("actor_user_id").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
@@ -359,14 +410,29 @@ export const acceptanceEvents = sqliteTable(
   },
   (t) => [
     uniqueIndex("acceptance_events_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("acceptance_events_provisioning_parent_unique").on(t.eventId, t.id, t.submissionId, t.primarySpeakerId),
     uniqueIndex("acceptance_events_submission_version_unique").on(t.eventId, t.submissionId, t.submissionVersion),
     index("acceptance_events_event_cursor").on(t.eventId, t.occurredAt, t.id),
     index("acceptance_events_primary_speaker").on(t.eventId, t.primarySpeakerId),
-    foreignKey({ columns: [t.eventId, t.submissionId], foreignColumns: [submissions.eventId, submissions.id], name: "acceptance_events_submission_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
-    foreignKey({ columns: [t.eventId, t.primarySpeakerId], foreignColumns: [speakers.eventId, speakers.id], name: "acceptance_events_speaker_fk" })
-      .onDelete("restrict").onUpdate("cascade"),
+    foreignKey({
+      columns: [
+        t.eventId,
+        t.submissionId,
+        t.primarySubmissionSpeakerId,
+        t.primarySpeakerId,
+        t.primaryAssociationIsPrimary,
+      ],
+      foreignColumns: [
+        submissionSpeakers.eventId,
+        submissionSpeakers.submissionId,
+        submissionSpeakers.id,
+        submissionSpeakers.speakerId,
+        submissionSpeakers.isPrimary,
+      ],
+      name: "acceptance_events_primary_submission_speaker_fk",
+    }).onDelete("restrict").onUpdate("cascade"),
     check("acceptance_events_version_positive", sql`${t.submissionVersion} > 0`),
+    check("acceptance_events_primary_association", sql`${t.primaryAssociationIsPrimary} = 1`),
   ],
 );
 
@@ -393,12 +459,16 @@ export const speakerProvisioning = sqliteTable(
     uniqueIndex("speaker_provisioning_acceptance_unique").on(t.eventId, t.acceptanceEventId),
     index("speaker_provisioning_claim").on(t.status, t.availableAt, t.leaseExpiresAt, t.createdAt),
     index("speaker_provisioning_submission").on(t.eventId, t.submissionId),
-    foreignKey({ columns: [t.eventId, t.acceptanceEventId], foreignColumns: [acceptanceEvents.eventId, acceptanceEvents.id], name: "speaker_provisioning_acceptance_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
-    foreignKey({ columns: [t.eventId, t.submissionId], foreignColumns: [submissions.eventId, submissions.id], name: "speaker_provisioning_submission_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
-    foreignKey({ columns: [t.eventId, t.primarySpeakerId], foreignColumns: [speakers.eventId, speakers.id], name: "speaker_provisioning_speaker_fk" })
-      .onDelete("restrict").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.acceptanceEventId, t.submissionId, t.primarySpeakerId],
+      foreignColumns: [
+        acceptanceEvents.eventId,
+        acceptanceEvents.id,
+        acceptanceEvents.submissionId,
+        acceptanceEvents.primarySpeakerId,
+      ],
+      name: "speaker_provisioning_acceptance_tuple_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
     check("speaker_provisioning_attempts_nonnegative", sql`${t.attemptCount} >= 0`),
     check("speaker_provisioning_version_positive", sql`${t.version} > 0`),
     check("speaker_provisioning_lease_pair", sql`(${t.leaseOwner} is null) = (${t.leaseExpiresAt} is null)`),
@@ -629,12 +699,12 @@ export const emailTemplates = sqliteTable("email_templates", {
   check("email_templates_version_positive", sql`${t.version} > 0`),
 ]);
 
-/** Immutable rendered delivery content. Mutable claims live in mail_deliveries. */
+/** Immutable rendered delivery content; auth bodies may be irreversibly redacted after terminal delivery. */
 export const mailDeliverySnapshots = sqliteTable(
   "mail_delivery_snapshots",
   {
     id: id(),
-    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    eventId: text("event_id").references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
     templateId: text("template_id"),
     recipientUserId: text("recipient_user_id").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
     recipientEmail: text("recipient_email").notNull(),
@@ -642,18 +712,24 @@ export const mailDeliverySnapshots = sqliteTable(
     fromEmail: text("from_email").notNull(),
     replyToEmail: text("reply_to_email"),
     subject: text("subject").notNull(),
-    renderedHtml: text("rendered_html").notNull(),
+    renderedHtml: text("rendered_html"),
     renderedText: text("rendered_text"),
     icsFilename: text("ics_filename"),
     icsContent: text("ics_content"),
+    redactedAt: integer("redacted_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [
     uniqueIndex("mail_snapshots_event_id_unique").on(t.eventId, t.id),
-    index("mail_snapshots_retention").on(t.createdAt),
+    index("mail_snapshots_retention").on(t.redactedAt, t.createdAt),
     foreignKey({ columns: [t.eventId, t.templateId], foreignColumns: [emailTemplates.eventId, emailTemplates.id], name: "mail_snapshots_template_fk" })
       .onDelete("restrict").onUpdate("cascade"),
+    check("mail_snapshots_template_event", sql`${t.templateId} is null or ${t.eventId} is not null`),
     check("mail_snapshots_ics_pair", sql`(${t.icsFilename} is null) = (${t.icsContent} is null)`),
+    check(
+      "mail_snapshots_content_state",
+      sql`(${t.redactedAt} is null and ${t.renderedHtml} is not null) or (${t.redactedAt} is not null and ${t.renderedHtml} is null and ${t.renderedText} is null and ${t.icsFilename} is null and ${t.icsContent} is null)`,
+    ),
   ],
 );
 
@@ -661,8 +737,7 @@ export const mailDeliveries = sqliteTable(
   "mail_deliveries",
   {
     id: id(),
-    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    snapshotId: text("snapshot_id").notNull(),
+    snapshotId: text("snapshot_id").notNull().references(() => mailDeliverySnapshots.id, { onDelete: "cascade", onUpdate: "cascade" }),
     idempotencyKey: text("idempotency_key").notNull(),
     status: text("status", { enum: ["pending", "claimed", "retry", "sent", "dead_letter", "cancelled"] }).notNull().default("pending"),
     scheduledFor: integer("scheduled_for", { mode: "timestamp_ms" }).notNull(),
@@ -680,14 +755,11 @@ export const mailDeliveries = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [
-    uniqueIndex("mail_deliveries_event_id_unique").on(t.eventId, t.id),
-    uniqueIndex("mail_deliveries_snapshot_unique").on(t.eventId, t.snapshotId),
-    uniqueIndex("mail_deliveries_idempotency_unique").on(t.eventId, t.idempotencyKey),
+    uniqueIndex("mail_deliveries_snapshot_unique").on(t.snapshotId),
+    uniqueIndex("mail_deliveries_idempotency_unique").on(t.idempotencyKey),
     uniqueIndex("mail_deliveries_provider_message_unique").on(t.provider, t.providerMessageId),
     index("mail_deliveries_claim").on(t.status, t.availableAt, t.leaseExpiresAt, t.createdAt),
-    index("mail_deliveries_event_status").on(t.eventId, t.status, t.createdAt),
-    foreignKey({ columns: [t.eventId, t.snapshotId], foreignColumns: [mailDeliverySnapshots.eventId, mailDeliverySnapshots.id], name: "mail_deliveries_snapshot_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
+    index("mail_deliveries_status").on(t.status, t.createdAt),
     check("mail_deliveries_attempts", sql`${t.attemptCount} >= 0 and ${t.maxAttempts} > 0 and ${t.attemptCount} <= ${t.maxAttempts}`),
     check("mail_deliveries_lease_pair", sql`(${t.leaseOwner} is null) = (${t.leaseExpiresAt} is null)`),
     check("mail_deliveries_sent_state", sql`(${t.status} = 'sent' and ${t.sentAt} is not null and ${t.providerMessageId} is not null) or ${t.status} <> 'sent'`),
@@ -699,8 +771,7 @@ export const mailDeliveryAttempts = sqliteTable(
   "mail_delivery_attempts",
   {
     id: id(),
-    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    deliveryId: text("delivery_id").notNull(),
+    deliveryId: text("delivery_id").notNull().references(() => mailDeliveries.id, { onDelete: "cascade", onUpdate: "cascade" }),
     attemptNumber: integer("attempt_number").notNull(),
     leaseOwner: text("lease_owner").notNull(),
     status: text("status", { enum: ["started", "sent", "retry", "failed"] }).notNull(),
@@ -711,11 +782,8 @@ export const mailDeliveryAttempts = sqliteTable(
     completedAt: integer("completed_at", { mode: "timestamp_ms" }),
   },
   (t) => [
-    uniqueIndex("mail_attempts_event_id_unique").on(t.eventId, t.id),
-    uniqueIndex("mail_attempts_number_unique").on(t.eventId, t.deliveryId, t.attemptNumber),
-    index("mail_attempts_delivery").on(t.eventId, t.deliveryId, t.startedAt),
-    foreignKey({ columns: [t.eventId, t.deliveryId], foreignColumns: [mailDeliveries.eventId, mailDeliveries.id], name: "mail_attempts_delivery_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
+    uniqueIndex("mail_attempts_number_unique").on(t.deliveryId, t.attemptNumber),
+    index("mail_attempts_delivery").on(t.deliveryId, t.startedAt),
     check("mail_attempts_number_positive", sql`${t.attemptNumber} > 0`),
     check("mail_attempts_completion", sql`${t.status} = 'started' or ${t.completedAt} is not null`),
   ],
@@ -773,6 +841,9 @@ export const airtableRecordLinks = sqliteTable(
     integrationId: text("integration_id").notNull(),
     entityType: text("entity_type", { enum: ["speaker", "submission", "talk"] }).notNull(),
     entityId: text("entity_id").notNull(),
+    speakerId: text("speaker_id"),
+    submissionId: text("submission_id"),
+    talkId: text("talk_id"),
     sessionPartyId: text("session_party_id").notNull(),
     airtableRecordId: text("airtable_record_id").notNull(),
     outboundRevision: integer("outbound_revision").notNull().default(0),
@@ -790,8 +861,45 @@ export const airtableRecordLinks = sqliteTable(
     uniqueIndex("airtable_links_session_party_unique").on(t.integrationId, t.entityType, t.sessionPartyId),
     uniqueIndex("airtable_links_record_unique").on(t.integrationId, t.entityType, t.airtableRecordId),
     index("airtable_links_refresh").on(t.integrationId, t.entityType, t.lastRefreshedAt),
-    foreignKey({ columns: [t.eventId, t.integrationId], foreignColumns: [integrations.eventId, integrations.id], name: "airtable_links_integration_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.integrationId],
+      foreignColumns: [integrations.eventId, integrations.id],
+      name: "airtable_links_integration_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.speakerId],
+      foreignColumns: [speakers.eventId, speakers.id],
+      name: "airtable_links_speaker_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.submissionId],
+      foreignColumns: [submissions.eventId, submissions.id],
+      name: "airtable_links_submission_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.talkId],
+      foreignColumns: [talks.eventId, talks.id],
+      name: "airtable_links_talk_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    check(
+      "airtable_links_entity_owner",
+      sql`(
+        ${t.entityType} = 'speaker'
+        and ${t.speakerId} = ${t.entityId}
+        and ${t.submissionId} is null
+        and ${t.talkId} is null
+      ) or (
+        ${t.entityType} = 'submission'
+        and ${t.speakerId} is null
+        and ${t.submissionId} = ${t.entityId}
+        and ${t.talkId} is null
+      ) or (
+        ${t.entityType} = 'talk'
+        and ${t.speakerId} is null
+        and ${t.submissionId} is null
+        and ${t.talkId} = ${t.entityId}
+      )`,
+    ),
     check("airtable_links_session_party_matches", sql`${t.sessionPartyId} = ${t.entityId}`),
     check("airtable_links_revision_nonnegative", sql`${t.outboundRevision} >= 0`),
     check("airtable_links_outbound_hash_length", sql`${t.outboundHash} is null or length(${t.outboundHash}) = 64`),
@@ -808,6 +916,9 @@ export const airtablePendingEdits = sqliteTable(
     integrationId: text("integration_id").notNull(),
     entityType: text("entity_type", { enum: ["speaker", "submission", "talk"] }).notNull(),
     entityId: text("entity_id").notNull(),
+    speakerId: text("speaker_id"),
+    submissionId: text("submission_id"),
+    talkId: text("talk_id"),
     fieldKey: text("field_key").notNull(),
     intendedValue: text("intended_value", { mode: "json" }).notNull(),
     baseInboundRevision: text("base_inbound_revision"),
@@ -820,11 +931,61 @@ export const airtablePendingEdits = sqliteTable(
   },
   (t) => [
     uniqueIndex("airtable_pending_event_id_unique").on(t.eventId, t.id),
-    uniqueIndex("airtable_pending_one_active").on(t.eventId, t.integrationId, t.entityType, t.entityId, t.fieldKey).where(sql`${t.status} = 'pending'`),
+    uniqueIndex("airtable_pending_outbox_parent_unique").on(
+      t.eventId,
+      t.integrationId,
+      t.id,
+      t.entityType,
+      t.entityId,
+    ),
+    uniqueIndex("airtable_pending_one_active").on(
+      t.eventId,
+      t.integrationId,
+      t.entityType,
+      t.entityId,
+      t.fieldKey,
+    ).where(sql`${t.status} = 'pending'`),
     index("airtable_pending_entity").on(t.eventId, t.entityType, t.entityId, t.status),
     index("airtable_pending_integration").on(t.integrationId, t.status, t.createdAt),
-    foreignKey({ columns: [t.eventId, t.integrationId], foreignColumns: [integrations.eventId, integrations.id], name: "airtable_pending_integration_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.integrationId],
+      foreignColumns: [integrations.eventId, integrations.id],
+      name: "airtable_pending_integration_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.speakerId],
+      foreignColumns: [speakers.eventId, speakers.id],
+      name: "airtable_pending_speaker_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.submissionId],
+      foreignColumns: [submissions.eventId, submissions.id],
+      name: "airtable_pending_submission_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.talkId],
+      foreignColumns: [talks.eventId, talks.id],
+      name: "airtable_pending_talk_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    check(
+      "airtable_pending_entity_owner",
+      sql`(
+        ${t.entityType} = 'speaker'
+        and ${t.speakerId} = ${t.entityId}
+        and ${t.submissionId} is null
+        and ${t.talkId} is null
+      ) or (
+        ${t.entityType} = 'submission'
+        and ${t.speakerId} is null
+        and ${t.submissionId} = ${t.entityId}
+        and ${t.talkId} is null
+      ) or (
+        ${t.entityType} = 'talk'
+        and ${t.speakerId} is null
+        and ${t.submissionId} is null
+        and ${t.talkId} = ${t.entityId}
+      )`,
+    ),
     check("airtable_pending_hash_length", sql`${t.baseInboundHash} is null or length(${t.baseInboundHash}) = 64`),
     check("airtable_pending_resolution", sql`(${t.status} = 'pending' and ${t.resolvedAt} is null) or (${t.status} <> 'pending' and ${t.resolvedAt} is not null)`),
     check("airtable_pending_version_positive", sql`${t.version} > 0`),
@@ -840,6 +1001,9 @@ export const airtableOutbox = sqliteTable(
     pendingEditId: text("pending_edit_id"),
     entityType: text("entity_type", { enum: ["speaker", "submission", "talk"] }).notNull(),
     entityId: text("entity_id").notNull(),
+    speakerId: text("speaker_id"),
+    submissionId: text("submission_id"),
+    talkId: text("talk_id"),
     sessionPartyId: text("session_party_id").notNull(),
     operation: text("operation", { enum: ["upsert", "delete"] }).notNull(),
     changedFields: text("changed_fields", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
@@ -863,10 +1027,56 @@ export const airtableOutbox = sqliteTable(
     uniqueIndex("airtable_outbox_idempotency_unique").on(t.integrationId, t.idempotencyKey),
     index("airtable_outbox_claim").on(t.integrationId, t.status, t.availableAt, t.leaseExpiresAt, t.createdAt),
     index("airtable_outbox_order").on(t.integrationId, t.entityType, t.entityId, t.outboundRevision),
-    foreignKey({ columns: [t.eventId, t.integrationId], foreignColumns: [integrations.eventId, integrations.id], name: "airtable_outbox_integration_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
-    foreignKey({ columns: [t.eventId, t.pendingEditId], foreignColumns: [airtablePendingEdits.eventId, airtablePendingEdits.id], name: "airtable_outbox_pending_fk" })
-      .onDelete("restrict").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.integrationId],
+      foreignColumns: [integrations.eventId, integrations.id],
+      name: "airtable_outbox_integration_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.speakerId],
+      foreignColumns: [speakers.eventId, speakers.id],
+      name: "airtable_outbox_speaker_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.submissionId],
+      foreignColumns: [submissions.eventId, submissions.id],
+      name: "airtable_outbox_submission_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.talkId],
+      foreignColumns: [talks.eventId, talks.id],
+      name: "airtable_outbox_talk_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.integrationId, t.pendingEditId, t.entityType, t.entityId],
+      foreignColumns: [
+        airtablePendingEdits.eventId,
+        airtablePendingEdits.integrationId,
+        airtablePendingEdits.id,
+        airtablePendingEdits.entityType,
+        airtablePendingEdits.entityId,
+      ],
+      name: "airtable_outbox_pending_fk",
+    }).onDelete("restrict").onUpdate("cascade"),
+    check(
+      "airtable_outbox_entity_owner",
+      sql`(
+        ${t.entityType} = 'speaker'
+        and ${t.speakerId} = ${t.entityId}
+        and ${t.submissionId} is null
+        and ${t.talkId} is null
+      ) or (
+        ${t.entityType} = 'submission'
+        and ${t.speakerId} is null
+        and ${t.submissionId} = ${t.entityId}
+        and ${t.talkId} is null
+      ) or (
+        ${t.entityType} = 'talk'
+        and ${t.speakerId} is null
+        and ${t.submissionId} is null
+        and ${t.talkId} = ${t.entityId}
+      )`,
+    ),
     check("airtable_outbox_session_party_matches", sql`${t.sessionPartyId} = ${t.entityId}`),
     check("airtable_outbox_revision_positive", sql`${t.outboundRevision} > 0`),
     check("airtable_outbox_hash_length", sql`length(${t.outboundHash}) = 64`),
