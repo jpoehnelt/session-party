@@ -287,6 +287,8 @@ The generated registry must fail on duplicate operation IDs, REST method/path pa
 
 ## UX plan
 
+Visual direction and component styling follow [`docs/brand.md`](docs/brand.md). This plan remains authoritative for product behavior and architecture; the brand packet owns approved visual and verbal expression.
+
 ### Product character
 
 Borrow from Luma:
@@ -345,6 +347,8 @@ Realtime completion advances the thread only after server acknowledgement.
 ### UI freeze
 
 Freeze design tokens, primitive APIs, status vocabulary, AppShell behavior, accessibility behavior, and shared composites before slice fan-out. Required composites include:
+
+The approved component foundation is **shadcn/ui with Radix Primitives**, exposed exclusively through `@/ui`. Shared components remain source-owned and themeable; feature slices must not import Radix directly or create parallel primitives. The visual integration spike and migration rules are defined in `docs/brand.md`.
 
 - `EventIdentityHeader`
 - `StatusBadge`
