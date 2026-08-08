@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useParams } from "react-router";
 import { ApiError, apiFetch } from "@/client/api";
 import { useEventRoom } from "@/client/socket";
@@ -167,43 +167,79 @@ export default function AgendaPage() {
       </>
     );
   }
-  return <AgendaWorkspace event={event} />;
+  return <AgendaWorkspace key={event.id} event={event} />;
 }
+
+type RefreshState =
+  | { readonly status: "idle"; readonly message: null }
+  | { readonly status: "refreshing"; readonly message: null }
+  | { readonly status: "error"; readonly message: string };
 
 function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [view, setView] = useState<AgendaView>("day");
   const [agenda, setAgenda] = useState<AgendaSnapshot | null | undefined>(undefined);
+  const [refresh, setRefresh] = useState<RefreshState>({ status: "idle", message: null });
   const [selectedTalkId, setSelectedTalkId] = useState<string | null>(null);
   const [intent, setIntent] = useState<RealtimeIntentState>(idleIntent);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ trackId: "", roomId: "", startsAt: "", durationMin: "30" });
+  const agendaRequest = useRef(0);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const mounted = useRef(true);
 
-  const loadAgenda = useCallback(async (nextView: AgendaView = view) => {
-    const loaded = await apiFetch<AgendaSnapshot>(
+  const fetchAgenda = useCallback((nextView: AgendaView) =>
+    apiFetch<AgendaSnapshot>(
       `/api/v1/events/${encodeURIComponent(event.id)}/agenda?view=${encodeURIComponent(nextView)}`,
       { schema: AgendaSnapshot },
-    );
-    setAgenda(loaded);
-    return loaded;
-  }, [event.id, view]);
+    ), [event.id]);
+
+  const refreshAgenda = useCallback(async (nextView: AgendaView): Promise<AgendaSnapshot | null> => {
+    const request = ++agendaRequest.current;
+    setRefresh({ status: "refreshing", message: null });
+    try {
+      const loaded = await fetchAgenda(nextView);
+      if (!mounted.current || request !== agendaRequest.current || nextView !== viewRef.current) return null;
+      setAgenda(loaded);
+      setRefresh({ status: "idle", message: null });
+      return loaded;
+    } catch (error) {
+      if (!mounted.current || request !== agendaRequest.current || nextView !== viewRef.current) return null;
+      const message = error instanceof Error ? error.message : "Could not load agenda";
+      setAgenda((current) => current === undefined ? null : current);
+      setRefresh({ status: "error", message });
+      throw error;
+    }
+  }, [fetchAgenda]);
+
+  const retryRefresh = useCallback(async () => {
+    try {
+      await refreshAgenda(viewRef.current);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not refresh agenda", { tone: "danger" });
+    }
+  }, [refreshAgenda]);
+
   const closeTalkSheet = useCallback(() => setSelectedTalkId(null), []);
 
   useEffect(() => {
-    let active = true;
-    setAgenda(undefined);
-    void loadAgenda(view)
-      .catch((error) => {
-        if (!active) return;
-        setAgenda(null);
-        toast(error instanceof Error ? error.message : "Could not load agenda", { tone: "danger" });
-      });
-    return () => { active = false; };
-  }, [loadAgenda, view]);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      agendaRequest.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    void refreshAgenda(view).catch((error) => {
+      toast(error instanceof Error ? error.message : "Could not load agenda", { tone: "danger" });
+    });
+  }, [refreshAgenda, view]);
 
   useEventRoom(event.id, (message) => {
     setIntent((current) => ({ ...current, connection: "connected" }));
     if (message.t === "agenda/talk_upserted" || message.t === "agenda/talk_deleted" || message.t === "agenda/conflicts") {
-      void loadAgenda().catch(() => {
+      void refreshAgenda(viewRef.current).catch(() => {
         setIntent((current) => ({ ...current, connection: "reconnecting", message: "Live refresh missed; reconnecting." }));
       });
     }
@@ -213,9 +249,13 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     const offline = () => setIntent((current) => ({ ...current, connection: "offline", message: "Changes are unavailable while offline." }));
     const online = () => {
       setIntent((current) => ({ ...current, connection: "reconnecting", message: "Connection restored; refreshing agenda." }));
-      void loadAgenda().then(() => {
-        setIntent((current) => ({ ...current, connection: "connected", message: null }));
-      }).catch(() => undefined);
+      void refreshAgenda(viewRef.current).then((loaded) => {
+        if (loaded) setIntent((current) => ({ ...current, connection: "connected", message: null }));
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : "Could not refresh agenda";
+        setIntent((current) => ({ ...current, connection: "reconnecting", message: `Connection restored, but refresh failed: ${message}` }));
+        toast(`Agenda refresh failed: ${message}`, { tone: "danger" });
+      });
     };
     window.addEventListener("offline", offline);
     window.addEventListener("online", online);
@@ -223,7 +263,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       window.removeEventListener("offline", offline);
       window.removeEventListener("online", online);
     };
-  }, [loadAgenda]);
+  }, [refreshAgenda]);
 
   const selectedTalk = useMemo(
     () => agenda?.talks.find(({ id }) => id === selectedTalkId) ?? null,
@@ -267,6 +307,24 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     }
   };
 
+  const refreshAfterCommit = async () => {
+    try {
+      await refreshAgenda(viewRef.current);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not refresh agenda";
+      toast(`The change was saved, but the agenda refresh failed: ${message}`, { tone: "danger" });
+    }
+  };
+  const refreshAfterStaleFailure = async (error: unknown) => {
+    if (intentFailure(error).acknowledgement !== "stale") return;
+    try {
+      await refreshAgenda(viewRef.current);
+    } catch (refreshError) {
+      const message = refreshError instanceof Error ? refreshError.message : "Could not refresh agenda";
+      toast(`The change was rejected and the agenda refresh failed: ${message}`, { tone: "danger" });
+    }
+  };
+
   const createTalk = async (proposal: BacklogProposal) => {
     const clientId = clientIntentId();
     try {
@@ -285,11 +343,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           schema: AgendaMutationResult,
         },
       ));
-      await loadAgenda();
       selectTalk(result.talk);
       toast("Talk created", { tone: "success" });
+      await refreshAfterCommit();
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not create talk", { tone: "danger" });
+      await refreshAfterStaleFailure(error);
     }
   };
 
@@ -315,11 +374,11 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           schema: AgendaMutationResult,
         },
       ));
-      await loadAgenda();
       toast("Talk moved", { tone: "success" });
+      await refreshAfterCommit();
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not move talk", { tone: "danger" });
-      await loadAgenda().catch(() => undefined);
+      await refreshAfterStaleFailure(error);
     }
   };
 
@@ -351,12 +410,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           schema: AgendaMutationResult,
         },
       ));
-      await loadAgenda();
       selectTalk(result.talk);
       toast(selectedTalk.status === "draft" ? "Talk scheduled" : "Talk moved", { tone: "success" });
+      await refreshAfterCommit();
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not save schedule", { tone: "danger" });
-      await loadAgenda().catch(() => undefined);
+      await refreshAfterStaleFailure(error);
     }
   };
 
@@ -376,10 +435,11 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         },
       ));
       closeTalkSheet();
-      await loadAgenda();
       toast("Talk cancelled", { tone: "success" });
+      await refreshAfterCommit();
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not cancel talk", { tone: "danger" });
+      await refreshAfterStaleFailure(error);
     }
   };
 
@@ -398,10 +458,11 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           schema: PublishedAgenda,
         },
       ));
-      await loadAgenda();
       toast(`Agenda revision ${published.revision} published`, { tone: "success" });
+      await refreshAfterCommit();
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not publish agenda", { tone: "danger" });
+      await refreshAfterStaleFailure(error);
     }
   };
 
@@ -414,8 +475,16 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         <PageHeader title={event.name} description={`Agenda · ${event.timezone}`} />
         <EmptyState
           title="Agenda unavailable"
-          description="Refresh after the agenda operations are activated for this event."
-          action={<Button onClick={() => void loadAgenda()}>Try again</Button>}
+          description={refresh.message ?? "Refresh after the agenda operations are activated for this event."}
+          action={
+            <Button
+              loading={refresh.status === "refreshing"}
+              disabled={refresh.status === "refreshing"}
+              onClick={() => void retryRefresh()}
+            >
+              Try again
+            </Button>
+          }
         />
         <Toaster />
       </>
@@ -442,7 +511,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         }
         actions={
           <Button
-            disabled={busy || agenda.conflicts.length > 0}
+            disabled={busy || refresh.status !== "idle" || agenda.conflicts.length > 0}
             loading={busy && intent.acknowledgement === "pending"}
             onClick={() => void publish()}
           >
@@ -450,7 +519,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           </Button>
         }
       />
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <Tabs
           tabs={views}
           active={view}
@@ -458,12 +527,25 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         />
         <p className="hidden text-xs text-ink-faint md:block">Confirmed talks stay private until this revision is published.</p>
       </div>
+      {refresh.status !== "idle" && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-ink-secondary" role="status" aria-live="polite">
+          <Badge tone={refresh.status === "error" ? "danger" : "neutral"}>
+            {refresh.status === "error" ? "Refresh failed" : "Refreshing"}
+          </Badge>
+          <span>
+            {refresh.status === "error" ? refresh.message : `Updating the ${view} view without clearing the board.`}
+          </span>
+          {refresh.status === "error" && (
+            <Button size="sm" variant="secondary" onClick={() => void retryRefresh()}>Retry refresh</Button>
+          )}
+        </div>
+      )}
       <AgendaBoard
         agenda={agenda}
         view={view}
         intent={intent}
         selectedTalkId={selectedTalkId}
-        disabled={busy || intent.connection === "offline"}
+        disabled={busy || refresh.status !== "idle" || intent.connection === "offline"}
         onCreateTalk={(proposal) => void createTalk(proposal)}
         onSelectTalk={selectTalk}
         onMoveTalk={(talk, target) => void moveTalk(talk, target)}
@@ -477,8 +559,8 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         footer={
           selectedTalk ? (
             <div className="flex w-full items-center justify-between gap-3">
-              <Button variant="danger" disabled={busy} onClick={() => void cancelTalk()}>Cancel talk</Button>
-              <Button form="agenda-move-form" type="submit" loading={busy}>Save schedule</Button>
+              <Button variant="danger" disabled={busy || refresh.status !== "idle"} onClick={() => void cancelTalk()}>Cancel talk</Button>
+              <Button form="agenda-move-form" type="submit" loading={busy} disabled={refresh.status !== "idle"}>Save schedule</Button>
             </div>
           ) : null
         }

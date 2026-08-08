@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
 import { Badge, Button, Card, EmptyState, Table } from "@/ui";
 import type {
   AgendaSnapshot,
@@ -82,6 +82,7 @@ export function AgendaBoard({
   onSelectTalk,
   onMoveTalk,
 }: AgendaBoardProps) {
+  const boardHeadingId = useId();
   const [draggedTalkId, setDraggedTalkId] = useState<string | null>(null);
   const connection = connectionLabel(intent);
   const scheduled = useMemo(
@@ -145,41 +146,22 @@ export function AgendaBoard({
       ];
     }
     if (view === "room") {
-      return [
-        ...agenda.rooms.map((room) => ({
-          id: `room:${room.id}`,
-          label: `${room.name} · ${activeDayLabel}`,
-          hint: room.capacity === null ? "Room" : `${room.capacity} seats`,
-          talks: activeDayTalks.filter(({ roomId }) => roomId === room.id),
-          target: { trackId: null, roomId: room.id },
-        })),
-        {
-          id: "room:unassigned",
-          label: `Unassigned room · ${activeDayLabel}`,
-          hint: "Needs placement",
-          talks: activeDayTalks.filter(({ roomId }) => roomId === null),
-          target: { trackId: null, roomId: null },
-        },
-      ];
+      return agenda.rooms.map((room) => ({
+        id: `room:${room.id}`,
+        label: `${room.name} · ${activeDayLabel}`,
+        hint: room.capacity === null ? "Room" : `${room.capacity} seats`,
+        talks: activeDayTalks.filter(({ roomId }) => roomId === room.id),
+        target: { trackId: null, roomId: room.id },
+      }));
     }
     if (view === "day") {
-      const dayTalks = activeDayTalks;
-      return [
-        ...agenda.rooms.map((room) => ({
-          id: `room:${room.id}`,
-          label: `${room.name} · ${activeDayLabel}`,
-          hint: room.capacity === null ? "Room" : `${room.capacity} seats`,
-          talks: dayTalks.filter(({ roomId }) => roomId === room.id),
-          target: { trackId: null, roomId: room.id },
-        })),
-        {
-          id: "room:unassigned",
-          label: `Unassigned room · ${activeDayLabel}`,
-          hint: "Needs placement",
-          talks: dayTalks.filter(({ roomId }) => roomId === null),
-          target: { trackId: null, roomId: null },
-        },
-      ];
+      return agenda.rooms.map((room) => ({
+        id: `room:${room.id}`,
+        label: `${room.name} · ${activeDayLabel}`,
+        hint: room.capacity === null ? "Room" : `${room.capacity} seats`,
+        talks: activeDayTalks.filter(({ roomId }) => roomId === room.id),
+        target: { trackId: null, roomId: room.id },
+      }));
     }
     if (view === "week") {
       const days = new Map<string, AgendaTalk[]>();
@@ -220,7 +202,8 @@ export function AgendaBoard({
   };
 
   return (
-    <div className="space-y-4" aria-label="Agenda operations board">
+    <section className="space-y-4" aria-labelledby={boardHeadingId}>
+      <h2 id={boardHeadingId} className="sr-only">{agenda.eventName} agenda scheduling board</h2>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-line bg-surface px-4 py-2.5">
         <div className="flex flex-wrap items-center gap-2 text-sm text-ink-secondary">
           <span className="font-medium text-ink">All times in {agenda.timezone}</span>
@@ -238,11 +221,11 @@ export function AgendaBoard({
       <ConflictIndicator conflicts={agenda.conflicts} />
 
       {(view === "day" || view === "room") && (
-        <div
+        <fieldset
           className="flex items-center gap-2 overflow-x-auto rounded-control border border-line bg-surface px-3 py-2"
-          aria-label={`Choose agenda day in ${agenda.timezone}`}
         >
-          <span className="mr-1 shrink-0 text-xs font-semibold uppercase tracking-wide text-ink-faint">Active day</span>
+          <legend className="sr-only">Choose active agenda day in {agenda.timezone}</legend>
+          <span className="mr-1 shrink-0 text-xs font-semibold uppercase tracking-wide text-ink-faint" aria-hidden="true">Active day</span>
           {availableDays.length === 0 ? (
             <span className="text-sm text-ink-secondary">Schedule a talk to create the first day rail.</span>
           ) : availableDays.map((day) => (
@@ -257,7 +240,7 @@ export function AgendaBoard({
               {day.label}
             </Button>
           ))}
-        </div>
+        </fieldset>
       )}
 
       <div className="grid min-h-[34rem] gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
@@ -350,13 +333,13 @@ export function AgendaBoard({
                               event.dataTransfer.setData("text/agenda-talk", talk.id);
                             }}
                             onDragEnd={() => setDraggedTalkId(null)}
-                            className={`rounded-control border bg-surface p-3 shadow-sm transition motion-reduce:transition-none ${
+                            className={`rounded-control border bg-surface p-3 shadow-card transition motion-reduce:transition-none ${
                               selectedTalkId === talk.id ? "border-accent ring-2 ring-accent/20" : "border-line"
                             } ${draggedTalkId === talk.id ? "opacity-50" : ""}`}
                           >
                             <button
                               type="button"
-                              className="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              className="block w-full rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                               aria-label={`Edit ${talk.title}. ${formattedStart}. Press Enter for move controls.`}
                               onClick={() => onSelectTalk(talk)}
                               onKeyDown={(event) => openWithKeyboard(event, talk)}
@@ -420,6 +403,6 @@ export function AgendaBoard({
       <p className="text-xs text-ink-faint">
         Drag a talk between track or room lanes. For exact track, room, start, and duration changes, open the talk and use the labeled form controls.
       </p>
-    </div>
+    </section>
   );
 }

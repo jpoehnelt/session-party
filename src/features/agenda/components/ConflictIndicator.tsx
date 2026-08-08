@@ -27,7 +27,7 @@ export function ConflictIndicator({
   return (
     <div
       className="space-y-2 rounded-control border border-warning/30 bg-warning-soft p-3 text-sm text-ink"
-      role={blocking ? "alert" : "status"}
+      role={compact ? undefined : blocking ? "alert" : "status"}
     >
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={blocking ? "danger" : "warning"}>
