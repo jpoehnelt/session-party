@@ -1,171 +1,727 @@
-# session-party — Build Plan
+# session-party — Execution Plan
 
-Open-source Sessionboard replacement for the "Kill My SaaS" competition.
-**Deadline: Wed Aug 12, 10PM PT.** Prize criteria: 9 core features, judged walkthrough, tiebreaker on product judgment. Bonuses: Cloudflare infra, Airtable persistence, speed, API.
+Open-source Sessionboard replacement for the “Kill My SaaS” competition.
 
-## Product references
+- Deadline: **Wednesday, August 12, 10 PM PT**
+- Evaluation: nine required workflows, a deployed walkthrough, and real use by non-technical event-production staff
+- Product direction: Sessionboard capabilities with Luma’s calm, event-first public UX and a denser operations cockpit
+- Authority: **the user is final authority**; Main coordinates and recommends; Sol, Ops, advisors, and subagents are advisory or scoped executors
+- Current scope: **planning only** until the user explicitly authorizes application changes or external actions
 
-- Feature rubric: competition brief (9 features, screenshots of Sessionboard).
-- **UX reference: [luma.com](https://luma.com)** — generous whitespace, one accent color, large rounded cards, soft shadows, minimal chrome, delightful empty states, event-page-first design. We clone Sessionboard's *capabilities* with Luma's *feel*.
-- API shape reference: https://sessionboard.mintlify.app (bonus points for API parity in spirit).
+## Outcome
 
-## Stack (locked — do not relitigate)
+A usable event-production system in which organizers can collect proposals, review and accept them, onboard speakers, build a conflict-free agenda, communicate with speakers, synchronize mapped records with Airtable, import Accelevents data, and publish speaker/schedule embeds.
 
-| Layer | Choice |
+The primary interface is the admin UI. MCP is a thin test/automation transport and bonus—not a substitute for the organizer experience.
+
+## Locked decisions
+
+| Area | Decision |
 |---|---|
-| Runtime | Cloudflare Workers (single Worker) |
-| Frontend | React 19 + Vite + `@cloudflare/vite-plugin`, file-based routes via `import.meta.glob` |
-| HTTP API | Hono, mounted at `/api/v1`, `effect/Schema`-validated, OpenAPI emitted from tool/route metadata |
-| Server style | **Effect v3 everywhere server-side**: `effect/Schema` at every ingress, `Data.TaggedError` error channel (`contracts/errors.ts`), services via `Layer` (`Db`, `Mail`, `Files`, `Rooms`, `Ai`), adapters `runPromise` at the Hono/MCP/WS boundary. Client stays plain React. |
-| **MCP server** | `/mcp` endpoint on the same Worker (streamable HTTP, Cloudflare `agents`/`mcp` SDK). Tools call the same service layer as REST. |
-| Realtime | PartyServer (`cloudflare/partykit`): one `EventRoom` Durable Object class, one instance per event |
-| DB | D1 + Drizzle (source of truth). One-way mirror → Airtable (bonus). One-way import ← Accelevents. |
-| Files | R2 (headshots, slides, docs) |
-| Email | Resend; `.ics` attachments for calendar invites; `partywhen` (DO alarms) for scheduled reminders |
-| AI review | Workers AI (optional assist pass) |
-| Auth | Magic-link email for speakers/reviewers; session cookie; admin role on event membership |
-| Tooling | pnpm, Node 24, TypeScript strict, vitest + `@cloudflare/vitest-pool-workers` |
+| Language | TypeScript |
+| Server programming model | **Effect v3**: Schema at every ingress/egress, tagged errors, Layer-provided capabilities, one runtime boundary |
+| Runtime | One Cloudflare Worker application |
+| Frontend | React 19 + Vite + Cloudflare Vite plugin |
+| HTTP API | Hono at `/api/v1` |
+| MCP | Streamable HTTP at `/mcp`; stateless `createMcpHandler` is the planned Cloudflare integration |
+| Wire contracts | **camelCase** across REST, MCP, OpenAPI, and realtime (user-locked) |
+| Realtime | PartyServer/Durable Objects; one coordination room per event with role-filtered delivery |
+| Working database | D1 + Drizzle |
+| Synchronized field authority | **Field-scoped:** every mapped field is declared Airtable-authoritative or D1-authoritative; there is no global winner |
+| D1 role | Fast transactional working copy, pending-edit overlay, outbox/event log, and read cache; D1 owns app workflow fields unless explicitly mapped |
+| Files | R2 |
+| Scheduling | Native Durable Object alarms through `Scheduler`; no `partywhen` dependency |
+| Email | Resend + generated `.ics` attachments |
+| AI | Workers AI for optional, labeled, non-authoritative review assistance |
+| Cloudflare account | `jpoehnelt` (`9cfedefc6185f3dad8ab91241b401135`) |
+| Airtable target | Base `apphFjgebe5pq9gez`; initial table `tblA29jIMOPD42pDj`; optional view `viwsCbJ68dks4nb0s` |
+| Status cadence | Paseo heartbeat every 30 minutes through August 13 |
 
-## Why MCP + API twin transport
-
-Every domain operation is implemented ONCE in a slice's `service.ts`, then exposed twice:
-
-1. REST route (`features/<slice>/api.ts`) — for the UI, the public API bonus, and judges.
-2. MCP tool (`features/<slice>/tools.ts`) — so agents (and Justin) can drive the app conversationally: create events, submit test CFPs, score, schedule, and verify — the dev/test loop IS the MCP server. Agents building slice N test it through MCP without touching the UI.
+## Architecture
 
 ```mermaid
-graph LR
-  UI[React UI] --> API[/api/v1 Hono/]
-  MCP[/mcp tools/] --> SVC[service layer]
-  API --> SVC
-  SVC --> D1[(D1)]
-  SVC --> DO[EventRoom DO]
-  DO --> WS[live clients]
-  SVC --> R2[(R2)]
-  CRON[partywhen alarms] --> SVC
-  SVC -.mirror.-> AT[(Airtable)]
-  ACC[Accelevents] -.import.-> SVC
+flowchart LR
+  UI[React admin / portal / public UI] --> REST[Hono REST adapter]
+  REST --> OP[OperationDef]
+  MCP[Stateless MCP adapter] --> OP
+  INTENT[Party intent adapter] --> OP
+  OP --> FX[One Effect operation]
+  FX --> TX[(D1 transaction)]
+  TX --> STATE[Working state]
+  TX --> LOG[Domain change + audit]
+  TX --> AOUT[Airtable outbox]
+  TX --> MOUT[Mail delivery queue]
+  STATE --> ROOM[EventRoom]
+  ROOM --> LIVE[Role-filtered live clients]
+  AOUT --> LANE[AirtableSyncLane per base]
+  LANE --> AT[(Airtable mapped fields)]
+  AT --> REFRESH[On-load/background refresh]
+  REFRESH --> TX
+  MOUT --> SCHED[Mail Scheduler DO]
+  SCHED --> RESEND[Resend]
+  FX --> R2[(R2)]
+  ACC[Accelevents adapter] --> FX
 ```
 
-## Parallelization model: contract-first, partitioned ownership
+### One operation, three transports
 
-Massive agent concurrency fails on shared files, not on shared ideas. Rules:
+Every command/query exists once as an `OperationDef`:
 
-1. **Phase 0 freezes the spine** (contracts, schema, UI kit, registries). After freeze, only the integrator (main session) edits `contracts/`, `src/ui/`, root configs, and migrations.
-2. **Exclusive directory ownership.** A slice agent writes ONLY inside `src/features/<slice>/` (+ its own tests). Zero central-file edits.
-3. **Registration by convention, not by editing shared files:**
-   - API: `features/*/api.ts` default-exports a Hono router; a codegen script (`pnpm gen`) writes `src/server/registry.gen.ts`. Agents never touch it — regenerate deterministically at integration.
-   - Client routes: `features/*/routes/**/*.tsx` picked up by `import.meta.glob` — adding a page is adding a file.
-   - MCP tools: `features/*/tools.ts` exports `ToolDef[]`, same codegen.
-   - Realtime: messages namespaced `"<slice>/<type>"`; `features/*/party.ts` exports handlers keyed by prefix. `EventRoom` dispatches by prefix — no central switch statement.
-4. **Schema is frozen data, not shared code.** The full domain schema ships in Phase 0 (below). Slices write queries against it; they NEVER add migrations. Schema gaps → message the integrator, who lands a migration and bumps `contracts/`.
-5. **UI is consumed, never forked.** Slices import from `@/ui` only. No new global CSS, no new design tokens, no second button.
-
-### Scale topology ("hundreds of agents")
-
-Honest math: this session runs ≤8 concurrent subagents. Hundreds = a tree, and it's the right shape anyway:
-
-- **Integrator (this session):** owns contracts, merges, resolves cross-slice questions on IRC/hub.
-- **~10 slice leads** (Paseo agents or task subagents, worktree-isolated): own one feature slice end to end.
-- **Each lead fans out internally** (schema-query writer, route builder, tests, polish) — 5–10 subtasks per slice ⇒ 50–100+ concurrent workers at peak without merge hell, because every leaf still writes only inside one slice directory.
-- Worktree isolation (`isolated: true` / Paseo worktrees) + the ownership rule means merges are append-only. Conflicts can only occur in generated files, which we regenerate instead of merging.
-
-## Repo layout
-
+```ts
+interface OperationDef<Input, EncodedInput, Output, EncodedOutput, Requirements> {
+  readonly id: `${string}.${string}`
+  readonly kind: "query" | "command"
+  readonly input: Schema.Schema<Input, EncodedInput, never>
+  readonly output: Schema.Schema<Output, EncodedOutput, never>
+  readonly authorize: AuthorizationPolicy
+  readonly invoke: (
+    input: Input,
+  ) => Effect.Effect<Output, AppError, Requirements>
+  readonly rest?: { method: HttpMethod; path: string; input: InputLocations }
+  readonly mcp?: { name: string; description: string }
+  readonly party?: { intentType: `${string}/${string}` }
+  readonly idempotency: "required" | "optional" | "none"
+  readonly concurrency: "required" | "none"
+  readonly emits: readonly EventType[]
+}
 ```
-contracts/               # FROZEN after Phase 0 (integrator-only)
-  schema.ts              # Drizzle schema — single source of truth
-  types.ts               # zod schemas + inferred domain types
-  protocol.ts            # realtime message types: "<slice>/<type>" unions
-  routes.ts              # API path constants + client route paths
-  mcp.ts                 # ToolDef type, tool naming convention
-migrations/              # integrator-only (drizzle-kit output)
+
+Code generation projects this registry into:
+
+- Hono routes
+- MCP tools and JSON Schema
+- OpenAPI 3.1
+- Party intent dispatch
+- collision/ownership manifest
+
+Adapters only decode, authorize, invoke, encode, and map errors. They never contain business rules or direct Drizzle writes.
+
+### Canonical Effect rules
+
+1. Public domain functions return `Effect.Effect<A, AppError, R>` with the smallest capability set.
+2. `effect/Schema` decodes inputs and encodes outputs. Output encoding failure is a defect, not client validation.
+3. Services are `Context.Tag` capabilities: `Db`, `Mail`, `Files`, `Rooms`, `Ai`, `AirtableAdapter`, `Clock`, `IdGenerator`, `CurrentUser`.
+4. `AppLayer(env)` provides infrastructure; `CurrentUser` is a per-invocation Layer.
+5. Only `src/server/adapt.ts` may call `Effect.runPromiseExit`.
+6. Drizzle/D1 transaction callbacks are bounded async islands: awaited DB work only; no nested Effect runner or external call.
+7. External adapters consume `AbortSignal`, use per-attempt timeout, and retry only proven-idempotent requests.
+8. Expected failures use the shared tagged errors; no strings, `unknown`, or thrown domain errors cross a service boundary.
+
+### Standard transport behavior
+
+- IDs: stable string IDs; optional human-friendly ID where useful
+- Pagination: `page`/`pageSize`, default 25, max 100; `{ results, pagination }`
+- Externally retryable commands require `idempotencyKey`; versioned updates/deletes require `expectedVersion`
+- Errors: safe public `{ error, message, requestId, details? }`; causes stay in redacted logs
+- API keys: event-bound, scoped, expiring/revocable; MCP uses a least-privilege key
+- OpenAPI/MCP output schemas derive from the same Effect schemas
+
+
+## Airtable: field-scoped authority and near-live synchronization
+
+### Authority
+
+- Every synchronized field has exactly one authority: `airtable` or `d1`; an absent field is not synchronized.
+- Airtable-authoritative changes replace D1’s canonical cached value on refresh.
+- An app edit to an Airtable-authoritative field creates a visible pending overlay plus an outbound intent. Airtable confirmation promotes it; a conflicting Airtable value wins and moves the intent to conflict resolution.
+- D1-authoritative workflow changes commit immediately and enter the outbound projection.
+- Outbound payloads include only the fields changed by the typed intent/projection; they never replay a full stale D1 row.
+
+### Outbound path
+
+1. UI/API/MCP command runs one Effect operation.
+2. One D1 transaction writes the committed workflow state or pending Airtable-edit overlay, row version, domain change, audit row, and immutable outbox intent/projection.
+3. PartyServer publishes the committed D1 state immediately, including visible `pendingSync` state when Airtable confirmation is outstanding.
+4. The per-base sync lane wakes and claims the oldest due outbox rows.
+5. It PATCH-upserts batches of at most ten using `SessionPartyId`.
+6. Success records Airtable record ID/revision/hash and clears the pending overlay after canonical refresh/confirmation.
+7. A conflicting Airtable-authoritative value wins; the intent becomes an admin-visible conflict rather than silently overwriting Airtable.
+8. Permanent mapping/auth errors dead-letter and block later ordered work visibly.
+
+### Inbound path
+
+1. Pages render the current D1 snapshot with `lastRefreshedAt`.
+2. On load, the per-base lane coalesces refresh requests when the cache is stale.
+3. Background refresh runs at a user-approved cadence.
+4. Airtable-owned mapped fields are normalized and committed to D1.
+5. PartyServer publishes only after the import transaction commits.
+6. D1-owned fields returned by Airtable are ignored as inbound facts; an edit to them is surfaced as an ownership violation.
+
+Post-commit Party delivery is best effort: a broadcast failure never turns a committed mutation into an apparent command failure. The D1 change log and REST refresh/replay recover missed live delivery.
+
+### Loop prevention and limits
+
+- Stable `SessionPartyId`
+- Reserved sync metadata: `sp_revision`, `sp_hash`, `sp_origin`
+- Separate hashes for Airtable-owned inbound fields and D1-owned outbound fields
+- Airtable record ID/link metadata in D1
+- Pace below 5 requests/second/base; global PAT ceiling 50 requests/second
+- Pause at least 30 seconds after 429
+- Batch at most ten records
+- No Cloudflare Queue initially: D1 outbox + a serialized per-base DO lane + recovery sweep is simpler and preserves order
+- Polling/on-load refresh ships first; Airtable webhooks are deferred
+
+Local and preview environments use a deterministic fake `AirtableAdapter` with the identical Effect interface. Fake runs are explicitly labeled and never presented as live Airtable delivery.
+
+## Security and data contracts required before `spine-v1`
+
+The existing prototype is not safe to freeze. Phase 0 must establish:
+
+1. **Tenant integrity**
+   - membership check at every admin REST/MCP/Party boundary
+   - composite same-event foreign keys/uniques where D1 permits them
+   - IDs are locators, never authority
+2. **Role-filtered realtime**
+   - one event coordination object, but recipient/audience filtering for admin, assigned reviewer, speaker-self, and public data
+   - replay applies the same authorization as live delivery
+3. **Credential safety**
+   - hash magic-link/session/API-key bearer values
+   - store only secret references in D1
+   - fail closed when production secrets are absent
+4. **Uploads and embeds**
+   - event/user ownership
+   - strict MIME/extension/size allowlist and content-disposition
+   - sandboxed/allowlisted iframe embeds; no raw active same-origin HTML
+5. **Mutation safety**
+   - row versions, idempotency records, append-only domain changes, audit log
+   - D1 outbox with leases/attempts/dead letters
+6. **Email delivery**
+   - immutable recipient/subject/rendered HTML/ICS snapshot
+   - idempotency key, durable lease, attempts, provider message ID
+7. **Forms and speakers**
+   - copy-on-publish form version so submitted answers retain meaning
+   - verified submission ownership and versioned edits after acceptance
+   - one-primary-speaker invariant; invitation/accept/revoke state is required only when independent co-speaker accounts ship
+8. **Publication**
+   - explicit draft versus public revision; embeds read only the published projection
+9. **Integrations**
+   - external identity mappings, per-run/per-item evidence, sync checkpoints, secret references
+10. **Abuse controls**
+    - rate budgets for magic links, public CFP, uploads, email, MCP, and AI
+
+Organizer-locked product behavior:
+
+- the primary CFP is one form with one-or-more track options and routing; organizers may create additional forms
+- accepted speakers may continue editing their submission; an optional future lock time is not required for the deadline
+- independent co-speaker portal accounts are P1/nice-to-have; the primary speaker portal is P0
+- calendar invites contain no video link and include room details only when assigned; reissue an updated ICS when scheduling details change
+
+Security defaults adopted by authorization “according to PLAN.md” unless the user overrides:
+
+- **Review:** reviewers see assigned submissions only; speakers never see reviewer identities, comments, or scores.
+- **Public projection:** event name/description/dates/timezone/location/banner/accent; visible speaker name/title/company/bio/headshot/approved links; published talk title/description/time/duration/room/track/public speaker names. Never expose email, form answers, reviews, tasks, assets not explicitly public, audit, or integration state.
+- **Embeds:** sandboxed iframes from `youtube-nocookie.com`, `youtube.com`, `player.vimeo.com`, and `docs.google.com`; no scripts, raw same-origin HTML, or arbitrary providers.
+- **Uploads:** headshots JPEG/PNG/WebP ≤10 MB; slides PDF/PPT/PPTX ≤100 MB; supporting docs PDF/DOC/DOCX ≤25 MB; reject HTML/SVG/executables and serve documents as attachments.
+- **Abuse budgets:** Turnstile in production for magic-link requests and public CFP submission; magic links ≤5/email/hour and ≤20/IP/hour; CFP ≤10/IP/hour and ≤3/normalized-email/form/day; MCP ≤120 requests/key/minute; email ≤500 recipients/event/day after an organizer confirms the campaign/template/audience (scheduled delivery and retries then run automatically); AI ≤200 requests/event/day.
+- **Retention/audit:** purge auth-token rows seven days after expiry/consumption; retain audit rows 365 days; retain rendered email/ICS 90 days; default private submission/profile/assets retention is 180 days after event end unless the operator shortens it or a deletion request applies.
+- **AI:** only title/abstract/rubric fields are sent; exclude email/contact/private profile data; label output, require reviewer confirmation, and never transition submission status automatically.
+- **Publication:** confirmed talks remain private until an agenda revision is published.
+
+## Repository shape after the spine correction
+
+```text
+contracts/                       # Main-only before/after freeze
+  domain.ts                      # IDs, pagination, shared wire schemas
+  errors.ts                      # tagged error + public error DTO
+  principal.ts                   # session/API key identity and policy types
+  operation.ts                   # OperationDef
+  protocol.ts                    # generic envelope, change cursor, audience
+  schema.ts                      # Drizzle schema and invariants
+migrations/                      # Main-only
 src/
   server/
-    index.ts             # Worker entry: Hono app, /mcp, static assets, DO export
-    registry.gen.ts      # GENERATED — api routers, tools, party handlers
-    party/EventRoom.ts   # PartyServer DO: auth, presence, prefix dispatch
-    auth.ts  db.ts  mail.ts  storage.ts   # shared infra (Phase 0)
-  ui/                    # FROZEN kit: tokens.css + components (Luma-flavored)
-  client/                # app shell, router glue, PartySocket hook, api client
+    index.ts                     # Worker composition
+    adapt.ts                     # sole Effect executor + transport mapping
+    services.ts                  # Effect service tags/AppLayer
+    auth.ts
+    registry.gen.ts              # generated; never hand-merged
+    party/EventRoom.ts
+    party/Scheduler.ts
+    sync/AirtableSyncLane.ts
+  client/                        # router, app shell, API/socket clients
+  ui/                            # frozen primitives + domain composites
+  dev/                           # local scenario catalog and dev-only adapters
   features/
     <slice>/
-      api.ts service.ts tools.ts queries.ts    # server side
-      party.ts?                                # realtime handlers (if any)
-      routes/*.tsx components/                 # client side
+      schema.ts                  # slice input/output/event schemas
+      service.ts                 # domain operations
+      operations.ts              # OperationDef metadata
+      party.ts?                  # intent schema/descriptor, no duplicate logic
+      routes/*.tsx
+      components/*
       <slice>.test.ts
-scripts/gen.ts           # scans features/, emits registry.gen.ts
-seed/                    # demo event, speakers, submissions (Phase 2)
-PLAN.md  AGENTS.md  wrangler.jsonc  vite.config.ts  drizzle.config.ts
+scripts/
+  gen.ts
+  dev-reset.ts
+  seed.ts
+seed/
 ```
 
-## Schema (Phase 0, frozen)
+The generated registry must fail on duplicate operation IDs, REST method/path pairs, MCP names, Party prefixes, client routes, invalid exports, or stale output. Ordering is bytewise deterministic.
 
-`users`, `sessions_auth` (magic-link tokens), `events`, `event_members` (role: owner/admin/reviewer),
-`forms` (kind: cfp/task), `form_fields` (type, options, `logic` JSON: show-if rules, category routing),
-`submissions` (status pipeline: submitted → in_review → accepted/rejected/waitlist), `submission_answers`,
-`speakers` (profile: bio, headshot R2 key, links), `submission_speakers`,
-`review_rounds`, `review_assignments`, `reviews` (score, comment, `ai` flag),
-`tracks`, `rooms`, `sessions` (talk: title, start/end, room_id, track_id, status), `session_speakers`,
-`tasks` (per-event onboarding checklist def), `task_completions` (per speaker, drives dashboard),
-`email_templates`, `email_sends` (log + scheduled via partywhen), `pages` (wiki/resources, html embed),
-`assets` (R2 metadata), `integrations` (airtable/accelevents config + cursors), `api_keys`.
+## UX plan
 
-## Realtime protocol (Phase 0, frozen)
+### Product character
 
-One room per event: `EventRoom:<eventId>`. Envelope `{ t: "<slice>/<type>", ...payload }`, server-authoritative:
-- `agenda/*` — session moved/created/deleted, conflict set recomputed server-side, presence cursors
-- `dashboard/*` — task_completion changed, speaker progress delta
-- `review/*` — score submitted, reviewer presence
-- `submissions/*` — new submission toast
+Borrow from Luma:
 
-## Phases
+- cover-led event identity
+- one clear primary action per decision
+- progressive disclosure
+- compact date/location/host metadata
+- generous public/portal spacing
+- plain-language lifecycle states
 
-### Phase 0 — Spine (serial, integrator, ~half day)
-1. Scaffold: pnpm workspace-less single app, wrangler.jsonc (D1, R2, DO, assets, vars), Vite+React, Hono `/api/v1` + `/mcp`, vitest.
-2. `contracts/` complete: schema + migration 0001, types, protocol, routes, ToolDef.
-3. Infra modules: auth (magic link + cookie), db, mail (Resend+ics), storage (R2 presign).
-4. `EventRoom` DO with prefix dispatch + presence.
-5. UI kit: tokens (Luma-flavored), ~15 components (Button, Input, Select, Card, Modal, Sheet, Tag, Avatar, Table, Tabs, EmptyState, Toast, DatePicker, Dropzone, Skeleton), app shell (sidebar nav per event, topbar).
-6. `scripts/gen.ts` + one example slice (`events`: CRUD) proving the whole pipe: route → service → tool → test.
-7. CI: typecheck + vitest + `pnpm gen --check`. Deploy once to Cloudflare (empty shell live from day 1).
-**FREEZE. Tag `spine-v1`.**
+Do not copy Luma’s consumer-discovery navigation or card-only density. The organizer UI needs filters, tables, bulk actions, deadlines, keyboard access, and explicit time zones/conflicts.
 
-### Phase 1 — Parallel slices (the fan-out)
+### Information architecture
 
-| # | Slice | Brief feature | Realtime | Key MCP tools |
-|---|---|---|---|---|
-| 1 | `forms` | #1 CFP builder: field editor, conditional logic, category routing | — | `create_form`, `add_field`, `set_logic` |
-| 2 | `submit` | #1 public CFP page (no-auth, mobile) | `submissions/new` | `submit_cfp` |
-| 3 | `portal` | #2, #8 speaker portal: profile, uploads, tasks, resources/wiki + HTML embeds | emits `dashboard/*` | `get_speaker_status`, `complete_task` |
-| 4 | `comms` | #3 templates, merge fields, scheduled reminders, ICS calendar invites | — | `send_email`, `schedule_reminder`, `preview_template` |
-| 5 | `review` | #4 rounds, assignments, scoring, AI-assist pass | `review/*` | `assign_reviewers`, `score`, `ai_review` |
-| 6 | `agenda` | #5 drag-drop builder, conflict detection, list/day/week/track/room views | `agenda/*` (flagship demo) | `schedule_session`, `detect_conflicts` |
-| 7 | `dashboard` | #6 live onboarding status board | `dashboard/*` consumer | `get_outstanding_tasks` |
-| 8 | `integrations` | #7 Accelevents one-way import + Airtable mirror | — | `sync_accelevents`, `mirror_airtable` |
-| 9 | `embed` | #9 public speaker gallery + schedule (iframe/web-component, edge-cached) | — | — |
-| 10 | `home` | Event settings, member management, landing (Luma-style event card) | — | `create_event` |
+Organizer:
 
-Slice-lead brief template (every dispatch carries this):
-> Own `src/features/<slice>/` exclusively. Import contracts from `contracts/*`, UI from `@/ui`, infra from `src/server/{auth,db,mail,storage}`. Never edit shared files or migrations; schema gaps → hub message to Main. Implement service.ts first, then api.ts + tools.ts (thin), then routes/. Test via MCP tool calls against local dev. Skip formatters/lint/full suite — integrator runs them.
+```text
+/                                  Events
+/e/:eventSlug                      Operations overview
+/e/:eventSlug/forms                CFP/forms
+/e/:eventSlug/submissions          Submission queue
+/e/:eventSlug/review               Review rounds
+/e/:eventSlug/agenda               Agenda builder
+/e/:eventSlug/speakers             Speaker directory/readiness
+/e/:eventSlug/dashboard            Onboarding dashboard
+/e/:eventSlug/tasks                Task definitions
+/e/:eventSlug/comms                Communications
+/e/:eventSlug/resources            Speaker resources
+/e/:eventSlug/publication          Gallery/schedule/embed preview
+/e/:eventSlug/integrations         Airtable/Accelevents health
+/e/:eventSlug/settings             Event/team/security settings
+```
 
-### Phase 2 — Integration & judging polish (serial-ish, 1 day buffer)
-- Regenerate registries, run full typecheck/tests, fix seams.
-- `seed/`: realistic demo event ("AI Engineer Sandbox"), 30 speakers, 60 submissions — judges must land in a *full* app.
-- Walkthrough pass mirroring the brief's video: every one of the 9 features exercised.
-- Perf pass (bonus): edge-cache embeds, no waterfalls, cold-start audit.
-- Deploy, custom domain, README, submission form.
+Speaker/public:
 
-## Verification loop
+```text
+/e/:eventSlug/portal/*
+/submit/:eventSlug/:formId
+/embed/:eventSlug/speakers
+/embed/:eventSlug/schedule
+```
 
-- Each slice: vitest against workers pool + at least one MCP-driven end-to-end call.
-- Integrator smoke: scripted MCP sequence — create event → publish CFP → submit → review → accept → task portal → schedule → embed renders. That script is also the demo script.
+Router owns the app shell; route modules render page content only. This avoids the current prototype’s duplicate nested `AppShell`.
 
-## Intel from Discord (updates, ranked by impact)
+### Signature interaction
 
-- **Admin UI is the mandatory deliverable**; chat/agentic interfaces are explicitly bonus. MCP remains our test harness + API bonus — it must never steal time from the organizer UI.
-- **Don't blindly clone the screenshots** — organizer expects synthesized flows that streamline real event ops. Luma-style UX is the differentiator, not screen parity.
-- **Airtable emphasis is strong** (possibly primary persistence in organizer's mind). Decision stands: D1 truth (participants already flagged Airtable-as-primary perf risk), but the Airtable mirror must be demo-visible. Re-check after Sunday clarification video; requirements FREEZE after it.
-- **Open questions awaiting organizer clarification** (build the cheap answer, keep the door open): `.ics` attachment vs native calendar API (build .ics); single CFP form with routing vs per-track forms (schema supports both); speaker edit-after-accept (portal: editable, per-event toggle); co-speaker accounts (supported via submission_speakers).
-- **Budget: $500 hard cap incl. subscriptions** — favor cheap models for mechanical subtasks, track usage.
-- **Decision: USE EFFECT (user call, locked).** Server-side is Effect v3: Schema for validation, tagged errors, Layer-provided services. Anti-hallucination mitigation: the spine's `events` slice is the canonical pattern — slice agents copy it, never invent Effect idioms; the slice brief forbids APIs not demonstrated there or in the Effect docs snapshot.
+**Readiness Thread:** a consistent accepted → tasks → confirmed-on-agenda progression shown as:
+
+- one speaker’s next action in the portal
+- an expandable timeline in speaker detail
+- a compact multi-speaker readiness matrix for organizers
+
+Realtime completion advances the thread only after server acknowledgement.
+
+### UI freeze
+
+Freeze design tokens, primitive APIs, status vocabulary, AppShell behavior, accessibility behavior, and shared composites before slice fan-out. Required composites include:
+
+- `EventIdentityHeader`
+- `StatusBadge`
+- `FilterBar`/`DataToolbar`
+- `DetailSheet`
+- `FormRenderer`/`FormFieldEditor`
+- `ReadinessThread`/`ProgressChecklist`
+- `AgendaBoard`/`ConflictIndicator`
+- `SpeakerGallery`/`ScheduleList`
+- `SyncStatusCard`
+
+## Local UI/UX troubleshooting
+
+Use a real-app `/dev/ui` laboratory—not Storybook/Ladle—so routes, auth, Effect API, D1, R2, PartyServer, Tailwind, and the UI kit cannot drift.
+
+### Local loop
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev:reset --scenario=agenda-live-conflict
+pnpm dev
+pnpm dev:open --scenario=agenda-live-conflict --persona=programmer
+```
+
+Requirements:
+
+- one explicit persisted local-state root shared by Vite and `wrangler ... --persist-to`
+- deterministic fixed clock/IDs and idempotent reset
+- guarded `DEV_LAB=1`; lab/persona/fault endpoints reject in production
+- normal cookie-backed personas: owner, admin, reviewer, speaker, applicant, observer, expired
+- fake Mail and Airtable adapters behind the same Effect ports
+- boundary fault injection for latency, 429, timeout, R2 failure, websocket drop/reconnect
+- two independent browser contexts for realtime verification
+- Playwright screenshots/traces against actual product routes
+
+Core scenarios:
+
+- empty event
+- full event
+- CFP routing/validation
+- 60-submission triage
+- review contention
+- agenda live conflict
+- speaker onboarding
+- communications/ICS/local mailbox
+- Airtable outbox/backoff/dead letter
+- external failures
+- public embed/privacy
+- accessibility/reduced motion
+
+## Agent factory
+
+### Honest concurrency
+
+“Hundreds of agents” means a hierarchy, not hundreds editing source:
+
+- 1 Main/release integrator
+- 6–10 domain leads
+- up to 4 exact-file writers per active slice
+- behavioral reviewers, security reviewers, UX/accessibility reviewers
+- read-only scouts, test designers, recon, and contingency agents
+
+Maximum productive source-writing concurrency:
+
+- Wave 0 spine: **1 central writer**
+- Wave 1A: about **24 slice writers**
+- Wave 1B: about **16 slice writers**
+- all active feature slices: about **40 writers maximum**
+
+Additional agents remain valuable for read-only QA/research. Multiple writers in one directory are not isolated; every leaf requires exact non-overlapping file ownership.
+
+Each active leaf gets its own Paseo-managed worktree/branch. The domain lead integrates leaf commits into the slice branch; leaves never share a worktree. One named test owner owns `<slice>.test.ts`, and the lead serializes any change to a contested file.
+
+Use Paseo-managed worktrees only for active lanes. Reuse/archive a bounded pool; do not create hundreds of worktrees that each run `pnpm install`.
+
+### Ownership
+
+Main alone writes:
+
+- `contracts/**`
+- `migrations/**`
+- `src/server/**`
+- `src/client/**`
+- `src/ui/**`
+- `src/dev/**`
+- `scripts/**`
+- root config
+- generated registries
+- seed and final demo artifacts
+
+Each domain lead owns exactly one `src/features/<slice>/**` branch. Within it, leaf ownership is literal:
+
+- service/query files
+- operation/transport descriptors
+- route/components
+- scoped tests
+
+### Task brief contract
+
+Every assignment includes:
+
+- task ID/wave/slice/lane
+- owner/lead/model tier/budget cap
+- exact writable files
+- read-only inputs and forbidden files
+- tables owned/read
+- operation manifest: REST/MCP/auth/realtime
+- dependencies and entry gate
+- observable acceptance behavior
+- scoped verification command
+- handoff format and escalation path
+
+Schema/protocol changes use a formal request to Main. Slice agents never add shadow JSON, local migrations, aliases, or central-file edits.
+
+## Execution waves
+
+### Wave 0A — Compatibility tranche
+
+One Main-owned writer:
+
+1. lock exact TypeScript and Workers Vitest versions/APIs from installed exports
+2. remove TS7-incompatible `baseUrl` usage or pin a compatible compiler intentionally
+3. correct Workers Vitest config import
+4. correct malformed HTML attribute quoting
+5. run `check`, `test`, and `build` once
+6. commit separately
+
+### Wave 0B entry decisions
+
+Before contract work begins:
+
+- camelCase wire casing is locked
+- Airtable field IDs/authority map (H7) and reserved key/revision/hash columns (H8) are approved
+- implementation approval “according to PLAN.md” adopts the concrete security defaults above, or the user supplies overrides
+- acceptance/provisioning event contract is defined for review → portal/agenda/comms consumers
+
+### Wave 0B — Contract/security tranche
+
+Main updates:
+
+- OperationDef registry, including REST/MCP/Party metadata, and generators
+- Effect input/output schemas and adapters
+- principals/scoped API keys/authorization matrix
+- tenant foreign keys and schema invariants
+- token hashing and secret references
+- row versions, idempotency, change log, audit
+- separate mail and Airtable outbox/lease contracts
+- Airtable field map/link/outbox/pending-edit/refresh state
+- generic role-filtered realtime envelope/replay
+- form publication version and primary-speaker provisioning
+- public publication projection
+
+Exit: clean blank-DB migration plus targeted upgrade/rebuild proof, including one atomicity test that state + version + audit + change + applicable outbox either commit together or all roll back.
+
+### Wave 0C — Canonical proof
+
+1. events vertical is the canonical slice
+2. one operation executes through service, REST, MCP, and Party intent with equivalent output/error behavior
+3. registry collision and freshness checks pass
+4. EventRoom rejects non-members and filters audiences
+5. local UI lab boots with deterministic seed/reset
+6. router, API/socket clients, frozen UI primitives/composites, and one organizer page compile and render through a single AppShell
+7. Airtable fake proves pending edit/projection → delivery → inbound confirmation/refresh
+8. Mail fake proves durable claim → captured delivery → idempotent retry
+
+### `spine-v1` gate
+
+Do not tag or fan out until:
+
+- `pnpm check`, `pnpm test`, and `pnpm build` are green without warnings
+- blank and upgrade migrations pass integrity checks
+- REST/MCP/Party parity proof passes
+- tenant/realtime/security tests pass
+- local UI lab and reset are deterministic
+- router, API/socket clients, UI primitives/composites, and accessibility behaviors are frozen and proven
+- generated registry is fresh and collision-free
+- working tree is clean and commits are intentional
+- local development is green; preview/prod approval remains a release gate, not a local freeze prerequisite
+- two independent reviews approve contracts/auth/migration
+
+### Feature dependency graph
+
+```mermaid
+flowchart TD
+  SPINE[spine-v1] --> FORMS[forms]
+  FORMS --> SUBMIT[submit]
+  SUBMIT --> REVIEW[review + acceptance]
+  REVIEW --> ACCEPT[accepted/provisioned speaker contract]
+  ACCEPT --> PORTAL[portal]
+  ACCEPT --> AGENDA[agenda]
+  PORTAL --> DASH[dashboard]
+  AGENDA --> ICS[scheduled ICS comms]
+  PORTAL --> EMBED[public speakers]
+  AGENDA --> EMBED2[public schedule]
+  SPINE --> HOME[home/settings]
+  SPINE --> INTEG[integrations UI/operations]
+  SPINE --> COMMS0[template/preview comms]
+```
+
+Slices may scaffold against frozen fixtures/contracts before their producer is implemented, but activation and integration wait for the named dependency artifact and contract tests.
+
+### Wave 1A — Producers and independent foundations
+
+Start after `spine-v1`:
+
+| Slice | Owns | Start/activation gate |
+|---|---|---|
+| `forms` | forms, published versions, field logic/routing | spine |
+| `submit` | public CFP and submission creation | forms operation artifact |
+| `portal` | speaker profile, tasks, resources, uploads | scaffold on frozen acceptance contract; activate after acceptance artifact |
+| `home` | event settings, members, overview | events |
+| `comms` | templates and preview only | spine; scheduling activates after agenda |
+| `integrations` | configuration/mapping operations and sync-status UI | Main-owned adapter/lane contract |
+
+Main owns Airtable/Accelevents infrastructure adapters and sync lanes under `src/server/**`; the integrations lead owns slice operations, mapping workflows, tests, and UI only.
+
+### Wave 1B — Acceptance and downstream workflows
+
+| Slice/pass | Depends on |
+|---|---|
+| `review` + acceptance | submit artifact |
+| `portal` activation/provisioning | acceptance artifact |
+| `agenda` | acceptance artifact |
+| `dashboard` | portal task event artifact |
+| `comms` scheduling/ICS pass | agenda scheduled-talk artifact |
+| `embed` speakers/schedule | portal visibility + published agenda artifacts |
+
+Each row starts independently only when its producer artifact and contract tests are green. Peak source-writer count is the sum of active, unblocked slices—not a fixed target.
+
+### Wave 2 — Integration
+
+Main:
+
+1. merges dependency-first
+2. regenerates registries instead of resolving generated conflicts
+3. applies deterministic seed
+4. runs one full integration train
+5. drives the browser and MCP walkthrough
+6. delegates slice-local repairs to owners
+
+Maximum useful active workers: Main + up to ten slice repair owners + six QA/review agents.
+
+### Wave 3 — Release candidate
+
+Scope freezes. Only P0/security/mandatory-demo fixes enter.
+
+Maximum: one release owner, two demo operators, up to three isolated bug owners.
+
+## Feature acceptance
+
+All nine are P0:
+
+1. **CFP forms:** one primary form with one-or-more track options/routing, optional additional forms, conditional fields, public mobile submission, closed-state and idempotency proof
+2. **Speaker portal:** primary-speaker account, editable accepted submission, profile/headshot/slides/docs, ownership and edit policy; independent co-speaker accounts are P1
+3. **Communications:** template preview, reminders, auditable delivery, valid ICS with no video link; include room details when assigned and support an updated invite after schedule changes
+4. **Reviews:** rounds, assignments, bounded rubric scores, optional labeled AI assist
+5. **Agenda:** backlog, drag/move alternative, room/speaker conflicts, list/day/week/track/room views
+6. **Live dashboard:** task completion updates organizer readiness without refresh
+7. **Integrations:** visible Airtable outbound/inbound sync state and truthful Accelevents live/fixture mode
+8. **Resources:** speaker-only wiki/resources and sandboxed embeds
+9. **Public embeds:** mobile gallery/schedule showing only visible speakers and published sessions
+
+## Verification
+
+### Per slice
+
+- scoped TypeScript project
+- scoped Effect service tests
+- operation registry/conformance check
+- REST/MCP parity fixture
+- slice browser route smoke
+
+Slice agents do not run the root suite.
+
+### Integration train
+
+Exactly once per train:
+
+1. frozen install
+2. migration verification
+3. registry generation + freshness/collision check
+4. full strict typecheck
+5. one full Workers Vitest run
+6. REST/MCP parity suite
+7. Party multi-client/auth/replay suite
+8. production build
+9. isolated preview migration/seed/deploy
+10. browser admin walkthrough, accessibility, and visual evidence
+
+
+Before release, run one minimal **live Airtable authority smoke** against the configured base/table: write a D1-authoritative field through the app and observe its Airtable upsert; edit an Airtable-authoritative field in Airtable and observe on-load/background refresh commit it to D1 and update the UI. Record IDs/hashes/status without exposing the PAT, then restore the demo fixture. Accelevents and real email remain optional enhanced paths.
+Preview/release consume the same green artifact; they do not rebuild it.
+
+## Demo
+
+Deterministic `AI Engineer Sandbox` seed:
+
+- 30 speakers
+- 60 submissions across statuses/categories
+- one conditional routed CFP
+- two review rounds
+- 4 tracks, 4 rooms, 18 talks
+- 5 speaker tasks
+- resources and a safe embed
+- communications with local mail/ICS evidence
+- fake Airtable/Accelevents adapters using production interfaces
+- public speaker and schedule embeds
+
+Primary walkthrough follows one proposal:
+
+CFP → review → acceptance → primary-speaker portal/edit → onboarding dashboard → agenda conflict/resolution → initial/updated ICS communication → resources → Airtable sync → public embed.
+
+A fake-backed demo is the reliable critical path. Because Airtable participates as the authoritative system for mapped Airtable-owned fields, the minimal live Airtable authority smoke above is a release gate once the PAT and field map are available. Live Accelevents and email delivery remain optional enhanced proof. Fake/seeded/live artifacts are labeled truthfully.
+
+## Human blockers
+
+### Resolved
+
+| Item | Decision |
+|---|---|
+| Cloudflare owner | `jpoehnelt` |
+| Cloudflare MCP inventory | OAuth transport connected; read-only `GET /accounts` returned HTTP 200 and account `9cfedefc6185f3dad8ab91241b401135`; exact roles/scopes were not exposed |
+| Local implementation authorization | Wave 0A application/configuration changes authorized; external writes remain separately gated |
+| Cloudflare security observation | OAuth app access enabled; account-wide two-factor enforcement currently disabled (release-hardening observation, not a local blocker) |
+| TypeScript server style | Effect v3 |
+| Airtable authority | field-scoped; Airtable mapped fields, D1 workflow fields |
+| Airtable base/table/view | IDs recorded above |
+| Status cadence | every 30 minutes |
+| CFP shape | one form with one-or-more track options/routing; additional forms supported |
+| Accepted edits | speakers may edit after acceptance; edit-lock time deferred |
+| Co-speaker portals | P1/nice-to-have; primary-speaker portal is P0 |
+| Calendar invite | no video link; room when assigned; updated ICS after scheduling changes |
+| Accelevents demo fallback | truthful fixture uses the production adapter interface; live credentials are optional enhanced proof |
+
+### Before Wave 0B
+
+| ID | Owner | Blocker | Required action |
+|---|---|---|---|
+| H7 | User/Airtable owner | Field map | Provide Airtable field IDs and assign each field `airtable`, `d1`, or unsynchronized |
+| H8 | User/Airtable owner | Reserved columns | Approve/create stable `SessionPartyId`, `sp_revision`, `sp_hash`, `sp_origin` |
+
+Authorizing implementation “according to PLAN.md” adopts the concrete security defaults above. State any override before Wave 0B.
+
+### Before fake-backed preview
+
+| ID | Owner | Blocker | Required action |
+|---|---|---|---|
+| H2 | User | Preview origin | Approve the preview origin |
+| H3 | User/Ops | External authorization path | Explicitly authorize preview provisioning/deployment/migration and approve a write-capable Wrangler OAuth or short-lived scoped token; read-only MCP OAuth is insufficient |
+
+### Before live Airtable/release smoke
+
+| ID | Owner | Blocker | Required action |
+|---|---|---|---|
+| H6 | User/Airtable owner | PAT | Supply `AIRTABLE_PAT` through the Worker secret path; never chat/source/D1 |
+| H9 | User | Freshness/call budget | Pick active background cadence; on-load refresh is mandatory, webhook is deferred |
+| H10 | User/Ops | Sync ownership | Name the person responsible for mapping changes, blocked rows, and dead letters |
+
+### Before live email or production release
+
+| ID | Owner | Blocker | Required action |
+|---|---|---|---|
+| H4 | User/Ops | Resend | Establish account owner, verified domain, From/Reply-To, demo recipient allowlist, daily cap before enabling live email |
+| H2P | User | Production origin | Approve production/custom domain |
+| H3P | User/Ops | Production authorization | Explicitly authorize production provisioning/deployment/migration/secrets/routes/DNS with a scoped write-capable path |
+
+### Optional tooling/integrations
+
+| ID | Owner | Item | Action |
+|---|---|---|---|
+| H5 | User/Ops | Live Accelevents | Decide encryption/key-rotation owner only if enabling live Accelevents or per-event credentials |
+
+### Before release packaging
+
+| ID | Owner | Blocker | Required action |
+|---|---|---|---|
+| H20 | User | Project packaging | Choose repository owner, license, product name/branding |
+
+## Current repository state
+
+The working tree remains a **quarantined Phase-0 prototype**, not delivered or frozen. Wave 0A compatibility verification is green:
+
+- exact TypeScript/Workers Vitest versions are pinned
+- `pnpm check` passes, including generated-registry freshness
+- Workers Vitest runs fully locally with 3/3 passing tests and no Cloudflare binding proxy; third-party MCP/cron packages emit missing-source sourcemap notices
+- `pnpm build` passes without the prior HTML parse warnings
+- no Cloudflare/Airtable resource write, deployment, migration, secret injection, route, or DNS action occurred
+- no `spine-v1` tag exists; current contracts still have the security, sync, schema, MCP, and realtime gaps listed above
+
+Do not push, tag, deploy, or fan Phase 1 from this state.
+
+## Reporting
+
+Heartbeat `11747f36` sends a status report every 30 minutes through August 13. Each report includes:
+
+- completed work
+- active agent scopes
+- locked decisions and conflicts
+- human blockers
+- repository Phase-0 gate
+- infrastructure authorization state
+- next 30-minute critical path
+
+## Immediate next action after planning approval
+
+Authorize implementation explicitly. Main then performs Wave 0A as one compatibility tranche before any contract or feature work.
