@@ -15,7 +15,7 @@ export default defineConfig({
       miniflare: {
         compatibilityDate: "2025-08-01",
         compatibilityFlags: ["nodejs_compat"],
-        d1Databases: ["DB"],
+        d1Databases: ["DB", "MIGRATION_DB"],
         r2Buckets: ["FILES"],
         durableObjects: {
           EVENT_ROOM: "EventRoom",
@@ -24,6 +24,7 @@ export default defineConfig({
         },
         bindings: {
           APP_URL: "http://localhost:5173",
+          LOCAL_MODE: "1",
           TEST_MIGRATIONS: migrations,
         },
       },

@@ -5,6 +5,21 @@
  * WS messages) with these via Schema.decodeUnknown.
  */
 import { Schema as S } from "effect";
+export { ApiScope, ApiScopes } from "./principal";
+
+// ---------- common persisted values ----------
+
+export const Sha256Hex = S.String.pipe(S.pattern(/^[a-f0-9]{64}$/));
+export type Sha256Hex = typeof Sha256Hex.Type;
+
+export const ExternalSecretRef = S.String.pipe(S.minLength(1), S.maxLength(255));
+export type ExternalSecretRef = typeof ExternalSecretRef.Type;
+
+export const EventRole = S.Literal("owner", "admin", "reviewer");
+export type EventRole = typeof EventRole.Type;
+
+export const JsonObject = S.Record({ key: S.String, value: S.Unknown });
+export type JsonObject = typeof JsonObject.Type;
 
 // ---------- form conditional logic (form_fields.logic) ----------
 
@@ -48,35 +63,109 @@ export const SpeakerLink = S.Struct({
   url: S.String.pipe(S.pattern(/^https?:\/\//)),
 });
 export type SpeakerLink = typeof SpeakerLink.Type;
+export const SpeakerLinks = S.Array(SpeakerLink);
+export type SpeakerLinks = typeof SpeakerLinks.Type;
 
 // ---------- integrations.config ----------
 
+export const AirtableEntityType = S.Literal("speaker", "submission", "talk");
+export type AirtableEntityType = typeof AirtableEntityType.Type;
+
+export const AirtableFieldAuthority = S.Literal("airtable", "d1");
+export type AirtableFieldAuthority = typeof AirtableFieldAuthority.Type;
+
+const airtableConnectorFields = {
+  sessionPartyId: S.String,
+  spRevision: S.String,
+  spHash: S.String,
+  spOrigin: S.String,
+};
+
+/**
+ * Physical tbl/fld IDs are deployment configuration. Logical keys and their
+ * field authority are locked by PLAN.md and are never inferred from names.
+ */
 export const AirtableConfig = S.Struct({
   kind: S.Literal("airtable"),
-  apiKey: S.String,
   baseId: S.String,
-  /** local entity -> Airtable table name; only mapped entities are mirrored. */
+  origin: S.String,
   tables: S.Struct({
-    speakers: S.optional(S.String),
-    submissions: S.optional(S.String),
-    talks: S.optional(S.String),
+    speakers: S.Struct({
+      tableId: S.String,
+      fields: S.Struct({
+        ...airtableConnectorFields,
+        displayName: S.String,
+        jobTitle: S.String,
+        company: S.String,
+        bio: S.String,
+        visibility: S.String,
+      }),
+    }),
+    submissions: S.Struct({
+      tableId: S.String,
+      fields: S.Struct({
+        ...airtableConnectorFields,
+        title: S.String,
+        abstract: S.String,
+        category: S.String,
+        status: S.String,
+        submittedAt: S.String,
+        speakerLinks: S.String,
+      }),
+    }),
+    talks: S.Struct({
+      tableId: S.String,
+      fields: S.Struct({
+        ...airtableConnectorFields,
+        title: S.String,
+        description: S.String,
+        track: S.String,
+        room: S.String,
+        startsAt: S.String,
+        durationMin: S.String,
+        status: S.String,
+        speakerLinks: S.String,
+        submissionLink: S.String,
+      }),
+    }),
   }),
 });
 export type AirtableConfig = typeof AirtableConfig.Type;
 
 export const AccelConfig = S.Struct({
   kind: S.Literal("accelevents"),
-  apiKey: S.String,
   accelEventId: S.String,
 });
 export type AccelConfig = typeof AccelConfig.Type;
 
+export const IntegrationConfig = S.Union(AirtableConfig, AccelConfig);
+export type IntegrationConfig = typeof IntegrationConfig.Type;
+
+export const AirtableMappedValues = JsonObject;
+export type AirtableMappedValues = typeof AirtableMappedValues.Type;
+
+// ---------- durable operation metadata ----------
+
+export const ChangeAudience = S.Union(
+  S.Struct({ kind: S.Literal("admins") }),
+  S.Struct({ kind: S.Literal("reviewers"), reviewerUserIds: S.Array(S.String) }),
+  S.Struct({ kind: S.Literal("speaker"), speakerIds: S.Array(S.String) }),
+  S.Struct({ kind: S.Literal("public") }),
+);
+export type ChangeAudience = typeof ChangeAudience.Type;
+
+export const ChangeAudiences = S.NonEmptyArray(ChangeAudience);
+export type ChangeAudiences = typeof ChangeAudiences.Type;
+
+export const AuditSnapshot = S.NullOr(JsonObject);
+export type AuditSnapshot = typeof AuditSnapshot.Type;
+
+export const ProviderResult = JsonObject;
+export type ProviderResult = typeof ProviderResult.Type;
+
 // ---------- email merge context ----------
 
-/**
- * Variables available in email templates as {{path}}.
- * comms slice builds this; keep flat and stable.
- */
+/** Variables available in email templates as {{path}}. */
 export interface MergeContext {
   "speaker.name": string;
   "speaker.email": string;

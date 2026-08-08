@@ -1,15 +1,23 @@
 import { Validation } from "contracts/errors";
 import type { ToolDef } from "contracts/mcp";
+import type { Principal } from "contracts/principal";
+import { API } from "contracts/routes";
 import { Effect, JSONSchema, Schema } from "effect";
 import { Hono } from "hono";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
-import auth, { apiKeyUserFromRequest } from "./auth";
-import { runMcp } from "./adapt";
+import auth, { apiKeyUserFromRequest, userFromRequest } from "./auth";
+import { runMcp, runRestOperation, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
 import { Scheduler } from "./party/Scheduler";
-import { apiRouters, tools } from "./registry.gen";
-import type { CurrentUserValue } from "./services";
+import {
+  apiRouters,
+  mcpTools,
+  operationById,
+  restRegistrations,
+  tools,
+} from "./registry.gen";
+import { isExplicitLocalEnvironment, sessionSecret } from "./services";
 
 type JsonRpcId = string | number;
 type JsonRpcRequest = {
@@ -38,7 +46,6 @@ interface McpTransport {
 const isJsonRpcBatch = (
   message: JsonRpcRequest | readonly JsonRpcRequest[],
 ): message is readonly JsonRpcRequest[] => Array.isArray(message);
-
 
 type RequestHandler = (params: unknown) => Promise<unknown>;
 
@@ -159,30 +166,52 @@ const mcpTool = (tool: ToolDef) => {
 
 export class SessionPartyMcp extends McpAgent<Env> {
   private readonly protocol = new LowLevelMcpServer();
-  private currentUser: CurrentUserValue | null = null;
+  private currentUser: Principal | null = null;
   // McpAgent intentionally accepts an MCP SDK v1-compatible protocol object.
   override server = this.protocol as never;
 
   override async init(): Promise<void> {
     this.protocol.setRequestHandler("tools/list", async () => ({
-      tools: tools.map(mcpTool),
+      tools: [
+        ...mcpTools.map(({ name, description, inputSchema, outputSchema }) => ({
+          name,
+          description,
+          inputSchema,
+          outputSchema,
+        })),
+        ...tools.map(mcpTool),
+      ],
     }));
     this.protocol.setRequestHandler("tools/call", async (rawParams) => {
       if (!this.currentUser) throw new Error("Unauthenticated: a Bearer API key is required");
       const params = objectParams(rawParams);
       const name = params.name;
-      const tool = typeof name === "string" ? tools.find((candidate) => candidate.name === name) : undefined;
-      if (!tool) throw new Error(`Unknown tool: ${String(name)}`);
-
       const args = objectParams(params.arguments);
+      const descriptor = typeof name === "string"
+        ? mcpTools.find((candidate) => candidate.name === name)
+        : undefined;
+      if (descriptor) {
+        const operation = operationById[descriptor.operationId];
+        if (!operation) throw new Error(`Unregistered operation: ${descriptor.operationId}`);
+        const result = await runTransportOperation(
+          this.env,
+          this.currentUser,
+          operation,
+          args,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      }
+
+      const tool = typeof name === "string"
+        ? tools.find((candidate) => candidate.name === name)
+        : undefined;
+      if (!tool) throw new Error(`Unknown tool: ${String(name)}`);
       const effect = Schema.decodeUnknown(tool.args)(args).pipe(
         Effect.mapError((error) => new Validation({ message: String(error) })),
         Effect.flatMap((decoded) => tool.handler(decoded)),
       );
       const result = await runMcp(this.env, this.currentUser, effect);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
     });
   }
 
@@ -199,8 +228,44 @@ export class SessionPartyMcp extends McpAgent<Env> {
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.route("/api/v1/auth", auth);
-for (const router of apiRouters) app.route("/api/v1", router);
+app.route(`${API}/auth`, auth);
+for (const registration of restRegistrations) {
+  const operation = operationById[registration.operationId];
+  if (!operation) throw new Error(`Unregistered operation: ${registration.operationId}`);
+  app.on(registration.method, `${API}${registration.path}`, async (c) =>
+    runRestOperation(
+      c,
+      await userFromRequest(c.req.raw, c.env) as Principal | null,
+      operation,
+      registration.input,
+    ),
+  );
+}
+for (const router of apiRouters) app.route(API, router);
+app.post("/__local/smoke", async (c) => {
+  if (!isExplicitLocalEnvironment(c.env)) return c.notFound();
+  if (c.req.header("x-local-smoke-secret") !== sessionSecret(c.env)) {
+    return c.json({ error: "Unauthenticated", message: "Local smoke secret required" }, 401);
+  }
+
+  const d1 = await c.env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
+  const objectKey = "local-smoke/probe.txt";
+  await c.env.FILES.put(objectKey, "local-smoke");
+  const object = await c.env.FILES.get(objectKey);
+  await c.env.FILES.delete(objectKey);
+
+  const schedulerId = c.env.SCHEDULER.idFromName("local-smoke");
+  const scheduler = await c.env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
+    method: "POST",
+    headers: { "x-session-party-internal": sessionSecret(c.env) },
+  });
+  return c.json({
+    mode: "local-fake",
+    d1: d1?.ok === 1,
+    r2: object !== null,
+    durableObject: scheduler.ok,
+  });
+});
 
 app.all("/parties/*", async (c) => {
   const response = await routePartykitRequest(c.req.raw, c.env);
