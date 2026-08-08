@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "session-party",
-      "database_id": "PLACEHOLDER-SET-ON-FIRST-DEPLOY",
+      "database_id": "2cb93013-05e8-48bc-865d-f99a0a0096da",
       "migrations_dir": "migrations"
     }
   ],
