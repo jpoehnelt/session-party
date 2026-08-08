@@ -27,7 +27,7 @@ const organizerWrite = eventAuthorization(
 
 const acceptanceWrite = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
-  { kind: "api-key", scopes: ["reviews:write", "submissions:write", "speakers:write"] },
+  { kind: "deny" },
 );
 
 const reviewRead = eventAuthorization(

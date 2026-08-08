@@ -20,6 +20,7 @@ import { SubmissionReviewPane } from "../components/SubmissionReviewPane";
 
 export interface ReviewWorkbenchRouteProps {
   snapshot?: ReviewWorkbench;
+  currentReviewerUserId?: string;
   state?: "loading" | "ready" | "error";
   errorMessage?: string;
   resolveFixtureDetail?: (submissionId: string) => SubmissionReviewDetail | null;
@@ -50,6 +51,7 @@ const reviewStateTone = {
 
 export default function ReviewWorkbenchRoute({
   snapshot = reviewWorkbenchFixture,
+  currentReviewerUserId,
   state = "ready",
   errorMessage,
   resolveFixtureDetail = detailForFixtureSubmission,
@@ -64,11 +66,16 @@ export default function ReviewWorkbenchRoute({
   const [status, setStatus] = useState<SubmissionStatus | "all">("all");
   const [category, setCategory] = useState("all");
   const [assignment, setAssignment] = useState<"all" | "assigned" | "unassigned">("all");
-  const [roundId, setRoundId] = useState(
-    snapshot.rounds.find((round) => round.status === "active")?.id ?? snapshot.rounds[0]?.id ?? "",
-  );
   const searchRef = useRef<HTMLInputElement>(null);
   const detailRef = useRef<HTMLElement>(null);
+  const queueButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+
+  const loadedRound = snapshot.selected?.round
+    ?? snapshot.rounds.find((round) => round.status === "active")
+    ?? snapshot.rounds[0]
+    ?? null;
+  const resolvedReviewerUserId = currentReviewerUserId
+    ?? (snapshot.viewerRole === "reviewer" ? fixtureReviewerId : undefined);
 
   const categories = useMemo(
     () => [...new Set(queue.flatMap((submission) => submission.category ? [submission.category] : []))].sort(),
@@ -88,7 +95,9 @@ export default function ReviewWorkbenchRoute({
   );
 
   useEffect(() => {
-    if (visibleQueue.length > 0 && !visibleQueue.some((submission) => submission.id === selectedId)) {
+    if (visibleQueue.length === 0) {
+      setSelectedId("");
+    } else if (!visibleQueue.some((submission) => submission.id === selectedId)) {
       setSelectedId(visibleQueue[0]!.id);
     }
   }, [selectedId, visibleQueue]);
@@ -114,19 +123,33 @@ export default function ReviewWorkbenchRoute({
       : submission));
   };
 
-  const moveSelection = (direction: -1 | 1) => {
-    if (visibleQueue.length === 0) return;
-    const currentIndex = visibleQueue.findIndex((submission) => submission.id === selectedId);
-    const nextIndex = currentIndex < 0
-      ? 0
-      : Math.min(visibleQueue.length - 1, Math.max(0, currentIndex + direction));
-    setSelectedId(visibleQueue[nextIndex]!.id);
+  const focusQueueItem = (submissionId: string) => {
+    requestAnimationFrame(() => queueButtonRefs.current.get(submissionId)?.focus());
+  };
+
+  const moveQueueFocus = (currentId: string, direction: -1 | 1) => {
+    const currentIndex = visibleQueue.findIndex((submission) => submission.id === currentId);
+    if (currentIndex < 0) return;
+    const nextIndex = Math.min(visibleQueue.length - 1, Math.max(0, currentIndex + direction));
+    const nextId = visibleQueue[nextIndex]!.id;
+    setSelectedId(nextId);
+    focusQueueItem(nextId);
+  };
+
+  const clearFilters = () => {
+    setQuery("");
+    setStatus("all");
+    setCategory("all");
+    setAssignment("all");
   };
 
   if (state === "loading") {
     return (
-      <main className="space-y-4 p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
-        <div className="flex items-center justify-between"><Skeleton className="h-8 w-72" /><Skeleton className="h-8 w-36" /></div>
+      <main className="space-y-4 p-3 sm:p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Skeleton className="h-8 w-full max-w-72" />
+          <Skeleton className="h-8 w-32 sm:w-36" />
+        </div>
         <div className="grid gap-4 lg:grid-cols-[minmax(19rem,0.78fr)_minmax(0,1.7fr)]">
           <Skeleton className="h-[38rem]" />
           <Skeleton className="h-[38rem]" />
@@ -138,7 +161,7 @@ export default function ReviewWorkbenchRoute({
 
   if (state === "error") {
     return (
-      <main className="p-6">
+      <main className="p-4 sm:p-6">
         <Card>
           <EmptyState
             title="Review queue could not load"
@@ -155,18 +178,9 @@ export default function ReviewWorkbenchRoute({
       className="min-h-screen bg-canvas p-3 sm:p-4 lg:p-6"
       onKeyDown={(event) => {
         const target = event.target as HTMLElement;
-        const editing = target.matches("input, textarea, select, button");
-        if (event.key === "/" && !editing) {
+        if (event.key === "/" && !target.matches("input, textarea, select")) {
           event.preventDefault();
           searchRef.current?.focus();
-        } else if (!editing && event.key === "ArrowDown") {
-          event.preventDefault();
-          moveSelection(1);
-        } else if (!editing && event.key === "ArrowUp") {
-          event.preventDefault();
-          moveSelection(-1);
-        } else if (!editing && event.key === "Enter") {
-          detailRef.current?.focus();
         }
       }}
     >
@@ -174,17 +188,17 @@ export default function ReviewWorkbenchRoute({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold tracking-tight text-ink">Proposal review</h1>
-            <Badge tone="neutral">{queue.length} submissions</Badge>
+            <Badge tone="neutral">{queue.length} in round</Badge>
             <Badge tone="accent">
-              {snapshot.rounds.find((round) => round.id === roundId)?.name ?? "No round"} · {snapshot.rounds.find((round) => round.id === roundId)?.status ?? "pending"}
+              {loadedRound ? `${loadedRound.name} · ${loadedRound.status}` : "No review round"}
             </Badge>
           </div>
           <p className="mt-1 text-sm text-ink-secondary">
             Evidence-first triage for {snapshot.eventName}. Times shown in {snapshot.timezone}.
           </p>
         </div>
-        <div className="text-right text-xs text-ink-faint">
-          <p>List: ↑/↓ · Detail: Enter · Search: /</p>
+        <div className="text-left text-xs text-ink-faint sm:text-right">
+          <p>Queue focus: ↑/↓ · Open detail: Enter · Search: /</p>
           <p>
             Fixture snapshot {new Intl.DateTimeFormat("en-US", {
               dateStyle: "medium",
@@ -195,31 +209,30 @@ export default function ReviewWorkbenchRoute({
         </div>
       </header>
 
-      <section className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1.5fr)_repeat(4,minmax(9rem,0.7fr))]" aria-label="Queue filters">
-        <Input
-          ref={searchRef}
-          label="Search proposals"
-          placeholder="Title or category"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <Select label="Round" value={roundId} onChange={(event) => setRoundId(event.target.value)}>
-          {snapshot.rounds.map((round) => <option key={round.id} value={round.id}>{round.name} · {round.status}</option>)}
-        </Select>
-        <Select label="Status" value={status} onChange={(event) => setStatus(event.target.value as SubmissionStatus | "all")}>
-          <option value="all">All statuses</option>
-          {Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </Select>
-        <Select label="Category" value={category} onChange={(event) => setCategory(event.target.value)}>
-          <option value="all">All categories</option>
-          {categories.map((value) => <option key={value} value={value}>{value}</option>)}
-        </Select>
-        <Select label="Assignment" value={assignment} onChange={(event) => setAssignment(event.target.value as typeof assignment)}>
-          <option value="all">All assignments</option>
-          <option value="assigned">Assigned</option>
-          <option value="unassigned">Unassigned</option>
-        </Select>
-      </section>
+      {queue.length > 0 && (
+        <section className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1.5fr)_repeat(3,minmax(9rem,0.7fr))]" aria-label="Queue filters">
+          <Input
+            ref={searchRef}
+            label="Search proposals"
+            placeholder="Title or category"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <Select label="Status" value={status} onChange={(event) => setStatus(event.target.value as SubmissionStatus | "all")}>
+            <option value="all">All statuses</option>
+            {Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </Select>
+          <Select label="Category" value={category} onChange={(event) => setCategory(event.target.value)}>
+            <option value="all">All categories</option>
+            {categories.map((value) => <option key={value} value={value}>{value}</option>)}
+          </Select>
+          <Select label="Assignment" value={assignment} onChange={(event) => setAssignment(event.target.value as typeof assignment)}>
+            <option value="all">All assignments</option>
+            <option value="assigned">Assigned</option>
+            <option value="unassigned">Unassigned</option>
+          </Select>
+        </section>
+      )}
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(19rem,0.78fr)_minmax(0,1.7fr)]">
         <Card
@@ -228,16 +241,21 @@ export default function ReviewWorkbenchRoute({
             <span className="flex items-center justify-between gap-3">
               <span>Queue</span>
               <span className="font-mono text-xs font-normal tabular-nums text-ink-faint">
-                {visibleQueue.length} shown
+                {queue.length === 0 ? "Empty round" : `${visibleQueue.length} shown`}
               </span>
             </span>
           )}
         >
-          {visibleQueue.length === 0 ? (
+          {queue.length === 0 ? (
             <EmptyState
-              title="No proposals match"
-              description="Clear a filter or choose another round. No proposal state has changed."
-              action={<Button variant="secondary" onClick={() => { setQuery(""); setStatus("all"); setCategory("all"); setAssignment("all"); }}>Clear filters</Button>}
+              title="No submissions in this round"
+              description={`${loadedRound?.name ?? "This round"} has no assigned or eligible proposals yet. Add proposals to the round before triage.`}
+            />
+          ) : visibleQueue.length === 0 ? (
+            <EmptyState
+              title="No proposals match these filters"
+              description="Clear the current search, status, category, or assignment filters. No proposal state has changed."
+              action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>}
             />
           ) : (
             <ol className="-mx-5 -my-4 max-h-[calc(100vh-15rem)] divide-y divide-line overflow-y-auto" aria-label="Submission review queue">
@@ -246,10 +264,39 @@ export default function ReviewWorkbenchRoute({
                 return (
                   <li key={submission.id}>
                     <button
+                      ref={(element) => {
+                        if (element) queueButtonRefs.current.set(submission.id, element);
+                        else queueButtonRefs.current.delete(submission.id);
+                      }}
                       type="button"
+                      tabIndex={isSelected ? 0 : -1}
                       className="group grid w-full grid-cols-[2.25rem_minmax(0,1fr)_auto] gap-2 px-3 py-3 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none"
                       aria-current={isSelected ? "true" : undefined}
+                      onFocus={() => setSelectedId(submission.id)}
                       onClick={() => setSelectedId(submission.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          moveQueueFocus(submission.id, 1);
+                        } else if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          moveQueueFocus(submission.id, -1);
+                        } else if (event.key === "Home") {
+                          event.preventDefault();
+                          const firstId = visibleQueue[0]!.id;
+                          setSelectedId(firstId);
+                          focusQueueItem(firstId);
+                        } else if (event.key === "End") {
+                          event.preventDefault();
+                          const lastId = visibleQueue[visibleQueue.length - 1]!.id;
+                          setSelectedId(lastId);
+                          focusQueueItem(lastId);
+                        } else if (event.key === "Enter") {
+                          event.preventDefault();
+                          setSelectedId(submission.id);
+                          detailRef.current?.focus();
+                        }
+                      }}
                     >
                       <span className="pt-0.5 font-mono text-xs tabular-nums text-ink-faint">{String(index + 1).padStart(2, "0")}</span>
                       <span className="min-w-0">
@@ -275,11 +322,17 @@ export default function ReviewWorkbenchRoute({
           )}
         </Card>
 
-        <section ref={detailRef} tabIndex={-1} className="min-w-0 scroll-mt-4 outline-none focus-visible:ring-2 focus-visible:ring-accent">
+        <section
+          ref={detailRef}
+          tabIndex={-1}
+          aria-label="Selected proposal detail"
+          className="min-w-0 scroll-mt-4 outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
           {selected ? (
             <SubmissionReviewPane
               submission={selected}
               viewerRole={snapshot.viewerRole}
+              {...(resolvedReviewerUserId ? { currentReviewerUserId: resolvedReviewerUserId } : {})}
               timezone={snapshot.timezone}
               reviewers={reviewerDirectoryFixture}
               onAssign={(reviewerId) => {
@@ -287,7 +340,7 @@ export default function ReviewWorkbenchRoute({
                 if (!reviewer) throw new Error("Reviewer is unavailable");
                 updateSelected((current) => ({
                   ...current,
-                  assignments: current.assignments.some((assignment) => assignment.reviewerUserId === reviewerId)
+                  assignments: current.assignments.some((candidate) => candidate.reviewerUserId === reviewerId)
                     ? current.assignments
                     : [...current.assignments, {
                         id: `assignment_local_${reviewerId}`,
@@ -295,32 +348,43 @@ export default function ReviewWorkbenchRoute({
                         reviewerName: reviewer.name,
                         version: 1,
                       }],
-                  assignmentCount: current.assignments.some((assignment) => assignment.reviewerUserId === reviewerId)
+                  assignmentCount: current.assignments.some((candidate) => candidate.reviewerUserId === reviewerId)
                     ? current.assignmentCount
                     : current.assignmentCount + 1,
                   reviewState: current.reviewState === "unassigned" ? "assigned" : current.reviewState,
                 }));
               }}
               onSaveReview={({ scores, comment }) => {
+                if (!resolvedReviewerUserId) throw new Error("Current reviewer identity is required");
+                const reviewerName = reviewerDirectoryFixture.find((reviewer) => reviewer.id === resolvedReviewerUserId)?.name
+                  ?? selected.reviews.find((review) => review.reviewerUserId === resolvedReviewerUserId)?.reviewerName
+                  ?? "Current reviewer";
                 const score = scores.reduce((total, entry) => total + entry.score, 0) / scores.length;
                 updateSelected((current) => {
-                  const existing = current.reviews.find((review) => review.reviewerUserId === fixtureReviewerId);
+                  const existing = current.reviews.find((review) => review.reviewerUserId === resolvedReviewerUserId);
                   const nextReview = {
-                    id: existing?.id ?? `review_local_${current.id}`,
-                    reviewerUserId: fixtureReviewerId,
-                    reviewerName: "Ada Rivera",
+                    id: existing?.id ?? `review_local_${current.id}_${resolvedReviewerUserId}`,
+                    reviewerUserId: resolvedReviewerUserId,
+                    reviewerName,
                     score,
                     scores,
                     comment,
                     version: (existing?.version ?? 0) + 1,
                     updatedAt: fixtureClock,
                   };
+                  const nextReviews = [
+                    ...current.reviews.filter((review) => review.reviewerUserId !== resolvedReviewerUserId),
+                    nextReview,
+                  ];
+                  const completedReviewCount = existing
+                    ? current.completedReviewCount
+                    : current.completedReviewCount + 1;
                   return {
                     ...current,
-                    reviews: [...current.reviews.filter((review) => review.reviewerUserId !== fixtureReviewerId), nextReview],
-                    completedReviewCount: existing ? current.completedReviewCount : current.completedReviewCount + 1,
-                    averageScore: score,
-                    reviewState: "complete",
+                    reviews: nextReviews,
+                    completedReviewCount,
+                    averageScore: nextReviews.reduce((total, review) => total + review.score, 0) / nextReviews.length,
+                    reviewState: completedReviewCount >= current.assignmentCount ? "complete" : "in_progress",
                   };
                 });
               }}
@@ -345,8 +409,10 @@ export default function ReviewWorkbenchRoute({
           ) : (
             <Card>
               <EmptyState
-                title="Select a proposal"
-                description="Choose a queue row to inspect its abstract, assignments, rubric evidence, and acceptance state."
+                title={queue.length === 0 ? "No proposal detail in this round" : "No filtered proposal selected"}
+                description={queue.length === 0
+                  ? "When a proposal enters this round, its abstract, rubric, assignments, and evidence will appear here."
+                  : "Clear or adjust the queue filters, then focus a proposal row and press Enter to move into its detail."}
               />
             </Card>
           )}

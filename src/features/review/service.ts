@@ -474,7 +474,10 @@ export const assignReviewer = (
     const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
     yield* requireOrganizer(viewer);
     const { db } = yield* Db;
-    yield* loadRound(input.eventId, input.roundId);
+    const round = yield* loadRound(input.eventId, input.roundId);
+    if (round.status === "complete") {
+      return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot receive new assignments" }));
+    }
     const [submission, reviewer, existing] = yield* Effect.all([
       database(() => db.select({ id: submissions.id }).from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1)),
       database(() => db.select({ name: users.name }).from(eventMembers).innerJoin(users, eq(users.id, eventMembers.userId)).where(and(eq(eventMembers.eventId, input.eventId), eq(eventMembers.userId, input.reviewerUserId), eq(eventMembers.role, "reviewer"))).limit(1)),
@@ -562,8 +565,8 @@ export const saveScore = (
     }
     yield* reviewerCanSeeSubmission(input.eventId, input.roundId, input.submissionId, viewer.userId);
     const round = yield* loadRound(input.eventId, input.roundId);
-    if (round.status === "complete") {
-      return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot be edited" }));
+    if (round.status !== "active") {
+      return yield* Effect.fail(new Conflict({ message: "Human scoring is available only while the review round is active" }));
     }
     const scoreRecord = yield* validateScores(round.rubric, input.scores);
     const { db } = yield* Db;
@@ -633,7 +636,9 @@ export const requestAiSuggestion = (
       yield* reviewerCanSeeSubmission(input.eventId, input.roundId, input.submissionId, viewer.userId);
     }
     const round = yield* loadRound(input.eventId, input.roundId);
-    if (round.status === "complete") return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot receive AI suggestions" }));
+    if (round.status !== "active") {
+      return yield* Effect.fail(new Conflict({ message: "AI suggestions are available only while the review round is active" }));
+    }
     const { db } = yield* Db;
     const [submission] = yield* database(() =>
       db.select({ title: submissions.title, status: submissions.status }).from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1),
@@ -728,6 +733,9 @@ export const acceptSubmission = (
 ): Effect.Effect<typeof AcceptSubmissionOutput.Type, AppError, Db | CurrentUser> =>
   Effect.gen(function* () {
     const viewer = yield* requireEventAccess(input.eventId, ["reviews:write", "submissions:write", "speakers:write"]);
+    if (viewer.actorApiKeyId) {
+      return yield* Effect.fail(new Forbidden({ reason: "API keys cannot accept submissions" }));
+    }
     yield* requireOrganizer(viewer);
     const { db } = yield* Db;
     const keyHash = yield* sha256(input.idempotencyKey);

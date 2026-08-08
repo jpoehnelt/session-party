@@ -49,6 +49,20 @@ export const activeRoundFixture = {
   },
 } satisfies ReviewRound;
 
+export const pendingRoundFixture = {
+  id: "round_final_selection",
+  name: "Final selection",
+  order: 2,
+  status: "pending",
+  version: 1,
+  rubric: {
+    criteria: [
+      { key: "program_balance", label: "Program balance", description: "Complements the accepted program.", max: 5 },
+      { key: "readiness", label: "Speaker readiness", description: "Evidence supports a production-ready session.", max: 5 },
+    ],
+  },
+} satisfies ReviewRound;
+
 export const completedRoundFixture = {
   id: "round_blind_screen",
   name: "Blind screen",
@@ -262,7 +276,7 @@ export const emptyReviewFixture = {
   eventName: "Fieldcraft 2026",
   timezone: "America/Los_Angeles",
   viewerRole: "admin",
-  rounds: [completedRoundFixture, activeRoundFixture],
+  rounds: [completedRoundFixture, activeRoundFixture, pendingRoundFixture],
   queue: [],
   selected: null,
   pagination: { page: 1, pageSize: 60, total: 0, pageCount: 0 },
@@ -274,7 +288,7 @@ export const reviewWorkbenchFixture = {
   eventName: "Fieldcraft 2026",
   timezone: "America/Los_Angeles",
   viewerRole: "admin",
-  rounds: [completedRoundFixture, activeRoundFixture],
+  rounds: [completedRoundFixture, activeRoundFixture, pendingRoundFixture],
   queue: submissionQueueFixture,
   selected: assignedSubmissionFixture,
   pagination: { page: 1, pageSize: 60, total: 60, pageCount: 1 },

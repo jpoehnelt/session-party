@@ -23,20 +23,26 @@ import * as dbSchema from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Either, Layer, Schema } from "effect";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server.edge";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AiService, CurrentUser, Db, type CurrentUserValue } from "@/server/services";
 import {
   activeRoundFixture,
   completedRoundFixture,
+  pendingRoundFixture,
   contentionFixture,
+  emptyReviewFixture,
   fixtureClock,
   fixtureEventId,
   fixtureOwnerId,
   fixturePrimarySpeakerId,
   fixtureReviewerId,
   submissionQueueFixture,
+  reviewWorkbenchFixture,
 } from "./fixtures";
 import { operations } from "./operations";
+import ReviewWorkbenchRoute from "./routes/review-workbench";
 import { SaveScoreInput } from "./schema";
 import {
   acceptSubmission,
@@ -76,6 +82,16 @@ const speakerOnly: CurrentUserValue = {
   email: "speaker@example.com",
   name: "Speaker Only",
   sessionId: "session_speaker",
+  expiresAt: fixtureClock + 86_400_000,
+};
+
+const reviewApiKey: CurrentUserValue = {
+  kind: "api-key",
+  userId: "api-key:review-automation",
+  apiKeyId: "review_automation",
+  eventId: fixtureEventId,
+  name: "Review automation",
+  scopes: ["reviews:write", "submissions:write", "speakers:write"],
   expiresAt: fixtureClock + 86_400_000,
 };
 
@@ -350,6 +366,17 @@ beforeAll(async () => {
       createdAt,
       updatedAt: createdAt,
     },
+    {
+      id: pendingRoundFixture.id,
+      eventId: fixtureEventId,
+      name: pendingRoundFixture.name,
+      order: pendingRoundFixture.order,
+      status: pendingRoundFixture.status,
+      rubric: pendingRoundFixture.rubric,
+      version: pendingRoundFixture.version,
+      createdAt,
+      updatedAt: createdAt,
+    },
   ]);
   const assignmentSeeds = [
     ...submissionQueueFixture.slice(1, 13).map((submission, index) => ({
@@ -367,6 +394,15 @@ beforeAll(async () => {
       roundId: activeRoundFixture.id,
       submissionId: "submission_05",
       reviewerUserId: "user_reviewer_dev",
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: "assignment_owner_complete",
+      eventId: fixtureEventId,
+      roundId: completedRoundFixture.id,
+      submissionId: "submission_22",
+      reviewerUserId: fixtureOwnerId,
       createdAt,
       updatedAt: createdAt,
     },
@@ -441,6 +477,35 @@ describe("review and acceptance slice", () => {
       expect(operation.mcp).toBeDefined();
     }
     expect(operations[0].emits).toEqual(["review.submission.accepted", "speaker.provisioning.requested"]);
+    const acceptanceAuthorization = operations[0].authorize;
+    expect(acceptanceAuthorization.kind).toBe("event");
+    if (acceptanceAuthorization.kind === "event") expect(acceptanceAuthorization.apiKey.kind).toBe("deny");
+    const aiAuthorization = operations[3].authorize;
+    expect(aiAuthorization.kind).toBe("event");
+    if (aiAuthorization.kind === "event") {
+      expect(aiAuthorization.apiKey).toEqual({ kind: "api-key", scopes: ["reviews:write"] });
+    }
+    const scoreAuthorization = operations[4].authorize;
+    expect(scoreAuthorization.kind).toBe("event");
+    if (scoreAuthorization.kind === "event") expect(scoreAuthorization.apiKey.kind).toBe("deny");
+  });
+
+  it("renders organizer evidence read-only and distinguishes a truly empty round", () => {
+    const organizerMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute));
+    expect(organizerMarkup).toContain("Ada Rivera · read-only evidence");
+    expect(organizerMarkup).not.toContain("Save my review");
+    expect(organizerMarkup).not.toContain(">Round</label>");
+
+    const reviewerMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
+      snapshot: { ...reviewWorkbenchFixture, viewerRole: "reviewer" },
+    }));
+    expect(reviewerMarkup).toContain("Save my review");
+
+    const emptyMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
+      snapshot: emptyReviewFixture,
+    }));
+    expect(emptyMarkup).toContain("No submissions in this round");
+    expect(emptyMarkup).not.toContain("Clear filters");
   });
 
   it("returns all 60 proposals to organizers but only assigned proposals and private review data to reviewers", async () => {
@@ -501,6 +566,75 @@ describe("review and acceptance slice", () => {
     if (stale._tag === "Left") expect(stale.left._tag).toBe("Conflict");
   });
 
+  it("allows pending assignments but limits scoring and AI suggestions to active rounds", async () => {
+    const pendingAssignment = await runAs(owner, assignReviewer({
+      eventId: fixtureEventId,
+      roundId: pendingRoundFixture.id,
+      submissionId: "submission_21",
+      reviewerUserId: fixtureReviewerId,
+      expectedVersion: 0,
+      requestId: "request_assign_pending",
+    }));
+    expect(pendingAssignment.created).toBe(true);
+
+    const completedAssignment = await runEitherAs(owner, assignReviewer({
+      eventId: fixtureEventId,
+      roundId: completedRoundFixture.id,
+      submissionId: "submission_23",
+      reviewerUserId: fixtureReviewerId,
+      expectedVersion: 0,
+      requestId: "request_assign_complete",
+    }));
+    expect(completedAssignment._tag).toBe("Left");
+    if (completedAssignment._tag === "Left") expect(completedAssignment.left._tag).toBe("Conflict");
+
+    const pendingScore = await runEitherAs(reviewer, saveScore({
+      eventId: fixtureEventId,
+      roundId: pendingRoundFixture.id,
+      submissionId: "submission_21",
+      expectedVersion: 0,
+      scores: [
+        { criterionKey: "program_balance", score: 4 },
+        { criterionKey: "readiness", score: 4 },
+      ],
+      requestId: "request_score_pending",
+    }));
+    expect(pendingScore._tag).toBe("Left");
+    if (pendingScore._tag === "Left") expect(pendingScore.left._tag).toBe("Conflict");
+
+    const completedScore = await runEitherAs(owner, saveScore({
+      eventId: fixtureEventId,
+      roundId: completedRoundFixture.id,
+      submissionId: "submission_22",
+      expectedVersion: 0,
+      scores: [
+        { criterionKey: "clarity", score: 4 },
+        { criterionKey: "originality", score: 4 },
+      ],
+      requestId: "request_score_complete",
+    }));
+    expect(completedScore._tag).toBe("Left");
+    if (completedScore._tag === "Left") expect(completedScore.left._tag).toBe("Conflict");
+
+    const pendingAi = await runEitherAs(reviewer, requestAiSuggestion({
+      eventId: fixtureEventId,
+      roundId: pendingRoundFixture.id,
+      submissionId: "submission_21",
+      requestId: "request_ai_pending",
+    }));
+    expect(pendingAi._tag).toBe("Left");
+    if (pendingAi._tag === "Left") expect(pendingAi.left._tag).toBe("Conflict");
+
+    const completedAi = await runEitherAs(owner, requestAiSuggestion({
+      eventId: fixtureEventId,
+      roundId: completedRoundFixture.id,
+      submissionId: "submission_22",
+      requestId: "request_ai_complete",
+    }));
+    expect(completedAi._tag).toBe("Left");
+    if (completedAi._tag === "Left") expect(completedAi.left._tag).toBe("Conflict");
+  });
+
   it("enforces complete bounded 1–5 human scoring without changing submission status", async () => {
     const decoded = Schema.decodeUnknownEither(SaveScoreInput)({
       eventId: fixtureEventId,
@@ -551,6 +685,44 @@ describe("review and acceptance slice", () => {
     expect(result.submissionStatus).not.toBe("accepted");
     const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_06"));
     expect(submission?.status).toBe("submitted");
+  });
+
+  it("allows scoped API-key AI suggestions but rejects human scoring and acceptance", async () => {
+    const aiResult = await runAs(reviewApiKey, requestAiSuggestion({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_08",
+      requestId: "request_api_ai",
+    }));
+    const [aiRow] = await db.select().from(reviews).where(eq(reviews.id, aiResult.suggestion.id));
+    expect(aiRow).toMatchObject({ ai: true, reviewerUserId: null });
+
+    const scoreResult = await runEitherAs(reviewApiKey, saveScore({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_08",
+      expectedVersion: 0,
+      scores: [
+        { criterionKey: "relevance", score: 4 },
+        { criterionKey: "specificity", score: 4 },
+        { criterionKey: "delivery", score: 4 },
+      ],
+      requestId: "request_api_score",
+    }));
+    expect(scoreResult._tag).toBe("Left");
+    if (scoreResult._tag === "Left") expect(scoreResult.left._tag).toBe("Forbidden");
+
+    const acceptanceResult = await runEitherAs(reviewApiKey, acceptSubmission({
+      eventId: fixtureEventId,
+      submissionId: "submission_24",
+      expectedVersion: 2,
+      idempotencyKey: "api-acceptance-denied",
+      requestId: "request_api_accept",
+    }));
+    expect(acceptanceResult._tag).toBe("Left");
+    if (acceptanceResult._tag === "Left") expect(acceptanceResult.left._tag).toBe("Forbidden");
+    const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_24"));
+    expect(submission?.status).not.toBe("accepted");
   });
 
   it("rejects stale acceptance and atomically creates one durable acceptance plus primary-speaker provisioning", async () => {
