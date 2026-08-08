@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+/*
+ * session-party design tokens — Luma-flavored.
+ * Calm, editorial, event-first: warm near-white canvas, deep neutral ink,
+ * one electric-violet accent, generous radii, soft layered shadows.
+ */
+@theme {
+  --font-sans: "Inter", "SF Pro Text", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+
+  /* Warm neutrals — never pure black or pure white */
+  --color-canvas: #faf9f7;
+  --color-surface: #fffefc;
+  --color-surface-muted: #f3f1ed;
+  --color-ink: #1c1b18;
+  --color-ink-secondary: #55524b;
+  --color-ink-faint: #8b867c;
+  --color-line: #eae7e1;
+  --color-line-strong: #dcd8d0;
+
+  /* The one accent — electric violet */
+  --color-accent: #6c3bf4;
+  --color-accent-hover: #5c2de4;
+  --color-accent-soft: #f0eafe;
+  --color-accent-deep: #4a21c4;
+  --color-on-accent: #fdfbff;
+
+  /* Status */
+  --color-success: #1a7f4e;
+  --color-success-soft: #e3f4ea;
+  --color-warning: #8a5b00;
+  --color-warning-soft: #fdf2d7;
+  --color-danger: #c92c34;
+  --color-danger-hover: #b02229;
+  --color-danger-soft: #fdeaea;
+
+  /* Shape */
+  --radius-card: 14px;
+  --radius-control: 10px;
+
+  /* Soft layered elevation */
+  --shadow-card: 0 1px 2px rgb(28 27 24 / 0.04), 0 4px 16px rgb(28 27 24 / 0.05);
+  --shadow-pop: 0 2px 8px rgb(28 27 24 / 0.08), 0 16px 40px rgb(28 27 24 / 0.14);
+  --shadow-sheet: -1px 0 4px rgb(28 27 24 / 0.05), -12px 0 48px rgb(28 27 24 / 0.14);
+
+  /* Motion — exponential ease-out, no bounce */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-fade-in: fade-in 160ms ease-out;
+  --animate-slide-up: slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-in-right: slide-in-right 260ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.98);
+    }
+  }
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
+    }
+  }
+}
+
+@layer base {
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: var(--color-accent-soft);
+    color: var(--color-accent-deep);
+  }
+}
