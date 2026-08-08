@@ -268,7 +268,7 @@ export const submissions = sqliteTable(
     foreignKey({ columns: [t.eventId, t.formVersionId], foreignColumns: [formVersions.eventId, formVersions.id], name: "submissions_form_version_fk" })
       .onDelete("restrict").onUpdate("cascade"),
     check("submissions_version_positive", sql`${t.version} > 0`),
-    check("submissions_acceptance_state", sql`(${t.status} = 'accepted' and ${t.acceptedAt} is not null) or (${t.status} <> 'accepted' and ${t.acceptedAt} is null)`),
+    check("submissions_acceptance_state", sql`(${t.status} = 'accepted' and ${t.acceptedAt} is not null) or (${t.status} <> 'accepted')`),
   ],
 );
 
