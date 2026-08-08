@@ -173,6 +173,10 @@ describe("events service", () => {
     );
     await addMember(created.id, admin.userId, "admin");
     await addMember(created.id, reviewer.userId, "reviewer");
+    await expect(runAs(reviewer, getEvent(created.id))).resolves.toEqual(created);
+    await expectFailure(outsider, getEvent(created.id), "Forbidden");
+    await expectFailure(outsider, getEvent(created.slug), "Forbidden");
+    await expect(runAs(outsider, listEvents())).resolves.toEqual([]);
 
     const ownerUpdate = await runAs(
       owner,
