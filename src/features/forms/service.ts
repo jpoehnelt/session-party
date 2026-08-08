@@ -315,18 +315,15 @@ const validateFields = (
   return problem ? Effect.fail(new Validation({ message: problem })) : Effect.void;
 };
 
-const prepareCommand = (
+const loadCommandReplay = (
   operationId: string,
   eventId: string,
-  idempotencyKey: string,
-  input: unknown,
-): Effect.Effect<PreparedCommand, AppError, Db | CurrentUser> =>
+  principalId: string,
+  keyHash: string,
+  requestHash: string,
+): Effect.Effect<FormDetail | null, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const principal = yield* CurrentUser;
-    yield* assertPrincipalTenant(principal, eventId);
-    const keyHash = yield* sha256(idempotencyKey);
-    const requestHash = yield* sha256(stableStringify(input));
     const [record] = yield* database(() =>
       db
         .select()
@@ -334,25 +331,82 @@ const prepareCommand = (
         .where(and(
           eq(idempotencyRecords.eventId, eventId),
           eq(idempotencyRecords.operationId, operationId),
-          eq(idempotencyRecords.principalId, principal.userId),
+          eq(idempotencyRecords.principalId, principalId),
           eq(idempotencyRecords.keyHash, keyHash),
         ))
         .limit(1),
     );
-    if (!record) {
-      return { principal, idempotencyId: nanoid(), keyHash, requestHash, replay: null };
-    }
+    if (!record) return null;
     if (record.requestHash !== requestHash) {
       return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different request" }));
     }
     if (record.status !== "completed" || record.responseBody === null) {
       return yield* Effect.fail(new Conflict({ message: "An operation with this idempotency key is still in progress" }));
     }
-    const replay = yield* Schema.decodeUnknown(FormDetail)(record.responseBody).pipe(
+    return yield* Schema.decodeUnknown(FormDetail)(record.responseBody).pipe(
       Effect.mapError((error) => new External({ service: "database", detail: String(error) })),
     );
-    return { principal, idempotencyId: record.id, keyHash, requestHash, replay };
   });
+
+const prepareCommand = (
+  operationId: string,
+  eventId: string,
+  idempotencyKey: string,
+  input: unknown,
+): Effect.Effect<PreparedCommand, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentUser;
+    yield* assertPrincipalTenant(principal, eventId);
+    const keyHash = yield* sha256(idempotencyKey);
+    const requestHash = yield* sha256(stableStringify(input));
+    const replay = yield* loadCommandReplay(
+      operationId,
+      eventId,
+      principal.userId,
+      keyHash,
+      requestHash,
+    );
+    return {
+      principal,
+      idempotencyId: replay ? "" : nanoid(),
+      keyHash,
+      requestHash,
+      replay,
+    };
+  });
+
+const commitCommand = (
+  run: () => Promise<unknown>,
+  operationId: string,
+  eventId: string,
+  prepared: PreparedCommand,
+  after: FormDetail,
+): Effect.Effect<FormDetail, AppError, Db> =>
+  database(run).pipe(
+    Effect.as(after),
+    Effect.catchIf(
+      (error): error is External =>
+        error._tag === "External" &&
+        (error.detail?.includes("idempotency_key_unique") === true ||
+          error.detail?.includes("UNIQUE constraint failed: idempotency_records.event_id") === true),
+      () =>
+        loadCommandReplay(
+          operationId,
+          eventId,
+          prepared.principal.userId,
+          prepared.keyHash,
+          prepared.requestHash,
+        ).pipe(
+          Effect.flatMap((replay) =>
+            replay
+              ? Effect.succeed(replay)
+              : Effect.fail(new External({
+                  service: "database",
+                  detail: "Idempotency collision committed without a replayable response",
+                }))),
+        ),
+    ),
+  );
 
 const commandEvidence = (
   operationId: string,
@@ -488,12 +542,21 @@ export const getForm = (
     return yield* loadFormDetail(input.eventId, input.formId);
   });
 
+/** Focused-test synchronization only; transports never provide command hooks. */
+export interface FormsCommandTestHooks {
+  readonly afterIdempotencyLookup?: () => Promise<void>;
+}
+
 export const createForm = (
   input: CreateFormInput,
+  testHooks?: FormsCommandTestHooks,
 ): Effect.Effect<FormDetail, AppError, Db | CurrentUser> =>
   Effect.gen(function* () {
     const prepared = yield* prepareCommand("forms.create", input.eventId, input.idempotencyKey, input);
     if (prepared.replay) return prepared.replay;
+    if (testHooks?.afterIdempotencyLookup) {
+      yield* Effect.promise(testHooks.afterIdempotencyLookup);
+    }
     const { db } = yield* Db;
     const [event] = yield* database(() =>
       db.select({ id: events.id }).from(events).where(eq(events.id, input.eventId)).limit(1),
@@ -555,8 +618,9 @@ export const createForm = (
           payload: { formId },
         }
       : null;
-    yield* database(() =>
-      db.batch([
+    return yield* commitCommand(
+      () => db.batch([
+        db.insert(idempotencyRecords).values(evidence.idempotency),
         db.insert(forms).values({
           id: formId,
           eventId: input.eventId,
@@ -571,14 +635,16 @@ export const createForm = (
           updatedAt: now,
         }),
         db.insert(formFields).values(fieldRows(input.eventId, formId, normalizedFields, now)),
-        db.insert(idempotencyRecords).values(evidence.idempotency),
         db.insert(domainChanges).values(evidence.versionClaim),
         ...(primaryClaim ? [db.insert(domainChanges).values(primaryClaim)] : []),
         db.insert(domainChanges).values(evidence.change),
         db.insert(auditLog).values(evidence.audit),
       ]),
+      "forms.create",
+      input.eventId,
+      prepared,
+      after,
     );
-    return after;
   });
 
 export const updateForm = (
@@ -620,8 +686,9 @@ export const updateForm = (
       after,
       now,
     );
-    yield* database(() =>
-      db.batch([
+    return yield* commitCommand(
+      () => db.batch([
+        db.insert(idempotencyRecords).values(evidence.idempotency),
         db.update(forms).set({
           name: after.name,
           description: after.description,
@@ -632,13 +699,15 @@ export const updateForm = (
         }).where(and(eq(forms.eventId, input.eventId), eq(forms.id, input.formId), eq(forms.version, input.expectedVersion))),
         db.delete(formFields).where(and(eq(formFields.eventId, input.eventId), eq(formFields.formId, input.formId))),
         db.insert(formFields).values(fieldRows(input.eventId, input.formId, normalizedFields, now)),
-        db.insert(idempotencyRecords).values(evidence.idempotency),
         db.insert(domainChanges).values(evidence.versionClaim),
         db.insert(domainChanges).values(evidence.change),
         db.insert(auditLog).values(evidence.audit),
       ]),
+      "forms.update",
+      input.eventId,
+      prepared,
+      after,
     );
-    return after;
   });
 
 export const publishForm = (
@@ -698,8 +767,9 @@ export const publishForm = (
       after,
       now,
     );
-    yield* database(() =>
-      db.batch([
+    return yield* commitCommand(
+      () => db.batch([
+        db.insert(idempotencyRecords).values(evidence.idempotency),
         db.update(formVersions).set({ retiredAt: now }).where(and(
           eq(formVersions.eventId, input.eventId),
           eq(formVersions.formId, input.formId),
@@ -729,13 +799,15 @@ export const publishForm = (
           eq(forms.id, input.formId),
           eq(forms.version, input.expectedVersion),
         )),
-        db.insert(idempotencyRecords).values(evidence.idempotency),
         db.insert(domainChanges).values(evidence.versionClaim),
         db.insert(domainChanges).values(evidence.change),
         db.insert(auditLog).values(evidence.audit),
       ]),
+      "forms.publish",
+      input.eventId,
+      prepared,
+      after,
     );
-    return after;
   });
 
 export const setFormStatus = (
@@ -773,18 +845,21 @@ export const setFormStatus = (
       after,
       now,
     );
-    yield* database(() =>
-      db.batch([
+    return yield* commitCommand(
+      () => db.batch([
+        db.insert(idempotencyRecords).values(evidence.idempotency),
         db.update(forms).set({ status: input.status, version: after.version, updatedAt: now }).where(and(
           eq(forms.eventId, input.eventId),
           eq(forms.id, input.formId),
           eq(forms.version, input.expectedVersion),
         )),
-        db.insert(idempotencyRecords).values(evidence.idempotency),
         db.insert(domainChanges).values(evidence.versionClaim),
         db.insert(domainChanges).values(evidence.change),
         db.insert(auditLog).values(evidence.audit),
       ]),
+      "forms.setStatus",
+      input.eventId,
+      prepared,
+      after,
     );
-    return after;
   });

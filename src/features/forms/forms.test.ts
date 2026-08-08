@@ -6,8 +6,10 @@ import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, type Db, CurrentUser, type CurrentUserValue } from "@/server/services";
 import { FORMS_FIXTURE_EVENT_ID, FORMS_FIXTURE_NOW, formsFixtures, routedFormsFixture } from "./fixtures";
+import { updateConditionAt, validatePublishIntent } from "./components/FormBuilder";
+import { getFormAvailability, projectActiveAnswers } from "./components/FormPreview";
 import { operations } from "./operations";
-import type { FormFieldDraft } from "./schema";
+import type { ConditionalLogic, FormField, FormFieldDraft } from "./schema";
 import { createForm, getForm, listForms, publishForm, setFormStatus, updateForm } from "./service";
 
 type TestEnv = Cloudflare.Env & {
@@ -42,6 +44,21 @@ const fixtureDraftFields: readonly FormFieldDraft[] = routedFormsFixture.forms[0
   logic: field.logic,
   routing: field.routing,
 }));
+
+const prefixDraftFields = (prefix: string): readonly FormFieldDraft[] =>
+  fixtureDraftFields.map((field) => ({
+    ...field,
+    id: `${prefix}-${field.id}`,
+    logic: field.logic
+      ? {
+          ...field.logic,
+          conditions: field.logic.conditions.map((condition) => ({
+            ...condition,
+            fieldId: `${prefix}-${condition.fieldId}`,
+          })) as ConditionalLogic["conditions"],
+        }
+      : null,
+  }));
 
 beforeAll(async () => {
   if (!hasTestMigrations(env)) throw new Error("TEST_MIGRATIONS test binding is unavailable");
@@ -203,6 +220,126 @@ describe("forms fixtures and operations", () => {
   });
 });
 
+describe("forms organizer behavior", () => {
+  it("validates publish intent and preserves every conditional rule update", () => {
+    const valid = routedFormsFixture.forms[0]!;
+    expect(validatePublishIntent(valid)).toEqual([]);
+
+    const invalid: typeof valid = {
+      ...valid,
+      name: " ",
+      opensAt: FORMS_FIXTURE_NOW + 10_000,
+      closesAt: FORMS_FIXTURE_NOW,
+      fields: valid.fields.map((field) =>
+        field.order === 1
+          ? { ...field, label: " " }
+          : field.order === 3
+            ? { ...field, options: ["Repeated", "Repeated"], routing: {} }
+            : field),
+    };
+    expect(validatePublishIntent(invalid).map((issue) => issue.controlId)).toEqual([
+      "builder-form-name",
+      "builder-closes-at",
+      "builder-field-field-session-title-label",
+      "builder-field-field-track-options",
+      "builder-field-field-track-routing-0",
+    ]);
+
+    const logic: ConditionalLogic = {
+      action: "show",
+      mode: "any",
+      conditions: [
+        { fieldId: "field-a", op: "eq", value: "A" },
+        { fieldId: "field-b", op: "neq", value: "B" },
+      ],
+    };
+    expect(updateConditionAt(logic, 1, { op: "not_empty", value: undefined })).toEqual({
+      action: "show",
+      mode: "any",
+      conditions: [
+        { fieldId: "field-a", op: "eq", value: "A" },
+        { fieldId: "field-b", op: "not_empty", value: undefined },
+      ],
+    });
+  });
+
+  it("uses deterministic availability boundaries and excludes recursively hidden answers", () => {
+    const form = routedFormsFixture.forms[0]!;
+    expect(getFormAvailability({ ...form, status: "draft" }, FORMS_FIXTURE_NOW)).toBe("draft");
+    expect(getFormAvailability({ ...form, publishedVersion: null }, FORMS_FIXTURE_NOW)).toBe("draft");
+    expect(getFormAvailability(form, form.opensAt! - 1)).toBe("scheduled");
+    expect(getFormAvailability(form, form.opensAt!)).toBe("open");
+    expect(getFormAvailability(form, form.closesAt! - 1)).toBe("open");
+    expect(getFormAvailability(form, form.closesAt!)).toBe("expired");
+    expect(getFormAvailability({ ...form, status: "closed" }, FORMS_FIXTURE_NOW)).toBe("closed");
+    expect(getFormAvailability({
+      ...form,
+      status: "closed",
+      publishedVersion: null,
+    }, FORMS_FIXTURE_NOW)).toBe("closed");
+
+    const fields: readonly FormField[] = [
+      {
+        id: "field-a",
+        order: 1,
+        type: "select",
+        label: "A",
+        helpText: null,
+        required: true,
+        options: ["yes", "no"],
+        logic: null,
+        routing: {},
+        version: 1,
+      },
+      {
+        id: "field-b",
+        order: 2,
+        type: "text",
+        label: "B",
+        helpText: null,
+        required: false,
+        options: [],
+        logic: {
+          action: "show",
+          mode: "all",
+          conditions: [{ fieldId: "field-a", op: "eq", value: "yes" }],
+        },
+        routing: {},
+        version: 1,
+      },
+      {
+        id: "field-c",
+        order: 3,
+        type: "text",
+        label: "C",
+        helpText: null,
+        required: false,
+        options: [],
+        logic: {
+          action: "show",
+          mode: "all",
+          conditions: [{ fieldId: "field-b", op: "eq", value: "go" }],
+        },
+        routing: {},
+        version: 1,
+      },
+    ];
+    const hidden = projectActiveAnswers(fields, {
+      "field-a": "no",
+      "field-b": "go",
+    });
+    expect(hidden.visibleFields.map((field) => field.id)).toEqual(["field-a"]);
+    expect(hidden.activeAnswers).toEqual({ "field-a": "no" });
+
+    const visible = projectActiveAnswers(fields, {
+      "field-a": "yes",
+      "field-b": "go",
+    });
+    expect(visible.visibleFields.map((field) => field.id)).toEqual(["field-a", "field-b", "field-c"]);
+    expect(visible.activeAnswers).toEqual({ "field-a": "yes", "field-b": "go" });
+  });
+});
+
 describe("forms service", () => {
   it("creates idempotently, snapshots on publish, and preserves published meaning across draft edits", async () => {
     const createInput = {
@@ -344,6 +481,63 @@ describe("forms service", () => {
     expect(idempotency).toHaveLength(6);
   });
 
+  it("replays the winner of concurrent identical idempotency keys", async () => {
+    const eventId = "event-idempotency-race";
+    const db = drizzle(env.DB);
+    const now = new Date(FORMS_FIXTURE_NOW);
+    await db.insert(events).values({
+      id: eventId,
+      slug: "idempotency-race",
+      name: "Idempotency race",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const input = {
+      eventId,
+      purpose: "additional" as const,
+      name: "Race-safe additional form",
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: prefixDraftFields("idempotency"),
+      idempotencyKey: "forms-identical-race-001",
+    };
+    let preparedCount = 0;
+    const releases: Array<() => void> = [];
+    const afterIdempotencyLookup = () => new Promise<void>((resolve) => {
+      preparedCount += 1;
+      releases.push(resolve);
+      if (preparedCount === 2) releases.splice(0).forEach((release) => release());
+    });
+    const responses = await Promise.all([
+      runAs(owner, createForm(input, { afterIdempotencyLookup })),
+      runAs(owner, createForm(input, { afterIdempotencyLookup })),
+    ]);
+    expect(responses[1]).toEqual(responses[0]);
+    expect(preparedCount).toBe(2);
+
+    const [formRows, changes, audits, idempotency] = await Promise.all([
+      db.select().from(forms).where(eq(forms.eventId, eventId)),
+      db.select().from(domainChanges).where(eq(domainChanges.eventId, eventId)),
+      db.select().from(auditLog).where(eq(auditLog.eventId, eventId)),
+      db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, eventId)),
+    ]);
+    expect(formRows).toHaveLength(1);
+    expect(changes.map((change) => change.eventType).sort()).toEqual([
+      "forms.created",
+      "forms.versionClaim",
+    ]);
+    expect(audits).toHaveLength(1);
+    expect(idempotency).toHaveLength(1);
+
+    const mismatched = await runAs(owner, createForm({
+      ...input,
+      name: "Different request",
+    }).pipe(Effect.either));
+    expect(mismatched._tag).toBe("Left");
+    if (mismatched._tag === "Left") expect(mismatched.left._tag).toBe("Conflict");
+  });
+
   it("enforces the single primary CFP and event-scoped API-key tenancy", async () => {
     const concurrencyEventId = "event-concurrent-primary";
     const db = drizzle(env.DB);
@@ -355,20 +549,6 @@ describe("forms service", () => {
       createdAt: now,
       updatedAt: now,
     });
-    const concurrentFields = (prefix: string): readonly FormFieldDraft[] =>
-      fixtureDraftFields.map((field) => ({
-        ...field,
-        id: `${prefix}-${field.id}`,
-        logic: field.logic
-          ? {
-              ...field.logic,
-              conditions: field.logic.conditions.map((condition) => ({
-                ...condition,
-                fieldId: `${prefix}-${condition.fieldId}`,
-              })) as typeof field.logic.conditions,
-            }
-          : null,
-      }));
     const attempts = await Promise.all([
       runAs(owner, createForm({
         eventId: concurrencyEventId,
@@ -377,7 +557,7 @@ describe("forms service", () => {
         description: null,
         opensAt: null,
         closesAt: null,
-        fields: concurrentFields("a"),
+        fields: prefixDraftFields("a"),
         idempotencyKey: "forms-primary-concurrent-a",
       }).pipe(Effect.either)),
       runAs(owner, createForm({
@@ -387,7 +567,7 @@ describe("forms service", () => {
         description: null,
         opensAt: null,
         closesAt: null,
-        fields: concurrentFields("b"),
+        fields: prefixDraftFields("b"),
         idempotencyKey: "forms-primary-concurrent-b",
       }).pipe(Effect.either)),
     ]);

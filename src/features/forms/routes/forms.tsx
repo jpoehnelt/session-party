@@ -159,10 +159,10 @@ export function FormsWorkbench({ fixture = routedFormsFixture, state = "ready" }
   if (state === "loading") {
     return (
       <div aria-busy="true" aria-label="Loading forms" className="space-y-5">
-        <Skeleton className="h-20" />
+        <Skeleton className="h-20 motion-reduce:animate-none" />
         <div className="grid gap-5 lg:grid-cols-[15rem_minmax(0,1fr)]">
-          <Skeleton className="h-72" />
-          <Skeleton className="h-[36rem]" />
+          <Skeleton className="h-72 motion-reduce:animate-none" />
+          <Skeleton className="h-[36rem] motion-reduce:animate-none" />
         </div>
       </div>
     );
@@ -275,7 +275,7 @@ export function FormsWorkbench({ fixture = routedFormsFixture, state = "ready" }
           )}
 
           <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start" aria-label="Live mobile preview">
-            {selected && <FormPreview form={selected} />}
+            {selected && <FormPreview form={selected} now={FORMS_FIXTURE_NOW} />}
           </aside>
         </div>
       )}

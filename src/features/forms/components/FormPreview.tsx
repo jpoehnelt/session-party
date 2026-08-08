@@ -2,14 +2,16 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Checkbox, Input, Select, Textarea } from "@/ui";
 import type { FormDetail, FormField, FormVersionField, LogicCondition } from "../schema";
 
-type Answer = string | readonly string[] | boolean;
-type PreviewField = FormField | FormVersionField;
+export type PreviewAnswer = string | readonly string[] | boolean;
+export type PreviewField = FormField | FormVersionField;
+export type FormAvailability = "draft" | "scheduled" | "open" | "expired" | "closed";
 
 export interface FormPreviewProps {
   form: FormDetail;
+  now: number;
 }
 
-const conditionMatches = (condition: LogicCondition, answer: Answer | undefined): boolean => {
+const conditionMatches = (condition: LogicCondition, answer: PreviewAnswer | undefined): boolean => {
   if (condition.op === "not_empty") {
     return Array.isArray(answer) ? answer.length > 0 : answer !== undefined && answer !== "" && answer !== false;
   }
@@ -24,24 +26,61 @@ const conditionMatches = (condition: LogicCondition, answer: Answer | undefined)
   return condition.op === "eq" ? equal : !equal;
 };
 
+const semanticFieldId = (field: PreviewField): string =>
+  "sourceFieldId" in field ? field.sourceFieldId ?? field.id : field.id;
 
-export function FormPreview({ form }: FormPreviewProps) {
-  const [answers, setAnswers] = useState<Record<string, Answer>>({});
-  const [submitted, setSubmitted] = useState(false);
-  const fields: readonly PreviewField[] = form.publishedVersion?.fields ?? form.fields;
-  const visibleFields = useMemo(
-    () => fields.filter((field) => {
-      if (!field.logic) return true;
+export const getFormAvailability = (form: FormDetail, now: number): FormAvailability => {
+  if (form.status === "closed") return "closed";
+  if (form.status === "draft" || form.publishedVersion === null) return "draft";
+  if (form.opensAt !== null && now < form.opensAt) return "scheduled";
+  if (form.closesAt !== null && now >= form.closesAt) return "expired";
+  return "open";
+};
+
+export const projectActiveAnswers = (
+  fields: readonly PreviewField[],
+  answers: Readonly<Record<string, PreviewAnswer>>,
+): { readonly visibleFields: readonly PreviewField[]; readonly activeAnswers: Readonly<Record<string, PreviewAnswer>> } => {
+  const visibleFields: PreviewField[] = [];
+  const activeAnswers: Record<string, PreviewAnswer> = {};
+  for (const field of fields) {
+    const visible = field.logic === null || (() => {
       const matches = field.logic.conditions.map((condition) =>
-        conditionMatches(condition, answers[condition.fieldId]));
+        conditionMatches(condition, activeAnswers[condition.fieldId]));
       const conditionsPass = field.logic.mode === "all" ? matches.every(Boolean) : matches.some(Boolean);
       return field.logic.action === "hide" ? !conditionsPass : conditionsPass;
-    }),
-    [answers, fields],
-  );
-  const available = form.status === "open" && form.publishedVersion !== null;
+    })();
+    if (!visible) continue;
+    visibleFields.push(field);
+    const fieldId = semanticFieldId(field);
+    if (answers[fieldId] !== undefined) activeAnswers[fieldId] = answers[fieldId];
+  }
+  return { visibleFields, activeAnswers };
+};
 
-  const setAnswer = (fieldId: string, answer: Answer) => {
+
+export function FormPreview({ form, now }: FormPreviewProps) {
+  const [answers, setAnswers] = useState<Record<string, PreviewAnswer>>({});
+  const [submitted, setSubmitted] = useState(false);
+  const fields: readonly PreviewField[] = form.publishedVersion?.fields ?? form.fields;
+  const projection = useMemo(() => projectActiveAnswers(fields, answers), [answers, fields]);
+  const availability = getFormAvailability(form, now);
+  const available = availability === "open";
+  const availabilityLabel: Record<FormAvailability, string> = {
+    draft: "Draft preview",
+    scheduled: "Scheduled to open",
+    open: "Open for proposals",
+    expired: "Submission window ended",
+    closed: "Manually closed",
+  };
+  const unavailableMessage: Record<Exclude<FormAvailability, "open">, string> = {
+    draft: "This draft is visible to organizers only until it is published.",
+    scheduled: "This form is published and will open at its scheduled start time.",
+    expired: "The scheduled submission window has ended.",
+    closed: "An organizer manually closed this form.",
+  };
+
+  const setAnswer = (fieldId: string, answer: PreviewAnswer) => {
     setSubmitted(false);
     setAnswers((current) => ({ ...current, [fieldId]: answer }));
   };
@@ -62,8 +101,16 @@ export function FormPreview({ form }: FormPreviewProps) {
                 <span className="text-xs font-medium uppercase tracking-[0.12em] text-ink-faint">
                   Submission preview
                 </span>
-                <Badge tone={available ? "success" : form.status === "closed" ? "warning" : "neutral"}>
-                  {available ? "Open for proposals" : form.status === "closed" ? "Closed" : "Draft preview"}
+                <Badge tone={
+                  availability === "open"
+                    ? "success"
+                    : availability === "scheduled"
+                      ? "accent"
+                      : availability === "expired" || availability === "closed"
+                        ? "warning"
+                        : "neutral"
+                }>
+                  {availabilityLabel[availability]}
                 </Badge>
               </div>
               <h2 className="text-xl font-semibold tracking-[-0.02em] text-ink">
@@ -78,20 +125,17 @@ export function FormPreview({ form }: FormPreviewProps) {
 
             {!available && (
               <div className="mb-5 rounded-control border border-line bg-surface-muted px-3 py-2.5 text-sm text-ink-secondary" role="status">
-                {form.status === "closed"
-                  ? "This form is closed. Responses cannot be submitted."
-                  : "This draft is visible to organizers only until it is published."}
+                {unavailableMessage[availability as Exclude<FormAvailability, "open">]}
               </div>
             )}
 
             <form className="space-y-5" onSubmit={handleSubmit}>
-              {visibleFields.map((field) => {
-                const fieldId = "sourceFieldId" in field
-                  ? field.sourceFieldId ?? field.id
-                  : field.id;
+              {projection.visibleFields.map((field) => {
+                const fieldId = semanticFieldId(field);
                 const inputId = `preview-${form.id}-${fieldId}`;
-                const answer = answers[fieldId];
+                const answer = projection.activeAnswers[fieldId];
                 const routedCategory = typeof answer === "string" ? field.routing[answer] : undefined;
+                const label = field.required ? `${field.label} *` : field.label;
 
                 if (field.type === "heading") {
                   return <h3 key={field.id} className="border-t border-line pt-5 text-base font-semibold text-ink">{field.label}</h3>;
@@ -108,7 +152,7 @@ export function FormPreview({ form }: FormPreviewProps) {
                     <Textarea
                       key={field.id}
                       id={inputId}
-                      label={field.label}
+                      label={label}
                       hint={field.helpText ?? undefined}
                       required={field.required}
                       value={typeof answer === "string" ? answer : ""}
@@ -121,7 +165,7 @@ export function FormPreview({ form }: FormPreviewProps) {
                     <div key={field.id}>
                       <Select
                         id={inputId}
-                        label={field.label}
+                        label={label}
                         hint={field.helpText ?? undefined}
                         required={field.required}
                         value={typeof answer === "string" ? answer : ""}
@@ -139,7 +183,7 @@ export function FormPreview({ form }: FormPreviewProps) {
                     <Select
                       key={field.id}
                       id={inputId}
-                      label={field.label}
+                      label={label}
                       hint={field.helpText ?? "Hold Command or Control to select more than one."}
                       required={field.required}
                       multiple
@@ -183,7 +227,7 @@ export function FormPreview({ form }: FormPreviewProps) {
                     <Checkbox
                       key={field.id}
                       id={inputId}
-                      label={field.label}
+                      label={label}
                       description={field.helpText ?? undefined}
                       required={field.required}
                       checked={answer === true}
@@ -196,7 +240,7 @@ export function FormPreview({ form }: FormPreviewProps) {
                     key={field.id}
                     id={inputId}
                     type={field.type === "file" ? "file" : field.type}
-                    label={field.label}
+                    label={label}
                     hint={field.helpText ?? undefined}
                     required={field.required}
                     value={field.type === "file" ? undefined : typeof answer === "string" ? answer : ""}

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Badge, Button, Card, Checkbox, Input, Select, Textarea } from "@/ui";
-import { FORM_FIELD_TYPES, type FormDetail, type FormField, type FormFieldType, type FormStatus } from "../schema";
+import { FORM_FIELD_TYPES, type ConditionalLogic, type FormDetail, type FormField, type FormFieldType, type FormStatus, type LogicCondition } from "../schema";
 
 const FIELD_TYPE_LABELS: Record<FormFieldType, string> = {
   text: "Short text",
@@ -47,6 +47,74 @@ export interface FormBuilderProps {
   onStatusChange: (status: Extract<FormStatus, "open" | "closed">) => void;
 }
 
+export interface PublishValidationIssue {
+  readonly controlId: string;
+  readonly message: string;
+}
+
+export const validatePublishIntent = (form: FormDetail): readonly PublishValidationIssue[] => {
+  const issues: PublishValidationIssue[] = [];
+  if (form.name.trim().length === 0) {
+    issues.push({ controlId: "builder-form-name", message: "Enter a form name." });
+  }
+  if (form.opensAt !== null && form.closesAt !== null && form.closesAt < form.opensAt) {
+    issues.push({ controlId: "builder-closes-at", message: "Close time must be at or after open time." });
+  }
+  for (const field of form.fields) {
+    if (field.label.trim().length === 0) {
+      issues.push({
+        controlId: `builder-field-${field.id}-label`,
+        message: `Field ${field.order} needs a label.`,
+      });
+    }
+    if (OPTION_TYPES[field.type]) {
+      if (field.options.length === 0) {
+        issues.push({
+          controlId: `builder-field-${field.id}-options`,
+          message: `${field.label || `Field ${field.order}`} needs at least one option.`,
+        });
+      }
+      const normalized = field.options.map((option) => option.trim());
+      if (normalized.some((option) => option.length === 0) || new Set(normalized).size !== normalized.length) {
+        issues.push({
+          controlId: `builder-field-${field.id}-options`,
+          message: `${field.label || `Field ${field.order}`} has blank or duplicate options.`,
+        });
+      }
+    }
+  }
+  if (form.purpose === "primary-cfp") {
+    const completeRouter = form.fields.find((field) =>
+      (field.type === "select" || field.type === "radio") &&
+      field.options.length > 0 &&
+      field.options.every((option) => field.routing[option]?.trim()));
+    if (!completeRouter) {
+      const candidate = form.fields.find((field) => field.type === "select" || field.type === "radio");
+      issues.push({
+        controlId: candidate
+          ? candidate.options.length > 0
+            ? `builder-field-${candidate.id}-routing-0`
+            : `builder-field-${candidate.id}-options`
+          : form.fields[0]
+            ? `builder-field-${form.fields[0].id}-type`
+            : "builder-add-field",
+        message: "Route every option in one select or radio field to a review category.",
+      });
+    }
+  }
+  return issues;
+};
+
+export const updateConditionAt = (
+  logic: ConditionalLogic,
+  conditionIndex: number,
+  patch: Partial<LogicCondition>,
+): ConditionalLogic => ({
+  ...logic,
+  conditions: logic.conditions.map((condition, index) =>
+    index === conditionIndex ? { ...condition, ...patch } : condition) as ConditionalLogic["conditions"],
+});
+
 const toDateTimeLocal = (value: number | null): string => {
   if (value === null) return "";
   const date = new Date(value - new Date(value).getTimezoneOffset() * 60_000);
@@ -55,14 +123,20 @@ const toDateTimeLocal = (value: number | null): string => {
 
 export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange }: FormBuilderProps) {
   const [message, setMessage] = useState<string | null>(null);
+  const [publishIssues, setPublishIssues] = useState<readonly PublishValidationIssue[]>([]);
 
-  const patchForm = (patch: Partial<FormDetail>) => onChange({ ...form, ...patch });
+  const patchForm = (patch: Partial<FormDetail>) => {
+    onChange({ ...form, ...patch });
+    setMessage(null);
+    setPublishIssues([]);
+  };
   const patchField = (fieldId: string, patch: Partial<FormField>) => {
     onChange({
       ...form,
       fields: form.fields.map((field) => field.id === fieldId ? { ...field, ...patch } : field),
     });
     setMessage(null);
+    setPublishIssues([]);
   };
 
   const moveField = (fieldId: string, direction: -1 | 1) => {
@@ -106,10 +180,24 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
     });
   };
 
-  const save = (event: FormEvent<HTMLFormElement>) => {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setMessage("Draft changes saved locally for this fixture preview.");
-    onSave(form);
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    if (submitter?.value === "save") {
+      setMessage("Draft changes saved locally for this fixture preview.");
+      setPublishIssues([]);
+      onSave(form);
+      return;
+    }
+    const issues = validatePublishIntent(form);
+    if (issues.length > 0) {
+      setMessage(null);
+      setPublishIssues(issues);
+      globalThis.setTimeout(() => globalThis.document?.getElementById(issues[0]!.controlId)?.focus(), 0);
+      return;
+    }
+    setPublishIssues([]);
+    onPublish(form);
   };
 
   const routingFields = form.fields.filter((field) => Object.keys(field.routing).length > 0);
@@ -117,7 +205,15 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
   const fieldLabels = Object.fromEntries(form.fields.map((field) => [field.id, field.label]));
 
   return (
-    <form className="space-y-5" onSubmit={save}>
+    <form className="space-y-5" noValidate onSubmit={submit}>
+      {publishIssues.length > 0 && (
+        <div className="rounded-control border border-danger bg-danger-soft px-4 py-3 text-sm text-ink" role="alert">
+          <h2 className="font-semibold">Fix these issues before publishing</h2>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-secondary">
+            {publishIssues.map((issue) => <li key={`${issue.controlId}-${issue.message}`}>{issue.message}</li>)}
+          </ul>
+        </div>
+      )}
       <Card
         title={
           <span className="flex flex-wrap items-center justify-between gap-2">
@@ -131,8 +227,10 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <Input
+              id="builder-form-name"
               label="Form name"
               required
+              error={publishIssues.find((issue) => issue.controlId === "builder-form-name")?.message}
               value={form.name}
               onChange={(event) => patchForm({ name: event.currentTarget.value })}
             />
@@ -146,6 +244,7 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
             />
           </div>
           <Input
+            id="builder-opens-at"
             type="datetime-local"
             label="Opens"
             value={toDateTimeLocal(form.opensAt)}
@@ -154,8 +253,10 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
             })}
           />
           <Input
+            id="builder-closes-at"
             type="datetime-local"
             label="Closes"
+            error={publishIssues.find((issue) => issue.controlId === "builder-closes-at")?.message}
             value={toDateTimeLocal(form.closesAt)}
             onChange={(event) => patchForm({
               closesAt: event.currentTarget.value ? new Date(event.currentTarget.value).getTime() : null,
@@ -247,13 +348,12 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
           <h2 className="text-lg font-semibold text-ink">Fields</h2>
           <p className="text-sm text-ink-faint">Order, validation, conditions, and category routing.</p>
         </div>
-        <Button size="sm" variant="secondary" onClick={addField}>Add field</Button>
+        <Button id="builder-add-field" size="sm" variant="secondary" onClick={addField}>Add field</Button>
       </div>
 
       {form.fields.map((field, index) => {
         const precedingFields = form.fields.slice(0, index).filter((candidate) =>
           candidate.type !== "heading" && candidate.type !== "html");
-        const condition = field.logic?.conditions[0];
         const optionType = OPTION_TYPES[field.type];
         return (
           <Card
@@ -292,12 +392,15 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
           >
             <div className="grid gap-4 sm:grid-cols-2">
               <Input
+                id={`builder-field-${field.id}-label`}
                 label="Label"
                 required
+                error={publishIssues.find((issue) => issue.controlId === `builder-field-${field.id}-label`)?.message}
                 value={field.label}
                 onChange={(event) => patchField(field.id, { label: event.currentTarget.value })}
               />
               <Select
+                id={`builder-field-${field.id}-type`}
                 label="Field type"
                 value={field.type}
                 onChange={(event) => {
@@ -345,8 +448,10 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
               {optionType && (
                 <div className="sm:col-span-2">
                   <Textarea
+                    id={`builder-field-${field.id}-options`}
                     label="Ordered options"
                     hint="One option per line. The displayed order is preserved in published versions."
+                    error={publishIssues.find((issue) => issue.controlId === `builder-field-${field.id}-options`)?.message}
                     rows={Math.max(3, field.options.length)}
                     value={field.options.join("\n")}
                     onChange={(event) => {
@@ -362,65 +467,111 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
                 </div>
               )}
 
-              {field.logic && condition && (
-                <fieldset className="grid gap-3 rounded-control border border-line bg-surface-muted/50 p-3 sm:col-span-2 sm:grid-cols-4">
-                  <legend className="px-1 text-sm font-medium text-ink">Conditional rule</legend>
-                  <Select
-                    label="Action"
-                    value={field.logic.action}
-                    onChange={(event) => patchField(field.id, {
-                      logic: { ...field.logic!, action: event.currentTarget.value as "show" | "hide" },
-                    })}
-                  >
-                    <option value="show">Show when</option>
-                    <option value="hide">Hide when</option>
-                  </Select>
-                  <Select
-                    label="Earlier field"
-                    value={condition.fieldId}
-                    onChange={(event) => patchField(field.id, {
-                      logic: {
-                        ...field.logic!,
-                        conditions: [{ ...condition, fieldId: event.currentTarget.value }],
-                      },
-                    })}
-                  >
-                    {precedingFields.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
-                  </Select>
-                  <Select
-                    label="Comparison"
-                    value={condition.op}
-                    onChange={(event) => {
-                      const op = event.currentTarget.value as typeof condition.op;
+              {field.logic && (
+                <fieldset className="space-y-3 rounded-control border border-line bg-surface-muted/50 p-3 sm:col-span-2">
+                  <legend className="px-1 text-sm font-medium text-ink">Conditional rules</legend>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Select
+                      label="Action"
+                      value={field.logic.action}
+                      onChange={(event) => patchField(field.id, {
+                        logic: { ...field.logic!, action: event.currentTarget.value as "show" | "hide" },
+                      })}
+                    >
+                      <option value="show">Show when</option>
+                      <option value="hide">Hide when</option>
+                    </Select>
+                    <Select
+                      label="Match"
+                      value={field.logic.mode}
+                      onChange={(event) => patchField(field.id, {
+                        logic: { ...field.logic!, mode: event.currentTarget.value as "all" | "any" },
+                      })}
+                    >
+                      <option value="all">All conditions match</option>
+                      <option value="any">Any condition matches</option>
+                    </Select>
+                  </div>
+                  <div className="space-y-3">
+                    {field.logic.conditions.map((condition, conditionIndex) => (
+                      <div key={`${condition.fieldId}-${conditionIndex}`} className="grid gap-3 rounded-control border border-line bg-surface p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                        <Select
+                          label={`Earlier field ${conditionIndex + 1}`}
+                          value={condition.fieldId}
+                          onChange={(event) => patchField(field.id, {
+                            logic: updateConditionAt(field.logic!, conditionIndex, {
+                              fieldId: event.currentTarget.value,
+                            }),
+                          })}
+                        >
+                          {precedingFields.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
+                        </Select>
+                        <Select
+                          label="Comparison"
+                          value={condition.op}
+                          onChange={(event) => {
+                            const op = event.currentTarget.value as typeof condition.op;
+                            patchField(field.id, {
+                              logic: updateConditionAt(field.logic!, conditionIndex, {
+                                op,
+                                value: op === "not_empty" ? undefined : condition.value ?? "",
+                              }),
+                            });
+                          }}
+                        >
+                          <option value="eq">Equals</option>
+                          <option value="neq">Does not equal</option>
+                          <option value="in">Is one of</option>
+                          <option value="not_empty">Is not empty</option>
+                        </Select>
+                        <Input
+                          label="Value"
+                          disabled={condition.op === "not_empty"}
+                          value={Array.isArray(condition.value) ? condition.value.join(", ") : condition.value ?? ""}
+                          onChange={(event) => patchField(field.id, {
+                            logic: updateConditionAt(field.logic!, conditionIndex, {
+                              value: condition.op === "in"
+                                ? event.currentTarget.value.split(",").map((value) => value.trim()).filter(Boolean)
+                                : event.currentTarget.value,
+                            }),
+                          })}
+                        />
+                        <Button
+                          className="self-end"
+                          size="sm"
+                          variant="ghost"
+                          disabled={field.logic.conditions.length === 1}
+                          onClick={() => {
+                            const conditions = field.logic!.conditions.filter((_, index) => index !== conditionIndex);
+                            patchField(field.id, {
+                              logic: { ...field.logic!, conditions: conditions as ConditionalLogic["conditions"] },
+                            });
+                          }}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={precedingFields.length === 0}
+                    onClick={() => {
+                      if (!precedingFields[0]) return;
                       patchField(field.id, {
                         logic: {
                           ...field.logic!,
-                          conditions: [{ ...condition, op, value: op === "not_empty" ? undefined : condition.value ?? "" }],
+                          conditions: [
+                            ...field.logic!.conditions,
+                            { fieldId: precedingFields[0].id, op: "eq", value: "" },
+                          ],
                         },
                       });
                     }}
                   >
-                    <option value="eq">Equals</option>
-                    <option value="neq">Does not equal</option>
-                    <option value="in">Is one of</option>
-                    <option value="not_empty">Is not empty</option>
-                  </Select>
-                  <Input
-                    label="Value"
-                    disabled={condition.op === "not_empty"}
-                    value={Array.isArray(condition.value) ? condition.value.join(", ") : condition.value ?? ""}
-                    onChange={(event) => patchField(field.id, {
-                      logic: {
-                        ...field.logic!,
-                        conditions: [{
-                          ...condition,
-                          value: condition.op === "in"
-                            ? event.currentTarget.value.split(",").map((value) => value.trim()).filter(Boolean)
-                            : event.currentTarget.value,
-                        }],
-                      },
-                    })}
-                  />
+                    Add condition
+                  </Button>
                 </fieldset>
               )}
 
@@ -429,6 +580,9 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
                   <legend className="px-1 text-sm font-medium text-ink">Category routing</legend>
                   {field.options.map((option) => (
                     <Input
+                      id={`builder-field-${field.id}-routing-${field.options.indexOf(option)}`}
+                      error={publishIssues.find((issue) =>
+                        issue.controlId === `builder-field-${field.id}-routing-${field.options.indexOf(option)}`)?.message}
                       key={option}
                       label={option}
                       hint="Internal category key"
@@ -461,8 +615,8 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
           {form.status === "closed" && form.publishedVersion && (
             <Button variant="secondary" onClick={() => onStatusChange("open")}>Reopen form</Button>
           )}
-          <Button type="submit" variant="secondary">Save draft</Button>
-          <Button onClick={() => onPublish(form)}>
+          <Button type="submit" name="intent" value="save" variant="secondary">Save draft</Button>
+          <Button type="submit" name="intent" value="publish">
             {form.publishedVersion ? "Publish new version" : "Publish form"}
           </Button>
         </div>
