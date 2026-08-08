@@ -5,7 +5,7 @@
   "scripts": {
     "dev": {
       "type": "service",
-      "command": "pnpm tsx scripts/dev-reset.ts && pnpm tsx scripts/local-dev.ts"
+      "command": "pnpm dev:service"
     }
   }
 }

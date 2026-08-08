@@ -16,10 +16,45 @@ import {
 
 type AppHono = { Bindings: Env };
 
+const MAX_REQUEST_LINK_BODY_BYTES = 1_024;
+const MAX_EMAIL_LENGTH = 254;
+const MAX_NAME_LENGTH = 120;
 const RequestLinkInput = Schema.Struct({
-  email: Schema.String.pipe(Schema.pattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)),
-  name: Schema.optional(Schema.String),
+  email: Schema.String.pipe(
+    Schema.maxLength(MAX_EMAIL_LENGTH),
+    Schema.pattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/),
+  ),
+  name: Schema.optional(Schema.String.pipe(Schema.maxLength(MAX_NAME_LENGTH))),
 });
+const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
+
+const readBoundedJson = async (request: Request): Promise<unknown | typeof BODY_TOO_LARGE> => {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_LINK_BODY_BYTES) {
+    return BODY_TOO_LARGE;
+  }
+  if (!request.body) return null;
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_REQUEST_LINK_BODY_BYTES) {
+      await reader.cancel();
+      return BODY_TOO_LARGE;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body));
+};
 
 const requestIdFor = (c: Context<AppHono>): string => {
   const supplied = c.req.header("x-request-id")?.trim();
@@ -57,6 +92,55 @@ export const hashBearerMaterial = async (env: Env, value: string): Promise<strin
     ["sign"],
   );
   return bytesToHex(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
+};
+const notifyScheduler = async (env: Env, requestId: string): Promise<void> => {
+  try {
+    const schedulerId = env.SCHEDULER.idFromName("mail");
+    const response = await env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
+      method: "POST",
+      headers: { "x-session-party-internal": sessionSecret(env) },
+    });
+    if (!response.ok) throw new Error("Scheduler rejected enqueue notification");
+  } catch {
+    console.error(JSON.stringify({
+      message: "Scheduler notification failed after magic-link enqueue",
+      requestId,
+    }));
+  }
+};
+
+const authorizeRequestLink = async (
+  request: Request,
+  env: Env,
+  email: string,
+  requestId: string,
+): Promise<boolean> => {
+  try {
+    const source = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+    const [sourceHash, recipientHash] = await Promise.all([
+      hashBearerMaterial(env, `request-link-source:${source.slice(0, 128)}`),
+      hashBearerMaterial(env, `request-link-recipient:${email}`),
+    ]);
+    const limiterId = env.SCHEDULER.idFromName("auth-rate-limit");
+    const response = await env.SCHEDULER.get(limiterId).fetch(
+      "https://scheduler/auth/request-link/authorize",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-session-party-internal": sessionSecret(env),
+        },
+        body: JSON.stringify({ sourceHash, recipientHash }),
+      },
+    );
+    return response.ok;
+  } catch {
+    console.error(JSON.stringify({
+      message: "Magic-link authorization unavailable",
+      requestId,
+    }));
+    return false;
+  }
 };
 
 const displayName = (email: string, name: string | null | undefined): string =>
@@ -176,21 +260,25 @@ const auth = new Hono<AppHono>();
 
 auth.post("/request-link", async (c) => {
   const requestId = requestIdFor(c);
-  const parsed = await Schema.decodeUnknownPromise(RequestLinkInput)(
-    await c.req.json().catch(() => null),
-  ).catch(() => null);
+  const body = await readBoundedJson(c.req.raw).catch(() => null);
+  const parsed = body === BODY_TOO_LARGE
+    ? null
+    : await Schema.decodeUnknownPromise(RequestLinkInput)(body).catch(() => null);
   if (!parsed) {
     return errorResponse(c, new Validation({ message: "A valid email is required" }), requestId);
   }
 
   const email = parsed.email.trim().toLowerCase();
   const name = parsed.name?.trim() || null;
+  if (!(await authorizeRequestLink(c.req.raw, c.env, email, requestId))) {
+    return c.json({ ok: true }, 202);
+  }
   let committed = false;
   try {
     const nowMs = Date.now();
     const db = drizzle(c.env.DB);
     const [existingUser] = await db
-      .select({ id: users.id })
+      .select({ id: users.id, name: users.name })
       .from(users)
       .where(eq(users.email, email))
       .limit(1);
@@ -207,6 +295,7 @@ auth.post("/request-link", async (c) => {
         .limit(1)
       : [];
     if (outstanding && outstanding.expiresAt.getTime() > nowMs) {
+      await notifyScheduler(c.env, requestId);
       return c.json({ ok: true }, 202);
     }
     const token = nanoid(48);
@@ -222,16 +311,10 @@ auth.post("/request-link", async (c) => {
     const renderedText = `Sign in to Session Party: ${link.toString()}\n\nThis link expires in 15 minutes.`;
     const statements: D1PreparedStatement[] = [];
 
-    if (existingUser) {
-      if (name) {
-        statements.push(c.env.DB.prepare(
-          "UPDATE users SET name = ?, updated_at = ? WHERE id = ?",
-        ).bind(name, nowMs, userId));
-      }
-    } else {
+    if (!existingUser) {
       statements.push(c.env.DB.prepare(
-        "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
-      ).bind(userId, email, name, nowMs, nowMs));
+        "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES (?, ?, NULL, 1, ?, ?)",
+      ).bind(userId, email, nowMs, nowMs));
     }
     if (outstanding) {
       statements.push(
@@ -256,7 +339,7 @@ auth.post("/request-link", async (c) => {
         snapshotId,
         userId,
         email,
-        name,
+        existingUser?.name ?? name,
         mailFrom(c.env),
         "Sign in to Session Party",
         renderedHtml,
@@ -277,21 +360,7 @@ auth.post("/request-link", async (c) => {
     }));
   }
 
-  if (committed) {
-    try {
-      const schedulerId = c.env.SCHEDULER.idFromName("mail");
-      const response = await c.env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
-        method: "POST",
-        headers: { "x-session-party-internal": sessionSecret(c.env) },
-      });
-      if (!response.ok) throw new Error("Scheduler rejected enqueue notification");
-    } catch {
-      console.error(JSON.stringify({
-        message: "Scheduler notification failed after magic-link enqueue",
-        requestId,
-      }));
-    }
-  }
+  if (committed) await notifyScheduler(c.env, requestId);
 
   return c.json({ ok: true }, 202);
 });

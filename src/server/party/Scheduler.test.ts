@@ -5,7 +5,7 @@ import {
   type D1Migration,
 } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import { sendMail } from "../services";
+import { sendMail, sessionSecret } from "../services";
 
 type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -117,5 +117,33 @@ describe("Scheduler durable delivery recovery", () => {
       ics_filename: null,
       ics_content: null,
     });
+  });
+  it("bounds auth requests without postponing an existing delivery alarm", async () => {
+    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("auth-rate-limit-proof"));
+    const scheduledAt = Date.now() + 5_000;
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.setAlarm(scheduledAt);
+    });
+    const statuses: number[] = [];
+    for (let index = 0; index <= 100; index += 1) {
+      const response = await stub.fetch("https://scheduler/auth/request-link/authorize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-session-party-internal": sessionSecret(env),
+        },
+        body: JSON.stringify({
+          sourceHash: index.toString(16).padStart(64, "0"),
+          recipientHash: (index + 1_000).toString(16).padStart(64, "0"),
+        }),
+      });
+      statuses.push(response.status);
+    }
+    expect(statuses.slice(0, 100).every((status) => status === 200)).toBe(true);
+    expect(statuses[100]).toBe(429);
+    expect(await runInDurableObject(
+      stub,
+      async (_instance, state) => state.storage.getAlarm(),
+    )).toBe(scheduledAt);
   });
 });

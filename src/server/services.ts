@@ -73,6 +73,7 @@ export class CurrentUser extends Context.Tag("session-party/CurrentUser")<
 >() {}
 
 type SecretBindings = {
+  readonly LOCAL_MODE?: string;
   readonly RESEND_API_KEY?: string;
   readonly SESSION_SECRET?: string;
 };
@@ -87,21 +88,13 @@ const optionalSecret = (
   return typeof value === "string" && value.length > 0 ? value : undefined;
 };
 
-export const isExplicitLocalEnvironment = (env: Pick<Env, "APP_URL">): boolean => {
-  const url = new URL(env.APP_URL);
-  return (
-    url.protocol === "http:" &&
-    (url.hostname === "localhost" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname === "::1" ||
-      url.hostname === "[::1]")
-  );
-};
+export const isExplicitLocalEnvironment = (env: object): boolean =>
+  "LOCAL_MODE" in env && env.LOCAL_MODE === "1";
 
-export const sessionSecret = (env: Env): string => {
+export const sessionSecret = (env: Env & SecretBindings): string => {
+  if (isExplicitLocalEnvironment(env)) return LOCAL_SESSION_SECRET;
   const configured = optionalSecret(env, "SESSION_SECRET");
   if (configured) return configured;
-  if (isExplicitLocalEnvironment(env)) return LOCAL_SESSION_SECRET;
   throw new Error("Missing required production secret: SESSION_SECRET");
 };
 
@@ -123,35 +116,35 @@ const sha256Hex = async (value: string): Promise<string> => {
 
 const LOCAL_MAIL_FROM = "Session Party <onboarding@resend.dev>";
 
-export const mailFrom = (env: Env): string => {
+export const mailFrom = (env: Env & SecretBindings): string => {
+  if (isExplicitLocalEnvironment(env)) return LOCAL_MAIL_FROM;
   const configured = typeof env.MAIL_FROM === "string" ? env.MAIL_FROM.trim() : "";
   if (configured) return configured;
-  if (isExplicitLocalEnvironment(env)) return LOCAL_MAIL_FROM;
   throw new Error("Missing required production binding: MAIL_FROM");
 };
 
 
-export const requireMailConfiguration = (env: Env): void => {
+export const requireMailConfiguration = (env: Env & SecretBindings): void => {
   mailFrom(env);
-  if (!optionalSecret(env, "RESEND_API_KEY") && !isExplicitLocalEnvironment(env)) {
+  if (!isExplicitLocalEnvironment(env) && !optionalSecret(env, "RESEND_API_KEY")) {
     throw new Error("Missing required production secret: RESEND_API_KEY");
   }
 };
 
 /** Shared by the Effect Mail service and Scheduler DO. */
-export const sendMail = async (env: Env, payload: MailPayload): Promise<MailReceipt> => {
+export const sendMail = async (
+  env: Env & SecretBindings,
+  payload: MailPayload,
+): Promise<MailReceipt> => {
   requireMailConfiguration(env);
-  const apiKey = optionalSecret(env, "RESEND_API_KEY");
+  const apiKey = isExplicitLocalEnvironment(env)
+    ? undefined
+    : optionalSecret(env, "RESEND_API_KEY");
   if (!apiKey) {
     const providerMessageId = payload.idempotencyKey
       ? `local-fake:${await sha256Hex(payload.idempotencyKey)}`
       : `local-fake:${crypto.randomUUID()}`;
-    console.log(JSON.stringify({
-      deliveryMode: "local-fake",
-      providerMessageId,
-      to: payload.to,
-      subject: payload.subject,
-    }));
+    console.log(JSON.stringify({ deliveryMode: "local-fake", providerMessageId }));
     return {
       provider: "local-fake",
       providerMessageId,

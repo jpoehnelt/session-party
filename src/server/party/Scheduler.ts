@@ -11,6 +11,16 @@ import { sendMail, sessionSecret } from "../services";
 const INTERVAL_MS = 60_000;
 const LEASE_MS = 5 * 60_000;
 const MAX_BATCH = 100;
+const AUTH_RATE_WINDOW_MS = 15 * 60_000;
+const AUTH_RATE_GLOBAL_LIMIT = 100;
+const AUTH_RATE_SOURCE_LIMIT = 10;
+const AUTH_RATE_RECIPIENT_LIMIT = 5;
+const AUTH_RATE_PREFIX = "auth-rate:";
+type AuthRateCounter = {
+  readonly windowStartedAt: number;
+  readonly count: number;
+};
+
 const redactAuthSnapshot = async (
   db: DrizzleD1Database,
   snapshotId: string,
@@ -45,9 +55,7 @@ const redactAuthSnapshot = async (
 export class Scheduler extends DurableObject<Env> {
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method !== "POST" || url.pathname !== "/poke") {
-      return new Response("Not found", { status: 404 });
-    }
+    if (request.method !== "POST") return new Response("Not found", { status: 404 });
     let secret: string;
     try {
       secret = sessionSecret(this.env);
@@ -57,8 +65,66 @@ export class Scheduler extends DurableObject<Env> {
     if (request.headers.get("x-session-party-internal") !== secret) {
       return new Response("Forbidden", { status: 403 });
     }
-    await this.ctx.storage.setAlarm(Date.now() + 1);
-    return Response.json({ ok: true });
+    if (url.pathname === "/poke") {
+      await this.ctx.storage.setAlarm(Date.now() + 1);
+      return Response.json({ ok: true });
+    }
+    if (url.pathname === "/auth/request-link/authorize") {
+      const input = await request.json<unknown>().catch(() => null);
+      if (
+        typeof input !== "object"
+        || input === null
+        || !("sourceHash" in input)
+        || !("recipientHash" in input)
+        || typeof input.sourceHash !== "string"
+        || typeof input.recipientHash !== "string"
+        || !/^[a-f0-9]{64}$/.test(input.sourceHash)
+        || !/^[a-f0-9]{64}$/.test(input.recipientHash)
+      ) {
+        return new Response("Invalid request", { status: 400 });
+      }
+      const allowed = await this.authorizeAuthRequest(input.sourceHash, input.recipientHash);
+      return Response.json({ ok: allowed }, { status: allowed ? 200 : 429 });
+    }
+    return new Response("Not found", { status: 404 });
+  }
+
+  private async authorizeAuthRequest(
+    sourceHash: string,
+    recipientHash: string,
+  ): Promise<boolean> {
+    const now = Date.now();
+    const windowStartedAt = Math.floor(now / AUTH_RATE_WINDOW_MS) * AUTH_RATE_WINDOW_MS;
+    const rules = [
+      { key: `${AUTH_RATE_PREFIX}global`, limit: AUTH_RATE_GLOBAL_LIMIT },
+      { key: `${AUTH_RATE_PREFIX}source:${sourceHash}`, limit: AUTH_RATE_SOURCE_LIMIT },
+      { key: `${AUTH_RATE_PREFIX}recipient:${recipientHash}`, limit: AUTH_RATE_RECIPIENT_LIMIT },
+    ] as const;
+    const allowed = await this.ctx.storage.transaction(async (transaction) => {
+      const next: Array<readonly [string, AuthRateCounter]> = [];
+      for (const { key, limit } of rules) {
+        const current = await transaction.get<AuthRateCounter>(key);
+        const count = current?.windowStartedAt === windowStartedAt ? current.count + 1 : 1;
+        if (count > limit) return false;
+        next.push([key, { windowStartedAt, count }]);
+      }
+      for (const [key, counter] of next) await transaction.put(key, counter);
+      return true;
+    });
+    const cleanupAt = now + AUTH_RATE_WINDOW_MS;
+    const existingAlarm = await this.ctx.storage.getAlarm();
+    if (existingAlarm === null || existingAlarm > cleanupAt) {
+      await this.ctx.storage.setAlarm(cleanupAt);
+    }
+    return allowed;
+  }
+
+  private async purgeAuthRateCounters(now: number): Promise<void> {
+    const counters = await this.ctx.storage.list<AuthRateCounter>({ prefix: AUTH_RATE_PREFIX });
+    const stale = [...counters]
+      .filter(([, counter]) => counter.windowStartedAt + AUTH_RATE_WINDOW_MS <= now)
+      .map(([key]) => key);
+    if (stale.length > 0) await this.ctx.storage.delete(stale);
   }
 
   override async alarm(): Promise<void> {
@@ -66,6 +132,7 @@ export class Scheduler extends DurableObject<Env> {
       const db = drizzle(this.env.DB);
       const now = new Date();
       const nowMs = now.getTime();
+      await this.purgeAuthRateCounters(nowMs);
       await this.env.DB.batch([
         this.env.DB.prepare(
           `UPDATE mail_deliveries

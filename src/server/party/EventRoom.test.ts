@@ -70,19 +70,29 @@ beforeAll(async () => {
   const ownerSession = await hashBearerMaterial(env, "room-owner-session");
   const reviewerSession = await hashBearerMaterial(env, "room-reviewer-session");
   const agendaKey = await hashBearerMaterial(env, "room-agenda-key");
+  const demotedSession = await hashBearerMaterial(env, "room-demoted-session");
+  const expiredSession = await hashBearerMaterial(env, "room-expired-session");
+  const revokedReaderKey = await hashBearerMaterial(env, "room-revoked-reader-key");
   const submissionsKey = await hashBearerMaterial(env, "room-submissions-key");
   const writerKey = await hashBearerMaterial(env, "room-writer-key");
   await env.DB.batch([
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-owner', 'room-owner@example.com', 'Room Owner', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-reviewer', 'room-reviewer@example.com', 'Room Reviewer', 1, ?, ?)").bind(now, now),
+    env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-demoted', 'room-demoted@example.com', 'Room Demoted', 1, ?, ?)").bind(now, now),
+    env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-expired', 'room-expired@example.com', 'Room Expired', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES (?, 'room-authority', 'Room Authority', 'UTC', 1, ?, ?)").bind(EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-owner-member', ?, 'room-owner', 'owner', 1, ?, ?)").bind(EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-reviewer-member', ?, 'room-reviewer', 'reviewer', 1, ?, ?)").bind(EVENT_ID, now, now),
+    env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-demoted-member', ?, 'room-demoted', 'owner', 1, ?, ?)").bind(EVENT_ID, now, now),
+    env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-expired-member', ?, 'room-expired', 'reviewer', 1, ?, ?)").bind(EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-owner-session-id', ?, 'room-owner', 'session', ?, NULL, ?)").bind(ownerSession, expiresAt, now),
     env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-reviewer-session-id', ?, 'room-reviewer', 'session', ?, NULL, ?)").bind(reviewerSession, expiresAt, now),
+    env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-demoted-session-id', ?, 'room-demoted', 'session', ?, NULL, ?)").bind(demotedSession, expiresAt, now),
+    env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-expired-session-id', ?, 'room-expired', 'session', ?, NULL, ?)").bind(expiredSession, expiresAt, now),
     env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-agenda-key-id', ?, 'Agenda Reader', ?, '[\"agenda:read\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, agendaKey, expiresAt, now, now),
     env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-submissions-key-id', ?, 'Submissions Reader', ?, '[\"submissions:read\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, submissionsKey, expiresAt, now, now),
     env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-writer-key-id', ?, 'Agenda Writer', ?, '[\"agenda:write\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, writerKey, expiresAt, now, now),
+    env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-revoked-reader-key-id', ?, 'Revoked Agenda Reader', ?, '[\"agenda:read\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, revokedReaderKey, expiresAt, now, now),
   ]);
 });
 
@@ -167,5 +177,73 @@ describe("EventRoom live authorization", () => {
       expectedVersion: 1,
     }));
     expect((await closed).code).toBe(4403);
+  });
+  it("closes a revoked recipient before privileged delivery", async () => {
+    const revoked = await connect({ bearer: "room-revoked-reader-key" });
+    const revokedMessages: ServerMessage[] = [];
+    revoked.addEventListener("message", (event) => {
+      if (typeof event.data === "string") revokedMessages.push(JSON.parse(event.data) as ServerMessage);
+    });
+    await env.DB.prepare(
+      "UPDATE api_keys SET revoked_at = ? WHERE id = 'room-revoked-reader-key-id'",
+    ).bind(Date.now()).run();
+    const revokedClosed = new Promise<CloseEvent>((resolve) => {
+      revoked.addEventListener("close", resolve, { once: true });
+    });
+    await broadcast({ t: "agenda/conflicts", conflicts: [] });
+    expect((await revokedClosed).code).toBe(4403);
+    expect(revokedMessages.some(({ t }) => t === "agenda/conflicts")).toBe(false);
+  });
+
+  it("rejects expired hello before publishing presence", async () => {
+
+    const observer = await connect({ cookie: "room-owner-session" });
+    const expired = await connect({ cookie: "room-expired-session" });
+    await env.DB.prepare(
+      "UPDATE auth_tokens SET expires_at = ? WHERE id = 'room-expired-session-id'",
+    ).bind(Date.now() - 1).run();
+    const expiredClosed = new Promise<CloseEvent>((resolve) => {
+      expired.addEventListener("close", resolve, { once: true });
+    });
+    expired.send(JSON.stringify({ t: "room/hello", surface: "forged-expired-presence" }));
+    expect((await expiredClosed).code).toBe(4403);
+    const presence = waitForType(observer, "room/presence");
+    observer.send(JSON.stringify({ t: "room/hello", surface: "observer" }));
+    expect(await presence).toMatchObject({
+      t: "room/presence",
+      users: expect.not.arrayContaining([
+        expect.objectContaining({ userId: "room-expired" }),
+      ]),
+    });
+    observer.close();
+  });
+
+  it("refreshes a demoted role before privileged broadcast", async () => {
+    const demoted = await connect({ cookie: "room-demoted-session" });
+    const messages: ServerMessage[] = [];
+    demoted.addEventListener("message", (event) => {
+      if (typeof event.data === "string") messages.push(JSON.parse(event.data) as ServerMessage);
+    });
+    await env.DB.prepare(
+      "UPDATE event_members SET role = 'reviewer' WHERE id = 'room-demoted-member'",
+    ).run();
+    await broadcast({
+      t: "dashboard/progress",
+      speakerId: "speaker",
+      taskId: "task",
+      completed: true,
+      tasksDone: 1,
+      tasksTotal: 1,
+    });
+    const refreshedPresence = waitForType(demoted, "room/presence");
+    demoted.send(JSON.stringify({ t: "room/hello", surface: "reviewer-surface" }));
+    expect(await refreshedPresence).toMatchObject({
+      t: "room/presence",
+      users: expect.arrayContaining([
+        expect.objectContaining({ userId: "room-demoted", surface: "reviewer-surface" }),
+      ]),
+    });
+    expect(messages.some(({ t }) => t === "dashboard/progress")).toBe(false);
+    demoted.close();
   });
 });

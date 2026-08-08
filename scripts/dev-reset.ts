@@ -8,8 +8,20 @@ await mkdir(stateRoot, { recursive: true });
 
 const migration = spawnSync(
   "pnpm",
-  ["wrangler", "d1", "migrations", "apply", "session-party", "--local"],
-  { stdio: "inherit" },
+  [
+    "wrangler",
+    "d1",
+    "migrations",
+    "apply",
+    "session-party",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+  ],
+  {
+    stdio: "inherit",
+    env: { ...process.env, CI: process.env.CI ?? "1" },
+  },
 );
 if (migration.status !== 0) process.exit(migration.status ?? 1);
 
