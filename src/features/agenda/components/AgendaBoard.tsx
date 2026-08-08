@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
 import { Badge, Button, Card, EmptyState, Table } from "@/ui";
 import type {
   AgendaSnapshot,
@@ -96,6 +96,34 @@ export function AgendaBoard({
   );
   const time = useMemo(() => timeFormatter(agenda.timezone), [agenda.timezone]);
   const date = useMemo(() => dateFormatter(agenda.timezone), [agenda.timezone]);
+  const availableDays = useMemo(() => {
+    const days = new Map<string, number>();
+    for (const talk of scheduled) {
+      if (talk.startsAt === null) continue;
+      const key = dateKey(talk.startsAt, agenda.timezone);
+      if (!days.has(key)) days.set(key, talk.startsAt);
+    }
+    return [...days.entries()]
+      .sort(([, left], [, right]) => left - right)
+      .map(([key, startsAt]) => ({ key, label: date.format(startsAt) }));
+  }, [agenda.timezone, date, scheduled]);
+  const [activeDay, setActiveDay] = useState<string | null>(null);
+  useEffect(() => {
+    setActiveDay((current) =>
+      current && availableDays.some(({ key }) => key === current)
+        ? current
+        : availableDays[0]?.key ?? null,
+    );
+  }, [agenda.eventId, availableDays]);
+  const activeDayLabel = availableDays.find(({ key }) => key === activeDay)?.label ?? "No scheduled day";
+  const activeDayTalks = useMemo(
+    () => activeDay === null
+      ? []
+      : scheduled.filter((talk) =>
+        talk.startsAt !== null && dateKey(talk.startsAt, agenda.timezone) === activeDay,
+      ),
+    [activeDay, agenda.timezone, scheduled],
+  );
 
   const lanes = useMemo<readonly Lane[]>(() => {
     if (view === "track") {
@@ -116,20 +144,39 @@ export function AgendaBoard({
         },
       ];
     }
-    if (view === "room" || view === "day") {
+    if (view === "room") {
       return [
         ...agenda.rooms.map((room) => ({
           id: `room:${room.id}`,
-          label: room.name,
+          label: `${room.name} · ${activeDayLabel}`,
           hint: room.capacity === null ? "Room" : `${room.capacity} seats`,
-          talks: scheduled.filter(({ roomId }) => roomId === room.id),
+          talks: activeDayTalks.filter(({ roomId }) => roomId === room.id),
           target: { trackId: null, roomId: room.id },
         })),
         {
           id: "room:unassigned",
-          label: "Unassigned room",
+          label: `Unassigned room · ${activeDayLabel}`,
           hint: "Needs placement",
-          talks: scheduled.filter(({ roomId }) => roomId === null),
+          talks: activeDayTalks.filter(({ roomId }) => roomId === null),
+          target: { trackId: null, roomId: null },
+        },
+      ];
+    }
+    if (view === "day") {
+      const dayTalks = activeDayTalks;
+      return [
+        ...agenda.rooms.map((room) => ({
+          id: `room:${room.id}`,
+          label: `${room.name} · ${activeDayLabel}`,
+          hint: room.capacity === null ? "Room" : `${room.capacity} seats`,
+          talks: dayTalks.filter(({ roomId }) => roomId === room.id),
+          target: { trackId: null, roomId: room.id },
+        })),
+        {
+          id: "room:unassigned",
+          label: `Unassigned room · ${activeDayLabel}`,
+          hint: "Needs placement",
+          talks: dayTalks.filter(({ roomId }) => roomId === null),
           target: { trackId: null, roomId: null },
         },
       ];
@@ -150,7 +197,7 @@ export function AgendaBoard({
       }));
     }
     return [];
-  }, [agenda.rooms, agenda.timezone, agenda.tracks, date, scheduled, view]);
+  }, [activeDayLabel, activeDayTalks, agenda.rooms, agenda.timezone, agenda.tracks, date, scheduled, view]);
 
   const dropOnLane = (event: DragEvent<HTMLElement>, lane: Lane) => {
     event.preventDefault();
@@ -190,37 +237,41 @@ export function AgendaBoard({
 
       <ConflictIndicator conflicts={agenda.conflicts} />
 
-      <div className="grid min-h-[34rem] gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
-        <Card title={<span className="flex items-center justify-between"><span>Accepted backlog</span><Badge>{agenda.backlog.length}</Badge></span>}>
-          {agenda.backlog.length === 0 ? (
-            <EmptyState
-              title="Backlog clear"
-              description="Accepted, provisioned proposals appear here until a talk is created."
-            />
-          ) : (
-            <ol className="space-y-2">
-              {agenda.backlog.map((proposal) => (
-                <li key={proposal.submissionId} className="rounded-control border border-line bg-surface-muted p-3">
-                  <p className="text-sm font-semibold text-ink">{proposal.title}</p>
-                  <p className="mt-1 text-xs text-ink-secondary">
-                    {proposal.primarySpeakerName}{proposal.category ? ` · ${proposal.category}` : ""}
-                  </p>
-                  <Button
-                    className="mt-3 w-full"
-                    size="sm"
-                    variant="secondary"
-                    disabled={disabled}
-                    onClick={() => onCreateTalk(proposal)}
-                  >
-                    Create talk
-                  </Button>
-                </li>
-              ))}
-            </ol>
-          )}
-        </Card>
+      {(view === "day" || view === "room") && (
+        <div
+          className="flex items-center gap-2 overflow-x-auto rounded-control border border-line bg-surface px-3 py-2"
+          aria-label={`Choose agenda day in ${agenda.timezone}`}
+        >
+          <span className="mr-1 shrink-0 text-xs font-semibold uppercase tracking-wide text-ink-faint">Active day</span>
+          {availableDays.length === 0 ? (
+            <span className="text-sm text-ink-secondary">Schedule a talk to create the first day rail.</span>
+          ) : availableDays.map((day) => (
+            <Button
+              className="shrink-0"
+              key={day.key}
+              size="sm"
+              variant={activeDay === day.key ? "primary" : "secondary"}
+              aria-pressed={activeDay === day.key}
+              onClick={() => setActiveDay(day.key)}
+            >
+              {day.label}
+            </Button>
+          ))}
+        </div>
+      )}
 
-        <section className="min-w-0" aria-label={`${view} agenda view`}>
+      <div className="grid min-h-[34rem] gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
+
+        <section
+          className="order-1 min-w-0 xl:order-2"
+          aria-label={
+            view === "day"
+              ? `Day agenda for ${activeDayLabel}`
+              : view === "room"
+                ? `Room agenda for ${activeDayLabel}`
+                : `${view} agenda view`
+          }
+        >
           {view === "list" ? (
             <Table
               columns={[
@@ -259,7 +310,10 @@ export function AgendaBoard({
               empty={<EmptyState title="No talks yet" description="Create a talk from the accepted backlog." />}
             />
           ) : lanes.length === 0 ? (
-            <EmptyState title="No schedule lanes" description="Add rooms or tracks before placing talks." />
+            <EmptyState
+              title={view === "day" ? "No scheduled days" : "No schedule lanes"}
+              description={view === "day" ? "Schedule a talk to create the first event day." : "Add rooms or tracks before placing talks."}
+            />
           ) : (
             <div className="overflow-x-auto pb-3">
               <div className="grid min-w-max auto-cols-[18rem] grid-flow-col gap-3">
@@ -281,6 +335,11 @@ export function AgendaBoard({
                     <ol className="space-y-2 p-2">
                       {lane.talks.map((talk) => {
                         const talkConflicts = agenda.conflicts.filter(({ talkIds }) => talkIds.includes(talk.id));
+                        const formattedStart = talk.startsAt === null
+                          ? "Unscheduled"
+                          : view === "room"
+                            ? `${date.format(talk.startsAt)}, ${time.format(talk.startsAt)}`
+                            : time.format(talk.startsAt);
                         return (
                           <li
                             key={talk.id}
@@ -298,13 +357,13 @@ export function AgendaBoard({
                             <button
                               type="button"
                               className="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                              aria-label={`Edit ${talk.title}. ${talk.startsAt === null ? "Unscheduled" : time.format(talk.startsAt)}. Press Enter for move controls.`}
+                              aria-label={`Edit ${talk.title}. ${formattedStart}. Press Enter for move controls.`}
                               onClick={() => onSelectTalk(talk)}
                               onKeyDown={(event) => openWithKeyboard(event, talk)}
                             >
                               <span className="flex items-start justify-between gap-2">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
-                                  {talk.startsAt === null ? "Unscheduled" : time.format(talk.startsAt)}
+                                  {formattedStart}
                                 </span>
                                 <span className="text-xs text-ink-faint">{talk.durationMin}m</span>
                               </span>
@@ -326,6 +385,37 @@ export function AgendaBoard({
             </div>
           )}
         </section>
+        <Card
+          className="order-2 xl:order-1"
+          title={<span className="flex items-center justify-between"><span>Accepted backlog</span><Badge>{agenda.backlog.length}</Badge></span>}
+        >
+          {agenda.backlog.length === 0 ? (
+            <EmptyState
+              title="Backlog clear"
+              description="Accepted, provisioned proposals appear here until a talk is created."
+            />
+          ) : (
+            <ol className="space-y-2">
+              {agenda.backlog.map((proposal) => (
+                <li key={proposal.submissionId} className="rounded-control border border-line bg-surface-muted p-3">
+                  <p className="text-sm font-semibold text-ink">{proposal.title}</p>
+                  <p className="mt-1 text-xs text-ink-secondary">
+                    {proposal.primarySpeakerName}{proposal.category ? ` · ${proposal.category}` : ""}
+                  </p>
+                  <Button
+                    className="mt-3 w-full"
+                    size="sm"
+                    variant="secondary"
+                    disabled={disabled}
+                    onClick={() => onCreateTalk(proposal)}
+                  >
+                    Create talk
+                  </Button>
+                </li>
+              ))}
+            </ol>
+          )}
+        </Card>
       </div>
       <p className="text-xs text-ink-faint">
         Drag a talk between track or room lanes. For exact track, room, start, and duration changes, open the talk and use the labeled form controls.

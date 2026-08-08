@@ -16,10 +16,11 @@ import {
 } from "contracts/schema";
 import type { JsonValue } from "contracts/domain";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 // BaselineGreen may rename these invocation seams; keep the shared import isolated here.
 import { CurrentUser, Db, Rooms, type CurrentUserValue } from "@/server/services";
+import { PublishedAgenda as PublishedAgendaSchema } from "./schema";
 import type {
   AgendaConflict,
   AgendaMutationResult,
@@ -42,7 +43,7 @@ const IDEMPOTENCY_TTL_MS = DAY_MS;
 const PRIVATE_AUDIENCE = [{ kind: "admins" }] as const;
 const PUBLIC_AUDIENCE = [{ kind: "public" }] as const;
 const TALK_CHANGE_EVENT = "agenda.talk_changed";
-const PUBLICATION_EVENT = "agenda.revision_published";
+const PUBLICATION_EVENT = "agenda/published";
 
 type Principal = CurrentUserValue;
 type IdempotencyContext = {
@@ -53,6 +54,25 @@ type IdempotencyContext = {
   readonly principalId: string;
   readonly now: Date;
 };
+
+export interface AgendaMutationReservation {
+  readonly eventId: string;
+  readonly operationId: "agenda.createTalk" | "agenda.moveTalk" | "agenda.scheduleTalk";
+  readonly workspaceVersion: number;
+}
+
+/** Feature-local deterministic contention seam; transport operations never provide it. */
+export type AgendaMutationInterlock = (
+  reservation: AgendaMutationReservation,
+) => Effect.Effect<void, never>;
+
+const waitAfterWorkspaceSample = (
+  interlock: AgendaMutationInterlock | undefined,
+  reservation: AgendaMutationReservation,
+) =>
+  interlock
+    ? interlock(reservation)
+    : Effect.void;
 
 const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
   Effect.tryPromise({
@@ -304,6 +324,13 @@ const loadConflicts = (
     return allTalks.flatMap((talk, index) => detectAgendaConflicts(talk, allTalks.slice(0, index), roomNames, speakerNames));
   });
 
+const decodePublishedAgenda = (payload: unknown): Effect.Effect<PublishedAgenda, External> =>
+  Schema.decodeUnknown(PublishedAgendaSchema)(payload).pipe(
+    Effect.mapError((error) =>
+      new External({ service: "agenda-publication", detail: String(error) }),
+    ),
+  );
+
 const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | null, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
@@ -320,7 +347,8 @@ const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | nul
         .orderBy(desc(domainChanges.aggregateVersion), desc(domainChanges.sequence))
         .limit(1),
     );
-    return change?.payload as PublishedAgenda | null ?? null;
+    if (!change) return null;
+    return yield* decodePublishedAgenda(change.payload);
   });
 
 const nextWorkspaceVersion = (eventId: string): Effect.Effect<number, AppError, Db> =>
@@ -497,14 +525,21 @@ const mutationContention = <A, R>(effect: Effect.Effect<A, AppError, R>) =>
 
 export const createTalk = (
   input: CreateTalkInput,
+  interlock?: AgendaMutationInterlock,
 ): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
   mutationContention(Effect.gen(function* () {
     const { db } = yield* Db;
     const principal = yield* CurrentUser;
-    yield* getEvent(input.eventId);
-    yield* ensureScheduleReferences(input.eventId, input.roomId, input.trackId);
     const prepared = yield* prepareIdempotency("agenda.createTalk", input);
     if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
+    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
+    yield* waitAfterWorkspaceSample(interlock, {
+      eventId: input.eventId,
+      operationId: "agenda.createTalk",
+      workspaceVersion,
+    });
+    yield* getEvent(input.eventId);
+    yield* ensureScheduleReferences(input.eventId, input.roomId, input.trackId);
 
     const [submission] = yield* database(() =>
       db.select().from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1),
@@ -581,7 +616,6 @@ export const createTalk = (
     const conflicts = yield* loadConflicts(input.eventId, [...existing, candidate]);
     yield* rejectConflicts(conflicts.filter(({ talkIds }) => talkIds.includes(candidate.id)));
 
-    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
     const changeId = nanoid();
     const auditId = nanoid();
     const result: AgendaMutationResult = { talk: candidate, conflicts: [], changeId, auditId, replayed: false };
@@ -648,13 +682,20 @@ const repositionTalk = (
   operationId: "agenda.scheduleTalk" | "agenda.moveTalk",
   action: "scheduled" | "moved",
   input: ScheduleTalkInput | MoveTalkInput,
+  interlock?: AgendaMutationInterlock,
 ): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
   mutationContention(Effect.gen(function* () {
     const { db } = yield* Db;
     const principal = yield* CurrentUser;
-    yield* ensureScheduleReferences(input.eventId, input.roomId, input.trackId);
     const prepared = yield* prepareIdempotency(operationId, input);
     if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
+    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
+    yield* waitAfterWorkspaceSample(interlock, {
+      eventId: input.eventId,
+      operationId,
+      workspaceVersion,
+    });
+    yield* ensureScheduleReferences(input.eventId, input.roomId, input.trackId);
     const before = yield* loadTalk(input.eventId, input.talkId);
     if (before.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: `Talk version is ${before.version}; expected ${input.expectedVersion}` }));
@@ -674,7 +715,6 @@ const repositionTalk = (
     const existing = yield* loadTalkRows(input.eventId);
     const conflicts = yield* loadConflicts(input.eventId, [...existing.filter(({ id }) => id !== candidate.id), candidate]);
     yield* rejectConflicts(conflicts.filter(({ talkIds }) => talkIds.includes(candidate.id)));
-    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
 
     const changeId = nanoid();
     const auditId = nanoid();
@@ -727,11 +767,11 @@ const repositionTalk = (
     return result;
   }));
 
-export const scheduleTalk = (input: ScheduleTalkInput) =>
-  repositionTalk("agenda.scheduleTalk", "scheduled", input);
+export const scheduleTalk = (input: ScheduleTalkInput, interlock?: AgendaMutationInterlock) =>
+  repositionTalk("agenda.scheduleTalk", "scheduled", input, interlock);
 
-export const moveTalk = (input: MoveTalkInput) =>
-  repositionTalk("agenda.moveTalk", "moved", input);
+export const moveTalk = (input: MoveTalkInput, interlock?: AgendaMutationInterlock) =>
+  repositionTalk("agenda.moveTalk", "moved", input, interlock);
 
 export const cancelTalk = (
   input: CancelTalkInput,
@@ -852,7 +892,7 @@ export const publishAgenda = (
         speakerNames: visibleSpeakerNames.get(talk.id) ?? [],
       }))
       .sort((left, right) => left.startsAt - right.startsAt || left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
-    const published: PublishedAgenda = {
+    const published = yield* decodePublishedAgenda({
       eventId: event.id,
       eventName: event.name,
       eventSlug: event.slug,
@@ -861,7 +901,7 @@ export const publishAgenda = (
       revision: currentRevision + 1,
       publishedAt: prepared.now.getTime(),
       talks: publicTalks,
-    };
+    });
     const actor = actorColumns(principal);
     const changeId = nanoid();
     const auditId = nanoid();

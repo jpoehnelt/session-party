@@ -149,7 +149,6 @@ export const moveTalkOperation = {
     name: "agenda_move_talk",
     description: "Move a versioned talk across track, room, start time, and duration.",
   },
-  party: { intentType: "agenda/move" },
   idempotency: "required",
   concurrency: "required",
   emits: ["agenda.talk_changed"],
@@ -175,7 +174,7 @@ export const publishAgendaOperation = {
   },
   idempotency: "required",
   concurrency: "required",
-  emits: ["agenda.revision_published"],
+  emits: ["agenda/published"],
 } as const satisfies AnyOperationDef;
 
 export const scheduleTalkOperation = {
@@ -219,9 +218,9 @@ const moveInputSchema = {
   additionalProperties: false,
   properties: {
     durationMin: { maximum: 480, minimum: 5, type: "integer" },
-    eventId: { minLength: 1, type: "string" },
     expectedVersion: { minimum: 1, type: "integer" },
     idempotencyKey: { maxLength: 200, minLength: 8, type: "string" },
+    requestId: { minLength: 1, type: "string" },
     roomId: { minLength: 1, type: "string" },
     startsAt: { minimum: 0, type: "integer" },
     talkId: { minLength: 1, type: "string" },
@@ -229,9 +228,9 @@ const moveInputSchema = {
   },
   required: [
     "durationMin",
-    "eventId",
     "expectedVersion",
     "idempotencyKey",
+    "requestId",
     "roomId",
     "startsAt",
     "talkId",
@@ -253,7 +252,7 @@ const mutationOutputSchema = {
   type: "object",
 } as const satisfies JsonObject;
 
-/** Feature-local projection for the frozen Party seam; activation waits for BaselineGreen enrichment. */
+/** Inactive projection of the accepted future Party move contract; no operation registers it yet. */
 export const partyDescriptors = [
   {
     inputSchema: moveInputSchema,

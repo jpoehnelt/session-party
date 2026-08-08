@@ -1,4 +1,5 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import type { ServerMessage } from "contracts/protocol";
 import {
   acceptanceEvents,
   auditLog,
@@ -21,9 +22,10 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppLayer, CurrentUser, type CurrentUserValue } from "@/server/services";
+import { AppLayer, CurrentUser, Rooms, type CurrentUserValue } from "@/server/services";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
 import { operations, partyDescriptors } from "./operations";
+import { zonedTimestamp } from "./routes/agenda";
 import {
   cancelTalk,
   createTalk,
@@ -32,6 +34,7 @@ import {
   moveTalk,
   publishAgenda,
   scheduleTalk,
+  type AgendaMutationInterlock,
 } from "./service";
 
 interface TestEnv extends Cloudflare.Env {
@@ -59,6 +62,44 @@ const runEither = <A, E>(principal: CurrentUserValue, effect: Effect.Effect<A, E
     Effect.either,
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
   ));
+
+const runAsRecording = <A, E>(
+  principal: CurrentUserValue,
+  effect: Effect.Effect<A, E, never>,
+  broadcasts: ServerMessage[],
+) =>
+  Effect.runPromise(effect.pipe(
+    Effect.provide(Layer.succeed(Rooms, {
+      broadcast: (_eventId, message) => Effect.sync(() => { broadcasts.push(message); }),
+    })),
+    Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+  ));
+
+const runEitherRecording = <A, E>(
+  principal: CurrentUserValue,
+  effect: Effect.Effect<A, E, never>,
+  broadcasts: ServerMessage[],
+) =>
+  Effect.runPromise(effect.pipe(
+    Effect.provide(Layer.succeed(Rooms, {
+      broadcast: (_eventId, message) => Effect.sync(() => { broadcasts.push(message); }),
+    })),
+    Effect.either,
+    Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+  ));
+
+const reservationBarrier = () => {
+  let announceSampled!: () => void;
+  let release!: () => void;
+  const sampled = new Promise<void>((resolve) => { announceSampled = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const interlock: AgendaMutationInterlock = () =>
+    Effect.promise(async () => {
+      announceSampled();
+      await released;
+    });
+  return { interlock, release, sampled };
+};
 
 interface SeedOptions {
   readonly scheduled?: boolean;
@@ -343,6 +384,16 @@ describe("agenda deterministic fixtures and descriptors", () => {
     expect(operationIds).toEqual([...operationIds].sort((left, right) => left < right ? -1 : left > right ? 1 : 0));
     expect(partyDescriptors.map(({ intentType }) => intentType)).toEqual(["agenda/move"]);
     expect(operations.every(({ id }) => id.startsWith("agenda."))).toBe(true);
+    expect(operations.some((operation) => "party" in operation)).toBe(false);
+    expect(partyDescriptors[0].inputSchema.required).toContain("requestId");
+    expect(partyDescriptors[0].inputSchema.required).not.toContain("eventId");
+  });
+
+  it("rejects DST gaps and chooses the earlier fall-back instant", () => {
+    expect(zonedTimestamp("2026-03-08T02:30", "America/Los_Angeles")).toBeNull();
+    expect(zonedTimestamp("2026-11-01T01:30", "America/Los_Angeles")).toBe(
+      Date.UTC(2026, 10, 1, 8, 30),
+    );
   });
 });
 
@@ -488,6 +539,104 @@ describe("agenda service", () => {
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(0);
   });
 
+  it("rejects stale create and move plans after deterministic interleaving", async () => {
+    const createSeed = await seedAgenda("stale-create");
+    const createBroadcasts: ServerMessage[] = [];
+    const createBarrier = reservationBarrier();
+    const staleCreate = runEitherRecording(
+      createSeed.user,
+      createTalk({
+        eventId: createSeed.eventId,
+        submissionId: createSeed.submissionA,
+        trackId: null,
+        roomId: null,
+        startsAt: null,
+        durationMin: 30,
+        idempotencyKey: "stale-create-loser-0001",
+      }, createBarrier.interlock) as never,
+      createBroadcasts,
+    );
+    await createBarrier.sampled;
+    try {
+      await runAsRecording(
+        createSeed.user,
+        createTalk({
+          eventId: createSeed.eventId,
+          submissionId: createSeed.submissionA,
+          trackId: null,
+          roomId: null,
+          startsAt: null,
+          durationMin: 30,
+          idempotencyKey: "stale-create-winner-0001",
+        }) as never,
+        createBroadcasts,
+      );
+    } finally {
+      createBarrier.release();
+    }
+    const staleCreateResult = await staleCreate;
+    expect(staleCreateResult._tag).toBe("Left");
+    if (staleCreateResult._tag === "Left") {
+      expect(staleCreateResult.left).toMatchObject({ _tag: "Conflict" });
+    }
+    await expect(createSeed.db.select().from(talks).where(eq(talks.eventId, createSeed.eventId))).resolves.toHaveLength(1);
+    await expect(createSeed.db.select().from(domainChanges).where(eq(domainChanges.eventId, createSeed.eventId))).resolves.toHaveLength(1);
+    await expect(createSeed.db.select().from(auditLog).where(eq(auditLog.eventId, createSeed.eventId))).resolves.toHaveLength(1);
+    await expect(createSeed.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, createSeed.eventId))).resolves.toHaveLength(1);
+    expect(createBroadcasts).toHaveLength(1);
+
+    const moveSeed = await seedAgenda("stale-interleaved-move", { scheduled: true });
+    const moveBroadcasts: ServerMessage[] = [];
+    const moveBarrier = reservationBarrier();
+    const staleMove = runEitherRecording(
+      moveSeed.user,
+      moveTalk({
+        eventId: moveSeed.eventId,
+        talkId: moveSeed.talkA,
+        trackId: moveSeed.trackId,
+        roomId: moveSeed.roomB,
+        startsAt: FIXED_DAY_START + 7_200_000,
+        durationMin: 30,
+        expectedVersion: 2,
+        idempotencyKey: "stale-interleaved-move-loser-0001",
+      }, moveBarrier.interlock) as never,
+      moveBroadcasts,
+    );
+    await moveBarrier.sampled;
+    try {
+      await runAsRecording(
+        moveSeed.user,
+        moveTalk({
+          eventId: moveSeed.eventId,
+          talkId: moveSeed.talkA,
+          trackId: moveSeed.trackId,
+          roomId: moveSeed.roomB,
+          startsAt: FIXED_DAY_START + 3_600_000,
+          durationMin: 30,
+          expectedVersion: 2,
+          idempotencyKey: "stale-interleaved-move-winner-0001",
+        }) as never,
+        moveBroadcasts,
+      );
+    } finally {
+      moveBarrier.release();
+    }
+    const staleMoveResult = await staleMove;
+    expect(staleMoveResult._tag).toBe("Left");
+    if (staleMoveResult._tag === "Left") {
+      expect(staleMoveResult.left).toMatchObject({ _tag: "Conflict" });
+    }
+    const [moved] = await moveSeed.db.select().from(talks).where(and(
+      eq(talks.eventId, moveSeed.eventId),
+      eq(talks.id, moveSeed.talkA),
+    ));
+    expect(moved).toMatchObject({ version: 3, roomId: moveSeed.roomB });
+    await expect(moveSeed.db.select().from(domainChanges).where(eq(domainChanges.eventId, moveSeed.eventId))).resolves.toHaveLength(1);
+    await expect(moveSeed.db.select().from(auditLog).where(eq(auditLog.eventId, moveSeed.eventId))).resolves.toHaveLength(1);
+    await expect(moveSeed.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, moveSeed.eventId))).resolves.toHaveLength(1);
+    expect(moveBroadcasts).toHaveLength(1);
+  });
+
   it("allows exactly one winner when different talks contend for one schedule revision", async () => {
     const seeded = await seedAgenda("contention", { scheduled: true, secondTalk: true });
     const first = moveTalk({
@@ -541,6 +690,18 @@ describe("agenda service", () => {
     expect(published.talks).toHaveLength(1);
     expect(published.talks[0]).not.toHaveProperty("version");
     expect(published.talks[0]).not.toHaveProperty("submissionId");
+    const [publicationChange] = await seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ));
+    expect(publicationChange).toMatchObject({
+      aggregateId: seeded.eventId,
+      aggregateVersion: 1,
+      eventType: "agenda/published",
+      payload: published,
+    });
+    await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(1);
+    await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(1);
 
     await runAs(seeded.user, moveTalk({
       eventId: seeded.eventId,

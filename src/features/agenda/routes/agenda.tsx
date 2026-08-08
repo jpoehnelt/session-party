@@ -70,7 +70,11 @@ const localInputValue = (timestamp: number | null, timezone: string) => {
   return `${value("year")}-${value("month")}-${value("day")}T${value("hour")}:${value("minute")}`;
 };
 
-const zonedTimestamp = (value: string, timezone: string): number | null => {
+/**
+ * Interprets a wall time in the event zone. Nonexistent DST-gap values are
+ * rejected; ambiguous fall-back values resolve to the earliest matching instant.
+ */
+export const zonedTimestamp = (value: string, timezone: string): number | null => {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
   if (!match) return null;
   const desired = Date.UTC(
@@ -82,20 +86,23 @@ const zonedTimestamp = (value: string, timezone: string): number | null => {
   );
   let candidate = desired;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      day: "2-digit",
-      hour: "2-digit",
-      hourCycle: "h23",
-      minute: "2-digit",
-      month: "2-digit",
-      timeZone: timezone,
-      year: "numeric",
-    }).formatToParts(candidate);
-    const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((entry) => entry.type === type)?.value);
-    const represented = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"));
-    candidate += desired - represented;
+    const represented = localInputValue(candidate, timezone);
+    const representedMatch = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(represented);
+    if (!representedMatch) return null;
+    const representedUtc = Date.UTC(
+      Number(representedMatch[1]),
+      Number(representedMatch[2]) - 1,
+      Number(representedMatch[3]),
+      Number(representedMatch[4]),
+      Number(representedMatch[5]),
+    );
+    candidate += desired - representedUtc;
   }
-  return candidate;
+
+  const offsetCandidates = [-7_200_000, -3_600_000, -1_800_000, 0, 1_800_000, 3_600_000, 7_200_000]
+    .map((offset) => candidate + offset)
+    .filter((instant) => localInputValue(instant, timezone) === value);
+  return offsetCandidates.length === 0 ? null : Math.min(...offsetCandidates);
 };
 
 const intentFailure = (error: unknown): Pick<RealtimeIntentState, "acknowledgement" | "message"> => {
@@ -104,30 +111,58 @@ const intentFailure = (error: unknown): Pick<RealtimeIntentState, "acknowledgeme
   return { acknowledgement: stale ? "stale" : "rejected", message };
 };
 
+function LoadingRegion({ label, className }: { readonly label: string; readonly className: string }) {
+  return (
+    <>
+      <div role="status" aria-live="polite" aria-label={label}>
+        <span className="sr-only">{label}</span>
+        <Skeleton className={`${className} motion-reduce:animate-none`} />
+      </div>
+      <Toaster />
+    </>
+  );
+}
+
 export default function AgendaPage() {
   const { eventSlug = "" } = useParams();
   const [event, setEvent] = useState<EventIdentity | null | undefined>(undefined);
+  const [eventError, setEventError] = useState<string | null>(null);
+  const [eventRequest, setEventRequest] = useState(0);
 
   useEffect(() => {
     let active = true;
     setEvent(undefined);
+    setEventError(null);
     void apiFetch<EventIdentity>(`/api/v1/events/${encodeURIComponent(eventSlug)}`)
       .then((loaded) => {
-        if (active) setEvent(loaded);
+        if (active) {
+          setEventError(null);
+          setEvent(loaded);
+        }
       })
       .catch((error) => {
         if (!active) return;
+        const notFound = error instanceof ApiError && error.status === 404;
+        const message = error instanceof Error ? error.message : "Could not load event";
+        setEventError(notFound ? null : message);
         setEvent(null);
-        toast(error instanceof Error ? error.message : "Could not load event", { tone: "danger" });
+        if (!notFound) toast(message, { tone: "danger" });
       });
     return () => { active = false; };
-  }, [eventSlug]);
+  }, [eventRequest, eventSlug]);
 
-  if (event === undefined) return <><Skeleton className="h-48" /><Toaster /></>;
+  if (event === undefined) {
+    return <LoadingRegion label="Loading event agenda" className="h-48" />;
+  }
   if (event === null) {
+    const recoverable = eventError !== null;
     return (
       <>
-        <EmptyState title="Event not found" description="The agenda cannot load until the event is available." />
+        <EmptyState
+          title={recoverable ? "Could not load event" : "Event not found"}
+          description={eventError ?? "The event may have moved or been removed."}
+          action={recoverable ? <Button onClick={() => setEventRequest((request) => request + 1)}>Try again</Button> : undefined}
+        />
         <Toaster />
       </>
     );
@@ -151,6 +186,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     setAgenda(loaded);
     return loaded;
   }, [event.id, view]);
+  const closeTalkSheet = useCallback(() => setSelectedTalkId(null), []);
 
   useEffect(() => {
     let active = true;
@@ -339,7 +375,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           schema: AgendaMutationResult,
         },
       ));
-      setSelectedTalkId(null);
+      closeTalkSheet();
       await loadAgenda();
       toast("Talk cancelled", { tone: "success" });
     } catch (error) {
@@ -369,7 +405,9 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     }
   };
 
-  if (agenda === undefined) return <><Skeleton className="h-[36rem]" /><Toaster /></>;
+  if (agenda === undefined) {
+    return <LoadingRegion label={`Loading ${event.name} agenda`} className="h-[36rem]" />;
+  }
   if (agenda === null) {
     return (
       <>
@@ -433,7 +471,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
       <Sheet
         open={selectedTalk !== null}
-        onClose={() => setSelectedTalkId(null)}
+        onClose={closeTalkSheet}
         title={selectedTalk?.title ?? "Talk details"}
         size="lg"
         footer={

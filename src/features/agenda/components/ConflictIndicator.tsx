@@ -26,7 +26,7 @@ export function ConflictIndicator({
 
   return (
     <div
-      className="space-y-2 rounded-control border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+      className="space-y-2 rounded-control border border-warning/30 bg-warning-soft p-3 text-sm text-ink"
       role={blocking ? "alert" : "status"}
     >
       <div className="flex flex-wrap items-center gap-2">
