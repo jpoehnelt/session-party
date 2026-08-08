@@ -35,6 +35,7 @@ The primary interface is the admin UI. MCP is a thin test/automation transport a
 | AI | Workers AI for optional, labeled, non-authoritative review assistance |
 | Cloudflare account | `jpoehnelt` (`9cfedefc6185f3dad8ab91241b401135`) |
 | Airtable target | Base `apphFjgebe5pq9gez`; initial table `tblA29jIMOPD42pDj`; optional view `viwsCbJ68dks4nb0s` |
+| Airtable P0 topology | Three entity tables: `Speakers`, `Submissions`, `Talks`; all other entities deferred |
 | Status cadence | Paseo heartbeat every 30 minutes through August 13 |
 
 ## Architecture
@@ -127,6 +128,16 @@ Adapters only decode, authorize, invoke, encode, and map errors. They never cont
 - D1-authoritative workflow changes commit immediately and enter the outbound projection.
 - Outbound payloads include only the fields changed by the typed intent/projection; they never replay a full stale D1 row.
 
+### P0 field map
+
+| Table | Airtable-authoritative | D1-authoritative outbound | Unsynchronized in P0 |
+|---|---|---|---|
+| `Speakers` | display name, job title, company, bio | visibility | email/account identity, links, headshot/assets, onboarding |
+| `Submissions` | title, one explicitly selected abstract answer, category | status, submitted time, speaker links | other answers, reviews, scores, conflicts |
+| `Talks` | title, description | track, room, start, duration, status, speaker/submission links | conflict/audit/publication internals |
+
+Relationship fields are D1-owned projections; Airtable cannot author schedule, acceptance, publication, or relationship changes. A talk may have no submission.
+
 ### Outbound path
 
 1. UI/API/MCP command runs one Effect operation.
@@ -151,10 +162,12 @@ Post-commit Party delivery is best effort: a broadcast failure never turns a com
 
 ### Loop prevention and limits
 
-- Stable `SessionPartyId`
-- Reserved sync metadata: `sp_revision`, `sp_hash`, `sp_origin`
-- Separate hashes for Airtable-owned inbound fields and D1-owned outbound fields
-- Airtable record ID/link metadata in D1
+- Connector-controlled Airtable fields in every synchronized table:
+  - `SessionPartyId`: immutable single-line-text upsert key; duplicate matches block the write
+  - `sp_revision`: nonnegative monotonic integer for D1 outbound projections
+  - `sp_hash`: SHA-256 of normalized D1-owned outbound mapped fields only
+  - `sp_origin`: diagnostic deployment identifier only; never establishes authority
+- Separate inbound hash/revision/link metadata remains in D1 for Airtable-owned fields
 - Pace below 5 requests/second/base; global PAT ceiling 50 requests/second
 - Pause at least 30 seconds after 429
 - Batch at most ten records
@@ -392,6 +405,8 @@ Additional agents remain valuable for read-only QA/research. Multiple writers in
 
 Each active leaf gets its own Paseo-managed worktree/branch. The domain lead integrates leaf commits into the slice branch; leaves never share a worktree. One named test owner owns `<slice>.test.ts`, and the lead serializes any change to a contested file.
 
+**Shared-index invariant:** the shared checkout and Git index are a single-writer resource owned by Main. Source-writing subagents always use isolated worktrees/branches with exact file ownership. They never stage, commit, amend, reset, or push shared `main`; Main alone integrates, validates, stages, commits, and pushes. Read-only agents may inspect the shared checkout.
+
 Use Paseo-managed worktrees only for active lanes. Reuse/archive a bounded pool; do not create hundreds of worktrees that each run `pnpm install`.
 
 ### Ownership
@@ -446,12 +461,21 @@ One Main-owned writer:
 5. run `check`, `test`, and `build` once
 6. commit separately
 
+**Scope acceptance gate — reconciled non-destructively.** The original mixed local commit was split, but a concurrent SmolForge commit consumed the staged compatibility files and reached `origin/main`. The user selected revert-and-reapply rather than rewriting shared history:
+
+- `c3a9c08` — quarantined prototype integration: `scripts/gen.ts`, `src/server/**`, `src/features/events/**`
+- `21af298` — reverts the accidentally mixed pushed commit
+- `20c1cc9` — compatibility-only: `index.html`, package/lock, TypeScript configs, Vitest config
+- `f1a1467` — SmolForge friction log only
+
+The combined head passed tree-equivalence comparison, `pnpm check`, 3/3 local Workers tests, and `pnpm build`; corrective commits were pushed without force. Wave 0A scope is accepted.
+
 ### Wave 0B entry decisions
 
 Before contract work begins:
 
 - camelCase wire casing is locked
-- Airtable field IDs/authority map (H7) and reserved key/revision/hash columns (H8) are approved
+- the three-table logical authority map and connector metadata semantics above are locked; physical IDs are runtime integration configuration
 - implementation approval “according to PLAN.md” adopts the concrete security defaults above, or the user supplies overrides
 - acceptance/provisioning event contract is defined for review → portal/agenda/comms consumers
 
@@ -646,6 +670,8 @@ A fake-backed demo is the reliable critical path. Because Airtable participates 
 | TypeScript server style | Effect v3 |
 | Airtable authority | field-scoped; Airtable mapped fields, D1 workflow fields |
 | Airtable base/table/view | IDs recorded above |
+| Airtable P0 topology | three tables: Speakers, Submissions, Talks; field authority map recorded above |
+| Airtable connector metadata | `SessionPartyId`, `sp_revision`, `sp_hash`, `sp_origin` retained with scoped semantics above |
 | Status cadence | every 30 minutes |
 | CFP shape | one form with one-or-more track options/routing; additional forms supported |
 | Accepted edits | speakers may edit after acceptance; edit-lock time deferred |
@@ -653,14 +679,9 @@ A fake-backed demo is the reliable critical path. Because Airtable participates 
 | Calendar invite | no video link; room when assigned; updated ICS after scheduling changes |
 | Accelevents demo fallback | truthful fixture uses the production adapter interface; live credentials are optional enhanced proof |
 
-### Before Wave 0B
+### Wave 0B entry
 
-| ID | Owner | Blocker | Required action |
-|---|---|---|---|
-| H7 | User/Airtable owner | Field map | Provide Airtable field IDs and assign each field `airtable`, `d1`, or unsynchronized |
-| H8 | User/Airtable owner | Reserved columns | Approve/create stable `SessionPartyId`, `sp_revision`, `sp_hash`, `sp_origin` |
-
-Authorizing implementation “according to PLAN.md” adopts the concrete security defaults above. State any override before Wave 0B.
+Logical topology, field authority, and connector metadata are resolved. Physical Airtable table/field IDs are runtime integration configuration, not a contract-design blocker. The read-only schema inventory is in progress; missing schema writes remain separately authorization-gated.
 
 ### Before fake-backed preview
 
@@ -674,6 +695,7 @@ Authorizing implementation “according to PLAN.md” adopts the concrete securi
 | ID | Owner | Blocker | Required action |
 |---|---|---|---|
 | H6 | User/Airtable owner | PAT | Supply `AIRTABLE_PAT` through the Worker secret path; never chat/source/D1 |
+| H7 | User/Airtable owner | Physical schema | Record the three table IDs and mapped `fld…` IDs; explicitly authorize creation of missing tables/fields before the live smoke |
 | H9 | User | Freshness/call budget | Pick active background cadence; on-load refresh is mandatory, webhook is deferred |
 | H10 | User/Ops | Sync ownership | Name the person responsible for mapping changes, blocked rows, and dead letters |
 
@@ -699,16 +721,16 @@ Authorizing implementation “according to PLAN.md” adopts the concrete securi
 
 ## Current repository state
 
-The working tree remains a **quarantined Phase-0 prototype**, not delivered or frozen. Wave 0A compatibility verification is green:
+Wave 0A is complete and pushed to `origin/main` through `f1a1467`. The runtime prototype and compatibility inventories are separately reviewable through the non-destructive repair sequence recorded above.
 
-- exact TypeScript/Workers Vitest versions are pinned
-- `pnpm check` passes, including generated-registry freshness
-- Workers Vitest runs fully locally with 3/3 passing tests and no Cloudflare binding proxy; third-party MCP/cron packages emit missing-source sourcemap notices
-- `pnpm build` passes without the prior HTML parse warnings
-- no Cloudflare/Airtable resource write, deployment, migration, secret injection, route, or DNS action occurred
-- no `spine-v1` tag exists; current contracts still have the security, sync, schema, MCP, and realtime gaps listed above
+Verification at the repaired combined head:
 
-Do not push, tag, deploy, or fan Phase 1 from this state.
+- `pnpm check` passes, including registry freshness
+- 3/3 Workers tests pass locally without a Cloudflare binding proxy
+- `pnpm build` passes
+- third-party MCP/cron packages emit missing-source sourcemap notices
+
+No Cloudflare/Airtable resource write, deployment, migration, secret injection, route, or DNS action occurred. No `spine-v1` tag exists. Wave 0B is unblocked by history and remains gated by Airtable mapping/metadata approval. The working tree still contains the uncommitted `PLAN.md` update and untracked local tool configuration; those are not part of the Wave 0A commits.
 
 ## Reporting
 
