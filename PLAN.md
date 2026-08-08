@@ -6,7 +6,7 @@ Open-source Sessionboard replacement for the “Kill My SaaS” competition.
 - Evaluation: nine required workflows, a deployed walkthrough, and real use by non-technical event-production staff
 - Product direction: Sessionboard capabilities with Luma’s calm, event-first public UX and a denser operations cockpit
 - Authority: **the user is final authority**; Main coordinates and recommends; Sol, Ops, advisors, and subagents are advisory or scoped executors
-- Current scope: **planning only** until the user explicitly authorizes application changes or external actions
+- Current scope: local implementation is authorized; external provisioning, migration, deployment, secrets, routes, DNS, and production promotion remain separately gated
 
 ## Outcome
 
@@ -543,6 +543,15 @@ flowchart TD
 ```
 
 Slices may scaffold against frozen fixtures/contracts before their producer is implemented, but activation and integration wait for the named dependency artifact and contract tests.
+
+### Active coordination ownership
+
+- One isolated, integrator-controlled `BaselineGreen` writer owns the exact green shared baseline.
+- Shared contracts, migrations, `src/server`, scripts, root configuration, generated registries, and the shared Git index are single-writer resources. `BaselineGreen` is the only writer for them; Main alone reviews and integrates its commit. No separate root/server writer lane may run.
+- `CiContract`, `MigrationParity`, and `LocalHarness` are read-only design/diagnosis lanes. They return one consolidated patch contract to Main/`BaselineGreen`; they never edit, stage, commit, or apply their proposals.
+- Concurrent slice writers are allowed only in literal, non-overlapping feature directories: Events in `src/features/events/**` plus fixture-backed Big 3 writers in `src/features/forms/**`, `src/features/review/**`, and `src/features/agenda/**`.
+- Big 3 contract packs forbid router/config/generated registry/`src/ui`/shared-contract edits, consume frozen fixtures/interfaces, and run focused slice checks only. Activation and dependency-order integration wait for the green `BaselineGreen` SHA and named producer artifacts.
+- Preview deployment, live canaries, observability expansion, rollback automation, and production promotion are separate exact-SHA gates requiring explicit external authorization.
 
 ### Wave 1A — Producers and independent foundations
 
