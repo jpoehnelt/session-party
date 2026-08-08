@@ -24,7 +24,6 @@ export default defineConfig({
         },
         bindings: {
           APP_URL: "http://localhost:5173",
-          LOCAL_MODE: "1",
           TEST_MIGRATIONS: migrations,
         },
       },

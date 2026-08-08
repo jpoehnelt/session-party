@@ -1,11 +1,5 @@
 {
   "worktree": {
     "setup": "pnpm i"
-  },
-  "scripts": {
-    "dev": {
-      "type": "service",
-      "command": "pnpm dev:service"
-    }
   }
 }
