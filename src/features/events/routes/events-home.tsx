@@ -68,7 +68,11 @@ export default function EventsHome() {
       <PageHeader
         title="Events"
         description="Plan programs, speakers, and every detail in one place."
-        actions={<Button onClick={() => setOpen(true)}>Create event</Button>}
+        actions={
+          events !== null && loadError === null ? (
+            <Button onClick={() => setOpen(true)}>Create event</Button>
+          ) : undefined
+        }
       />
       {loadError === "unauthenticated" ? (
         <EmptyState
