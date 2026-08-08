@@ -1,4 +1,5 @@
 import { appErrorStatus, External, toPublicAppError, Unauthenticated, Validation, type AppError } from "contracts/errors";
+import type { Principal } from "contracts/principal";
 import { ApiScopes } from "contracts/principal";
 import { apiKeys, authTokens, users } from "contracts/schema";
 import { Schema } from "effect";
@@ -9,9 +10,8 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { nanoid } from "nanoid";
 import {
   isExplicitLocalEnvironment,
-  sendMail,
+  mailFrom,
   sessionSecret,
-  type CurrentUserValue,
 } from "./services";
 
 type AppHono = { Bindings: Env };
@@ -84,7 +84,7 @@ const sessionFromRequest = (request: Request): string | null => {
 export const apiKeyUserFromRequest = async (
   request: Request,
   env: Env,
-): Promise<CurrentUserValue | null> => {
+): Promise<Principal | null> => {
   const key = bearerFromRequest(request);
   if (!key) return null;
 
@@ -127,7 +127,7 @@ export const apiKeyUserFromRequest = async (
 export const userFromRequest = async (
   request: Request,
   env: Env,
-): Promise<CurrentUserValue | null> => {
+): Promise<Principal | null> => {
   if (request.headers.has("Authorization")) {
     return apiKeyUserFromRequest(request, env);
   }
@@ -169,70 +169,131 @@ export const userFromRequest = async (
     : null;
 };
 
-export const sessionUser = (c: Context<AppHono>): Promise<CurrentUserValue | null> =>
+export const sessionUser = (c: Context<AppHono>): Promise<Principal | null> =>
   userFromRequest(c.req.raw, c.env);
 
 const auth = new Hono<AppHono>();
 
 auth.post("/request-link", async (c) => {
   const requestId = requestIdFor(c);
+  const parsed = await Schema.decodeUnknownPromise(RequestLinkInput)(
+    await c.req.json().catch(() => null),
+  ).catch(() => null);
+  if (!parsed) {
+    return errorResponse(c, new Validation({ message: "A valid email is required" }), requestId);
+  }
+
+  const email = parsed.email.trim().toLowerCase();
+  const name = parsed.name?.trim() || null;
+  let committed = false;
   try {
-    const parsed = await Schema.decodeUnknownPromise(RequestLinkInput)(
-      await c.req.json().catch(() => null),
-    ).catch(() => null);
-    if (!parsed) {
-      return errorResponse(c, new Validation({ message: "A valid email is required" }), requestId);
-    }
-
-    const email = parsed.email.trim().toLowerCase();
-    const now = new Date();
+    const nowMs = Date.now();
     const db = drizzle(c.env.DB);
-    const [existingUser] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    const user =
-      existingUser ??
-      (
-        await db
-          .insert(users)
-          .values({
-            id: nanoid(),
-            email,
-            name: parsed.name?.trim() || null,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .returning()
-      )[0];
-    if (!user) {
-      return errorResponse(
-        c,
-        new External({ service: "database", detail: "User insert returned no row" }),
-        requestId,
-      );
+    const [existingUser] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    const userId = existingUser?.id ?? nanoid();
+    const [outstanding] = existingUser
+      ? await db
+        .select({ id: authTokens.id, expiresAt: authTokens.expiresAt })
+        .from(authTokens)
+        .where(and(
+          eq(authTokens.userId, userId),
+          eq(authTokens.kind, "magic_link"),
+          isNull(authTokens.consumedAt),
+        ))
+        .limit(1)
+      : [];
+    if (outstanding && outstanding.expiresAt.getTime() > nowMs) {
+      return c.json({ ok: true }, 202);
     }
-
     const token = nanoid(48);
     const tokenHash = await hashBearerMaterial(c.env, token);
-    await db.insert(authTokens).values({
-      id: nanoid(),
-      tokenHash,
-      userId: user.id,
-      kind: "magic_link",
-      expiresAt: new Date(now.getTime() + 15 * 60_000),
-      createdAt: now,
-    });
-
+    const tokenId = nanoid();
+    const snapshotId = nanoid();
+    const deliveryId = nanoid();
+    const deliveryIdempotencyKey = `auth-magic-link:${tokenId}`;
     const link = new URL("/api/v1/auth/verify", c.env.APP_URL);
     link.searchParams.set("token", token);
-    await sendMail(c.env, {
-      to: email,
-      subject: "Sign in to Session Party",
-      html: `<p>Use this link to sign in. It expires in 15 minutes.</p><p><a href="${link.toString()}">Sign in to Session Party</a></p>`,
-    });
+    const renderedHtml =
+      `<p>Use this link to sign in. It expires in 15 minutes.</p><p><a href="${link.toString()}">Sign in to Session Party</a></p>`;
+    const renderedText = `Sign in to Session Party: ${link.toString()}\n\nThis link expires in 15 minutes.`;
+    const statements: D1PreparedStatement[] = [];
 
-    return c.json({ ok: true });
-  } catch (error) {
-    return unexpectedResponse(c, "authentication", error, requestId);
+    if (existingUser) {
+      if (name) {
+        statements.push(c.env.DB.prepare(
+          "UPDATE users SET name = ?, updated_at = ? WHERE id = ?",
+        ).bind(name, nowMs, userId));
+      }
+    } else {
+      statements.push(c.env.DB.prepare(
+        "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+      ).bind(userId, email, name, nowMs, nowMs));
+    }
+    if (outstanding) {
+      statements.push(
+        c.env.DB.prepare(
+          "UPDATE auth_tokens SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND expires_at <= ?",
+        ).bind(nowMs, outstanding.id, nowMs),
+        c.env.DB.prepare(
+          "UPDATE mail_deliveries SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL WHERE idempotency_key = ? AND status IN ('pending', 'retry')",
+        ).bind(`auth-magic-link:${outstanding.id}`),
+        c.env.DB.prepare(
+          "UPDATE mail_delivery_snapshots SET rendered_html = NULL, rendered_text = NULL, ics_filename = NULL, ics_content = NULL, redacted_at = ? WHERE id IN (SELECT snapshot_id FROM mail_deliveries WHERE idempotency_key = ? AND status = 'cancelled')",
+        ).bind(nowMs, `auth-magic-link:${outstanding.id}`),
+      );
+    }
+    statements.push(
+      c.env.DB.prepare(
+        "INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES (?, ?, ?, 'magic_link', ?, NULL, ?)",
+      ).bind(tokenId, tokenHash, userId, nowMs + 15 * 60_000, nowMs),
+      c.env.DB.prepare(
+        "INSERT INTO mail_delivery_snapshots (id, event_id, template_id, recipient_user_id, recipient_email, recipient_name, from_email, reply_to_email, subject, rendered_html, rendered_text, ics_filename, ics_content, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, ?)",
+      ).bind(
+        snapshotId,
+        userId,
+        email,
+        name,
+        mailFrom(c.env),
+        "Sign in to Session Party",
+        renderedHtml,
+        renderedText,
+        nowMs,
+      ),
+      c.env.DB.prepare(
+        "INSERT INTO mail_deliveries (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, lease_owner, lease_expires_at, attempt_count, max_attempts, provider, provider_message_id, provider_result, last_error, sent_at, dead_lettered_at, created_at) VALUES (?, ?, ?, 'pending', ?, ?, NULL, NULL, 0, 8, 'resend', NULL, NULL, NULL, NULL, NULL, ?)",
+      ).bind(deliveryId, snapshotId, deliveryIdempotencyKey, nowMs, nowMs, nowMs),
+    );
+
+    await c.env.DB.batch(statements);
+    committed = true;
+  } catch {
+    console.error(JSON.stringify({
+      message: "Magic-link enqueue failed",
+      requestId,
+    }));
   }
+
+  if (committed) {
+    try {
+      const schedulerId = c.env.SCHEDULER.idFromName("mail");
+      const response = await c.env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
+        method: "POST",
+        headers: { "x-session-party-internal": sessionSecret(c.env) },
+      });
+      if (!response.ok) throw new Error("Scheduler rejected enqueue notification");
+    } catch {
+      console.error(JSON.stringify({
+        message: "Scheduler notification failed after magic-link enqueue",
+        requestId,
+      }));
+    }
+  }
+
+  return c.json({ ok: true }, 202);
 });
 
 auth.get("/verify", async (c) => {
@@ -243,40 +304,38 @@ auth.get("/verify", async (c) => {
       return errorResponse(c, new Validation({ message: "Missing token" }), requestId);
     }
 
-    const now = new Date();
+    const nowMs = Date.now();
     const tokenHash = await hashBearerMaterial(c.env, token);
-    const db = drizzle(c.env.DB);
-    const [consumed] = await db
-      .update(authTokens)
-      .set({ consumedAt: now })
-      .where(
-        and(
-          eq(authTokens.tokenHash, tokenHash),
-          eq(authTokens.kind, "magic_link"),
-          gt(authTokens.expiresAt, now),
-          isNull(authTokens.consumedAt),
-        ),
-      )
-      .returning({ userId: authTokens.userId });
+    const session = nanoid(48);
+    const sessionHash = await hashBearerMaterial(c.env, session);
+    const sessionId = nanoid();
+    const expiresAtMs = nowMs + 30 * 24 * 60 * 60_000;
+    const eligibleMagicLink =
+      "token_hash = ? AND kind = 'magic_link' AND expires_at > ? AND consumed_at IS NULL";
+    const [insertResult, consumeResult] = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at)
+         SELECT ?, ?, user_id, 'session', ?, NULL, ?
+         FROM auth_tokens
+         WHERE ${eligibleMagicLink}`,
+      ).bind(sessionId, sessionHash, expiresAtMs, nowMs, tokenHash, nowMs),
+      c.env.DB.prepare(
+        `UPDATE auth_tokens SET consumed_at = ? WHERE ${eligibleMagicLink}`,
+      ).bind(nowMs, tokenHash, nowMs),
+    ]);
 
-    if (!consumed) {
+    if (
+      !insertResult ||
+      !consumeResult ||
+      insertResult.meta.changes !== 1 ||
+      consumeResult.meta.changes !== 1
+    ) {
       return errorResponse(
         c,
         new Unauthenticated({ reason: "Magic link is invalid, expired, or consumed" }),
         requestId,
       );
     }
-
-    const session = nanoid(48);
-    const sessionHash = await hashBearerMaterial(c.env, session);
-    await db.insert(authTokens).values({
-      id: nanoid(),
-      tokenHash: sessionHash,
-      userId: consumed.userId,
-      kind: "session",
-      expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60_000),
-      createdAt: now,
-    });
 
     setCookie(c, "sp_session", session, {
       httpOnly: true,

@@ -9,6 +9,7 @@
  * slice service and broadcasts resulting state.
  */
 import type { Conflict } from "./types";
+import type { ApiScope, EventRole } from "./principal";
 
 // ---------- presence (handled by EventRoom itself) ----------
 
@@ -19,12 +20,39 @@ export interface PresenceUser {
   surface: string;
 }
 
+export type EventAudience =
+  | "members"
+  | `role:${EventRole}`
+  | `scope:${ApiScope}`;
+
+/** Internal-only envelope. Recipient audiences are derived from the message type. */
+export interface EventRoomBroadcast {
+  readonly message: ServerMessage;
+}
+
 // ---------- client -> server ----------
 
 export type ClientMessage =
   | { t: "room/hello"; surface: string }
-  | { t: "agenda/move"; talkId: string; roomId: string | null; startsAt: number | null }
-  | { t: "agenda/resize"; talkId: string; durationMin: number };
+  | {
+      t: "agenda/move";
+      requestId: string;
+      idempotencyKey: string;
+      talkId: string;
+      trackId: string | null;
+      roomId: string | null;
+      startsAt: number | null;
+      durationMin: number;
+      expectedVersion: number;
+    }
+  | {
+      t: "agenda/resize";
+      requestId: string;
+      idempotencyKey: string;
+      talkId: string;
+      durationMin: number;
+      expectedVersion: number;
+    };
 
 // ---------- server -> client ----------
 
@@ -32,7 +60,7 @@ export type ServerMessage =
   | { t: "room/presence"; users: PresenceUser[] }
   | { t: "room/error"; message: string; replyTo?: string }
   // agenda (flagship realtime demo)
-  | { t: "agenda/talk_upserted"; talk: TalkSnapshot; by: string }
+  | { t: "agenda/talk_upserted"; talk: TalkSnapshot; by: string; replyTo: string }
   | { t: "agenda/talk_deleted"; talkId: string }
   | { t: "agenda/conflicts"; conflicts: Conflict[] }
   // dashboard

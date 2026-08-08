@@ -5,7 +5,14 @@ import { defineConfig } from "vite";
 import path from "node:path";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), cloudflare()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    cloudflare({
+      persistState: { path: ".wrangler/state" },
+      remoteBindings: false,
+    }),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),

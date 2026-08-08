@@ -1,5 +1,4 @@
-import type { AppError } from "contracts/errors";
-import { Unauthenticated, Validation } from "contracts/errors";
+import { appErrorStatus, External, toPublicAppError, Unauthenticated, Validation, type AppError } from "contracts/errors";
 import type { AnyOperationDef } from "contracts/operation";
 import type { Principal } from "contracts/principal";
 import type { RestInputLocations } from "contracts/routes";
@@ -15,7 +14,6 @@ import {
   Files,
   Mail,
   Rooms,
-  type CurrentUserValue,
 } from "./services";
 
 export type AppHono = { Bindings: Env };
@@ -33,12 +31,12 @@ export const decode = <A, I>(schema: Schema.Schema<A, I, never>, input: unknown)
     Effect.mapError((error) => new Validation({ message: String(error) })),
   );
 
-const layerFor = (env: Env, user: CurrentUserValue) =>
-  Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, user));
+const layerFor = (env: Env, principal: Principal) =>
+  Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal));
 
 export const runEffect = async <A>(
   env: Env,
-  user: CurrentUserValue,
+  user: Principal,
   effect: Effect.Effect<A, AppError, RuntimeServices>,
 ): Promise<Exit.Exit<A, AppError>> =>
   Effect.runPromiseExit(effect.pipe(Effect.provide(layerFor(env, user))));
@@ -48,50 +46,25 @@ const runOperationEffect = async (
   principal: Principal | null,
   effect: Effect.Effect<unknown, AppError, RuntimeServices>,
 ): Promise<Exit.Exit<unknown, AppError>> => {
-  const layer = principal
-    ? layerFor(env, principal as CurrentUserValue)
-    : AppLayer(env);
-  return Effect.runPromiseExit(effect.pipe(Effect.provide(layer)));
+  const layer = principal ? layerFor(env, principal) : AppLayer(env);
+  const provided = effect.pipe(Effect.provide(layer)) as Effect.Effect<unknown, AppError, never>;
+  return Effect.runPromiseExit(provided);
 };
 
-const statusFor = (error: AppError): 400 | 401 | 403 | 404 | 409 | 502 => {
-  switch (error._tag) {
-    case "Validation":
-      return 400;
-    case "Unauthenticated":
-      return 401;
-    case "Forbidden":
-      return 403;
-    case "NotFound":
-      return 404;
-    case "Conflict":
-      return 409;
-    case "External":
-      return 502;
-  }
-};
-
-const appErrorBody = (error: AppError, requestId: string) => {
-  switch (error._tag) {
-    case "Validation":
-    case "Conflict":
-      return { error: error._tag, message: error.message, requestId };
-    case "Unauthenticated":
-    case "Forbidden":
-      return { error: error._tag, message: error.reason ?? error._tag, requestId };
-    case "NotFound":
-      return {
-        error: error._tag,
-        message: `${error.entity} ${error.id} was not found`,
-        requestId,
-      };
-    case "External":
-      return {
-        error: error._tag,
-        message: `${error.service} request failed${error.detail ? `: ${error.detail}` : ""}`,
-        requestId,
-      };
-  }
+const logAppError = (
+  error: AppError,
+  requestId: string,
+  operation?: string,
+): void => {
+  console.error(JSON.stringify({
+    message: "Application request failed",
+    requestId,
+    error: error._tag,
+    operation: error._tag === "External" ? error.operation ?? operation : operation,
+    service: error._tag === "External" ? error.service : undefined,
+    detail: error._tag === "External" ? error.detail : undefined,
+    migration: error._tag === "External" ? error.migration : undefined,
+  }));
 };
 
 const requestIdFor = (request: Request): string =>
@@ -103,11 +76,11 @@ const failureFrom = <A>(exit: Exit.Exit<A, AppError>): AppError | undefined => {
   return failure._tag === "Some" ? failure.value : undefined;
 };
 
-const eventIdFrom = (operation: AnyOperationDef, input: unknown): string | undefined => {
-  if (operation.authorize.kind !== "event") return undefined;
-  if (typeof input !== "object" || input === null || Array.isArray(input)) return undefined;
+const eventIdFrom = (operation: AnyOperationDef, input: unknown): string | null => {
+  if (operation.authorize.kind !== "event") return null;
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
   const eventId = Reflect.get(input, "eventId");
-  return typeof eventId === "string" && eventId.length > 0 ? eventId : undefined;
+  return typeof eventId === "string" && eventId.length > 0 ? eventId : null;
 };
 
 /** Decode, authorize, invoke, and encode one registry operation. */
@@ -125,7 +98,13 @@ export const operationEffect = (
           policy: operation.authorize,
           eventId: eventIdFrom(operation, input),
         });
-        const output = yield* operation.invoke(input);
+        const output = yield* operation.invoke(input).pipe(
+          Effect.mapError((error) =>
+            error._tag === "External" && !error.operation
+              ? new External({ ...error, operation: operation.id })
+              : error
+          ),
+        );
         return yield* Schema.encode(operation.output)(output).pipe(Effect.orDie);
       }),
     ),
@@ -145,7 +124,10 @@ export const restInput = async (
   const queries = c.req.queries();
   for (const field of locations.query ?? []) input[field] = valuesFor(queries, field);
   for (const [field, header] of Object.entries(locations.headers ?? {})) {
-    input[field] = c.req.header(header);
+    const value = c.req.header(header);
+    input[field] = field === "expectedVersion" && value !== undefined
+      ? Number(value)
+      : value;
   }
   if (locations.body) {
     const body = await c.req.json<unknown>().catch(() => null);
@@ -178,7 +160,10 @@ export const runRestOperation = async (
       return status === 204 ? c.body(null, 204) : c.json(exit.value, status);
     }
     const failure = failureFrom(exit);
-    if (failure) return c.json(appErrorBody(failure, requestId), statusFor(failure));
+    if (failure) {
+      logAppError(failure, requestId, operation.id);
+      return c.json(toPublicAppError(failure, requestId), appErrorStatus(failure));
+    }
     console.error(JSON.stringify({ message: "REST operation defect", requestId, cause: Cause.pretty(exit.cause) }));
   } catch (error) {
     console.error(JSON.stringify({
@@ -199,12 +184,15 @@ export const runTransportOperation = async (
   const requestId = crypto.randomUUID();
   const exit = await runEffect(
     env,
-    principal as CurrentUserValue,
+    principal,
     operationEffect(operation, rawInput, principal),
   );
   if (Exit.isSuccess(exit)) return exit.value;
   const failure = failureFrom(exit);
-  if (failure) throw new Error(JSON.stringify(appErrorBody(failure, requestId)));
+  if (failure) {
+    logAppError(failure, requestId, operation.id);
+    throw new Error(JSON.stringify(toPublicAppError(failure, requestId)));
+  }
   console.error(JSON.stringify({ message: "Operation transport defect", requestId, cause: Cause.pretty(exit.cause) }));
   throw new Error(JSON.stringify({ error: "Internal", message: "Internal server error", requestId }));
 };
@@ -219,12 +207,15 @@ export const runApi = async <A>(
     const user = await sessionUser(c);
     if (!user) {
       const error = new Unauthenticated({ reason: "A valid session or API key is required" });
-      return c.json(appErrorBody(error, requestId), 401);
+      return c.json(toPublicAppError(error, requestId), 401);
     }
     const exit = await runEffect(c.env, user, effect);
     if (Exit.isSuccess(exit)) return c.json(exit.value);
     const failure = failureFrom(exit);
-    if (failure) return c.json(appErrorBody(failure, requestId), statusFor(failure));
+    if (failure) {
+      logAppError(failure, requestId);
+      return c.json(toPublicAppError(failure, requestId), appErrorStatus(failure));
+    }
     console.error(JSON.stringify({ message: "API effect defect", requestId, cause: Cause.pretty(exit.cause) }));
   } catch (error) {
     console.error(JSON.stringify({
@@ -239,14 +230,17 @@ export const runApi = async <A>(
 /** Compatibility boundary for pre-registry MCP and Party handlers. */
 export const runMcp = async <A>(
   env: Env,
-  user: CurrentUserValue,
+  user: Principal,
   effect: Effect.Effect<A, AppError, RuntimeServices>,
 ): Promise<A> => {
   const requestId = crypto.randomUUID();
   const exit = await runEffect(env, user, effect);
   if (Exit.isSuccess(exit)) return exit.value;
   const failure = failureFrom(exit);
-  if (failure) throw new Error(JSON.stringify(appErrorBody(failure, requestId)));
+  if (failure) {
+    logAppError(failure, requestId);
+    throw new Error(JSON.stringify(toPublicAppError(failure, requestId)));
+  }
   console.error(JSON.stringify({ message: "MCP effect defect", requestId, cause: Cause.pretty(exit.cause) }));
   throw new Error(JSON.stringify({ error: "Internal", message: "Internal server error", requestId }));
 };
