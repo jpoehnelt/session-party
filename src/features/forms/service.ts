@@ -250,11 +250,13 @@ const normalizeFields = (
   });
 
 const validationProblem = (
+  name: string,
   purposeValue: FormDetail["purpose"],
   opensAt: number | null,
   closesAt: number | null,
   fields: readonly FormField[],
 ): string | null => {
+  if (name.trim().length === 0) return "Form name cannot be empty";
   if (opensAt !== null && closesAt !== null && closesAt < opensAt) {
     return "Close time must be at or after open time";
   }
@@ -306,12 +308,13 @@ const validationProblem = (
 };
 
 const validateFields = (
+  name: string,
   purposeValue: FormDetail["purpose"],
   opensAt: number | null,
   closesAt: number | null,
   fields: readonly FormField[],
 ): Effect.Effect<void, Validation> => {
-  const problem = validationProblem(purposeValue, opensAt, closesAt, fields);
+  const problem = validationProblem(name, purposeValue, opensAt, closesAt, fields);
   return problem ? Effect.fail(new Validation({ message: problem })) : Effect.void;
 };
 
@@ -575,7 +578,7 @@ export const createForm = (
       }
     }
     const normalizedFields = normalizeFields(input.fields);
-    yield* validateFields(input.purpose, input.opensAt, input.closesAt, normalizedFields);
+    yield* validateFields(input.name, input.purpose, input.opensAt, input.closesAt, normalizedFields);
     const now = new Date();
     const formId = nanoid();
     const after: FormDetail = {
@@ -660,7 +663,7 @@ export const updateForm = (
     }
     const previous = new Map(before.fields.map((field) => [field.id, field]));
     const normalizedFields = normalizeFields(input.fields, previous);
-    yield* validateFields(before.purpose, input.opensAt, input.closesAt, normalizedFields);
+    yield* validateFields(input.name, before.purpose, input.opensAt, input.closesAt, normalizedFields);
     const now = new Date();
     const after: FormDetail = {
       ...before,
@@ -721,7 +724,7 @@ export const publishForm = (
     if (before.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: `Expected form version ${input.expectedVersion}, found ${before.version}` }));
     }
-    yield* validateFields(before.purpose, before.opensAt, before.closesAt, before.fields);
+    yield* validateFields(before.name, before.purpose, before.opensAt, before.closesAt, before.fields);
     const now = new Date();
     const versionId = nanoid();
     const versionNumber = (before.publishedVersion?.versionNumber ?? 0) + 1;

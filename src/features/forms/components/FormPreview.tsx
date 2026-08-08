@@ -91,10 +91,9 @@ export function FormPreview({ form, now }: FormPreviewProps) {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[24rem]" aria-label="Mobile form preview">
-      <div className="overflow-hidden rounded-[2rem] border-[6px] border-ink bg-canvas shadow-card">
-        <div className="mx-auto mt-2 h-1.5 w-16 rounded-full bg-ink-faint" aria-hidden="true" />
-        <div className="max-h-[46rem] overflow-y-auto px-3 pb-4 pt-3 sm:px-4">
+    <div className="mx-auto w-full max-w-sm" aria-label="Mobile form preview">
+      <div className="overflow-hidden rounded-card border border-line bg-canvas shadow-card">
+        <div className="max-h-screen overflow-y-auto px-3 pb-4 pt-3 sm:px-4">
           <Card className="overflow-hidden">
             <div className="mb-5 border-b border-line pb-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -184,7 +183,7 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                       key={field.id}
                       id={inputId}
                       label={label}
-                      hint={field.helpText ?? "Hold Command or Control to select more than one."}
+                      hint={field.helpText ?? "Select one or more options."}
                       required={field.required}
                       multiple
                       value={Array.isArray(answer) ? [...answer] : []}
@@ -243,10 +242,15 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                     label={label}
                     hint={field.helpText ?? undefined}
                     required={field.required}
-                    value={field.type === "file" ? undefined : typeof answer === "string" ? answer : ""}
-                    onChange={(event) => {
-                      if (field.type !== "file") setAnswer(fieldId, event.currentTarget.value);
-                    }}
+                    {...(field.type === "file"
+                      ? {}
+                      : { value: typeof answer === "string" ? answer : "" })}
+                    onChange={(event) => setAnswer(
+                      fieldId,
+                      field.type === "file"
+                        ? event.currentTarget.files !== null && event.currentTarget.files.length > 0
+                        : event.currentTarget.value,
+                    )}
                   />
                 );
               })}

@@ -60,7 +60,7 @@ export const validatePublishIntent = (form: FormDetail): readonly PublishValidat
   if (form.opensAt !== null && form.closesAt !== null && form.closesAt < form.opensAt) {
     issues.push({ controlId: "builder-closes-at", message: "Close time must be at or after open time." });
   }
-  for (const field of form.fields) {
+  for (const [fieldIndex, field] of form.fields.entries()) {
     if (field.label.trim().length === 0) {
       issues.push({
         controlId: `builder-field-${field.id}-label`,
@@ -82,6 +82,15 @@ export const validatePublishIntent = (form: FormDetail): readonly PublishValidat
         });
       }
     }
+    field.logic?.conditions.forEach((condition, conditionIndex) => {
+      const sourceIndex = form.fields.findIndex((candidate) => candidate.id === condition.fieldId);
+      if (sourceIndex < 0 || sourceIndex >= fieldIndex) {
+        issues.push({
+          controlId: `builder-field-${field.id}-condition-${conditionIndex}-source`,
+          message: `${field.label || `Field ${field.order}`} must depend on an earlier field.`,
+        });
+      }
+    });
   }
   if (form.purpose === "primary-cfp") {
     const completeRouter = form.fields.find((field) =>
@@ -90,10 +99,12 @@ export const validatePublishIntent = (form: FormDetail): readonly PublishValidat
       field.options.every((option) => field.routing[option]?.trim()));
     if (!completeRouter) {
       const candidate = form.fields.find((field) => field.type === "select" || field.type === "radio");
+      const missingOptionIndex = candidate?.options.findIndex((option) =>
+        !candidate.routing[option]?.trim()) ?? -1;
       issues.push({
         controlId: candidate
           ? candidate.options.length > 0
-            ? `builder-field-${candidate.id}-routing-0`
+            ? `builder-field-${candidate.id}-routing-${Math.max(0, missingOptionIndex)}`
             : `builder-field-${candidate.id}-options`
           : form.fields[0]
             ? `builder-field-${form.fields[0].id}-type`
@@ -114,6 +125,44 @@ export const updateConditionAt = (
   conditions: logic.conditions.map((condition, index) =>
     index === conditionIndex ? { ...condition, ...patch } : condition) as ConditionalLogic["conditions"],
 });
+
+export const normalizeOptionDraft = (
+  raw: string,
+  routing: Readonly<Record<string, string>>,
+): { readonly options: readonly string[]; readonly routing: Readonly<Record<string, string>> } => {
+  const options = raw.split(/\r?\n/).map((option) => option.trim()).filter(Boolean);
+  return {
+    options,
+    routing: Object.fromEntries(
+      Object.entries(routing).filter(([option]) => options.includes(option)),
+    ),
+  };
+};
+
+interface OptionsEditorProps {
+  readonly field: FormField;
+  readonly error?: string;
+  readonly onCommit: (options: readonly string[], routing: Readonly<Record<string, string>>) => void;
+}
+
+function OptionsEditor({ field, error, onCommit }: OptionsEditorProps) {
+  const [raw, setRaw] = useState(field.options.join("\n"));
+  return (
+    <Textarea
+      id={`builder-field-${field.id}-options`}
+      label="Ordered options"
+      hint="One option per line. Options are normalized when you leave this field."
+      error={error}
+      rows={Math.max(3, raw.split(/\r?\n/).length)}
+      value={raw}
+      onChange={(event) => setRaw(event.currentTarget.value)}
+      onBlur={() => {
+        const normalized = normalizeOptionDraft(raw, field.routing);
+        onCommit(normalized.options, normalized.routing);
+      }}
+    />
+  );
+}
 
 const toDateTimeLocal = (value: number | null): string => {
   if (value === null) return "";
@@ -145,6 +194,14 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
     if (index < 0 || target < 0 || target >= form.fields.length) return;
     const fields = [...form.fields];
     [fields[index], fields[target]] = [fields[target]!, fields[index]!];
+    const positions = Object.fromEntries(fields.map((field, position) => [field.id, position]));
+    const invalid = fields.find((field, position) =>
+      field.logic?.conditions.some((condition) =>
+        positions[condition.fieldId] === undefined || positions[condition.fieldId] >= position));
+    if (invalid) {
+      setMessage(`Move blocked: ${invalid.label || "this field"} must stay below every field it depends on.`);
+      return;
+    }
     patchForm({ fields: fields.map((field, order) => ({ ...field, order: order + 1 })) });
   };
 
@@ -197,6 +254,7 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
       return;
     }
     setPublishIssues([]);
+    setMessage(null);
     onPublish(form);
   };
 
@@ -324,7 +382,7 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
                       </div>
                       <div className="mt-1.5 space-y-1 text-xs leading-relaxed text-ink-secondary">
                         {field.logic?.conditions.map((condition, index) => (
-                          <p key={`${condition.fieldId}-${index}`}>
+                          <p key={index}>
                             {index > 0 ? `${field.logic?.mode === "all" ? "and" : "or"} ` : "when "}
                             <span className="font-medium text-ink">{fieldLabels[condition.fieldId] ?? "Missing field"}</span>
                             {" "}{LOGIC_OPERATOR_LABELS[condition.op] ?? condition.op}
@@ -447,22 +505,11 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
 
               {optionType && (
                 <div className="sm:col-span-2">
-                  <Textarea
-                    id={`builder-field-${field.id}-options`}
-                    label="Ordered options"
-                    hint="One option per line. The displayed order is preserved in published versions."
-                    error={publishIssues.find((issue) => issue.controlId === `builder-field-${field.id}-options`)?.message}
-                    rows={Math.max(3, field.options.length)}
-                    value={field.options.join("\n")}
-                    onChange={(event) => {
-                      const options = event.currentTarget.value.split("\n").map((option) => option.trim()).filter(Boolean);
-                      patchField(field.id, {
-                        options,
-                        routing: Object.fromEntries(
-                          Object.entries(field.routing).filter(([option]) => options.includes(option)),
-                        ),
-                      });
-                    }}
+                  <OptionsEditor
+                    field={field}
+                    error={publishIssues.find((issue) =>
+                      issue.controlId === `builder-field-${field.id}-options`)?.message}
+                    onCommit={(options, routing) => patchField(field.id, { options, routing })}
                   />
                 </div>
               )}
@@ -494,8 +541,9 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
                   </div>
                   <div className="space-y-3">
                     {field.logic.conditions.map((condition, conditionIndex) => (
-                      <div key={`${condition.fieldId}-${conditionIndex}`} className="grid gap-3 rounded-control border border-line bg-surface p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                      <div key={conditionIndex} className="grid gap-3 rounded-control border border-line bg-surface p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
                         <Select
+                          id={`builder-field-${field.id}-condition-${conditionIndex}-source`}
                           label={`Earlier field ${conditionIndex + 1}`}
                           value={condition.fieldId}
                           onChange={(event) => patchField(field.id, {

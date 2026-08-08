@@ -263,6 +263,7 @@ export function FormsWorkbench({ fixture = routedFormsFixture, state = "ready" }
           {selected ? (
             <main className="min-w-0">
               <FormBuilder
+                key={`${scenarioId}:${selected.id}:${selected.version}`}
                 form={selected}
                 onChange={replaceForm}
                 onSave={saveDraft}
@@ -275,7 +276,13 @@ export function FormsWorkbench({ fixture = routedFormsFixture, state = "ready" }
           )}
 
           <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start" aria-label="Live mobile preview">
-            {selected && <FormPreview form={selected} now={FORMS_FIXTURE_NOW} />}
+            {selected && (
+              <FormPreview
+                key={`${scenarioId}:${selected.id}:${selected.version}`}
+                form={selected}
+                now={FORMS_FIXTURE_NOW}
+              />
+            )}
           </aside>
         </div>
       )}

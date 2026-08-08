@@ -2,13 +2,13 @@ import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import { auditLog, domainChanges, eventMembers, events, formVersionFields, forms, idempotencyRecords, users } from "contracts/schema";
 import { and, asc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, type Db, CurrentUser, type CurrentUserValue } from "@/server/services";
 import { FORMS_FIXTURE_EVENT_ID, FORMS_FIXTURE_NOW, formsFixtures, routedFormsFixture } from "./fixtures";
-import { updateConditionAt, validatePublishIntent } from "./components/FormBuilder";
+import { normalizeOptionDraft, updateConditionAt, validatePublishIntent } from "./components/FormBuilder";
 import { getFormAvailability, projectActiveAnswers } from "./components/FormPreview";
-import { operations } from "./operations";
+import { operations, publishFormOperation, setFormStatusOperation, updateFormOperation } from "./operations";
 import type { ConditionalLogic, FormField, FormFieldDraft } from "./schema";
 import { createForm, getForm, listForms, publishForm, setFormStatus, updateForm } from "./service";
 
@@ -218,6 +218,41 @@ describe("forms fixtures and operations", () => {
       "forms.update",
     ]);
   });
+
+  it("decodes REST If-Match headers and preserves direct numeric command input", () => {
+    const update = Schema.decodeUnknownSync(updateFormOperation.input)({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: "form-header-update",
+      expectedVersion: "\"7\"",
+      name: "Header update",
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: fixtureDraftFields,
+      idempotencyKey: "forms-header-update-001",
+    });
+    const publish = Schema.decodeUnknownSync(publishFormOperation.input)({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: "form-header-publish",
+      expectedVersion: "8",
+      idempotencyKey: "forms-header-publish-001",
+    });
+    const status = Schema.decodeUnknownSync(setFormStatusOperation.input)({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: "form-header-status",
+      expectedVersion: 9,
+      status: "open",
+      idempotencyKey: "forms-header-status-001",
+    });
+    expect([update.expectedVersion, publish.expectedVersion, status.expectedVersion]).toEqual([7, 8, 9]);
+    expect(() => Schema.decodeUnknownSync(setFormStatusOperation.input)({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: "form-header-invalid",
+      expectedVersion: "\"0\"",
+      status: "closed",
+      idempotencyKey: "forms-header-status-002",
+    })).toThrow();
+  });
 });
 
 describe("forms organizer behavior", () => {
@@ -261,6 +296,51 @@ describe("forms organizer behavior", () => {
         { fieldId: "field-b", op: "not_empty", value: undefined },
       ],
     });
+  });
+
+  it("normalizes committed options and targets malformed routing and dependency controls", () => {
+    expect(normalizeOptionDraft("AI systems\nDeveloper tools\n", {
+      "AI systems": "ai-systems",
+      "Developer tools": "developer-tools",
+      Removed: "removed",
+    })).toEqual({
+      options: ["AI systems", "Developer tools"],
+      routing: {
+        "AI systems": "ai-systems",
+        "Developer tools": "developer-tools",
+      },
+    });
+
+    const valid = routedFormsFixture.forms[0]!;
+    const incompleteRouting: typeof valid = {
+      ...valid,
+      fields: valid.fields.map((field) =>
+        field.id === "field-track"
+          ? { ...field, routing: { "AI systems": "ai-systems" } }
+          : field),
+    };
+    expect(validatePublishIntent(incompleteRouting).find((issue) =>
+      issue.message.startsWith("Route every option"))?.controlId).toBe(
+      "builder-field-field-track-routing-1",
+    );
+
+    const reorderedIds = [
+      "field-session-title",
+      "field-session-abstract",
+      "field-workshop-plan",
+      "field-track",
+      "field-commercial-disclosure",
+    ];
+    const malformedOrder: typeof valid = {
+      ...valid,
+      fields: reorderedIds.map((id, index) => ({
+        ...valid.fields.find((field) => field.id === id)!,
+        order: index + 1,
+      })),
+    };
+    expect(validatePublishIntent(malformedOrder).map((issue) => issue.controlId)).toContain(
+      "builder-field-field-workshop-plan-condition-0-source",
+    );
   });
 
   it("uses deterministic availability boundaries and excludes recursively hidden answers", () => {
@@ -337,6 +417,41 @@ describe("forms organizer behavior", () => {
     });
     expect(visible.visibleFields.map((field) => field.id)).toEqual(["field-a", "field-b", "field-c"]);
     expect(visible.activeAnswers).toEqual({ "field-a": "yes", "field-b": "go" });
+
+    const fileFields: readonly FormField[] = [
+      {
+        id: "file-proof",
+        order: 1,
+        type: "file",
+        label: "Supporting file",
+        helpText: null,
+        required: false,
+        options: [],
+        logic: null,
+        routing: {},
+        version: 1,
+      },
+      {
+        id: "file-details",
+        order: 2,
+        type: "text",
+        label: "File details",
+        helpText: null,
+        required: false,
+        options: [],
+        logic: {
+          action: "show",
+          mode: "all",
+          conditions: [{ fieldId: "file-proof", op: "not_empty" }],
+        },
+        routing: {},
+        version: 1,
+      },
+    ];
+    expect(projectActiveAnswers(fileFields, { "file-proof": false }).visibleFields.map((field) =>
+      field.id)).toEqual(["file-proof"]);
+    expect(projectActiveAnswers(fileFields, { "file-proof": true }).visibleFields.map((field) =>
+      field.id)).toEqual(["file-proof", "file-details"]);
   });
 });
 
@@ -536,6 +651,66 @@ describe("forms service", () => {
     }).pipe(Effect.either));
     expect(mismatched._tag).toBe("Left");
     if (mismatched._tag === "Left") expect(mismatched.left._tag).toBe("Conflict");
+  });
+
+  it("rejects trim-empty names in create, update, and publish service paths", async () => {
+    const eventId = "event-name-validation";
+    const db = drizzle(env.DB);
+    const now = new Date(FORMS_FIXTURE_NOW);
+    await db.insert(events).values({
+      id: eventId,
+      slug: "name-validation",
+      name: "Name validation",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const baseInput = {
+      eventId,
+      purpose: "additional" as const,
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: prefixDraftFields("name-validation"),
+    };
+    const invalidCreate = await runAs(owner, createForm({
+      ...baseInput,
+      name: "   ",
+      idempotencyKey: "forms-name-create-invalid",
+    }).pipe(Effect.either));
+    expect(invalidCreate._tag).toBe("Left");
+    if (invalidCreate._tag === "Left") expect(invalidCreate.left._tag).toBe("Validation");
+
+    const created = await runAs(owner, createForm({
+      ...baseInput,
+      name: "Valid name",
+      idempotencyKey: "forms-name-create-valid",
+    }));
+    const invalidUpdate = await runAs(owner, updateForm({
+      eventId,
+      formId: created.id,
+      expectedVersion: created.version,
+      name: "\t ",
+      description: created.description,
+      opensAt: created.opensAt,
+      closesAt: created.closesAt,
+      fields: prefixDraftFields("name-validation"),
+      idempotencyKey: "forms-name-update-invalid",
+    }).pipe(Effect.either));
+    expect(invalidUpdate._tag).toBe("Left");
+    if (invalidUpdate._tag === "Left") expect(invalidUpdate.left._tag).toBe("Validation");
+
+    await db.update(forms).set({ name: " " }).where(and(
+      eq(forms.eventId, eventId),
+      eq(forms.id, created.id),
+    ));
+    const invalidPublish = await runAs(owner, publishForm({
+      eventId,
+      formId: created.id,
+      expectedVersion: created.version,
+      idempotencyKey: "forms-name-publish-invalid",
+    }).pipe(Effect.either));
+    expect(invalidPublish._tag).toBe("Left");
+    if (invalidPublish._tag === "Left") expect(invalidPublish.left._tag).toBe("Validation");
   });
 
   it("enforces the single primary CFP and event-scoped API-key tenancy", async () => {

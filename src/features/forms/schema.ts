@@ -139,9 +139,19 @@ export type ListFormsInput = typeof ListFormsInput.Type;
 export const GetFormInput = Schema.Struct({ eventId: EntityId, formId: EntityId });
 export type GetFormInput = typeof GetFormInput.Type;
 
-const FormName = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200));
+const FormName = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200), Schema.pattern(/\S/));
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(200));
 const DraftFields = Schema.NonEmptyArray(FormFieldDraft);
+const PositiveVersion = Schema.Int.pipe(Schema.positive());
+const HeaderVersion = Schema.transform(
+  Schema.String.pipe(Schema.pattern(/^(?:"[1-9]\d*"|[1-9]\d*)$/)),
+  PositiveVersion,
+  {
+    decode: (value) => Number(value.startsWith("\"") ? value.slice(1, -1) : value),
+    encode: (value) => String(value),
+  },
+);
+export const ExpectedVersion = Schema.Union(PositiveVersion, HeaderVersion);
 
 export const CreateFormInput = Schema.Struct({
   eventId: EntityId,
@@ -158,7 +168,7 @@ export type CreateFormInput = typeof CreateFormInput.Type;
 export const UpdateFormInput = Schema.Struct({
   eventId: EntityId,
   formId: EntityId,
-  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  expectedVersion: ExpectedVersion,
   name: FormName,
   description: NullableText,
   opensAt: NullableTimestamp,
@@ -171,7 +181,7 @@ export type UpdateFormInput = typeof UpdateFormInput.Type;
 export const PublishFormInput = Schema.Struct({
   eventId: EntityId,
   formId: EntityId,
-  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  expectedVersion: ExpectedVersion,
   idempotencyKey: IdempotencyKey,
 });
 export type PublishFormInput = typeof PublishFormInput.Type;
@@ -179,7 +189,7 @@ export type PublishFormInput = typeof PublishFormInput.Type;
 export const SetFormStatusInput = Schema.Struct({
   eventId: EntityId,
   formId: EntityId,
-  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  expectedVersion: ExpectedVersion,
   status: Schema.Literal("open", "closed"),
   idempotencyKey: IdempotencyKey,
 });
