@@ -70,10 +70,6 @@ export default function ReviewWorkbenchRoute({
   const detailRef = useRef<HTMLElement>(null);
   const queueButtonRefs = useRef(new Map<string, HTMLButtonElement>());
 
-  const loadedRound = snapshot.selected?.round
-    ?? snapshot.rounds.find((round) => round.status === "active")
-    ?? snapshot.rounds[0]
-    ?? null;
   const resolvedReviewerUserId = currentReviewerUserId
     ?? (snapshot.viewerRole === "reviewer" ? fixtureReviewerId : undefined);
 
@@ -105,6 +101,10 @@ export default function ReviewWorkbenchRoute({
   const selected = selectedId
     ? detailOverrides[selectedId] ?? resolveFixtureDetail(selectedId)
     : null;
+  const loadedRound = selected?.round
+    ?? snapshot.rounds.find((round) => round.status === "active")
+    ?? snapshot.rounds[0]
+    ?? null;
 
   const updateSelected = (update: (current: SubmissionReviewDetail) => SubmissionReviewDetail) => {
     if (!selected) return;
@@ -147,12 +147,12 @@ export default function ReviewWorkbenchRoute({
     return (
       <main className="space-y-4 p-3 sm:p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Skeleton className="h-8 w-full max-w-72" />
-          <Skeleton className="h-8 w-32 sm:w-36" />
+          <Skeleton className="h-8 w-full max-w-72 motion-reduce:animate-none" />
+          <Skeleton className="h-8 w-32 motion-reduce:animate-none sm:w-36" />
         </div>
         <div className="grid gap-4 lg:grid-cols-[minmax(19rem,0.78fr)_minmax(0,1.7fr)]">
-          <Skeleton className="h-[38rem]" />
-          <Skeleton className="h-[38rem]" />
+          <Skeleton className="h-[38rem] motion-reduce:animate-none" />
+          <Skeleton className="h-[38rem] motion-reduce:animate-none" />
         </div>
         <span className="sr-only">Loading submissions, rounds, and assignments.</span>
       </main>
@@ -325,7 +325,8 @@ export default function ReviewWorkbenchRoute({
         <section
           ref={detailRef}
           tabIndex={-1}
-          aria-label="Selected proposal detail"
+          aria-labelledby={selected ? `proposal-heading-${selected.id}` : undefined}
+          aria-label={selected ? undefined : "Proposal detail"}
           className="min-w-0 scroll-mt-4 outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           {selected ? (

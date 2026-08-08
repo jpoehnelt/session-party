@@ -108,25 +108,27 @@ export function SubmissionReviewPane({
   const [confirmedAiSuggestionId, setConfirmedAiSuggestionId] = useState<string>();
   const [assignmentId, setAssignmentId] = useState("");
   const [assignmentState, setAssignmentState] = useState<AsyncState>("idle");
+  const [submittedReviewer, setSubmittedReviewer] = useState<ReviewerOption>();
   const [saveState, setSaveState] = useState<AsyncState>("idle");
   const [aiState, setAiState] = useState<AsyncState>("idle");
   const [acceptState, setAcceptState] = useState<AsyncState>("idle");
   const [acceptConfirmed, setAcceptConfirmed] = useState(false);
 
   useEffect(() => {
-    const nextReview = currentReviewerUserId
-      ? submission.reviews.find((review) => review.reviewerUserId === currentReviewerUserId)
-      : undefined;
-    setScores(nextReview?.scores ?? []);
-    setComment(nextReview?.comment ?? "");
+    setScores(currentReview?.scores ?? []);
+    setComment(currentReview?.comment ?? "");
     setConfirmedAiSuggestionId(undefined);
+  }, [submission.id, currentReviewerUserId, currentReview?.id, currentReview?.version]);
+
+  useEffect(() => {
     setAssignmentId("");
+    setSubmittedReviewer(undefined);
     setAssignmentState("idle");
     setSaveState("idle");
     setAiState("idle");
     setAcceptState("idle");
     setAcceptConfirmed(false);
-  }, [currentReviewerUserId, submission.id, submission.reviews]);
+  }, [currentReviewerUserId, submission.id]);
 
   const rubric = submission.round?.rubric;
   const scoresComplete = useMemo(
@@ -146,13 +148,28 @@ export function SubmissionReviewPane({
   const evidenceReviews = canEditCurrentReview
     ? submission.reviews.filter((review) => review.reviewerUserId !== currentReviewerUserId)
     : submission.reviews;
-  const selectedReviewerName = reviewers.find((reviewer) => reviewer.id === assignmentId)?.name;
+  const assignedReviewerIds = new Set(submission.assignments.map((assignment) => assignment.reviewerUserId));
+  const availableReviewers = reviewers.filter((reviewer) => !assignedReviewerIds.has(reviewer.id));
+  const selectedReviewer = availableReviewers.find((reviewer) => reviewer.id === assignmentId);
 
   const useAiDraft = (suggestion: AiSuggestion) => {
     setScores(suggestion.scores);
     setComment(suggestion.comment);
     setConfirmedAiSuggestionId(suggestion.id);
     setSaveState("idle");
+  };
+
+  const assignSelectedReviewer = async () => {
+    if (!selectedReviewer) return;
+    setSubmittedReviewer(selectedReviewer);
+    setAssignmentState("saving");
+    try {
+      await onAssign(selectedReviewer.id);
+      setAssignmentId("");
+      setAssignmentState("saved");
+    } catch {
+      setAssignmentState("error");
+    }
   };
 
   const run = async (setState: (state: AsyncState) => void, action: () => Promise<void> | void) => {
@@ -173,7 +190,7 @@ export function SubmissionReviewPane({
           <Badge tone="neutral">{submission.category ?? "Uncategorized"}</Badge>
           <span className="text-xs text-ink-faint">Version {submission.version}</span>
         </div>
-        <h2 className="mt-3 max-w-4xl text-2xl font-semibold leading-tight tracking-tight text-ink">
+        <h2 id={`proposal-heading-${submission.id}`} className="mt-3 max-w-4xl text-2xl font-semibold leading-tight tracking-tight text-ink">
           {submission.title}
         </h2>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-secondary">
@@ -200,14 +217,15 @@ export function SubmissionReviewPane({
             <Select
               label="Assign another reviewer"
               value={assignmentId}
-              disabled={!canAssign}
+              disabled={!canAssign || assignmentState === "saving" || availableReviewers.length === 0}
               onChange={(event) => {
                 setAssignmentId(event.target.value);
+                setSubmittedReviewer(undefined);
                 setAssignmentState("idle");
               }}
             >
-              <option value="">Choose reviewer</option>
-              {reviewers.map((reviewer) => (
+              <option value="">{availableReviewers.length === 0 ? "No available reviewers" : "Choose reviewer"}</option>
+              {availableReviewers.map((reviewer) => (
                 <option key={reviewer.id} value={reviewer.id}>
                   {reviewer.name} · {reviewer.assignmentCount} assigned
                 </option>
@@ -215,9 +233,9 @@ export function SubmissionReviewPane({
             </Select>
             <Button
               variant="secondary"
-              disabled={!assignmentId || !canAssign}
+              disabled={!selectedReviewer || !canAssign || assignmentState === "saving"}
               loading={assignmentState === "saving"}
-              onClick={() => run(setAssignmentState, () => onAssign(assignmentId))}
+              onClick={assignSelectedReviewer}
             >
               Assign reviewer
             </Button>
@@ -228,12 +246,14 @@ export function SubmissionReviewPane({
                 ? "Round complete · assignments are locked."
                 : "Assignments require a pending or active review round."
               : assignmentState === "saving"
-                ? `Assigning ${selectedReviewerName ?? "reviewer"}…`
+                ? `Assigning ${submittedReviewer?.name ?? "reviewer"}…`
                 : assignmentState === "saved"
-                  ? `${selectedReviewerName ?? "Reviewer"} assigned to this round.`
+                  ? `${submittedReviewer?.name ?? "Reviewer"} assigned to this round.`
                   : assignmentState === "error"
-                    ? "Reviewer was not assigned. Reload the round and retry."
-                    : "Assignments are available while the round is pending or active."}
+                    ? `${submittedReviewer?.name ?? "Reviewer"} was not assigned. Reload the round and retry.`
+                    : availableReviewers.length === 0
+                      ? "All available reviewers are already assigned to this proposal."
+                      : "Assignments are available while the round is pending or active."}
           </p>
           <div className="mt-3 flex flex-wrap gap-2" aria-label="Current reviewers">
             {submission.assignments.length === 0 ? (
@@ -278,6 +298,7 @@ export function SubmissionReviewPane({
           <RubricScorecard
             rubric={rubric}
             scores={scores}
+            disabled={saveState === "saving"}
             onChange={(next) => {
               setScores(next);
               setConfirmedAiSuggestionId(undefined);
@@ -291,6 +312,7 @@ export function SubmissionReviewPane({
             hint="Visible to organizers; never shown to speakers or public viewers."
             rows={4}
             value={comment}
+            disabled={saveState === "saving"}
             onChange={(event) => {
               setComment(event.target.value);
               setSaveState("idle");
@@ -334,7 +356,7 @@ export function SubmissionReviewPane({
             </div>
             <Button
               variant="secondary"
-              disabled={!canEditCurrentReview}
+              disabled={!canEditCurrentReview || saveState === "saving"}
               onClick={() => useAiDraft(suggestion)}
             >
               Use as my draft

@@ -810,7 +810,7 @@ export const acceptSubmission = (
         ),
     );
 
-    yield* database(() =>
+    const commitAcceptance = database(() =>
       db.batch([
         db.insert(idempotencyRecords).values({
           id: idempotencyId, eventId: input.eventId, operationId: "review.acceptSubmission", principalId,
@@ -844,5 +844,40 @@ export const acceptSubmission = (
         db.update(idempotencyRecords).set({ status: "completed", responseStatus: 200, responseBody: output, completedAt: acceptedAt }).where(eq(idempotencyRecords.id, idempotencyId)),
       ]),
     );
-    return output;
+
+    return yield* commitAcceptance.pipe(
+      Effect.as(output),
+      Effect.catchAll((batchFailure) =>
+        Effect.gen(function* () {
+          const [committedRequest] = yield* database(() =>
+            db.select().from(idempotencyRecords).where(and(
+              eq(idempotencyRecords.eventId, input.eventId),
+              eq(idempotencyRecords.operationId, "review.acceptSubmission"),
+              eq(idempotencyRecords.principalId, principalId),
+              eq(idempotencyRecords.keyHash, keyHash),
+            )).limit(1),
+          );
+          if (committedRequest) {
+            if (committedRequest.requestHash !== requestHash) {
+              return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different acceptance request" }));
+            }
+            if (committedRequest.status === "completed") {
+              return yield* readIdempotentAcceptance(committedRequest.responseBody);
+            }
+            return yield* Effect.fail(new Conflict({ message: "Acceptance request with this idempotency key is already in progress" }));
+          }
+
+          const [currentSubmission] = yield* database(() =>
+            db.select({ version: submissions.version }).from(submissions).where(and(
+              eq(submissions.eventId, input.eventId),
+              eq(submissions.id, input.submissionId),
+            )).limit(1),
+          );
+          if (!currentSubmission || currentSubmission.version !== input.expectedVersion) {
+            return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before accepting" }));
+          }
+          return yield* Effect.fail(batchFailure);
+        }),
+      ),
+    );
   });

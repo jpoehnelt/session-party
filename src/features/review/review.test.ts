@@ -29,6 +29,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { AiService, CurrentUser, Db, type CurrentUserValue } from "@/server/services";
 import {
   activeRoundFixture,
+  acceptedSubmissionFixture,
+  assignedSubmissionFixture,
   completedRoundFixture,
   pendingRoundFixture,
   contentionFixture,
@@ -506,6 +508,35 @@ describe("review and acceptance slice", () => {
     }));
     expect(emptyMarkup).toContain("No submissions in this round");
     expect(emptyMarkup).not.toContain("Clear filters");
+
+    expect(organizerMarkup).toContain('aria-labelledby="proposal-heading-submission_05"');
+    expect(organizerMarkup).toContain('id="proposal-heading-submission_05"');
+    expect(organizerMarkup).not.toContain(`<option value="${fixtureReviewerId}"`);
+    expect(organizerMarkup).not.toContain('<option value="user_reviewer_dev"');
+    expect(reviewerMarkup).toContain("min-h-11 min-w-11");
+
+    const completedSelectionMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
+      snapshot: { ...reviewWorkbenchFixture, selected: acceptedSubmissionFixture },
+    }));
+    expect(completedSelectionMarkup.split("Blind screen · complete")).toHaveLength(3);
+
+    const noAvailableMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
+      snapshot: {
+        ...reviewWorkbenchFixture,
+        selected: {
+          ...assignedSubmissionFixture,
+          assignments: [
+            ...assignedSubmissionFixture.assignments,
+            { id: "assignment_mina_01", reviewerUserId: "user_reviewer_mina", reviewerName: "Mina Okafor", version: 1 },
+          ],
+        },
+      },
+    }));
+    expect(noAvailableMarkup).toContain("All available reviewers are already assigned to this proposal.");
+    expect(noAvailableMarkup).toContain("No available reviewers");
+
+    const loadingMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, { state: "loading" }));
+    expect(loadingMarkup.match(/motion-reduce:animate-none/g)).toHaveLength(4);
   });
 
   it("returns all 60 proposals to organizers but only assigned proposals and private review data to reviewers", async () => {
@@ -725,6 +756,125 @@ describe("review and acceptance slice", () => {
     expect(submission?.status).not.toBe("accepted");
   });
 
+  it("replays concurrent matching acceptance keys without duplicate durable evidence", async () => {
+    const input = {
+      eventId: fixtureEventId,
+      submissionId: "submission_25",
+      expectedVersion: 2,
+      idempotencyKey: "concurrent-same-key-25",
+      requestId: "request_concurrent_same_25",
+    } as const;
+    const results = await Promise.all([
+      runAs(owner, acceptSubmission(input)),
+      runAs(owner, acceptSubmission(input)),
+    ]);
+    expect(results.map((result) => result.idempotent).sort()).toEqual([false, true]);
+    expect(new Set(results.map((result) => result.acceptanceEventId)).size).toBe(1);
+
+    const durableAcceptance = await db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, input.submissionId));
+    const provisioning = await db.select().from(speakerProvisioning).where(eq(speakerProvisioning.submissionId, input.submissionId));
+    const changes = await db.select().from(domainChanges).where(eq(domainChanges.requestId, input.requestId));
+    const audits = await db.select().from(auditLog).where(and(eq(auditLog.resourceType, "submission"), eq(auditLog.resourceId, input.submissionId)));
+    const allIdempotency = await db.select().from(idempotencyRecords).where(eq(idempotencyRecords.operationId, "review.acceptSubmission"));
+    const matchingIdempotency = allIdempotency.filter((record) => {
+      const response = record.responseBody;
+      return response !== null
+        && typeof response === "object"
+        && "submissionId" in response
+        && response.submissionId === input.submissionId;
+    });
+    expect(durableAcceptance).toHaveLength(1);
+    expect(provisioning).toHaveLength(1);
+    expect(changes).toHaveLength(2);
+    expect(audits).toHaveLength(1);
+    expect(matchingIdempotency).toHaveLength(1);
+  });
+
+  it("resolves concurrent different acceptance keys with one winner and one stale CAS conflict", async () => {
+    const first = {
+      eventId: fixtureEventId,
+      submissionId: "submission_26",
+      expectedVersion: 2,
+      idempotencyKey: "concurrent-key-a-26",
+      requestId: "request_concurrent_a_26",
+    } as const;
+    const second = {
+      ...first,
+      idempotencyKey: "concurrent-key-b-26",
+      requestId: "request_concurrent_b_26",
+    } as const;
+    const results = await Promise.all([
+      runEitherAs(owner, acceptSubmission(first)),
+      runEitherAs(owner, acceptSubmission(second)),
+    ]);
+    expect(results.map((result) => result._tag).sort()).toEqual(["Left", "Right"]);
+    const failure = results.find((result) => result._tag === "Left");
+    if (failure?._tag === "Left") expect(failure.left._tag).toBe("Conflict");
+
+    const durableAcceptance = await db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, first.submissionId));
+    const provisioning = await db.select().from(speakerProvisioning).where(eq(speakerProvisioning.submissionId, first.submissionId));
+    const allChanges = await db.select().from(domainChanges);
+    const changes = allChanges.filter((change) => change.requestId === first.requestId || change.requestId === second.requestId);
+    const audits = await db.select().from(auditLog).where(and(eq(auditLog.resourceType, "submission"), eq(auditLog.resourceId, first.submissionId)));
+    const allIdempotency = await db.select().from(idempotencyRecords).where(eq(idempotencyRecords.operationId, "review.acceptSubmission"));
+    const matchingIdempotency = allIdempotency.filter((record) => {
+      const response = record.responseBody;
+      return response !== null
+        && typeof response === "object"
+        && "submissionId" in response
+        && response.submissionId === first.submissionId;
+    });
+    expect(durableAcceptance).toHaveLength(1);
+    expect(provisioning).toHaveLength(1);
+    expect(changes).toHaveLength(2);
+    expect(audits).toHaveLength(1);
+    expect(matchingIdempotency).toHaveLength(1);
+  });
+
+  it("rethrows an unrelated acceptance batch failure when the submission CAS remains current", async () => {
+    const submissionId = "submission_27";
+    const requestId = "request_unrelated_batch_27";
+    await db.insert(domainChanges).values({
+      id: "change_collision_27",
+      eventId: fixtureEventId,
+      aggregateType: "submission",
+      aggregateId: submissionId,
+      aggregateVersion: 3,
+      eventType: "review.submission.accepted",
+      audiences: [{ kind: "admins" }],
+      payload: { fixture: "preexisting evidence collision" },
+      actorUserId: fixtureOwnerId,
+      actorApiKeyId: null,
+      requestId: "request_fixture_collision_27",
+      idempotencyRecordId: null,
+      occurredAt: new Date(fixtureClock - 1_000),
+    });
+    const idempotencyBefore = await db.select().from(idempotencyRecords);
+
+    const result = await runEitherAs(owner, acceptSubmission({
+      eventId: fixtureEventId,
+      submissionId,
+      expectedVersion: 2,
+      idempotencyKey: "unrelated-batch-failure-27",
+      requestId,
+    }));
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") expect(result.left._tag).toBe("External");
+
+    const [submission] = await db.select().from(submissions).where(eq(submissions.id, submissionId));
+    const durableAcceptance = await db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, submissionId));
+    const provisioning = await db.select().from(speakerProvisioning).where(eq(speakerProvisioning.submissionId, submissionId));
+    const changes = await db.select().from(domainChanges).where(eq(domainChanges.requestId, requestId));
+    const audits = await db.select().from(auditLog).where(eq(auditLog.requestId, requestId));
+    const idempotencyAfter = await db.select().from(idempotencyRecords);
+    expect(submission).toMatchObject({ status: "rejected", version: 2 });
+    expect(durableAcceptance).toEqual([]);
+    expect(provisioning).toEqual([]);
+    expect(changes).toEqual([]);
+    expect(audits).toEqual([]);
+    expect(idempotencyAfter).toHaveLength(idempotencyBefore.length);
+  });
+
   it("rejects stale acceptance and atomically creates one durable acceptance plus primary-speaker provisioning", async () => {
     const stale = await runEitherAs(owner, acceptSubmission({
       eventId: fixtureEventId,
@@ -754,7 +904,14 @@ describe("review and acceptance slice", () => {
     const provisioning = await db.select().from(speakerProvisioning).where(and(eq(speakerProvisioning.eventId, fixtureEventId), eq(speakerProvisioning.submissionId, input.submissionId)));
     const changes = await db.select().from(domainChanges).where(and(eq(domainChanges.eventId, fixtureEventId), eq(domainChanges.requestId, input.requestId)));
     const audits = await db.select().from(auditLog).where(and(eq(auditLog.eventId, fixtureEventId), eq(auditLog.requestId, input.requestId)));
-    const idempotency = await db.select().from(idempotencyRecords).where(and(eq(idempotencyRecords.eventId, fixtureEventId), eq(idempotencyRecords.operationId, "review.acceptSubmission")));
+    const allIdempotency = await db.select().from(idempotencyRecords).where(and(eq(idempotencyRecords.eventId, fixtureEventId), eq(idempotencyRecords.operationId, "review.acceptSubmission")));
+    const idempotency = allIdempotency.filter((record) => {
+      const response = record.responseBody;
+      return response !== null
+        && typeof response === "object"
+        && "submissionId" in response
+        && response.submissionId === input.submissionId;
+    });
     expect(durableAcceptance).toHaveLength(1);
     expect(provisioning).toHaveLength(1);
     expect(provisioning[0]).toMatchObject({ acceptanceEventId: durableAcceptance[0]!.id, primarySpeakerId: fixturePrimarySpeakerId, status: "pending" });

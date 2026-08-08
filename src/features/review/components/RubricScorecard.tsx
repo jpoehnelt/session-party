@@ -73,9 +73,9 @@ export function RubricScorecard({
                 {([1, 2, 3, 4, 5] as const).map((score) => (
                   <Button
                     key={score}
-                    size="sm"
+                    size="md"
                     variant={selected === score ? "primary" : "secondary"}
-                    className="min-w-9 px-2 font-mono tabular-nums"
+                    className="min-h-11 min-w-11 px-3 font-mono tabular-nums"
                     aria-pressed={selected === score}
                     aria-label={`${score} — ${scoreMeaning[score]}`}
                     title={scoreMeaning[score]}
