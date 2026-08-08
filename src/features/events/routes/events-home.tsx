@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
-import { apiFetch } from "@/client/api";
+import { Link, useNavigate } from "react-router";
+import { ApiError, apiFetch } from "@/client/api";
 import {
   Button,
   Card,
@@ -25,6 +25,8 @@ export const path = "/";
 
 export default function EventsHome() {
   const [events, setEvents] = useState<EventSummary[] | null>(null);
+  const navigate = useNavigate();
+  const [loadError, setLoadError] = useState<"unauthenticated" | "failed" | null>(null);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -32,10 +34,14 @@ export default function EventsHome() {
 
   useEffect(() => {
     void apiFetch<EventSummary[]>("/api/v1/events")
-      .then(setEvents)
-      .catch((error) =>
-        toast(error instanceof Error ? error.message : "Could not load events", { tone: "danger" }),
-      );
+      .then((loadedEvents) => {
+        setEvents(loadedEvents);
+        setLoadError(null);
+      })
+      .catch((error) => {
+        setLoadError(error instanceof ApiError && error.status === 401 ? "unauthenticated" : "failed");
+        toast(error instanceof Error ? error.message : "Could not load events", { tone: "danger" });
+      });
   }, []);
 
   const create = async () => {
@@ -64,7 +70,18 @@ export default function EventsHome() {
         description="Plan programs, speakers, and every detail in one place."
         actions={<Button onClick={() => setOpen(true)}>Create event</Button>}
       />
-      {events === null ? (
+      {loadError === "unauthenticated" ? (
+        <EmptyState
+          title="Sign in to start planning"
+          description="Sign in, then create your first event to begin building the program."
+          action={<Button onClick={() => navigate("/login")}>Sign in</Button>}
+        />
+      ) : loadError === "failed" ? (
+        <EmptyState
+          title="Events could not be loaded"
+          description="Refresh the page to try again. Your event data has not been changed."
+        />
+      ) : events === null ? (
         <Skeleton />
       ) : events.length === 0 ? (
         <EmptyState

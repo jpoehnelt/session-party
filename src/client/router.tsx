@@ -21,6 +21,11 @@ type AuthMeResponse = {
   user?: { email?: string };
 };
 
+type SessionState =
+  | { status: "loading" }
+  | { status: "signed-out" }
+  | { status: "signed-in"; email: string };
+
 const routeModules = import.meta.glob("../features/*/routes/*.tsx", {
   eager: true,
 }) as Record<string, RouteModule>;
@@ -84,16 +89,18 @@ function Sidebar() {
 
 function Topbar() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState<string>();
+  const [session, setSession] = useState<SessionState>({ status: "loading" });
 
   useEffect(() => {
     let isCurrent = true;
     void apiFetch<AuthMeResponse>("/api/v1/auth/me")
       .then((user) => {
-        if (isCurrent) setEmail(user.user?.email ?? user.email);
+        if (!isCurrent) return;
+        const email = user.user?.email ?? user.email;
+        setSession(email ? { status: "signed-in", email } : { status: "signed-out" });
       })
       .catch(() => {
-        if (isCurrent) setEmail(undefined);
+        if (isCurrent) setSession({ status: "signed-out" });
       });
 
     return () => {
@@ -111,10 +118,22 @@ function Topbar() {
 
   return (
     <div className="flex items-center gap-3 px-4 py-2">
-      <span className="text-sm text-muted-foreground">{email ?? "Not signed in"}</span>
-      <Button type="button" onClick={() => void logout()}>
-        Log out
-      </Button>
+      <span className="text-sm text-muted-foreground">
+        {session.status === "loading"
+          ? "Checking session…"
+          : session.status === "signed-in"
+            ? session.email
+            : "Not signed in"}
+      </span>
+      {session.status === "signed-in" ? (
+        <Button type="button" onClick={() => void logout()}>
+          Log out
+        </Button>
+      ) : session.status === "signed-out" ? (
+        <Button type="button" onClick={() => navigate("/login")}>
+          Sign in
+        </Button>
+      ) : null}
     </div>
   );
 }
