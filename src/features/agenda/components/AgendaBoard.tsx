@@ -1,0 +1,335 @@
+import { useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
+import { Badge, Button, Card, EmptyState, Table } from "@/ui";
+import type {
+  AgendaSnapshot,
+  AgendaTalk,
+  AgendaView,
+  BacklogProposal,
+  RealtimeIntentState,
+} from "../schema";
+import { ConflictIndicator } from "./ConflictIndicator";
+
+export interface AgendaMoveTarget {
+  readonly trackId: string | null;
+  readonly roomId: string | null;
+  readonly startsAt: number | null;
+  readonly durationMin: number;
+}
+
+export interface AgendaBoardProps {
+  readonly agenda: AgendaSnapshot;
+  readonly view: AgendaView;
+  readonly intent: RealtimeIntentState;
+  readonly selectedTalkId?: string | null;
+  readonly disabled?: boolean;
+  readonly onCreateTalk: (proposal: BacklogProposal) => void;
+  readonly onSelectTalk: (talk: AgendaTalk) => void;
+  readonly onMoveTalk: (talk: AgendaTalk, target: AgendaMoveTarget) => void;
+}
+
+interface Lane {
+  readonly id: string;
+  readonly label: string;
+  readonly hint: string;
+  readonly talks: readonly AgendaTalk[];
+  readonly target?: Pick<AgendaMoveTarget, "roomId" | "trackId">;
+}
+
+const timeFormatter = (timezone: string) =>
+  new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: timezone,
+    timeZoneName: "short",
+  });
+
+const dateFormatter = (timezone: string) =>
+  new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: timezone,
+  });
+
+const dateKey = (startsAt: number, timezone: string) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: timezone,
+    year: "numeric",
+  }).formatToParts(startsAt);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+};
+
+const connectionLabel = (intent: RealtimeIntentState) => {
+  if (intent.connection === "offline") return { label: "Offline", tone: "danger" as const };
+  if (intent.connection === "reconnecting") return { label: "Reconnecting", tone: "warning" as const };
+  if (intent.acknowledgement === "pending") return { label: "Waiting for acknowledgement", tone: "warning" as const };
+  if (intent.acknowledgement === "stale") return { label: "Stale change", tone: "danger" as const };
+  if (intent.acknowledgement === "rejected") return { label: "Change rejected", tone: "danger" as const };
+  if (intent.acknowledgement === "acknowledged") return { label: "Saved", tone: "success" as const };
+  return { label: "Live", tone: "success" as const };
+};
+
+export function AgendaBoard({
+  agenda,
+  view,
+  intent,
+  selectedTalkId = null,
+  disabled = false,
+  onCreateTalk,
+  onSelectTalk,
+  onMoveTalk,
+}: AgendaBoardProps) {
+  const [draggedTalkId, setDraggedTalkId] = useState<string | null>(null);
+  const connection = connectionLabel(intent);
+  const scheduled = useMemo(
+    () => agenda.talks
+      .filter(({ status }) => status !== "cancelled")
+      .sort((left, right) =>
+        (left.startsAt ?? Number.MAX_SAFE_INTEGER) - (right.startsAt ?? Number.MAX_SAFE_INTEGER) ||
+        left.title.localeCompare(right.title) ||
+        left.id.localeCompare(right.id),
+      ),
+    [agenda.talks],
+  );
+  const time = useMemo(() => timeFormatter(agenda.timezone), [agenda.timezone]);
+  const date = useMemo(() => dateFormatter(agenda.timezone), [agenda.timezone]);
+
+  const lanes = useMemo<readonly Lane[]>(() => {
+    if (view === "track") {
+      return [
+        ...agenda.tracks.map((track) => ({
+          id: `track:${track.id}`,
+          label: track.name,
+          hint: "Track",
+          talks: scheduled.filter(({ trackId }) => trackId === track.id),
+          target: { trackId: track.id, roomId: null },
+        })),
+        {
+          id: "track:unassigned",
+          label: "Unassigned track",
+          hint: "Needs placement",
+          talks: scheduled.filter(({ trackId }) => trackId === null),
+          target: { trackId: null, roomId: null },
+        },
+      ];
+    }
+    if (view === "room" || view === "day") {
+      return [
+        ...agenda.rooms.map((room) => ({
+          id: `room:${room.id}`,
+          label: room.name,
+          hint: room.capacity === null ? "Room" : `${room.capacity} seats`,
+          talks: scheduled.filter(({ roomId }) => roomId === room.id),
+          target: { trackId: null, roomId: room.id },
+        })),
+        {
+          id: "room:unassigned",
+          label: "Unassigned room",
+          hint: "Needs placement",
+          talks: scheduled.filter(({ roomId }) => roomId === null),
+          target: { trackId: null, roomId: null },
+        },
+      ];
+    }
+    if (view === "week") {
+      const days = new Map<string, AgendaTalk[]>();
+      for (const talk of scheduled) {
+        const key = talk.startsAt === null ? "unscheduled" : dateKey(talk.startsAt, agenda.timezone);
+        const entries = days.get(key) ?? [];
+        entries.push(talk);
+        days.set(key, entries);
+      }
+      return [...days.entries()].map(([key, talks]) => ({
+        id: `day:${key}`,
+        label: key === "unscheduled" || talks[0]?.startsAt === null ? "Unscheduled" : date.format(talks[0]!.startsAt!),
+        hint: `${talks.length} ${talks.length === 1 ? "talk" : "talks"}`,
+        talks,
+      }));
+    }
+    return [];
+  }, [agenda.rooms, agenda.timezone, agenda.tracks, date, scheduled, view]);
+
+  const dropOnLane = (event: DragEvent<HTMLElement>, lane: Lane) => {
+    event.preventDefault();
+    const talkId = event.dataTransfer.getData("text/agenda-talk") || draggedTalkId;
+    const talk = agenda.talks.find(({ id }) => id === talkId);
+    setDraggedTalkId(null);
+    if (!talk || !lane.target || disabled) return;
+    onMoveTalk(talk, {
+      trackId: lane.id.startsWith("track:") ? lane.target.trackId : talk.trackId,
+      roomId: lane.id.startsWith("room:") ? lane.target.roomId : talk.roomId,
+      startsAt: talk.startsAt,
+      durationMin: talk.durationMin,
+    });
+  };
+
+  const openWithKeyboard = (event: KeyboardEvent<HTMLButtonElement>, talk: AgendaTalk) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onSelectTalk(talk);
+  };
+
+  return (
+    <div className="space-y-4" aria-label="Agenda operations board">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-line bg-surface px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-ink-secondary">
+          <span className="font-medium text-ink">All times in {agenda.timezone}</span>
+          <span aria-hidden="true">·</span>
+          <span>{scheduled.length} active talks</span>
+          <span aria-hidden="true">·</span>
+          <span>{agenda.backlog.length} in backlog</span>
+        </div>
+        <div className="flex items-center gap-2" role="status" aria-live="polite">
+          <Badge tone={connection.tone}>{connection.label}</Badge>
+          {intent.message && <span className="max-w-md text-xs text-ink-secondary">{intent.message}</span>}
+        </div>
+      </div>
+
+      <ConflictIndicator conflicts={agenda.conflicts} />
+
+      <div className="grid min-h-[34rem] gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
+        <Card title={<span className="flex items-center justify-between"><span>Accepted backlog</span><Badge>{agenda.backlog.length}</Badge></span>}>
+          {agenda.backlog.length === 0 ? (
+            <EmptyState
+              title="Backlog clear"
+              description="Accepted, provisioned proposals appear here until a talk is created."
+            />
+          ) : (
+            <ol className="space-y-2">
+              {agenda.backlog.map((proposal) => (
+                <li key={proposal.submissionId} className="rounded-control border border-line bg-surface-muted p-3">
+                  <p className="text-sm font-semibold text-ink">{proposal.title}</p>
+                  <p className="mt-1 text-xs text-ink-secondary">
+                    {proposal.primarySpeakerName}{proposal.category ? ` · ${proposal.category}` : ""}
+                  </p>
+                  <Button
+                    className="mt-3 w-full"
+                    size="sm"
+                    variant="secondary"
+                    disabled={disabled}
+                    onClick={() => onCreateTalk(proposal)}
+                  >
+                    Create talk
+                  </Button>
+                </li>
+              ))}
+            </ol>
+          )}
+        </Card>
+
+        <section className="min-w-0" aria-label={`${view} agenda view`}>
+          {view === "list" ? (
+            <Table
+              columns={[
+                {
+                  key: "title",
+                  header: "Talk",
+                  render: (talk) => (
+                    <button
+                      type="button"
+                      className="text-left font-medium text-ink underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      onClick={() => onSelectTalk(talk)}
+                    >
+                      {talk.title}
+                    </button>
+                  ),
+                },
+                { key: "speakerNames", header: "Speakers", render: (talk) => talk.speakerNames.join(", ") },
+                {
+                  key: "startsAt",
+                  header: `Start (${agenda.timezone})`,
+                  render: (talk) => talk.startsAt === null ? "Unscheduled" : `${date.format(talk.startsAt)}, ${time.format(talk.startsAt)}`,
+                },
+                {
+                  key: "placement",
+                  header: "Placement",
+                  render: (talk) => [
+                    agenda.tracks.find(({ id }) => id === talk.trackId)?.name,
+                    agenda.rooms.find(({ id }) => id === talk.roomId)?.name,
+                  ].filter(Boolean).join(" · ") || "Unassigned",
+                },
+                { key: "durationMin", header: "Duration", render: (talk) => `${talk.durationMin} min` },
+                { key: "status", header: "Status", render: (talk) => <Badge tone={talk.status === "confirmed" ? "success" : "neutral"}>{talk.status}</Badge> },
+              ]}
+              rows={[...scheduled]}
+              rowKey={(talk) => talk.id}
+              empty={<EmptyState title="No talks yet" description="Create a talk from the accepted backlog." />}
+            />
+          ) : lanes.length === 0 ? (
+            <EmptyState title="No schedule lanes" description="Add rooms or tracks before placing talks." />
+          ) : (
+            <div className="overflow-x-auto pb-3">
+              <div className="grid min-w-max auto-cols-[18rem] grid-flow-col gap-3">
+                {lanes.map((lane) => (
+                  <section
+                    key={lane.id}
+                    className="min-h-[30rem] rounded-card border border-line bg-surface-muted"
+                    aria-label={lane.label}
+                    onDragOver={lane.target ? (event) => event.preventDefault() : undefined}
+                    onDrop={lane.target ? (event) => dropOnLane(event, lane) : undefined}
+                  >
+                    <header className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-surface px-3 py-2.5">
+                      <div>
+                        <h3 className="text-sm font-semibold text-ink">{lane.label}</h3>
+                        <p className="text-xs text-ink-faint">{lane.hint}</p>
+                      </div>
+                      <Badge>{lane.talks.length}</Badge>
+                    </header>
+                    <ol className="space-y-2 p-2">
+                      {lane.talks.map((talk) => {
+                        const talkConflicts = agenda.conflicts.filter(({ talkIds }) => talkIds.includes(talk.id));
+                        return (
+                          <li
+                            key={talk.id}
+                            draggable={!disabled}
+                            onDragStart={(event) => {
+                              setDraggedTalkId(talk.id);
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData("text/agenda-talk", talk.id);
+                            }}
+                            onDragEnd={() => setDraggedTalkId(null)}
+                            className={`rounded-control border bg-surface p-3 shadow-sm transition motion-reduce:transition-none ${
+                              selectedTalkId === talk.id ? "border-accent ring-2 ring-accent/20" : "border-line"
+                            } ${draggedTalkId === talk.id ? "opacity-50" : ""}`}
+                          >
+                            <button
+                              type="button"
+                              className="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              aria-label={`Edit ${talk.title}. ${talk.startsAt === null ? "Unscheduled" : time.format(talk.startsAt)}. Press Enter for move controls.`}
+                              onClick={() => onSelectTalk(talk)}
+                              onKeyDown={(event) => openWithKeyboard(event, talk)}
+                            >
+                              <span className="flex items-start justify-between gap-2">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+                                  {talk.startsAt === null ? "Unscheduled" : time.format(talk.startsAt)}
+                                </span>
+                                <span className="text-xs text-ink-faint">{talk.durationMin}m</span>
+                              </span>
+                              <span className="mt-1 block text-sm font-semibold leading-snug text-ink">{talk.title}</span>
+                              <span className="mt-1 block text-xs text-ink-secondary">{talk.speakerNames.join(", ")}</span>
+                            </button>
+                            {talkConflicts.length > 0 && (
+                              <div className="mt-2">
+                                <ConflictIndicator conflicts={talkConflicts} compact />
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </section>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+      <p className="text-xs text-ink-faint">
+        Drag a talk between track or room lanes. For exact track, room, start, and duration changes, open the talk and use the labeled form controls.
+      </p>
+    </div>
+  );
+}
