@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "session-party-local",
+  "main": "src/server/index.ts",
+  "compatibility_date": "2025-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "not_found_handling": "single-page-application"
+  },
+  "observability": { "enabled": false },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "session-party",
+      "database_id": "local-only",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "session-party-files" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "EVENT_ROOM", "class_name": "EventRoom" },
+      { "name": "SCHEDULER", "class_name": "Scheduler" },
+      { "name": "MCP_OBJECT", "class_name": "SessionPartyMcp" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["EventRoom", "Scheduler", "SessionPartyMcp"] }
+  ],
+  "vars": {
+    "LOCAL_MODE": "1",
+    "APP_URL": "http://127.0.0.1:5173",
+    "MAIL_FROM": "Session Party <onboarding@resend.dev>"
+  }
+}
