@@ -9,6 +9,7 @@ import FormsPage, {
   fetchEventIdentity,
   fetchFormDetail,
   fetchFormSummaries,
+  FormPresenceNotice,
   FormsWorkspace,
   path,
   publishFormDraft,
@@ -240,6 +241,21 @@ describe("forms organizer route", () => {
     expect(markup).not.toContain("[&amp;&gt;header]:bg-[#caff4a]");
     expect(markup).not.toContain("[&amp;&gt;header]:bg-[#8fdcff]");
     expect(markup).not.toContain("[&amp;&gt;header]:bg-[#ff714f]");
+  });
+
+  it("shows presence only for people viewing the selected form", () => {
+    const markup = renderToStaticMarkup(createElement(FormPresenceNotice, {
+      formId: formDetail.id,
+      users: [
+        { userId: "user-jamie", name: "Jamie", surface: `forms:${formDetail.id}` },
+        { userId: "user-pat", name: "Pat", surface: "agenda" },
+      ],
+    }));
+
+    expect(markup).toContain("1 person viewing this form");
+    expect(markup).toContain("Jamie is here now");
+    expect(markup).toContain("changes are not merged live");
+    expect(markup).not.toContain("Pat");
   });
 
   it("marks legacy file fields unavailable instead of previewing a working upload", () => {
