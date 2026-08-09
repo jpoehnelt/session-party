@@ -36,8 +36,8 @@ The primary interface is the admin UI. MCP is a thin test/automation transport a
 | Agenda publication | Latest immutable `domainChanges` snapshot (`agenda-publication` / event ID / `agenda/published`) is the P0 public projection; payload is validated and contains only confirmed scheduled talks plus visible speaker data |
 | Files | R2 |
 | Scheduling | Native Durable Object alarms through `Scheduler`; no `partywhen` dependency |
-| Email | Resend + generated `.ics` attachments |
-| Mail execution | Scheduler sends the immutable snapshot exactly—recipient, configured sender/reply-to, subject/body, ICS filename/content—and propagates the delivery idempotency key to Resend. Provider calls never reconstruct mutable template/event state |
+| Email | Cloudflare Workers Email Sending through the `EMAIL` binding, authorized sender `welcome@sessionparty.com`, plus generated `.ics` attachments |
+| Mail execution | Scheduler sends the immutable snapshot exactly—recipient, configured sender/reply-to, subject, rendered HTML and text, base64-encoded ICS filename/content—and never reconstructs mutable template/event state. Cloudflare controls RFC `Message-ID` and rejects attempts to set it, so the adapter carries a stable SHA-256-derived `X-Session-Party-Delivery-ID` only as non-secret correlation metadata. Cloudflare's returned `EmailSendResult.messageId` is persisted separately as the provider message ID |
 | Magic-link delivery | One D1 transaction commits user/token plus immutable mail snapshot/delivery; Scheduler performs the provider call after commit. A partial uniqueness invariant permits one unconsumed magic link per user; valid duplicate requests return the same generic response without extra mail, expired replacement invalidates/cancels the old delivery, raw tokens never enter logs/responses, and provider failures retain retry/dead-letter evidence |
 | Magic-link verification | Conditional session creation and one-time token consumption commit atomically; the session cookie is emitted only after commit, and concurrent replay creates no second session |
 | AI | Workers AI for optional, labeled, non-authoritative review assistance |
@@ -72,7 +72,7 @@ flowchart LR
   AT --> REFRESH[On-load/background refresh]
   REFRESH --> TX
   MOUT --> SCHED[Mail Scheduler DO]
-  SCHED --> RESEND[Resend]
+  SCHED --> EMAIL[Cloudflare Email Sending]
   FX --> R2[(R2)]
   ACC[Accelevents adapter] --> FX
 ```
@@ -118,7 +118,7 @@ Adapters only decode, authorize, invoke, encode, and map errors. They never cont
 4. `AppLayer(env)` provides infrastructure; `CurrentUser` is a per-invocation Layer.
 5. Only `src/server/adapt.ts` may call `Effect.runPromiseExit`.
 6. Drizzle/D1 transaction callbacks are bounded async islands: awaited DB work only; no nested Effect runner or external call.
-7. External adapters consume `AbortSignal`, use per-attempt timeout, and retry only proven-idempotent requests.
+7. External adapters consume `AbortSignal` and use per-attempt timeouts. Automatic retries require proven idempotency unless the documented operation contract is at-least-once: mail delivery may retry after an ambiguous crash window, reusing stable correlation metadata while recording every logical attempt and observed provider receipt. Cloudflare generates a new platform-controlled RFC `Message-ID`; this API cannot provide recipient-level duplicate suppression or exactly-once delivery.
 8. Expected failures use the shared tagged errors; no strings, `unknown`, or thrown domain errors cross a service boundary.
 
 ### Standard transport behavior
@@ -212,8 +212,10 @@ The existing prototype is not safe to freeze. Phase 0 must establish:
    - row versions, idempotency records, append-only domain changes, audit log
    - D1 outbox with leases/attempts/dead letters
 6. **Email delivery**
-   - immutable recipient/subject/rendered HTML/ICS snapshot
-   - idempotency key, durable lease, attempts, provider message ID
+   - immutable recipient/sender/reply-to/subject/rendered HTML/rendered text/ICS snapshot
+   - durable lease, logical attempts, Cloudflare provider message ID, and deterministic outbound `X-Session-Party-Delivery-ID` correlation evidence
+   - honest at-least-once semantics: a crash after provider acceptance but before D1 receipt persistence can cause a physical duplicate. Cloudflare rejects caller-supplied RFC `Message-ID`, and the correlation header is not duplicate suppression or proof of provider acceptance
+   - the canonical `Scheduler` object named `mail` is the only object permitted to claim/send deliveries. Its atomic reservations count every physical send invocation against the invocation's actual UTC day before egress: 1,000 total/account/day, at most 900 campaign sends/account/day, and at most 500 sends/event/day. The 100-message account reserve remains available to eventless/auth mail. Budget exhaustion defers or dead-letters with delivery/attempt evidence; provider rejection is not the budget mechanism
 7. **Forms and speakers**
    - copy-on-publish form version so submitted answers retain meaning
    - verified submission ownership and versioned edits after acceptance
@@ -796,7 +798,7 @@ Logical topology, field authority, and connector metadata are resolved. Physical
 
 | ID | Owner | Blocker | Required action |
 |---|---|---|---|
-| H4 | User/Ops | Resend | Establish account owner, verified domain, From/Reply-To, demo recipient allowlist, daily cap before enabling live email |
+| H4 | User/Ops | Cloudflare Email live cutover | Email Sending and `welcome@sessionparty.com` are verified; account quota is 1,000/day. Read-only production inventory on 2026-08-08 found zero `pending`, `retry`, or `claimed` deliveries, so the provider-default migration is a clean cutover while terminal historical Resend provenance remains unchanged. If a later pre-deploy inventory finds old in-flight snapshots, cancel and explicitly re-enqueue from new Cloudflare-sender snapshots rather than mutating immutable content. A live email smoke still requires explicit authorization |
 | H2P | User | Production origin | Approve production/custom domain |
 | H3P | User/Ops | Production authorization | Explicitly authorize production provisioning/deployment/migration/secrets/routes/DNS with a scoped write-capable path |
 

@@ -19,13 +19,14 @@ export interface MailPayload {
   readonly to: string;
   readonly subject: string;
   readonly html: string;
+  readonly text: string;
   readonly icsFilename?: string;
   readonly ics?: string;
   readonly idempotencyKey?: string;
 }
 
 export interface MailReceipt {
-  readonly provider: "resend" | "local-fake";
+  readonly provider: "cloudflare-email" | "local-fake";
   readonly providerMessageId: string;
   readonly providerResult: Readonly<Record<string, unknown>>;
 }
@@ -74,7 +75,6 @@ export class CurrentUser extends Context.Tag("session-party/CurrentUser")<
 
 type SecretBindings = {
   readonly LOCAL_MODE?: string;
-  readonly RESEND_API_KEY?: string;
   readonly SESSION_SECRET?: string;
 };
 
@@ -98,12 +98,6 @@ export const sessionSecret = (env: Env & SecretBindings): string => {
   throw new Error("Missing required production secret: SESSION_SECRET");
 };
 
-const toBase64 = (value: string): string => {
-  const bytes = new TextEncoder().encode(value);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-};
 const sha256Hex = async (value: string): Promise<string> => {
   const digest = new Uint8Array(await crypto.subtle.digest(
     "SHA-256",
@@ -114,7 +108,14 @@ const sha256Hex = async (value: string): Promise<string> => {
   return hex;
 };
 
-const LOCAL_MAIL_FROM = "Session Party <onboarding@resend.dev>";
+const toBase64 = (value: string): string => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+const LOCAL_MAIL_FROM = "Session Party <welcome@sessionparty.com>";
 
 export const mailFrom = (env: Env & SecretBindings): string => {
   if (isExplicitLocalEnvironment(env)) return LOCAL_MAIL_FROM;
@@ -126,9 +127,15 @@ export const mailFrom = (env: Env & SecretBindings): string => {
 
 export const requireMailConfiguration = (env: Env & SecretBindings): void => {
   mailFrom(env);
-  if (!isExplicitLocalEnvironment(env) && !optionalSecret(env, "RESEND_API_KEY")) {
-    throw new Error("Missing required production secret: RESEND_API_KEY");
+  if (!isExplicitLocalEnvironment(env) && !env.EMAIL) {
+    throw new Error("Missing required production binding: EMAIL");
   }
+};
+
+/** Stable non-secret correlation metadata; it does not suppress duplicate delivery. */
+export const outboundCorrelationId = async (idempotencyKey?: string): Promise<string> => {
+  const identity = idempotencyKey ?? crypto.randomUUID();
+  return `sp-${await sha256Hex(identity)}`;
 };
 
 /** Shared by the Effect Mail service and Scheduler DO. */
@@ -137,60 +144,46 @@ export const sendMail = async (
   payload: MailPayload,
 ): Promise<MailReceipt> => {
   requireMailConfiguration(env);
-  const apiKey = isExplicitLocalEnvironment(env)
-    ? undefined
-    : optionalSecret(env, "RESEND_API_KEY");
-  if (!apiKey) {
+  const correlationId = await outboundCorrelationId(payload.idempotencyKey);
+  if (isExplicitLocalEnvironment(env)) {
     const providerMessageId = payload.idempotencyKey
       ? `local-fake:${await sha256Hex(payload.idempotencyKey)}`
       : `local-fake:${crypto.randomUUID()}`;
-    console.log(JSON.stringify({ deliveryMode: "local-fake", providerMessageId }));
+    console.log(JSON.stringify({ deliveryMode: "local-fake", providerMessageId, correlationId }));
     return {
       provider: "local-fake",
       providerMessageId,
-      providerResult: { deliveryMode: "local-fake" },
+      providerResult: { deliveryMode: "local-fake", outboundCorrelationId: correlationId },
     };
   }
 
-  const headers = new Headers({
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
+  const result = await env.EMAIL.send({
+    from: payload.fromEmail,
+    replyTo: payload.replyToEmail,
+    to: payload.to,
+    subject: payload.subject,
+    headers: { "X-Session-Party-Delivery-ID": correlationId },
+    html: payload.html,
+    text: payload.text,
+    attachments: payload.ics
+      ? [{
+        disposition: "attachment",
+        filename: payload.icsFilename ?? "invite.ics",
+        type: "text/calendar; charset=utf-8; method=REQUEST",
+        content: toBase64(payload.ics),
+      }]
+      : undefined,
   });
-  if (payload.idempotencyKey) headers.set("Idempotency-Key", payload.idempotencyKey);
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      from: payload.fromEmail,
-      reply_to: payload.replyToEmail,
-      to: [payload.to],
-      subject: payload.subject,
-      html: payload.html,
-      attachments: payload.ics
-        ? [{ filename: payload.icsFilename ?? "invite.ics", content: toBase64(payload.ics) }]
-        : undefined,
-    }),
-  });
-
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 2_000);
-    throw new Error(`Resend returned ${response.status}: ${detail}`);
-  }
-
-  const result: unknown = await response.json();
-  if (
-    typeof result !== "object"
-    || result === null
-    || !("id" in result)
-    || typeof result.id !== "string"
-  ) {
-    throw new Error("Resend returned an invalid delivery receipt");
+  if (!result || typeof result.messageId !== "string" || result.messageId.length === 0) {
+    throw new Error("Cloudflare Email returned an invalid delivery receipt");
   }
   return {
-    provider: "resend",
-    providerMessageId: result.id,
-    providerResult: { id: result.id },
+    provider: "cloudflare-email",
+    providerMessageId: result.messageId,
+    providerResult: {
+      providerMessageId: result.messageId,
+      outboundCorrelationId: correlationId,
+    },
   };
 };
 
@@ -279,7 +272,7 @@ export const AppLayer = (env: Env) => {
     Layer.succeed(Db, { db }),
     Layer.succeed(Authorizer, { authorize: authorizePrincipal }),
     Layer.succeed(Mail, {
-      send: (payload) => externalEffect("resend", () => sendMail(env, payload)),
+      send: (payload) => externalEffect("cloudflare-email", () => sendMail(env, payload)),
     }),
     Layer.succeed(Files, {
       put: (key, value, options) =>
