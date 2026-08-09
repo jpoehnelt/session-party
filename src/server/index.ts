@@ -8,6 +8,8 @@ import { runRestOperation, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
 import { Scheduler } from "./party/Scheduler";
 import { mcpToolsForPrincipal } from "./mcp";
+import { AirtableRateLimiter } from "./sync/AirtableRateLimiter";
+import { AirtableSyncLane } from "./sync/AirtableSyncLane";
 import {
   apiRouters,
   mcpTools,
@@ -321,7 +323,7 @@ async function fetchPublicProgram(request: Request, env: Env): Promise<Response>
     .transform(shell);
 }
 
-export { EventRoom, Scheduler };
+export { AirtableRateLimiter, AirtableSyncLane, EventRoom, Scheduler };
 export default {
   fetch(request, env, ctx) {
     const pathname = new URL(request.url).pathname;

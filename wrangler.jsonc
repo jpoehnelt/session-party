@@ -23,11 +23,14 @@
     "bindings": [
       { "name": "EVENT_ROOM", "class_name": "EventRoom" },
       { "name": "SCHEDULER", "class_name": "Scheduler" },
+      { "name": "AIRTABLE_SYNC", "class_name": "AirtableSyncLane" },
+      { "name": "AIRTABLE_RATE_LIMITER", "class_name": "AirtableRateLimiter" },
       { "name": "MCP_OBJECT", "class_name": "SessionPartyMcp" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["EventRoom", "Scheduler", "SessionPartyMcp"] }
+    { "tag": "v1", "new_sqlite_classes": ["EventRoom", "Scheduler", "SessionPartyMcp"] },
+    { "tag": "v2", "new_sqlite_classes": ["AirtableSyncLane", "AirtableRateLimiter"] }
   ],
   "ai": { "binding": "AI" },
   "send_email": [{ "name": "EMAIL" }],
@@ -57,6 +60,8 @@
         "bindings": [
           { "name": "EVENT_ROOM", "class_name": "EventRoom" },
           { "name": "SCHEDULER", "class_name": "Scheduler" },
+          { "name": "AIRTABLE_SYNC", "class_name": "AirtableSyncLane" },
+          { "name": "AIRTABLE_RATE_LIMITER", "class_name": "AirtableRateLimiter" },
           { "name": "MCP_OBJECT", "class_name": "SessionPartyMcp" }
         ]
       },
@@ -70,5 +75,5 @@
       }
     }
   }
-  // Secrets (wrangler secret put): SESSION_SECRET, TURNSTILE_SECRET, ACCELEVENTS_API_TOKEN
+  // Secrets (wrangler secret put): SESSION_SECRET, TURNSTILE_SECRET, ACCELEVENTS_API_TOKEN, AIRTABLE_PAT
 }

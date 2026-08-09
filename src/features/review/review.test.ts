@@ -2,6 +2,7 @@ import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import type { Principal } from "contracts/principal";
 import {
   acceptanceEvents,
+  airtableOutbox,
   apiKeys,
   auditLog,
   domainChanges,
@@ -13,6 +14,7 @@ import {
   idempotencyRecords,
   mailDeliveries,
   mailDeliverySnapshots,
+  integrations,
   reviewAssignments,
   reviewComments,
   reviewRounds,
@@ -1277,6 +1279,17 @@ describe("review and acceptance slice", () => {
   });
 
   it("rejects stale acceptance and atomically creates one durable acceptance plus primary-speaker provisioning", async () => {
+    const integrationId = "airtable-review-acceptance";
+    const integrationNow = new Date(fixtureClock);
+    await db.insert(integrations).values({
+      id: integrationId,
+      eventId: fixtureEventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: integrationNow,
+      updatedAt: integrationNow,
+    });
     const stale = await runEitherAs(owner, acceptSubmission({
       eventId: fixtureEventId,
       submissionId: contentionFixture.submissionId,
@@ -1286,6 +1299,8 @@ describe("review and acceptance slice", () => {
     }));
     expect(stale._tag).toBe("Left");
     if (stale._tag === "Left") expect(stale.left._tag).toBe("Conflict");
+    await expect(db.select().from(airtableOutbox).where(eq(airtableOutbox.integrationId, integrationId)))
+      .resolves.toHaveLength(0);
 
     const input = {
       eventId: fixtureEventId,
@@ -1320,6 +1335,14 @@ describe("review and acceptance slice", () => {
     expect(audits).toHaveLength(1);
     expect(idempotency).toHaveLength(1);
     expect(idempotency[0]?.status).toBe("completed");
+    await expect(db.select().from(airtableOutbox).where(eq(airtableOutbox.integrationId, integrationId)))
+      .resolves.toEqual([expect.objectContaining({
+        entityType: "submission",
+        entityId: input.submissionId,
+        changedFields: { status: "accepted" },
+        outboundRevision: 1,
+        status: "pending",
+      })]);
   });
 
   it("undoes acceptance with append-only revocation evidence and revokes provisioning", async () => {

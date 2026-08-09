@@ -20,6 +20,8 @@ export default defineConfig({
         durableObjects: {
           EVENT_ROOM: { className: "EventRoom", useSQLite: true },
           SCHEDULER: { className: "Scheduler", useSQLite: true },
+          AIRTABLE_SYNC: { className: "AirtableSyncLane", useSQLite: true },
+          AIRTABLE_RATE_LIMITER: { className: "AirtableRateLimiter", useSQLite: true },
           MCP_OBJECT: { className: "SessionPartyMcp", useSQLite: true },
         },
         bindings: {

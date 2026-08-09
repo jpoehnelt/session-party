@@ -3,6 +3,7 @@ import type { Principal as CurrentUserValue } from "contracts/principal";
 import type { ServerMessage } from "contracts/protocol";
 import {
   acceptanceEvents,
+  airtableOutbox,
   auditLog,
   domainChanges,
   events,
@@ -11,6 +12,7 @@ import {
   formVersions,
   forms,
   idempotencyRecords,
+  integrations,
   rooms,
   speakerProvisioning,
   speakers,
@@ -733,6 +735,17 @@ describe("agenda service", () => {
 
   it("creates, schedules, moves, replays idempotently, and cancels a talk with evidence", async () => {
     const seeded = await seedAgenda("lifecycle");
+    const integrationId = `airtable-${seeded.eventId}`;
+    const integrationNow = new Date(FIXED_NOW);
+    await seeded.db.insert(integrations).values({
+      id: integrationId,
+      eventId: seeded.eventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: integrationNow,
+      updatedAt: integrationNow,
+    });
     const createInput = {
       eventId: seeded.eventId,
       submissionId: seeded.submissionA,
@@ -783,14 +796,30 @@ describe("agenda service", () => {
     }));
     expect(cancelled.talk).toMatchObject({ status: "cancelled", version: 4 });
 
-    const [idempotency, changes, audits] = await Promise.all([
+    const [idempotency, changes, audits, outbox] = await Promise.all([
       seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId)),
       seeded.db.select().from(domainChanges).where(eq(domainChanges.eventId, seeded.eventId)),
       seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId)),
+      seeded.db.select().from(airtableOutbox).where(eq(airtableOutbox.integrationId, integrationId)),
     ]);
     expect(idempotency).toHaveLength(4);
     expect(changes).toHaveLength(4);
     expect(audits).toHaveLength(4);
+    expect(outbox).toHaveLength(4);
+    const orderedOutbox = [...outbox].sort((left, right) => left.outboundRevision - right.outboundRevision);
+    expect(orderedOutbox.map((row) => row.origin)).toEqual([
+      "agenda.createTalk",
+      "agenda.scheduleTalk",
+      "agenda.moveTalk",
+      "agenda.cancelTalk",
+    ]);
+    expect(orderedOutbox.at(-1)).toMatchObject({
+      entityType: "talk",
+      entityId: created.talk.id,
+      changedFields: { status: "cancelled" },
+      outboundRevision: 4,
+      status: "pending",
+    });
   });
 
   it("saves room and speaker overlaps as named non-blocking agenda warnings", async () => {

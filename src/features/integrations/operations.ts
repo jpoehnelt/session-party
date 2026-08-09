@@ -10,12 +10,20 @@ import {
   ConfigureAcceleventsInput,
   ConfigureAcceleventsResult,
   AcceleventsConfiguration,
+  AirtableSyncStatus,
+  ConfigureAirtableInput,
+  ConfigureAirtableResult,
+  RequestAirtableRefreshInput,
+  RequestAirtableRefreshResult,
 } from "./schema";
 import {
+  configureAirtable,
   configureAccelevents,
+  getAirtableSyncStatus,
   getAcceleventsConfiguration,
   getAcceleventsImportStatus,
   listIntegrationConfigurations,
+  requestAirtableRefresh,
   runAcceleventsImport,
 } from "./service";
 
@@ -162,10 +170,89 @@ export const getAcceleventsConfigurationOperation = {
   emits: [],
 } as const;
 
+export const getAirtableSyncStatusOperation = {
+  id: "integrations.getAirtableSyncStatus",
+  kind: "query",
+  input: ListIntegrationConfigurationsInput,
+  output: AirtableSyncStatus,
+  authorize: authenticatedAuthorization,
+  invoke: ({ idOrSlug }: typeof ListIntegrationConfigurationsInput.Type) =>
+    getAirtableSyncStatus(idOrSlug),
+  rest: {
+    method: "get",
+    path: "/events/:idOrSlug/integrations/airtable/status",
+    input: { path: ["idOrSlug"] },
+    summary: "Get Airtable synchronization status",
+    description: "Returns server-observed adapter capability, durable queue counts, refresh state, and non-secret configuration.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "get_airtable_sync_status",
+    description: "Get Airtable adapter, queue, refresh, and mapping status for an event.",
+    scopes: ["integrations:read"],
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} as const;
+
+export const configureAirtableOperation = {
+  id: "integrations.configureAirtable",
+  kind: "command",
+  input: ConfigureAirtableInput,
+  output: ConfigureAirtableResult,
+  authorize: authenticatedAuthorization,
+  invoke: configureAirtable,
+  rest: {
+    method: "put",
+    path: "/events/:idOrSlug/integrations/airtable/configuration",
+    input: { path: ["idOrSlug"], body: ["config", "expectedVersion", "idempotencyKey"] },
+    summary: "Configure Airtable synchronization",
+    description: "Creates or replaces the validated three-table Airtable field map without accepting provider credentials.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "configure_airtable",
+    description: "Configure a versioned Airtable base and physical field mapping for an event.",
+    scopes: ["integrations:write"],
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["integrations.airtable_configured"],
+} as const;
+
+export const requestAirtableRefreshOperation = {
+  id: "integrations.requestAirtableRefresh",
+  kind: "command",
+  input: RequestAirtableRefreshInput,
+  output: RequestAirtableRefreshResult,
+  authorize: authenticatedAuthorization,
+  invoke: requestAirtableRefresh,
+  rest: {
+    method: "post",
+    path: "/events/:idOrSlug/integrations/airtable/refreshes",
+    input: { path: ["idOrSlug"], body: ["entityTypes"] },
+    summary: "Request an Airtable refresh",
+    description: "Coalesces a near-live inbound refresh request and wakes the per-base sync lane.",
+    successStatus: 202,
+  },
+  mcp: {
+    name: "request_airtable_refresh",
+    description: "Request a coalesced Airtable refresh for speakers, submissions, and talks.",
+    scopes: ["integrations:write"],
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} as const;
+
 export const operations = [
   getAcceleventsImportStatusOperation,
   listIntegrationConfigurationsOperation,
   runAcceleventsImportOperation,
   configureAcceleventsOperation,
   getAcceleventsConfigurationOperation,
+  getAirtableSyncStatusOperation,
+  configureAirtableOperation,
+  requestAirtableRefreshOperation,
 ] as const;

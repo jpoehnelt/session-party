@@ -147,7 +147,15 @@ export type ServerMessage =
   // review
   | { t: "review/scored"; submissionId: string; roundId: string; score: number; reviewerName: string }
   // submissions
-  | { t: "submissions/new"; submissionId: string; title: string };
+  | { t: "submissions/new"; submissionId: string; title: string }
+  // integrations
+  | {
+      t: "integrations/airtable_sync";
+      entityType: "speaker" | "submission" | "talk";
+      entityId: string;
+      state: "pending" | "confirmed" | "refreshed" | "conflict" | "dead_letter";
+      fields: string[];
+    };
 
 /** Denormalized talk for wire transfer (matches talks table + speaker names). */
 export interface TalkSnapshot {
@@ -305,6 +313,13 @@ const ServerMessageWire = Schema.Union(
     t: Schema.Literal("submissions/new"),
     submissionId: Schema.String,
     title: Schema.String,
+  }),
+  Schema.Struct({
+    t: Schema.Literal("integrations/airtable_sync"),
+    entityType: Schema.Literal("speaker", "submission", "talk"),
+    entityId: Schema.String,
+    state: Schema.Literal("pending", "confirmed", "refreshed", "conflict", "dead_letter"),
+    fields: Schema.Array(Schema.String),
   }),
 );
 

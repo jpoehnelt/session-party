@@ -3,6 +3,7 @@ import { External, Validation } from "contracts/errors";
 import type { Principal } from "contracts/principal";
 import {
   acceptanceEvents,
+  airtableOutbox,
   auditLog,
   domainChanges,
   eventMembers,
@@ -11,6 +12,7 @@ import {
   formVersions,
   forms,
   idempotencyRecords,
+  integrations,
   reviewAssignments,
   reviewRounds,
   speakerProvisioning,
@@ -1206,5 +1208,45 @@ describe("organizer submission privacy and listing", () => {
     }]);
     expect("answers" in page.results[0]!).toBe(false);
     expect("speakerEmail" in page.results[0]!).toBe(false);
+  });
+});
+
+describe("submission Airtable outbox", () => {
+  it("atomically bootstraps the new speaker and submission projections", async () => {
+    const db = drizzle(env.DB);
+    const integrationId = "airtable-submit-outbox";
+    const integrationNow = new Date(NOW);
+    await db.insert(integrations).values({
+      id: integrationId,
+      eventId: EVENT_ID,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: integrationNow,
+      updatedAt: integrationNow,
+    });
+    const output = await runPublic(createPublicSubmission(
+      submissionInput("submit-airtable-outbox-001", OPEN_FORM_ID, "Transactional sync proof"),
+    ));
+    const rows = await db.select().from(airtableOutbox).where(eq(airtableOutbox.integrationId, integrationId));
+
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        entityType: "speaker",
+        changedFields: expect.objectContaining({ displayName: "Sam Rivera", visible: true }),
+        status: "pending",
+      }),
+      expect.objectContaining({
+        entityType: "submission",
+        entityId: output.submissionId,
+        changedFields: expect.objectContaining({
+          title: "Transactional sync proof",
+          abstract: "A proposal grounded in real immutable answers.",
+          status: "submitted",
+        }),
+        status: "pending",
+      }),
+    ]));
   });
 });

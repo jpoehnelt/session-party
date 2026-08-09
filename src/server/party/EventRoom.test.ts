@@ -146,6 +146,13 @@ describe("EventRoom live authorization", () => {
       "role:owner", "role:admin", "role:reviewer", "scope:reviews:read",
     ]);
     expect(audiencesForServerMessage({
+      t: "integrations/airtable_sync",
+      entityType: "speaker",
+      entityId: "speaker",
+      state: "confirmed",
+      fields: ["title"],
+    })).toEqual(["role:owner", "role:admin", "scope:integrations:read"]);
+    expect(audiencesForServerMessage({
       t: "submissions/new",
       submissionId: "submission",
       title: "Submission",
