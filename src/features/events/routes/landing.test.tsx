@@ -18,7 +18,7 @@ describe("public landing route", () => {
       createElement(MemoryRouter, null, createElement(LandingPage)),
     );
 
-    expect(markup).toContain("Your whole program");
+    expect(markup).toContain("ready on cue.");
     expect(markup).toContain("One connected workflow");
     expect(markup).toContain("Production, not busywork");
     expect(markup).toContain('href="/events"');
