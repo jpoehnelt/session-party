@@ -965,6 +965,19 @@ export const publishAgenda = (
         message: `Event version is ${event.version}; expected ${input.expectedEventVersion}`,
       }));
     }
+    const eventStartsAt = timestamp(event.startsAt);
+    if (eventStartsAt === null) {
+      return yield* Effect.fail(new Validation({ message: "Agenda publication requires an event start time" }));
+    }
+    const eventEndsAt = timestamp(event.endsAt);
+    if (eventEndsAt === null) {
+      return yield* Effect.fail(new Validation({ message: "Agenda publication requires an event end time" }));
+    }
+    if (eventEndsAt <= eventStartsAt) {
+      return yield* Effect.fail(new Validation({
+        message: "Agenda publication requires the event end time to be after the start time",
+      }));
+    }
     const [agendaTalks, trackRows, roomRows, visibleSpeakerRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
       database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(eq(tracks.eventId, input.eventId))),
@@ -1024,8 +1037,8 @@ export const publishAgenda = (
     const deliveryProjection = yield* decodeAgendaDeliveryProjection({
       eventId: event.id,
       revision,
-      eventStartsAt: timestamp(event.startsAt),
-      eventEndsAt: timestamp(event.endsAt),
+      eventStartsAt,
+      eventEndsAt,
       talks: confirmedTalks.map((talk) => ({
         talkId: talk.id,
         roomId: talk.roomId,

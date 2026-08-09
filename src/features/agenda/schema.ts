@@ -187,8 +187,8 @@ export type AgendaDeliveryTalk = typeof AgendaDeliveryTalk.Type;
 export const AgendaDeliveryProjection = Schema.Struct({
   eventId: EntityId,
   revision: Schema.Int.pipe(Schema.positive()),
-  eventStartsAt: NullableTimestamp,
-  eventEndsAt: NullableTimestamp,
+  eventStartsAt: UnixTimestampMs,
+  eventEndsAt: UnixTimestampMs,
   talks: Schema.Array(AgendaDeliveryTalk),
 });
 export type AgendaDeliveryProjection = typeof AgendaDeliveryProjection.Type;
