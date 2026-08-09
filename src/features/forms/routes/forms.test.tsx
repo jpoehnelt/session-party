@@ -17,6 +17,7 @@ import FormsPage, {
   updateFormDraft,
 } from "./forms";
 import type { FormDetail, FormSummary } from "../schema";
+import { FormPreview } from "../components/FormPreview";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -259,6 +260,48 @@ describe("forms organizer route", () => {
     expect(markup).toContain("File upload (unavailable)");
     expect(markup).toContain("File uploads are unavailable on public forms");
     expect(markup).not.toContain('type="file"');
+  });
+
+  it("renders editable draft content in the live preview instead of the last published snapshot", () => {
+    const markup = renderToStaticMarkup(
+      createElement(FormPreview, {
+        form: {
+          ...formDetail,
+          name: "Edited draft name",
+          description: "Edited draft description",
+          fields: [{ ...formDetail.fields[0]!, label: "Edited draft field" }],
+          publishedVersion: {
+            id: "form_version_2",
+            versionNumber: 2,
+            name: "Published name",
+            description: "Published description",
+            publishedAt: 1_753_500_000_000,
+            retiredAt: null,
+            fields: [{
+              id: "form_version_field_track",
+              sourceFieldId: formDetail.fields[0]!.id,
+              order: 1,
+              type: "radio",
+              label: "Published field",
+              semanticKey: null,
+              helpText: null,
+              required: true,
+              options: ["General"],
+              logic: null,
+              routing: { General: "general" },
+            }],
+          },
+        },
+        now: 1_754_000_000_000,
+      }),
+    );
+
+    expect(markup).toContain("Edited draft name");
+    expect(markup).toContain("Edited draft description");
+    expect(markup).toContain("Edited draft field");
+    expect(markup).not.toContain("Published name");
+    expect(markup).not.toContain("Published description");
+    expect(markup).not.toContain("Published field");
   });
 
   it("offers deletion only for an unpublished additional-form draft", () => {
