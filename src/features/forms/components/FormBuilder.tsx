@@ -1,7 +1,24 @@
 import { useEffect, useState } from "react";
 import { effectTsResolver } from "@hookform/resolvers/effect-ts";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
-import { Badge, Button, Card, Checkbox, Input, Select, Textarea } from "@/ui";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  Input,
+  Select,
+  Textarea,
+} from "@/ui";
 import {
   FORM_FIELD_OPTION_TYPES,
   FORM_FIELD_TYPES,
@@ -54,10 +71,11 @@ export interface FormBuilderProps {
   onSave: (form: FormDetail) => void;
   onPublish: (form: FormDetail) => void;
   onStatusChange: (status: Extract<FormStatus, "open" | "closed">, form: FormDetail) => void;
+  onDelete?: (form: FormDetail) => void;
   /** False only when the surrounding client intentionally presents a read-only form. Defaults to true. */
   mutationsAvailable?: boolean;
   /** Disables every edit while one versioned mutation is in flight. */
-  busyAction?: "create" | "save" | "publish" | "status" | null;
+  busyAction?: "create" | "delete" | "save" | "publish" | "status" | null;
 }
 
 
@@ -96,6 +114,7 @@ export function FormBuilder({
   onSave,
   onPublish,
   onStatusChange,
+  onDelete,
   mutationsAvailable = true,
   busyAction = null,
 }: FormBuilderProps) {
@@ -666,6 +685,28 @@ export function FormBuilder({
           Draft v{watchedForm.version} · {watchedFields.length} {watchedFields.length === 1 ? "field" : "fields"}
         </div>
         <div className="flex flex-wrap gap-2">
+          {watchedForm.purpose === "additional" &&
+            watchedForm.status === "draft" &&
+            watchedForm.publishedVersion === null &&
+            onDelete && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="danger" loading={busyAction === "delete"}>Delete draft</Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete “{watchedForm.name}”?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This permanently removes the unpublished additional-form draft. Published forms and the primary CFP cannot be deleted.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Keep draft</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => onDelete(watchedForm)}>Delete draft</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
           {watchedForm.status === "open" && (
             <Button
               variant="secondary"

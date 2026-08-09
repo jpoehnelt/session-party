@@ -17,4 +17,38 @@ describe("availableEventNavItems", () => {
       "Agenda",
     ]);
   });
+
+  it("exposes every registered organizer workspace in workflow order", () => {
+    const routes = [
+      "/e/:eventSlug",
+      "/e/:eventSlug/forms",
+      "/e/:eventSlug/submissions",
+      "/e/:eventSlug/review",
+      "/e/:eventSlug/dashboard",
+      "/e/:eventSlug/speakers",
+      "/e/:eventSlug/tasks",
+      "/e/:eventSlug/resources",
+      "/e/:eventSlug/agenda",
+      "/e/:eventSlug/comms",
+      "/e/:eventSlug/publication",
+      "/e/:eventSlug/integrations",
+      "/e/:eventSlug/settings",
+    ];
+
+    expect(availableEventNavItems(routes).map(({ label }) => label)).toEqual([
+      "Overview",
+      "Forms",
+      "Submissions",
+      "Review",
+      "Onboarding",
+      "Speakers",
+      "Tasks",
+      "Resources",
+      "Agenda",
+      "Communications",
+      "Publication",
+      "Integrations",
+      "Settings",
+    ]);
+  });
 });

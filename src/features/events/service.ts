@@ -360,7 +360,7 @@ export const listEventMembers = (
   input: ListEventMembersInput,
 ): Effect.Effect<readonly EventMemberType[], AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
-    const event = yield* findEvent(input.idOrSlug);
+    const event = yield* findEvent(input.eventId);
     yield* requireMemberManager(event.id);
     const { db } = yield* Db;
     const rows = yield* database(() =>
@@ -377,7 +377,7 @@ export const addEventMember = (
   input: AddEventMemberInput,
 ): Effect.Effect<AddEventMemberOutputType, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
-    const event = yield* findEvent(input.idOrSlug);
+    const event = yield* findEvent(input.eventId);
     const actor = yield* requireMemberManager(event.id);
     const email = normalizedEmail(input.email);
     if (!email.includes("@")) {
@@ -454,7 +454,7 @@ export const updateEventMember = (
   input: UpdateEventMemberInput,
 ): Effect.Effect<UpdateEventMemberOutputType, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
-    const event = yield* findEvent(input.idOrSlug);
+    const event = yield* findEvent(input.eventId);
     const actor = yield* requireMemberManager(event.id);
     const keyHash = yield* sha256(input.idempotencyKey);
     const requestHash = yield* sha256(JSON.stringify({ memberId: input.memberId, role: input.role, expectedVersion: input.expectedVersion }));
@@ -495,7 +495,7 @@ export const removeEventMember = (
   input: RemoveEventMemberInput,
 ): Effect.Effect<RemoveEventMemberOutputType, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
-    const event = yield* findEvent(input.idOrSlug);
+    const event = yield* findEvent(input.eventId);
     const actor = yield* requireMemberManager(event.id);
     const keyHash = yield* sha256(input.idempotencyKey);
     const requestHash = yield* sha256(JSON.stringify({ memberId: input.memberId, expectedVersion: input.expectedVersion }));

@@ -2,6 +2,8 @@ import type { AnyOperationDef } from "contracts/operation";
 import { eventAuthorization } from "contracts/principal";
 import {
   CreateFormInput,
+  DeleteFormInput,
+  DeleteFormOutput,
   FormDetail,
   FormList,
   GetFormInput,
@@ -10,7 +12,7 @@ import {
   SetFormStatusInput,
   UpdateFormInput,
 } from "./schema";
-import { createForm, getForm, listForms, publishForm, setFormStatus, updateForm } from "./service";
+import { createForm, deleteForm, getForm, listForms, publishForm, setFormStatus, updateForm } from "./service";
 
 const readAuthorization = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
@@ -47,6 +49,32 @@ export const createFormOperation = {
   idempotency: "required",
   concurrency: "required",
   emits: ["forms.primaryClaim", "forms.versionClaim", "forms.created"],
+} satisfies AnyOperationDef;
+
+export const deleteFormOperation = {
+  id: "forms.deleteDraft",
+  kind: "command",
+  input: DeleteFormInput,
+  output: DeleteFormOutput,
+  authorize: writeAuthorization,
+  invoke: deleteForm,
+  rest: {
+    method: "delete",
+    path: "/events/:eventId/forms/:formId",
+    input: {
+      path: ["eventId", "formId"],
+      headers: { expectedVersion: "If-Match", idempotencyKey: "Idempotency-Key" },
+    },
+    summary: "Delete an unpublished additional-form draft",
+    description: "Primary CFPs and any form that has been published or linked to onboarding are retained.",
+  },
+  mcp: {
+    name: "forms_delete_draft",
+    description: "Delete an unpublished additional-form draft with optimistic concurrency.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["forms.versionClaim", "forms.deleted"],
 } satisfies AnyOperationDef;
 
 export const getFormOperation = {
@@ -165,6 +193,7 @@ export const updateFormOperation = {
 /** Operation IDs are kept in bytewise ascending order for deterministic registry generation. */
 export const operations = [
   createFormOperation,
+  deleteFormOperation,
   getFormOperation,
   listFormsOperation,
   publishFormOperation,

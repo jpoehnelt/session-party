@@ -57,12 +57,12 @@ export const EventMember = Schema.Struct({
 export type EventMember = typeof EventMember.Type;
 
 export const ListEventMembersInput = Schema.Struct({
-  idOrSlug: EntityId,
+  eventId: EntityId,
 });
 export type ListEventMembersInput = typeof ListEventMembersInput.Type;
 
 export const AddEventMemberInput = Schema.Struct({
-  idOrSlug: EntityId,
+  eventId: EntityId,
   /** Normalized server-side before looking up an already authenticated account. */
   email: Email,
   role: EventRole,
@@ -78,7 +78,7 @@ export const AddEventMemberOutput = Schema.Struct({
 export type AddEventMemberOutput = typeof AddEventMemberOutput.Type;
 
 export const UpdateEventMemberInput = Schema.Struct({
-  idOrSlug: EntityId,
+  eventId: EntityId,
   memberId: EntityId,
   role: EventRole,
   expectedVersion: Schema.Int.pipe(Schema.positive()),
@@ -93,7 +93,7 @@ export const UpdateEventMemberOutput = Schema.Struct({
 export type UpdateEventMemberOutput = typeof UpdateEventMemberOutput.Type;
 
 export const RemoveEventMemberInput = Schema.Struct({
-  idOrSlug: EntityId,
+  eventId: EntityId,
   memberId: EntityId,
   expectedVersion: Schema.Int.pipe(Schema.positive()),
   idempotencyKey: IdempotencyKey,

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/client/api";
 import FormsPage, {
   createFormDraft,
+  deleteFormDraft,
   fetchEventIdentity,
   fetchFormDetail,
   fetchFormSummaries,
@@ -203,6 +204,39 @@ describe("forms organizer route", () => {
     expect(markup).toContain("Save draft");
     expect(markup).toContain("Publish form");
     expect(markup).toContain("Close form");
+    expect(markup).not.toContain("Delete draft");
+  });
+
+  it("offers deletion only for an unpublished additional-form draft", () => {
+    const additional = {
+      ...formDetail,
+      id: "form-speaker-logistics",
+      purpose: "additional" as const,
+      name: "Speaker logistics",
+      status: "draft" as const,
+      publishedVersion: null,
+    };
+    const markup = renderToStaticMarkup(
+      createElement(FormsWorkspace, {
+        event,
+        initialSummaries: [
+          formSummary,
+          {
+            ...formSummary,
+            id: additional.id,
+            purpose: "additional",
+            name: additional.name,
+            status: "draft",
+            publishedVersionNumber: null,
+          },
+        ],
+        initialSelectedId: additional.id,
+        initialSelectedForm: additional,
+      }),
+    );
+
+    expect(markup).toContain("New additional form");
+    expect(markup).toContain("Delete draft");
   });
 
   it("renders a zero-form create path for the primary CFP", () => {
@@ -238,6 +272,9 @@ describe("forms organizer mutations", () => {
       if (url.endsWith("/status")) {
         return new Response(JSON.stringify({ ...formDetail, status: "closed", version: 6 }), { status: 200 });
       }
+      if (url === `/api/v1/events/${event.id}/forms/${formDetail.id}` && init?.method === "DELETE") {
+        return new Response(JSON.stringify({ formId: formDetail.id, deleted: true, idempotent: false }), { status: 200 });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -246,6 +283,7 @@ describe("forms organizer mutations", () => {
     await updateFormDraft(event.id, formDetail, "forms-update-test-001");
     await publishFormDraft(event.id, formDetail.id, 4, "forms-publish-test-001");
     await setFormLifecycle(event.id, formDetail.id, 5, "closed", "forms-close-test-001");
+    await deleteFormDraft(event.id, formDetail.id, 3, "forms-delete-test-001");
 
     const create = fetchMock.mock.calls[0]![1] as RequestInit;
     expect(fetchMock.mock.calls[0]![0]).toBe(`/api/v1/events/${event.id}/forms`);
@@ -322,6 +360,43 @@ describe("forms organizer mutations", () => {
       },
     });
     expect(JSON.parse(String(status.body))).toEqual({ status: "closed" });
+
+    const deleted = fetchMock.mock.calls[4]![1] as RequestInit;
+    expect(fetchMock.mock.calls[4]![0]).toBe(`/api/v1/events/${event.id}/forms/${formDetail.id}`);
+    expect(deleted).toMatchObject({
+      method: "DELETE",
+      credentials: "include",
+      headers: {
+        "Idempotency-Key": "forms-delete-test-001",
+        "If-Match": "3",
+      },
+    });
+    expect(deleted).not.toHaveProperty("body");
+  });
+
+  it("uses an organizer-provided name when creating an additional form", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      ...formDetail,
+      id: "form-speaker-logistics",
+      purpose: "additional",
+      name: "Speaker logistics",
+      description: "Travel and accessibility details",
+      status: "draft",
+      version: 1,
+    }), { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createFormDraft(event.id, "additional", "forms-create-additional-001", {
+      name: "Speaker logistics",
+      description: "Travel and accessibility details",
+    });
+
+    const request = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      purpose: "additional",
+      name: "Speaker logistics",
+      description: "Travel and accessibility details",
+    });
   });
 
   it("surfaces a failed mutation as an ApiError with the server message", async () => {

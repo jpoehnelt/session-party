@@ -11,8 +11,11 @@ import {
   Button,
   Card,
   EmptyState,
+  Input,
+  Modal,
   PageHeader,
   Skeleton,
+  Textarea,
   Toaster,
   toast,
 } from "@/ui";
@@ -20,6 +23,7 @@ import { FormBuilder } from "../components/FormBuilder";
 import { FormPreview } from "../components/FormPreview";
 import {
   FormDetail,
+  DeleteFormOutput,
   FormList,
   type FormFieldDraft,
   type FormPurpose,
@@ -154,6 +158,7 @@ export async function createFormDraft(
   eventId: string,
   purpose: FormPurpose,
   idempotencyKey: string,
+  details?: { readonly name: string; readonly description: string | null },
 ): Promise<FormDetail> {
   const response = await fetch(`/api/v1/events/${encodeURIComponent(eventId)}/forms`, {
     method: "POST",
@@ -164,14 +169,42 @@ export async function createFormDraft(
     },
     body: JSON.stringify({
       purpose,
-      name: purpose === "primary-cfp" ? "Call for proposals" : "Additional form",
-      description: purpose === "primary-cfp" ? "Tell us about the session you would like to present." : null,
+      name: details?.name ?? (purpose === "primary-cfp" ? "Call for proposals" : "Speaker follow-up"),
+      description: details?.description ?? (purpose === "primary-cfp" ? "Tell us about the session you would like to present." : null),
       opensAt: null,
       closesAt: null,
       fields: purpose === "primary-cfp" ? primaryCfpFields : additionalFormFields,
     }),
   });
   return mutationResponse(response);
+}
+
+/** Deletes only an unpublished additional-form draft through forms.deleteDraft. */
+export async function deleteFormDraft(
+  eventId: string,
+  formId: string,
+  expectedVersion: number,
+  idempotencyKey: string,
+) {
+  const response = await fetch(
+    `/api/v1/events/${encodeURIComponent(eventId)}/forms/${encodeURIComponent(formId)}`,
+    {
+      method: "DELETE",
+      credentials: "include",
+      headers: {
+        "Idempotency-Key": idempotencyKey,
+        "If-Match": String(expectedVersion),
+      },
+    },
+  );
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
+      ? payload.message
+      : `Form request failed with status ${response.status}`;
+    throw new ApiError(response.status, message);
+  }
+  return Schema.decodeUnknownSync(DeleteFormOutput)(payload);
 }
 
 /** Replaces the editable draft through forms.update, preserving field identities. */
@@ -262,7 +295,7 @@ const toSummary = (form: FormDetail): FormSummary => ({
 });
 
 type MutationState = Readonly<{
-  action: "create" | "save" | "publish" | "status" | null;
+  action: "create" | "delete" | "save" | "publish" | "status" | null;
   tone: "neutral" | "success" | "danger";
   message: string | null;
 }>;
@@ -397,6 +430,9 @@ export function FormsWorkspace({
   const [selectedForm, setSelectedForm] = useState<FormDetail | null | undefined>(initialSelectedForm);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [mutation, setMutation] = useState<MutationState>({ action: null, tone: "neutral", message: null });
+  const [createAdditionalOpen, setCreateAdditionalOpen] = useState(false);
+  const [additionalName, setAdditionalName] = useState("");
+  const [additionalDescription, setAdditionalDescription] = useState("");
 
   const applyDetail = useCallback((form: FormDetail) => {
     setSelectedId(form.id);
@@ -420,19 +456,39 @@ export function FormsWorkspace({
     toast(message, { tone: "danger" });
   }, [onUnauthenticated]);
 
-  const handleCreate = async () => {
-    const purpose: FormPurpose = summaries?.some((form) => form.purpose === "primary-cfp")
-      ? "additional"
-      : "primary-cfp";
+  const handleCreate = async (
+    purpose: FormPurpose,
+    details?: { readonly name: string; readonly description: string | null },
+  ) => {
     setMutation({ action: "create", tone: "neutral", message: purpose === "primary-cfp" ? "Creating primary CFP…" : "Creating form…" });
     try {
-      const created = await createFormDraft(event.id, purpose, mutationKey("forms-create"));
+      const created = await createFormDraft(event.id, purpose, mutationKey("forms-create"), details);
       applyDetail(created);
       const message = purpose === "primary-cfp" ? "Primary CFP draft created." : "Additional form draft created.";
       setMutation({ action: null, tone: "success", message });
+      if (purpose === "additional") {
+        setCreateAdditionalOpen(false);
+        setAdditionalName("");
+        setAdditionalDescription("");
+      }
       toast(message, { tone: "success" });
     } catch (error) {
       failMutation(error, "Could not create form");
+    }
+  };
+
+  const handleDelete = async (draft: FormDetail) => {
+    setMutation({ action: "delete", tone: "neutral", message: "Deleting draft…" });
+    try {
+      await deleteFormDraft(event.id, draft.id, draft.version, mutationKey("forms-delete-draft"));
+      const remaining = (summaries ?? []).filter((form) => form.id !== draft.id);
+      setSummaries(remaining);
+      setSelectedId(remaining[0]?.id ?? null);
+      setSelectedForm(null);
+      setMutation({ action: null, tone: "success", message: "Unpublished draft deleted." });
+      toast("Draft deleted.", { tone: "success" });
+    } catch (error) {
+      failMutation(error, "Could not delete draft");
     }
   };
 
@@ -565,7 +621,16 @@ export function FormsWorkspace({
         title="CFP & forms"
         description="Build routed proposal forms, publish immutable versions, and control submission availability."
         actions={summaries.length > 0 ? (
-          <Button loading={mutation.action === "create"} onClick={() => void handleCreate()}>
+          <Button
+            loading={mutation.action === "create"}
+            onClick={() => {
+              if (summaries.some((form) => form.purpose === "primary-cfp")) {
+                setCreateAdditionalOpen(true);
+              } else {
+                void handleCreate("primary-cfp");
+              }
+            }}
+          >
             {summaries.some((form) => form.purpose === "primary-cfp") ? "New additional form" : "Create primary CFP"}
           </Button>
         ) : undefined}
@@ -591,7 +656,7 @@ export function FormsWorkspace({
             title="No forms yet"
             description="Create the primary CFP to start collecting routed proposals."
             action={
-              <Button loading={mutation.action === "create"} onClick={() => void handleCreate()}>
+              <Button loading={mutation.action === "create"} onClick={() => void handleCreate("primary-cfp")}>
                 Create primary CFP
               </Button>
             }
@@ -667,6 +732,7 @@ export function FormsWorkspace({
                 onSave={(draft) => void handleSave(draft)}
                 onPublish={(draft) => void handlePublish(draft)}
                 onStatusChange={(status, draft) => void handleStatus(status, draft)}
+                onDelete={(draft) => void handleDelete(draft)}
               />
             )}
           </section>
@@ -682,6 +748,58 @@ export function FormsWorkspace({
           </aside>
         </div>
       )}
+      <Modal
+        open={createAdditionalOpen}
+        onClose={() => {
+          if (mutation.action !== "create") setCreateAdditionalOpen(false);
+        }}
+        title="Create an additional form"
+        footer={(
+          <>
+            <Button type="button" variant="secondary" onClick={() => setCreateAdditionalOpen(false)} disabled={mutation.action === "create"}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="create-additional-form"
+              loading={mutation.action === "create"}
+              disabled={additionalName.trim().length === 0}
+            >
+              Create draft
+            </Button>
+          </>
+        )}
+      >
+        <form
+          id="create-additional-form"
+          className="space-y-4"
+          onSubmit={(event_) => {
+            event_.preventDefault();
+            const name = additionalName.trim();
+            if (!name) return;
+            void handleCreate("additional", {
+              name,
+              description: additionalDescription.trim() || null,
+            });
+          }}
+        >
+          <p className="text-sm leading-relaxed text-ink-secondary">
+            Name the follow-up form before its draft is created. You can safely delete it until it is published or linked to onboarding.
+          </p>
+          <Input
+            autoFocus
+            label="Form name"
+            required
+            value={additionalName}
+            onChange={(event_) => setAdditionalName(event_.currentTarget.value)}
+          />
+          <Textarea
+            label="Description"
+            value={additionalDescription}
+            onChange={(event_) => setAdditionalDescription(event_.currentTarget.value)}
+          />
+        </form>
+      </Modal>
       <Toaster />
     </>
   );
