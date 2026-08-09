@@ -7,12 +7,15 @@ import {
   SELF,
   type D1Migration,
 } from "cloudflare:test";
+import { Effect } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { hashBearerMaterial } from "./auth";
 import worker from "./index";
 import {
+  AppLayer,
   isExplicitLocalEnvironment,
   mailFrom,
+  MailQueue,
   requireMailConfiguration,
   sendMail,
   sessionSecret,
@@ -546,6 +549,20 @@ describe("durable magic-link authentication", () => {
       text: "Sensitive body",
       idempotencyKey: "local-no-egress",
     })).provider).toBe("local-fake");
+  });
+  it("provides the configured sender and wakes only the canonical mail scheduler", async () => {
+    const sender = await Effect.runPromise(
+      Effect.gen(function* () {
+        const queue = yield* MailQueue;
+        yield* queue.wake();
+        return queue.fromEmail;
+      }).pipe(Effect.provide(AppLayer(env))),
+    );
+    expect(sender).toBe("Session Party <welcome@sessionparty.com>");
+    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail"));
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.get("mail-scheduler-enabled")).toBe(true);
+    });
   });
 
 

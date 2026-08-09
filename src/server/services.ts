@@ -40,6 +40,14 @@ export class Mail extends Context.Tag("session-party/Mail")<
   }
 >() {}
 
+export class MailQueue extends Context.Tag("session-party/MailQueue")<
+  MailQueue,
+  {
+    readonly fromEmail: string;
+    readonly wake: () => Effect.Effect<void>;
+  }
+>() {}
+
 export class Files extends Context.Tag("session-party/Files")<
   Files,
   {
@@ -273,6 +281,21 @@ export const AppLayer = (env: Env) => {
     Layer.succeed(Authorizer, { authorize: authorizePrincipal }),
     Layer.succeed(Mail, {
       send: (payload) => externalEffect("cloudflare-email", () => sendMail(env, payload)),
+    }),
+    Layer.succeed(MailQueue, {
+      fromEmail: mailFrom(env),
+      wake: () =>
+        externalEffect("mail-scheduler", async () => {
+          const id = env.SCHEDULER.idFromName("mail");
+          const response = await env.SCHEDULER.get(id).fetch("https://scheduler/poke", {
+            method: "POST",
+            headers: { "x-session-party-internal": sessionSecret(env) },
+          });
+          if (!response.ok) throw new Error(`Mail scheduler returned ${response.status}`);
+        }).pipe(
+          Effect.catchAll((error) =>
+            Effect.logWarning("Mail outbox persisted but scheduler wake failed", { error })),
+        ),
     }),
     Layer.succeed(Files, {
       put: (key, value, options) =>
