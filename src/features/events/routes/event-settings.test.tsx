@@ -229,6 +229,21 @@ describe("event metadata settings route", () => {
     ).toThrow("Enter a name, a valid lowercase slug, and a timezone before saving.");
   });
 
+  it("rejects an end time before the start time before sending a save request", () => {
+    expect(() =>
+      buildEventPatch({
+        name: "Production Summit",
+        slug: "production-summit",
+        description: "",
+        location: "",
+        timezone: "America/Denver",
+        startsAt: "2026-08-24T18:00",
+        endsAt: "2026-08-14T18:00",
+        accentColor: "",
+      }),
+    ).toThrow("End must be at or after start.");
+  });
+
   it("renders organizer-facing MCP discovery, least-privilege presets, and key management", () => {
     const key: EventApiKey = {
       id: "api_key_123", name: "Agenda automation", scopes: ["event:read", "agenda:read", "agenda:write"],

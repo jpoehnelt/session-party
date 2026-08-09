@@ -204,6 +204,32 @@ describe("events service", () => {
     );
   });
 
+  it("rejects invalid event date order with Validation", async () => {
+    await expectFailure(
+      owner,
+      createEvent({
+        name: "Invalid dates",
+        slug: "invalid-create-dates",
+        startsAt: Date.UTC(2026, 7, 24),
+        endsAt: Date.UTC(2026, 7, 14),
+      }),
+      "Validation",
+    );
+
+    const created = await runAs(
+      owner,
+      createEvent({ name: "Valid dates", slug: "invalid-update-dates" }),
+    );
+    await expectFailure(
+      owner,
+      updateEvent(created.id, {
+        startsAt: Date.UTC(2026, 7, 24),
+        endsAt: Date.UTC(2026, 7, 14),
+      }),
+      "Validation",
+    );
+  });
+
   it("allows owner and admin writes but denies reviewer and nonmember writes", async () => {
     const created = await runAs(
       owner,
