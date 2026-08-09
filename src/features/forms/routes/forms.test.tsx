@@ -64,6 +64,26 @@ const formDetail: FormDetail = {
       routing: { General: "general" },
       version: 2,
     },
+    {
+      id: "field_details",
+      order: 2,
+      type: "text",
+      label: "Workshop details",
+      semanticKey: null,
+      helpText: null,
+      required: false,
+      options: [],
+      logic: {
+        action: "show",
+        mode: "all",
+        conditions: [
+          { fieldId: "field_track", op: "eq", value: "General" },
+          { fieldId: "field_track", op: "in", value: ["General"] },
+        ],
+      },
+      routing: {},
+      version: 1,
+    },
   ],
   publishedVersion: null,
 };
@@ -195,9 +215,15 @@ describe("forms organizer route", () => {
     );
     expect(markup).toContain("Call for proposals");
     expect(markup).toContain("Best-fit track");
-    expect(markup).toContain("Submission/review meaning");
+    expect(markup).toContain("Use this answer as");
     expect(markup).toContain("Submission title");
-    expect(markup).toContain("Labels are never used as a fallback.");
+    expect(markup).toContain("Assign proposal title, proposal abstract, and speaker name once each before publishing.");
+    expect(markup).not.toContain("Submission/review meaning");
+    expect(markup).not.toContain("File upload (unavailable)");
+    expect(markup).toMatch(/<select[^>]*id="builder-field-field_details-condition-0-value"/);
+    expect(markup).toMatch(/<select[^>]*multiple=""[^>]*id="builder-field-field_details-condition-1-value"/);
+    expect(markup).toContain("Choose an answer");
+    expect(markup).toContain("Select one or more answers.");
     expect(markup).not.toContain("Deterministic view");
     expect(markup).not.toContain("formsFixtures");
     expect(markup).not.toContain("read-only");
@@ -208,6 +234,31 @@ describe("forms organizer route", () => {
     expect(markup).not.toContain("Internal category key");
     expect(markup).toContain("Close form");
     expect(markup).not.toContain("Delete draft");
+  });
+
+  it("marks legacy file fields unavailable instead of previewing a working upload", () => {
+    const fileForm: FormDetail = {
+      ...formDetail,
+      fields: [{
+        ...formDetail.fields[0]!,
+        type: "file",
+        label: "Upload a sample",
+        options: [],
+        routing: {},
+      }],
+    };
+    const markup = renderToStaticMarkup(
+      createElement(FormsWorkspace, {
+        event,
+        initialSummaries: [formSummary],
+        initialSelectedId: formSummary.id,
+        initialSelectedForm: fileForm,
+      }),
+    );
+
+    expect(markup).toContain("File upload (unavailable)");
+    expect(markup).toContain("File uploads are unavailable on public forms");
+    expect(markup).not.toContain('type="file"');
   });
 
   it("offers deletion only for an unpublished additional-form draft", () => {
