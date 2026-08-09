@@ -26,12 +26,12 @@ export function Sheet({ open, onClose, title, id, children, footer, size = "md" 
           id={id}
           aria-describedby={undefined}
           className={cx(
-            "fixed inset-y-0 right-0 z-50 flex w-full animate-slide-in-right flex-col bg-surface shadow-sheet outline-none motion-reduce:animate-none",
+            "fixed inset-y-0 right-0 z-50 flex w-full animate-slide-in-right flex-col border-l-2 border-line-strong bg-surface shadow-sheet outline-none motion-reduce:animate-none",
             SIZES[size],
           )}
         >
-          <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-5 py-4">
-            <Dialog.Title className="text-base font-semibold text-ink">{title}</Dialog.Title>
+          <header className="flex shrink-0 items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-4 text-on-accent">
+            <Dialog.Title className="text-sm font-black uppercase tracking-[0.1em] text-on-accent">{title}</Dialog.Title>
             <Dialog.Close asChild>
               <IconButton aria-label="Close" size="sm" className="-mr-1.5 min-h-11 min-w-11">
                 <XIcon />
@@ -40,7 +40,7 @@ export function Sheet({ open, onClose, title, id, children, footer, size = "md" 
           </header>
           <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
           {footer != null && (
-            <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-surface-muted/60 px-5 py-3.5">
+            <footer className="flex shrink-0 items-center justify-end gap-2 border-t-2 border-line-strong bg-surface-muted px-5 py-3.5">
               {footer}
             </footer>
           )}

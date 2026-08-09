@@ -35,16 +35,16 @@ export function RubricScorecard({
 
   return (
     <section aria-labelledby="rubric-heading" className="space-y-4">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-line-strong pb-3">
         <div>
           <div className="flex items-center gap-2">
-            <h3 id="rubric-heading" className="text-sm font-semibold text-ink">Rubric scorecard</h3>
+            <h3 id="rubric-heading" className="text-sm font-black uppercase tracking-[0.08em] text-ink">Rubric scorecard</h3>
             <Badge tone={sourceLabel === "AI draft" ? "warning" : "neutral"}>{sourceLabel}</Badge>
           </div>
           <p className="mt-1 text-xs text-ink-faint">Every criterion requires a whole-number score from 1 to 5.</p>
         </div>
-        <div className="text-right" aria-live="polite">
-          <div className="font-mono text-lg font-semibold tabular-nums text-ink">
+        <div className="border-2 border-line-strong bg-production-lime px-3 py-2 text-right shadow-[3px_3px_0_#171714]" aria-live="polite">
+          <div className="font-mono text-xl font-black tabular-nums text-ink">
             {average === null ? "—" : average.toFixed(1)}
             <span className="text-xs font-normal text-ink-faint"> / 5</span>
           </div>
@@ -54,14 +54,14 @@ export function RubricScorecard({
         </div>
       </header>
 
-      <div className="divide-y divide-line">
+      <div className="divide-y-2 divide-line-strong">
         {rubric.criteria.map((criterion) => {
           const selected = byCriterion.get(criterion.key);
           return (
             <fieldset key={criterion.key} className="grid gap-3 py-4 first:pt-0 sm:grid-cols-[minmax(11rem,1fr)_auto] sm:items-center">
               <legend className="contents">
                 <span>
-                  <span className="block text-sm font-medium text-ink">{criterion.label}</span>
+                  <span className="block text-sm font-black text-ink">{criterion.label}</span>
                   {criterion.description && (
                     <span className="mt-0.5 block max-w-xl text-xs leading-relaxed text-ink-faint">
                       {criterion.description}

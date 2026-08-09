@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import type { AnswerValue } from "contracts/types";
 import { Schema } from "effect";
@@ -7,7 +7,6 @@ import {
   AlertDescription,
   AlertTitle,
   Button,
-  Card,
   Checkbox,
   EmptyState,
   Input,
@@ -216,6 +215,38 @@ export interface PublicSubmitPageProps {
   readonly initialSuccess?: typeof CreatePublicSubmissionOutput.Type | null;
 }
 
+function PublicSubmitShell({ children }: { readonly children: ReactNode }) {
+  return (
+    <div className="production-grid min-h-dvh bg-canvas text-ink">
+      <header className="border-b-2 border-line-strong bg-canvas">
+        <div className="mx-auto flex h-18 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+          <Link className="inline-flex items-center gap-3 no-underline" to="/" aria-label="Session Party home">
+            <span className="grid size-9 place-items-center border-2 border-line-strong bg-production-lime text-[11px] font-black tracking-[-0.04em] shadow-[3px_3px_0_#171714]">
+              SP
+            </span>
+            <span className="text-sm font-black tracking-[-0.03em]">Session Party</span>
+          </Link>
+          <span className="border-2 border-line-strong bg-surface px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] shadow-[3px_3px_0_#171714]">
+            Proposal desk
+          </span>
+        </div>
+      </header>
+      {children}
+    </div>
+  );
+}
+
+function LoadingPage() {
+  return (
+    <PublicSubmitShell>
+      <main className="mx-auto grid max-w-6xl gap-8 px-4 py-10 sm:px-6 sm:py-16 lg:grid-cols-[minmax(0,0.78fr)_minmax(28rem,1.22fr)] lg:px-8">
+        <Skeleton className="h-64" />
+        <Skeleton className="h-[36rem]" />
+      </main>
+    </PublicSubmitShell>
+  );
+}
+
 type TurnstileApi = {
   render: (container: HTMLElement, options: {
     readonly sitekey: string;
@@ -368,119 +399,182 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   };
 
   if (form === undefined) {
-    return <main className="mx-auto max-w-2xl space-y-5 px-4 py-10"><Skeleton className="h-24" /><Skeleton className="h-[32rem]" /></main>;
+    return <LoadingPage />;
   }
   if (form === null) {
     return (
-      <main className="mx-auto max-w-2xl px-4 py-10">
-        <EmptyState title="Submission form unavailable" description={loadError ?? "This form may have moved or been removed."} />
-      </main>
+      <PublicSubmitShell>
+        <main className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-20 lg:px-8">
+          <div className="border-[3px] border-line-strong bg-surface p-2 shadow-[8px_8px_0_#171714]">
+            <EmptyState title="Submission form unavailable" description={loadError ?? "This form may have moved or been removed."} />
+          </div>
+        </main>
+      </PublicSubmitShell>
     );
   }
   if (success) {
     return (
-      <main className="mx-auto max-w-2xl px-4 py-10">
-        <Card>
-          <EmptyState
-            title="Submission received"
-            description={`Your proposal was saved successfully. Reference: ${success.submissionId}. Sign in with the same email to track its status and edit while the CFP remains open.`}
-            action={
+      <PublicSubmitShell>
+        <main className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-20 lg:px-8">
+          <section className="border-[3px] border-line-strong bg-surface shadow-[10px_10px_0_#171714]" aria-labelledby="submission-received-title">
+            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
+              <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/65">Intake confirmation</span>
+              <span className="size-3 bg-production-lime" aria-hidden="true" />
+            </div>
+            <div className="p-6 sm:p-10">
+              <p className="inline-block border-2 border-line-strong bg-production-lime px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] shadow-[3px_3px_0_#171714]">
+                Safely on the board
+              </p>
+              <h1 id="submission-received-title" className="mt-7 text-5xl font-black leading-[0.88] tracking-[-0.065em] sm:text-7xl">
+                Submission received
+              </h1>
+              <p className="mt-6 max-w-xl text-base font-semibold leading-7 text-ink-secondary">
+                Your proposal was saved successfully. Keep this reference for your records, then sign in with the same email to track its status and edit while the CFP remains open.
+              </p>
+              <div className="mt-8 border-2 border-line-strong bg-production-sky px-4 py-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.14em]">Submission reference</p>
+                <p className="mt-1 break-all font-mono text-sm font-bold">{success.submissionId}</p>
+              </div>
               <Link
-                className="inline-flex h-10 items-center justify-center rounded-control bg-accent px-4 text-sm font-medium text-on-accent shadow-xs hover:bg-accent-hover"
+                className="mt-7 inline-flex min-h-12 items-center justify-center border-2 border-line-strong bg-ink px-5 text-xs font-black uppercase tracking-[0.1em] text-on-accent shadow-[5px_5px_0_#7857ff] transition-transform hover:-translate-y-0.5"
                 to={`/portal/events/${form.event.slug}/submissions`}
               >
-                Manage your proposals
+                Manage your proposals →
               </Link>
-            }
-          />
-        </Card>
-      </main>
+            </div>
+          </section>
+        </main>
+      </PublicSubmitShell>
     );
   }
 
   const accepting = form.form.availability === "open";
   const canSubmit = accepting && !!form.turnstileSiteKey && !!turnstileToken && !turnstileUnavailable;
   return (
-    <main className="mx-auto max-w-2xl space-y-6 px-4 py-10">
-      <header className="space-y-2">
-        <p className="text-sm font-medium text-accent">{form.event.name}</p>
-        <h1 className="text-3xl font-semibold tracking-tight text-ink">{form.form.name}</h1>
-        {form.form.description && <p className="leading-relaxed text-ink-secondary">{form.form.description}</p>}
-        {form.form.closesAt !== null && (
-          <p className="text-sm font-medium text-ink-secondary">
-            Deadline {new Intl.DateTimeFormat("en-US", {
-              dateStyle: "full",
-              timeStyle: "short",
-              timeZone: form.event.timezone,
-            }).format(form.form.closesAt)} {form.event.timezone}
+    <PublicSubmitShell>
+      <main className="mx-auto grid max-w-6xl items-start gap-10 px-4 py-10 sm:px-6 sm:py-16 lg:grid-cols-[minmax(0,0.78fr)_minmax(28rem,1.22fr)] lg:gap-14 lg:px-8">
+        <header className="lg:sticky lg:top-8">
+          <p className="inline-block -rotate-1 border-2 border-line-strong bg-production-coral px-3 py-2 text-[10px] font-black uppercase tracking-[0.15em] shadow-[4px_4px_0_#171714]">
+            Call for speakers
           </p>
-        )}
-      </header>
-      {!accepting && (
-        <Alert tone="warning">
-          <AlertTitle>{form.form.availability === "scheduled" ? "Submissions are not open yet" : "Submissions are closed"}</AlertTitle>
-          <AlertDescription>
-            {form.form.availability === "scheduled"
-              ? "Review the published form below and return when submissions open."
-              : "This published form is no longer accepting responses."}
-          </AlertDescription>
-        </Alert>
-      )}
-      <Card>
-        <form className="space-y-6" onSubmit={handleSubmit}>
-          {shownFields.map((field) => (
-            <PublicField
-              key={field.id}
-              field={field}
-              value={answers[field.id]}
-              disabled={!accepting || submitting}
-              onChange={(value) => setAnswers((current) => ({ ...current, [field.id]: value }))}
-            />
-          ))}
-          {accepting && (
-            <TurnstileChallenge
-              siteKey={form.turnstileSiteKey ?? null}
-              disabled={submitting}
-              onToken={setTurnstileToken}
-              onUnavailable={markTurnstileUnavailable}
-              widgetIdRef={widgetId}
-            />
+          <p className="mt-8 text-xs font-black uppercase tracking-[0.16em] text-accent">{form.event.name}</p>
+          <h1 className="mt-3 text-5xl font-black leading-[0.88] tracking-[-0.065em] sm:text-7xl lg:text-[5.5rem]">
+            {form.form.name}
+          </h1>
+          {form.form.description && (
+            <p className="mt-6 max-w-xl border-l-[3px] border-line-strong pl-5 text-base font-semibold leading-7 text-ink-secondary">
+              {form.form.description}
+            </p>
           )}
-          {submitError && (
-            <Alert tone="danger">
-              <AlertTitle>Submission not saved</AlertTitle>
-              <AlertDescription>{submitError}</AlertDescription>
+          {form.form.closesAt !== null && (
+            <div className="mt-6 max-w-md border-2 border-line-strong bg-production-yellow px-4 py-3 shadow-[4px_4px_0_#171714]">
+              <p className="text-[9px] font-black uppercase tracking-[0.14em]">Deadline</p>
+              <p className="mt-1 text-sm font-black">
+                {new Intl.DateTimeFormat("en-US", {
+                  dateStyle: "full",
+                  timeStyle: "short",
+                  timeZone: form.event.timezone,
+                }).format(form.form.closesAt)} {form.event.timezone}
+              </p>
+            </div>
+          )}
+          <div className="mt-8 grid max-w-md grid-cols-2 border-2 border-line-strong bg-surface text-[10px] font-black uppercase tracking-[0.12em] shadow-[4px_4px_0_#171714]">
+            <div className="border-r-2 border-line-strong px-3 py-3">Published form</div>
+            <div className={`px-3 py-3 ${accepting ? "bg-production-lime" : "bg-production-yellow"}`}>
+              {accepting ? "Intake open" : "View only"}
+            </div>
+          </div>
+        </header>
+
+        <section aria-label="Proposal form">
+          {!accepting && (
+            <Alert className="mb-5" tone="warning">
+              <AlertTitle>{form.form.availability === "scheduled" ? "Submissions are not open yet" : "Submissions are closed"}</AlertTitle>
+              <AlertDescription>
+                {form.form.availability === "scheduled"
+                  ? "Review the published form below and return when submissions open."
+                  : "This published form is no longer accepting responses."}
+              </AlertDescription>
             </Alert>
           )}
           {draftStatus && (
-            <Alert tone="success" role="status">
+            <Alert className="mb-5" tone="success" role="status">
               <AlertTitle>{draftStatus === "restored" ? "Draft restored" : "Draft saved"}</AlertTitle>
               <AlertDescription>
                 {draftStatus === "restored" ? "Your answers from this browser are ready to continue." : "Your answers are stored in this browser until you submit."}
               </AlertDescription>
             </Alert>
           )}
-          {accepting && (
-            <div className="flex flex-wrap gap-3">
-              <Button type="submit" disabled={submitting || !canSubmit}>{submitting ? "Submitting…" : "Submit proposal"}</Button>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={submitting || Object.keys(answers).length === 0}
-                onClick={() => {
-                  window.localStorage.setItem(
-                    draftStorageKey(eventSlug, formId, form.form.versionId),
-                    JSON.stringify(answers),
-                  );
-                  setDraftStatus("saved");
-                }}
-              >
-                Save draft
-              </Button>
+          <form className="border-[3px] border-line-strong bg-surface shadow-[10px_10px_0_#171714]" onSubmit={handleSubmit}>
+            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
+              <div className="flex items-center gap-2">
+                <span className={`size-2.5 ${accepting ? "bg-production-lime" : "bg-production-yellow"}`} aria-hidden="true" />
+                <span className="text-[10px] font-black uppercase tracking-[0.16em]">Proposal intake</span>
+              </div>
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-white/55">
+                {shownFields.length} field{shownFields.length === 1 ? "" : "s"}
+              </span>
             </div>
-          )}
-        </form>
-      </Card>
-    </main>
+            <div className="divide-y-2 divide-line-strong">
+              {shownFields.map((field, index) => (
+                <div className={field.type === "heading" ? "bg-production-sky px-5 py-4" : "px-5 py-5 sm:px-6 sm:py-6"} key={field.id}>
+                  <div className="mb-2 text-[9px] font-black uppercase tracking-[0.14em] text-ink-faint" aria-hidden="true">
+                    {String(index + 1).padStart(2, "0")}
+                  </div>
+                  <PublicField
+                    field={field}
+                    value={answers[field.id]}
+                    disabled={!accepting || submitting}
+                    onChange={(value) => setAnswers((current) => ({ ...current, [field.id]: value }))}
+                  />
+                </div>
+              ))}
+            </div>
+            {accepting && (
+              <div className="border-t-2 border-line-strong bg-surface-muted px-5 py-5 sm:px-6">
+                <p className="mb-3 text-[10px] font-black uppercase tracking-[0.12em] text-ink-secondary">Final check · human verification</p>
+                <TurnstileChallenge
+                  siteKey={form.turnstileSiteKey ?? null}
+                  disabled={submitting}
+                  onToken={setTurnstileToken}
+                  onUnavailable={markTurnstileUnavailable}
+                  widgetIdRef={widgetId}
+                />
+              </div>
+            )}
+            {submitError && (
+              <div className="border-t-2 border-line-strong px-5 py-5 sm:px-6">
+                <Alert tone="danger">
+                  <AlertTitle>Submission not saved</AlertTitle>
+                  <AlertDescription>{submitError}</AlertDescription>
+                </Alert>
+              </div>
+            )}
+            {accepting && (
+              <div className="flex flex-col items-start justify-between gap-4 border-t-2 border-line-strong bg-production-lime px-5 py-5 sm:flex-row sm:items-center sm:px-6">
+                <p className="max-w-xs text-xs font-bold leading-5 text-ink-secondary">Your answers are submitted together when verification is complete.</p>
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={submitting || Object.keys(answers).length === 0}
+                    onClick={() => {
+                      window.localStorage.setItem(
+                        draftStorageKey(eventSlug, formId, form.form.versionId),
+                        JSON.stringify(answers),
+                      );
+                      setDraftStatus("saved");
+                    }}
+                  >
+                    Save draft
+                  </Button>
+                  <Button type="submit" disabled={submitting || !canSubmit}>{submitting ? "Submitting…" : "Submit proposal →"}</Button>
+                </div>
+              </div>
+            )}
+          </form>
+        </section>
+      </main>
+    </PublicSubmitShell>
   );
 }

@@ -9,7 +9,7 @@ export function Separator({ className, orientation = "horizontal", decorative = 
     <Primitive.Root
       decorative={decorative}
       orientation={orientation}
-      className={cx("shrink-0 bg-line data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px", className)}
+      className={cx("shrink-0 bg-line-strong data-[orientation=horizontal]:h-0.5 data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-0.5", className)}
       {...props}
     />
   );

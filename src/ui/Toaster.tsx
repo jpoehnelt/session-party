@@ -50,9 +50,9 @@ export function toast(message: string, options: ToastOptions = {}): number {
 
 const TONES: Record<ToastTone, string> = {
   neutral: "border-line-strong bg-surface text-ink",
-  success: "border-success/20 bg-success-soft text-success",
-  warning: "border-warning/20 bg-warning-soft text-warning",
-  danger: "border-danger/20 bg-danger-soft text-danger",
+  success: "border-line-strong bg-success-soft text-ink",
+  warning: "border-line-strong bg-warning-soft text-ink",
+  danger: "border-line-strong bg-danger-soft text-danger",
 };
 
 export function Toaster() {
@@ -75,7 +75,7 @@ export function Toaster() {
           role={item.tone === "danger" ? "alert" : "status"}
           onOpenChange={(nextOpen) => { if (!nextOpen) dismiss(item.id); }}
           className={cx(
-            "pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-control border px-4 py-3 shadow-pop motion-reduce:animate-none",
+            "pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-control border-2 px-4 py-3 font-bold shadow-pop motion-reduce:animate-none",
             TONES[item.tone],
           )}
         >

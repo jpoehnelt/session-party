@@ -14,9 +14,9 @@ export function ConflictIndicator({
 }: ConflictIndicatorProps) {
   if (conflicts.length === 0) {
     return compact ? null : (
-      <div className="flex items-center gap-2 text-sm text-ink-secondary" role="status">
+      <div className="flex items-center gap-3 border-2 border-line-strong bg-production-lime px-3 py-2.5 text-sm font-semibold text-ink shadow-[3px_3px_0_#171714]" role="status">
         <Badge tone="success">Clear</Badge>
-        <span>No speaker or room overlaps.</span>
+        <span>No speaker or room overlaps. The board is ready to roll.</span>
       </div>
     );
   }
@@ -26,14 +26,16 @@ export function ConflictIndicator({
 
   return (
     <div
-      className="space-y-2 rounded-control border border-warning/30 bg-warning-soft p-3 text-sm text-ink"
+      className={`space-y-2 border-2 border-line-strong p-3 text-sm text-ink shadow-[3px_3px_0_#171714] ${
+        blocking ? "bg-production-coral" : "bg-production-yellow"
+      }`}
       role={compact ? undefined : blocking ? "alert" : "status"}
     >
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={blocking ? "danger" : "warning"}>
           {conflicts.length} {conflicts.length === 1 ? "conflict" : "conflicts"}
         </Badge>
-        <span className="font-medium">
+        <span className="font-black uppercase tracking-[0.06em]">
           {[
             roomCount > 0 ? `${roomCount} room` : null,
             speakerCount > 0 ? `${speakerCount} speaker` : null,

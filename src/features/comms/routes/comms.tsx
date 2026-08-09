@@ -66,9 +66,9 @@ const emptyDraft: TemplateDraft = {
 };
 
 const tabs = [
-  { id: "templates", label: "Templates", panelId: "comms-templates" },
-  { id: "send", label: "Audience & queue", panelId: "comms-send" },
-  { id: "history", label: "Delivery history", panelId: "comms-history" },
+  { id: "templates", label: "01 / Templates", panelId: "comms-templates" },
+  { id: "send", label: "02 / Audience & queue", panelId: "comms-send" },
+  { id: "history", label: "03 / Delivery history", panelId: "comms-history" },
 ];
 
 const asDraft = (template: CommunicationTemplateValue): TemplateDraft => ({
@@ -123,7 +123,10 @@ export function ScheduleControl({
   onScheduledWallTimeChange,
 }: ScheduleControlProps) {
   return (
-    <div className="space-y-3">
+    <fieldset className="space-y-3 border-2 border-line-strong bg-surface-muted p-4 shadow-[3px_3px_0_#171714]">
+      <legend className="border-2 border-line-strong bg-production-yellow px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-ink">
+        Dispatch window
+      </legend>
       <Select
         label="Delivery timing"
         value={mode}
@@ -147,7 +150,7 @@ export function ScheduleControl({
           </p>
         </>
       )}
-    </div>
+    </fieldset>
   );
 }
 
@@ -391,12 +394,12 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
       header: "Recipient",
       render: (delivery) => (
         <div>
-          <p className="font-medium text-ink">{delivery.recipientName ?? delivery.recipientEmail}</p>
-          <p className="text-xs text-ink-faint">{delivery.recipientEmail}</p>
+          <p className="font-black tracking-[-0.015em] text-ink">{delivery.recipientName ?? delivery.recipientEmail}</p>
+          <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-ink-faint">{delivery.recipientEmail}</p>
         </div>
       ),
     },
-    { key: "subject", header: "Message", render: (delivery) => <span className="line-clamp-2 max-w-sm">{delivery.subject}</span> },
+    { key: "subject", header: "Message", render: (delivery) => <span className="line-clamp-2 max-w-sm font-bold text-ink">{delivery.subject}</span> },
     {
       key: "status",
       header: "Delivery truth",
@@ -424,14 +427,46 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
 
   if (templates === undefined || audience === undefined || history === undefined) return <LoadingRegion />;
 
+  const retryCount = history.deliveries.filter((delivery) => delivery.canRetry).length;
+  const sentCount = history.deliveries.filter((delivery) => delivery.status === "sent").length;
+  const movingCount = history.deliveries.filter((delivery) => ["queued", "claimed", "retry"].includes(delivery.status)).length;
+
   return (
-    <>
+    <div className="relative -mx-4 -my-6 min-h-full overflow-hidden bg-canvas px-4 py-6 text-ink sm:-mx-6 sm:-my-8 sm:px-6 sm:py-8 lg:-mx-8 lg:-my-10 lg:px-8 lg:py-10">
+      <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(#b9b1a1_1px,transparent_1px),linear-gradient(90deg,#b9b1a1_1px,transparent_1px)] [background-size:36px_36px]" aria-hidden="true" />
+      <div className="relative">
       <PageHeader
-        title="Speaker communications"
-        description={`Prepare accepted-speaker messages for ${event.name}, confirm the exact audience, and inspect durable delivery evidence.`}
-        actions={<Badge tone={history.localCaptureCount > 0 ? "accent" : "neutral"}>{history.localCaptureCount} local captures</Badge>}
+        title={(
+          <>
+            <span className="mb-3 block text-[11px] font-black uppercase tracking-[0.2em] text-production-lime">Outbound / cue desk</span>
+            <span className="block">Speaker communications</span>
+          </>
+        )}
+        description={`Cue accepted-speaker messages for ${event.name}, confirm the exact audience, and inspect durable delivery evidence.`}
+        className="border-[3px] border-line-strong bg-ink p-5 text-on-accent shadow-[7px_7px_0_#7857ff] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-[0.88] [&_h1]:tracking-[-0.055em] [&_h1]:text-on-accent sm:[&_h1]:text-5xl [&_p]:mt-4 [&_p]:max-w-2xl [&_p]:font-semibold [&_p]:text-on-accent/70"
+        actions={(
+          <div className="border-2 border-line-strong bg-production-lime px-4 py-3 text-ink shadow-[4px_4px_0_#fffdf7]">
+            <p className="text-3xl font-black leading-none tracking-[-0.06em]">{eligibleRecipients.length}</p>
+            <p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em]">Speakers on comms</p>
+          </div>
+        )}
       />
-      <Tabs tabs={tabs} active={activeTab} onChange={(value) => setActiveTab(value as WorkspaceTab)} className="mb-6" />
+
+      <dl className="-mt-3 mb-8 ml-3 grid max-w-4xl grid-cols-2 border-2 border-line-strong bg-surface shadow-[5px_5px_0_#171714] md:grid-cols-4" aria-label="Communications production totals">
+        {[
+          [String(templates.length).padStart(2, "0"), "Message templates", "bg-production-sky"],
+          [String(eligibleRecipients.length).padStart(2, "0"), "Audience ready", "bg-production-lime"],
+          [String(history.deliveries.length).padStart(2, "0"), "Delivery records", "bg-production-coral"],
+          [String(retryCount).padStart(2, "0"), "Needs a retry", "bg-production-yellow"],
+        ].map(([value, label, color], index) => (
+          <div className={`px-4 py-3 ${color} ${index % 2 > 0 ? "border-l-2 border-line-strong" : ""} ${index >= 2 ? "border-t-2 border-line-strong md:border-t-0" : ""} ${index === 2 ? "md:border-l-2" : ""}`} key={label}>
+            <dd className="text-2xl font-black leading-none tracking-[-0.055em] sm:text-3xl">{value}</dd>
+            <dt className="mt-1.5 text-[9px] font-black uppercase tracking-[0.13em]">{label}</dt>
+          </div>
+        ))}
+      </dl>
+
+      <Tabs tabs={tabs} active={activeTab} onChange={(value) => setActiveTab(value as WorkspaceTab)} className="mb-7 max-w-3xl" />
 
       {loadError && (
         <Alert tone="danger" className="mb-6">
@@ -443,23 +478,28 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
       {activeTab === "templates" && (
         <div id="comms-templates" role="tabpanel" aria-labelledby="comms-templates-tab" className="grid gap-6 lg:grid-cols-[17rem_minmax(0,1fr)]">
           <Card
-            title="Templates"
-            footer={<Button variant="secondary" className="w-full" onClick={() => { setDraft(emptyDraft); setPreview(null); }}>New template</Button>}
+            className="h-fit rounded-none [&>header]:bg-production-sky [&>header_h3]:text-ink"
+            title="Template roll"
+            footer={<Button variant="secondary" className="w-full rounded-none bg-production-lime" onClick={() => { setDraft(emptyDraft); setPreview(null); }}>+ New template</Button>}
           >
             {templates.length === 0 ? (
               <p className="text-sm text-ink-faint">Create the first reusable message.</p>
             ) : (
-              <div className="space-y-1">
-                {templates.map((template) => (
+              <div className="space-y-3">
+                {templates.map((template, index) => (
                   <Button
                     key={template.id}
-                    variant={draft.id === template.id ? "secondary" : "ghost"}
-                    className="h-auto w-full justify-start px-3 py-2 text-left whitespace-normal"
+                    variant="ghost"
+                    aria-current={draft.id === template.id ? "page" : undefined}
+                    className={`h-auto w-full justify-start whitespace-normal rounded-none border-2 border-line-strong px-3 py-3 text-left shadow-[3px_3px_0_#171714] ${draft.id === template.id ? "bg-accent text-on-accent hover:bg-accent-hover hover:text-on-accent" : "bg-canvas hover:bg-production-lime"}`}
                     onClick={() => { setDraft(asDraft(template)); setPreview(null); }}
                   >
-                    <span>
-                      <span className="block text-sm font-medium">{template.name}</span>
-                      <span className="block text-xs font-normal text-ink-faint">Version {template.version}{template.attachIcs ? " · ICS gated" : ""}</span>
+                    <span className="grid w-full grid-cols-[2rem_minmax(0,1fr)] gap-2">
+                      <span className={`text-[10px] font-black tracking-[0.1em] ${draft.id === template.id ? "text-production-lime" : "text-accent"}`}>{String(index + 1).padStart(2, "0")}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-black tracking-[-0.015em]">{template.name}</span>
+                        <span className={`mt-1 block text-[10px] font-bold uppercase tracking-[0.08em] ${draft.id === template.id ? "text-on-accent/70" : "text-ink-faint"}`}>V{template.version}{template.attachIcs ? " · Calendar ready" : " · Message only"}</span>
+                      </span>
                     </span>
                   </Button>
                 ))}
@@ -468,42 +508,51 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
           </Card>
 
           <div className="space-y-6">
-            <Card title={draft.id ? `Edit ${draft.name || "template"}` : "New template"}>
+            <Card className="rounded-none [&>header]:bg-accent" title={draft.id ? `Edit / ${draft.name || "template"}` : "New message master"}>
               <form className="space-y-4" onSubmit={(event_) => void saveTemplate(event_)}>
-                <Input label="Template name" value={draft.name} maxLength={120} onChange={(event_) => setDraft({ ...draft, name: event_.target.value })} required />
-                <Input
-                  label="Subject"
-                  value={draft.subject}
-                  maxLength={240}
-                  hint="Merge contract: {{speaker.name}}, {{speaker.email}}, {{event.name}}, {{event.location}}, {{event.dates}}, {{talk.title}}, {{talk.time}}, {{talk.room}}, {{portal.url}}"
-                  onChange={(event_) => setDraft({ ...draft, subject: event_.target.value })}
-                  required
-                />
-                <Textarea
-                  label="Plain-text message"
-                  value={draft.textBody}
-                  rows={8}
-                  maxLength={20_000}
-                  hint="Personalized independently and stored immutably with each delivery."
-                  onChange={(event_) => setDraft({ ...draft, textBody: event_.target.value })}
-                  required
-                />
-                <Textarea
-                  label="HTML message"
-                  value={draft.htmlBody}
-                  rows={10}
-                  maxLength={20_000}
-                  hint="Template markup is retained; merge values are HTML-escaped before the snapshot is committed."
-                  onChange={(event_) => setDraft({ ...draft, htmlBody: event_.target.value })}
-                  required
-                />
-                <Checkbox
-                  checked={draft.attachIcs}
-                  onChange={(event_) => setDraft({ ...draft, attachIcs: event_.target.checked })}
-                  label="Attach schedule invite"
-                  description="Uses the selected speaker's confirmed agenda talks and rooms; enqueue rejects missing agenda data."
-                />
-                <div className="flex flex-wrap gap-2">
+                <div className="grid gap-4 md:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)]">
+                  <Input label="Template name" value={draft.name} maxLength={120} onChange={(event_) => setDraft({ ...draft, name: event_.target.value })} required />
+                  <Input
+                    label="Subject line"
+                    value={draft.subject}
+                    maxLength={240}
+                    onChange={(event_) => setDraft({ ...draft, subject: event_.target.value })}
+                    required
+                  />
+                </div>
+                <div className="border-l-4 border-production-coral bg-surface-muted px-4 py-3">
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-ink">Available merge cues</p>
+                  <p className="mt-1 break-words text-xs font-semibold leading-relaxed text-ink-faint">{"{{speaker.name}}, {{speaker.email}}, {{event.name}}, {{event.location}}, {{event.dates}}, {{talk.title}}, {{talk.time}}, {{talk.room}}, {{portal.url}}"}</p>
+                </div>
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <Textarea
+                    label="Plain-text message"
+                    value={draft.textBody}
+                    rows={12}
+                    maxLength={20_000}
+                    hint="Personalized independently and stored immutably with each delivery."
+                    onChange={(event_) => setDraft({ ...draft, textBody: event_.target.value })}
+                    required
+                  />
+                  <Textarea
+                    label="HTML message"
+                    value={draft.htmlBody}
+                    rows={12}
+                    maxLength={20_000}
+                    hint="Markup is retained; merge values are escaped before the snapshot is committed."
+                    onChange={(event_) => setDraft({ ...draft, htmlBody: event_.target.value })}
+                    required
+                  />
+                </div>
+                <div className="border-2 border-line-strong bg-production-yellow p-4 shadow-[3px_3px_0_#171714]">
+                  <Checkbox
+                    checked={draft.attachIcs}
+                    onChange={(event_) => setDraft({ ...draft, attachIcs: event_.target.checked })}
+                    label="Attach schedule invite"
+                    description="Uses the selected speaker's confirmed agenda talks and rooms; enqueue rejects missing agenda data."
+                  />
+                </div>
+                <div className="flex flex-wrap items-end gap-3 border-t-2 border-line-strong pt-5">
                   <Button type="submit" loading={busy === "save"}>{draft.id ? "Save changes" : "Create template"}</Button>
                   <Button type="button" variant="secondary" loading={busy === "preview"} disabled={!draft.subject.trim() || !draft.textBody.trim() || !draft.htmlBody.trim()} onClick={() => void renderPreview()}>
                     Preview locally
@@ -522,7 +571,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
             </Card>
 
             {preview && (
-              <Card title="Local preview" footer={<span className="text-xs text-ink-faint">{preview.note}</span>}>
+              <Card className="rounded-none [&>header]:bg-production-coral [&>header_h3]:text-ink" title="Local proof / not sent" footer={<span className="text-xs font-semibold text-ink-faint">{preview.note}</span>}>
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge tone="accent">Not sent</Badge>
@@ -535,13 +584,13 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                       <Badge tone="warning">{preview.unavailableVariables.join(", ")} unavailable</Badge>
                     )}
                   </div>
-                  <div className="rounded-card border border-line bg-surface-muted p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-ink-faint">To</p>
-                    <p className="mt-1 text-sm text-ink">{preview.recipientName} &lt;{preview.recipientEmail}&gt;</p>
-                    <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-ink-faint">Subject</p>
-                    <p className="mt-1 font-medium text-ink">{preview.subject}</p>
+                  <div className="grid border-2 border-line-strong bg-surface-muted sm:grid-cols-[7rem_minmax(0,1fr)]">
+                    <p className="border-b-2 border-line-strong bg-production-sky px-4 py-3 text-[10px] font-black uppercase tracking-[0.12em] text-ink sm:border-b-0 sm:border-r-2">To / recipient</p>
+                    <p className="border-b-2 border-line-strong px-4 py-3 text-sm font-bold text-ink sm:col-start-2">{preview.recipientName} &lt;{preview.recipientEmail}&gt;</p>
+                    <p className="border-b-2 border-line-strong bg-production-lime px-4 py-3 text-[10px] font-black uppercase tracking-[0.12em] text-ink sm:border-b-0 sm:border-r-2">Subject</p>
+                    <p className="px-4 py-3 font-black tracking-[-0.015em] text-ink">{preview.subject}</p>
                   </div>
-                  <div className="whitespace-pre-wrap rounded-card border border-line bg-surface p-5 text-sm leading-7 text-ink-secondary">{preview.text}</div>
+                  <div className="whitespace-pre-wrap border-2 border-line-strong bg-surface p-5 text-sm font-medium leading-7 text-ink-secondary shadow-[4px_4px_0_#171714]">{preview.text}</div>
                 </div>
               </Card>
             )}
@@ -551,13 +600,22 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
 
       {activeTab === "send" && (
         <div id="comms-send" role="tabpanel" aria-labelledby="comms-send-tab" className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <Card title="Accepted-speaker audience">
+          <Card className="rounded-none [&>header]:bg-production-sky [&>header_h3]:text-ink" title="Audience manifest / accepted speakers">
             {audience.recipients.length === 0 ? (
               <EmptyState title="No accepted speakers yet" description="Audience selection activates from the append-only acceptance contract." />
             ) : (
-              <div className="divide-y divide-line">
-                {audience.recipients.map((recipient) => (
-                  <div key={recipient.speakerId} className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
+              <div>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink p-3 text-on-accent">
+                  <p className="text-[10px] font-black uppercase tracking-[0.14em]">{selectedCount} selected / {eligibleRecipients.length} ready</p>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => setSelectedSpeakers(new Set(eligibleRecipients.map((recipient) => recipient.speakerId)))}>Select ready</Button>
+                    <Button size="sm" variant="ghost" className="text-on-accent hover:bg-on-accent/15 hover:text-on-accent" disabled={selectedCount === 0} onClick={() => setSelectedSpeakers(new Set())}>Clear</Button>
+                  </div>
+                </div>
+                <div className="divide-y-2 divide-line-strong border-2 border-line-strong">
+                {audience.recipients.map((recipient, index) => (
+                  <div key={recipient.speakerId} className="grid gap-3 bg-surface px-4 py-4 transition-colors hover:bg-production-sky/25 sm:grid-cols-[2.25rem_minmax(0,1fr)_minmax(8rem,0.6fr)] sm:items-start">
+                    <span className="text-xs font-black tracking-[0.12em] text-accent" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
                     <Checkbox
                       checked={selectedSpeakers.has(recipient.speakerId)}
                       disabled={recipient.eligibility !== "eligible"}
@@ -569,7 +627,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                       label={recipient.name}
                       description={recipient.email ?? "No account email; not eligible for delivery"}
                     />
-                    <div className="max-w-xs text-right">
+                    <div className="ml-[3.25rem] sm:ml-0 sm:text-right">
                       <Badge tone={recipient.eligibility === "eligible" ? "success" : "warning"}>
                         {recipient.eligibility === "eligible" ? "Ready" : "Missing email"}
                       </Badge>
@@ -577,12 +635,13 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                     </div>
                   </div>
                 ))}
+                </div>
               </div>
             )}
           </Card>
 
-          <div className="space-y-6">
-            <Card title="Queue exact snapshots">
+          <div className="space-y-6 xl:sticky xl:top-4 xl:self-start">
+            <Card className="rounded-none [&>header]:bg-accent" title="Dispatch console">
               <div className="space-y-4">
                 <Select label="Template" value={selectedTemplateId} onChange={(event_) => setSelectedTemplateId(event_.target.value)}>
                   <option value="">Select a template</option>
@@ -608,9 +667,12 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                     <AlertDescription>Each selected speaker receives exact confirmed talk times and rooms; recipients without confirmed agenda data are rejected.</AlertDescription>
                   </Alert>
                 )}
-                <div className="rounded-card border border-line bg-surface-muted p-4">
-                  <p className="text-2xl font-semibold tracking-tight text-ink">{selectedCount}</p>
-                  <p className="text-sm text-ink-secondary">confirmed recipients</p>
+                <div className="grid grid-cols-[1fr_auto] border-2 border-line-strong bg-production-lime shadow-[4px_4px_0_#171714]">
+                  <div className="p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.13em] text-ink-secondary">Confirmed recipients</p>
+                    <p className="mt-2 text-xs font-bold text-ink-secondary">Immutable, personalized snapshots</p>
+                  </div>
+                  <p className="grid min-w-20 place-items-center border-l-2 border-line-strong px-4 text-5xl font-black tracking-[-0.07em] text-ink">{selectedCount}</p>
                 </div>
                 <Button
                   className="w-full"
@@ -648,8 +710,23 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
               </AlertDescription>
             </Alert>
           )}
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-sm text-ink-secondary">Snapshot, provider, attempt, and dead-letter evidence from the durable mail tables.</p>
+          <dl className="grid grid-cols-3 border-2 border-line-strong bg-surface shadow-[4px_4px_0_#171714]" aria-label="Delivery status totals">
+            {[
+              [String(sentCount).padStart(2, "0"), "Sent / captured", "bg-production-lime"],
+              [String(movingCount).padStart(2, "0"), "In motion", "bg-production-sky"],
+              [String(retryCount).padStart(2, "0"), "Action needed", "bg-production-coral"],
+            ].map(([value, label, color], index) => (
+              <div className={`p-4 ${color} ${index > 0 ? "border-l-2 border-line-strong" : ""}`} key={label}>
+                <dd className="text-3xl font-black leading-none tracking-[-0.055em]">{value}</dd>
+                <dt className="mt-1.5 text-[9px] font-black uppercase tracking-[0.12em]">{label}</dt>
+              </div>
+            ))}
+          </dl>
+          <div className="flex flex-col gap-4 border-2 border-line-strong bg-ink p-4 text-on-accent shadow-[4px_4px_0_#7857ff] sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-production-lime">Durable evidence log</p>
+              <p className="mt-1 text-sm font-semibold text-on-accent/70">Snapshot, provider, attempt, and dead-letter truth from the mail tables.</p>
+            </div>
             <Button variant="secondary" size="sm" onClick={() => setRefresh((value) => value + 1)}>Refresh history</Button>
           </div>
           <Table
@@ -661,6 +738,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
         </div>
       )}
       <Toaster />
-    </>
+      </div>
+    </div>
   );
 }

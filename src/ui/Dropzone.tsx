@@ -42,10 +42,10 @@ export function Dropzone({
       }}
       onDrop={handleDrop}
       className={cx(
-        "relative flex min-h-36 flex-col items-center justify-center rounded-card border border-dashed px-6 py-8 text-center transition-colors",
+        "relative flex min-h-36 flex-col items-center justify-center rounded-card border-2 border-dashed px-6 py-8 text-center shadow-[3px_3px_0_#171714] transition-colors",
         dragging
-          ? "border-accent bg-accent-soft/60"
-          : "border-line-strong bg-surface hover:border-accent/50 hover:bg-surface-muted/40",
+          ? "border-line-strong bg-production-lime"
+          : "border-line-strong bg-surface hover:bg-production-sky/35",
         disabled && "pointer-events-none opacity-50",
         className,
       )}
@@ -66,16 +66,16 @@ export function Dropzone({
         }}
         className="sr-only"
       />
-      <div className="mb-3 flex size-9 items-center justify-center rounded-control bg-accent-soft text-accent">
+      <div className="mb-3 flex size-10 items-center justify-center rounded-control border-2 border-line-strong bg-accent text-on-accent shadow-[2px_2px_0_#171714]">
         <UploadIcon className="size-5" />
       </div>
-      <p className="text-sm font-medium text-ink">
+      <p className="text-sm font-bold text-ink">
         Drop files here, or{" "}
         <button
           type="button"
           disabled={disabled}
           onClick={() => inputRef.current?.click()}
-          className="rounded-sm text-accent outline-none hover:text-accent-hover focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="rounded-sm font-black text-accent-deep underline decoration-2 underline-offset-2 outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent"
         >
           choose files
         </button>

@@ -3,7 +3,7 @@ import { cx } from "./cx";
 import { ChevronDownIcon } from "./icons";
 
 const FIELD =
-  "w-full rounded-control border border-line-strong bg-surface px-3 text-sm text-ink shadow-xs outline-none transition-colors placeholder:text-ink-faint focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-ink-faint";
+  "w-full rounded-control border-2 border-line-strong bg-surface px-3 text-sm font-medium text-ink shadow-xs outline-none transition-colors placeholder:font-normal placeholder:text-ink-faint focus:border-accent focus:ring-2 focus:ring-accent/25 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-ink-faint";
 
 const FIELD_ERROR = "border-danger focus:border-danger focus:ring-danger/20";
 
@@ -23,7 +23,7 @@ function FieldShell({
   return (
     <div className="flex w-full flex-col gap-1.5">
       {label && (
-        <label htmlFor={id} className="text-[13px] font-medium text-ink-secondary">
+        <label htmlFor={id} className="text-[11px] font-black uppercase tracking-[0.08em] text-ink-secondary">
           {label}
         </label>
       )}
@@ -138,11 +138,11 @@ export function Checkbox({
         {...rest}
         id={inputId}
         type="checkbox"
-        className="mt-0.5 size-4 shrink-0 rounded border-line-strong accent-accent outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
+        className="mt-0.5 size-4 shrink-0 rounded-none border-2 border-line-strong accent-accent outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
       />
       {(label || description) && (
         <label htmlFor={inputId} className="flex select-none flex-col gap-0.5">
-          {label && <span className="text-sm font-medium text-ink">{label}</span>}
+          {label && <span className="text-sm font-bold text-ink">{label}</span>}
           {description && (
             <span className="text-[13px] text-ink-faint">{description}</span>
           )}

@@ -1,9 +1,16 @@
 import { useState } from "react";
 import { useParams } from "react-router";
-import { Avatar, Badge, Button, Checkbox, PageHeader, ReadinessThread, Table, Toaster, toast } from "@/ui";
+import { Avatar, Badge, Button, Checkbox, ReadinessThread, Table, Toaster, toast } from "@/ui";
 import type { SpeakerDirectory, SpeakerDirectoryItem } from "../schema";
 import { getSpeakerDirectory, provisionSpeaker, updateSpeakerPublication } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
+import {
+  ProductionHeader,
+  ProductionSectionLabel,
+  ProductionStats,
+  productionButtonClass,
+  productionTableClass,
+} from "../components/production-ui";
 
 export const path = "/e/:eventSlug/speakers";
 
@@ -74,18 +81,38 @@ export function OrganizerSpeakersContent({
   readonly onProvision: (speaker: SpeakerDirectoryItem) => void;
   readonly onVisibility: (speaker: SpeakerDirectoryItem, visible: boolean) => void;
 }) {
+  const readyCount = directory.speakers.filter((item) => item.readiness.state === "ready").length;
+  const provisionedCount = directory.speakers.filter((item) => item.provisioningStatus === "provisioned").length;
+  const visibleCount = directory.speakers.filter((item) => item.speaker.visible).length;
   return (
-    <div className="space-y-6">
-      <PageHeader
+    <div className="space-y-8">
+      <ProductionHeader
+        eyebrow="Organizer control room / Cast"
         title="Speakers"
         description={`Production directory for ${directory.event.name}. Readiness is derived from completed event tasks.`}
-        actions={<Badge tone="neutral">{directory.speakers.length} speakers</Badge>}
+        accent="coral"
+        actions={
+          <span className="border-2 border-[#171714] bg-[#ff714f] px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] shadow-[3px_3px_0_#171714]">
+            {directory.speakers.length} speakers on call
+          </span>
+        }
       />
-      <Table
-        rows={[...directory.speakers]}
-        rowKey={(item) => item.speaker.id}
-        empty="Accepted speakers will appear after provisioning begins."
-        columns={[
+      <ProductionStats
+        stats={[
+          { label: "Accepted", value: directory.speakers.length, tone: "paper" },
+          { label: "Provisioned", value: provisionedCount, tone: "sky" },
+          { label: "Ready", value: readyCount, tone: "lime" },
+          { label: "Public", value: visibleCount, tone: "purple" },
+        ]}
+      />
+      <section aria-label="Speaker production directory">
+        <ProductionSectionLabel>Speaker production directory</ProductionSectionLabel>
+        <div className={productionTableClass}>
+          <Table
+            rows={[...directory.speakers]}
+            rowKey={(item) => item.speaker.id}
+            empty="Accepted speakers will appear after provisioning begins."
+            columns={[
           {
             key: "speaker",
             header: "Speaker",
@@ -125,6 +152,7 @@ export function OrganizerSpeakersContent({
                 <ReadinessThread
                   compact
                   currentId={item.readiness.nextTaskId ?? undefined}
+                  className="[&_li>span]:rounded-none [&_li>span]:border-[#171714]"
                   items={item.readiness.outstandingTaskIds.map((id, index) => ({
                     id,
                     label: `Outstanding task ${index + 1}`,
@@ -157,6 +185,7 @@ export function OrganizerSpeakersContent({
               <Button
                 size="sm"
                 variant="secondary"
+                className={productionButtonClass}
                 loading={busySpeakerId === item.speaker.id}
                 onClick={() => onProvision(item)}
               >
@@ -164,8 +193,10 @@ export function OrganizerSpeakersContent({
               </Button>
             ),
           },
-        ]}
-      />
+            ]}
+          />
+        </div>
+      </section>
     </div>
   );
 }

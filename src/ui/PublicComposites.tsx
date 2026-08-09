@@ -35,20 +35,20 @@ export function SpeakerGallery({
     return <EmptyState title="No speakers published" description="Public speakers will appear here after they are ready." />;
   }
   return (
-    <ul className={cx(mode === "grid" ? "grid gap-4 sm:grid-cols-2 lg:grid-cols-3" : "space-y-3", className)}>
+    <ul className={cx(mode === "grid" ? "grid gap-6 sm:grid-cols-2 lg:grid-cols-3" : "space-y-4", className)}>
       {speakers.map((speaker) => (
-        <li key={speaker.id}>
-          <Card className="h-full">
+        <li key={speaker.id} className="transition-transform hover:-translate-y-1">
+          <Card className="h-full border-line-strong">
             <button
               type="button"
               disabled={onSelect == null}
               onClick={() => onSelect?.(speaker)}
-              className="w-full rounded-control text-left outline-none enabled:focus-visible:ring-2 enabled:focus-visible:ring-accent/40 disabled:cursor-default"
+              className="w-full rounded-control text-left outline-none enabled:focus-visible:ring-2 enabled:focus-visible:ring-accent disabled:cursor-default"
             >
               <div className="flex items-start gap-3">
                 <Avatar name={speaker.displayName} src={speaker.headshotUrl} size="lg" />
                 <div className="min-w-0">
-                  <h3 className="font-semibold text-ink">{speaker.displayName}</h3>
+                  <h3 className="text-lg font-black tracking-[-0.025em] text-ink">{speaker.displayName}</h3>
                   {(speaker.title || speaker.company) && (
                     <p className="text-sm text-ink-secondary">{[speaker.title, speaker.company].filter(Boolean).join(" at ")}</p>
                   )}
@@ -111,15 +111,15 @@ export function ScheduleList({
   }
   const ordered = [...talks].sort((left, right) => left.startsAt.localeCompare(right.startsAt));
   return (
-    <ol className={cx("divide-y divide-line rounded-card border border-line bg-surface", className)}>
+    <ol className={cx("divide-y-2 divide-line-strong rounded-card border-2 border-line-strong bg-surface shadow-card", className)}>
       {ordered.map((talk) => (
-        <li key={talk.id} className="grid gap-2 px-4 py-4 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-5">
-          <div>
-            <time dateTime={talk.startsAt} className="text-sm font-semibold text-ink">{formatTime(talk.startsAt, timezone)}</time>
-            <p className="text-xs text-ink-faint">{talk.durationMin} min · {timezone}</p>
+        <li key={talk.id} className="grid gap-0 sm:grid-cols-[10rem_minmax(0,1fr)]">
+          <div className="border-b-2 border-line-strong bg-ink px-4 py-4 text-on-accent sm:border-b-0 sm:border-r-2">
+            <time dateTime={talk.startsAt} className="text-sm font-black uppercase text-production-lime">{formatTime(talk.startsAt, timezone)}</time>
+            <p className="mt-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/55">{talk.durationMin} min · {timezone}</p>
           </div>
-          <div className="min-w-0">
-            <h3 className="font-semibold text-ink">{talk.title}</h3>
+          <div className="min-w-0 px-4 py-4">
+            <h3 className="text-lg font-black tracking-[-0.025em] text-ink">{talk.title}</h3>
             <p className="mt-1 text-sm text-ink-secondary">{talk.speakerNames.join(", ")}</p>
             {(talk.room || talk.track) && (
               <p className="mt-1 text-xs text-ink-faint">{[talk.room, talk.track].filter(Boolean).join(" · ")}</p>

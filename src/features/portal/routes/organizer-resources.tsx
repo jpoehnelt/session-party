@@ -14,7 +14,6 @@ import {
   Card,
   EmptyState,
   Input,
-  PageHeader,
   Select,
   Textarea,
   Toaster,
@@ -23,6 +22,14 @@ import {
 import type { CreateResourceInput, PortalResource, UpdateResourceInput } from "../schema";
 import { createResource, deleteResource, getPortalResources, resolveOrganizerEventId, updateResource } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
+import {
+  ProductionHeader,
+  ProductionSectionLabel,
+  ProductionStats,
+  productionButtonClass,
+  productionCardClass,
+  productionFormClass,
+} from "../components/production-ui";
 
 export const path = "/e/:eventSlug/resources";
 
@@ -96,10 +103,24 @@ export function OrganizerResourcesContent({
   readonly onUpdate: (resource: PortalResource, form: HTMLFormElement) => void;
   readonly onDelete: (resource: PortalResource) => void;
 }) {
+  const speakerResources = resources.filter((resource) => resource.audience === "speakers").length;
+  const embeddedResources = resources.filter((resource) => resource.embedUrl !== null).length;
   return (
-    <div className="space-y-7">
-      <PageHeader title="Speaker resources" description="Publish production guidance in the portal. Embeds are rendered only from the portal's approved HTTPS providers." />
-      <Card title="Create resource">
+    <div className="space-y-8">
+      <ProductionHeader
+        eyebrow="Organizer control room / Field kit"
+        title="Speaker resources"
+        description="Publish production guidance in the portal. Embeds are rendered only from the portal's approved HTTPS providers."
+        accent="sky"
+      />
+      <ProductionStats
+        stats={[
+          { label: "Resources", value: resources.length, tone: "sky" },
+          { label: "Speaker only", value: speakerResources, tone: "lime" },
+          { label: "Embedded", value: embeddedResources, tone: "coral" },
+        ]}
+      />
+      <Card className={productionCardClass} title="New asset / Create resource">
         <ResourceFields
           submitLabel="Create resource"
           loading={busyId === "new"}
@@ -110,40 +131,49 @@ export function OrganizerResourcesContent({
         />
       </Card>
       {resources.length === 0 ? (
-        <EmptyState title="No resources published" description="Create a speaker guide, slide template, or production briefing." />
-      ) : (
-        <div className="space-y-4">
-          {[...resources].sort((left, right) => left.order - right.order).map((resource) => (
-            <Card key={resource.id} title={resource.title}>
-              <ResourceFields
-                resource={resource}
-                submitLabel="Save changes"
-                loading={busyId === resource.id}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  onUpdate(resource, event.currentTarget);
-                }}
-                deleteAction={
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button type="button" variant="ghost" size="sm" disabled={busyId !== null}>Delete resource</Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete {resource.title}?</AlertDialogTitle>
-                        <AlertDialogDescription>This removes the current version from the speaker portal.</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Keep resource</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => onDelete(resource)}>Delete resource</AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                }
-              />
-            </Card>
-          ))}
+        <div className="border-2 border-[#171714] bg-[#fffdf7] p-6 shadow-[6px_6px_0_#171714]">
+          <EmptyState title="No resources published" description="Create a speaker guide, slide template, or production briefing." />
         </div>
+      ) : (
+        <section>
+          <ProductionSectionLabel>Published field kit</ProductionSectionLabel>
+          <div className="grid gap-5 xl:grid-cols-2">
+            {[...resources].sort((left, right) => left.order - right.order).map((resource) => (
+              <Card
+                className={`${productionCardClass} [&>header]:bg-[#8fdcff]`}
+                key={resource.id}
+                title={`Asset ${String(resource.order).padStart(2, "0")} / ${resource.title}`}
+              >
+                <ResourceFields
+                  resource={resource}
+                  submitLabel="Save changes"
+                  loading={busyId === resource.id}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    onUpdate(resource, event.currentTarget);
+                  }}
+                  deleteAction={
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button className={productionButtonClass} type="button" variant="ghost" size="sm" disabled={busyId !== null}>Delete resource</Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete {resource.title}?</AlertDialogTitle>
+                          <AlertDialogDescription>This removes the current version from the speaker portal.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Keep resource</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => onDelete(resource)}>Delete resource</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  }
+                />
+              </Card>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );
@@ -163,7 +193,7 @@ function ResourceFields({
   readonly deleteAction?: ReactNode;
 }) {
   return (
-    <form className="space-y-4" onSubmit={onSubmit}>
+    <form className={`space-y-4 ${productionFormClass}`} onSubmit={onSubmit}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Input name="title" label="Title" required defaultValue={resource?.title ?? ""} />
         <Input name="slug" label="Slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" defaultValue={resource?.slug ?? ""} />
@@ -176,7 +206,7 @@ function ResourceFields({
       <Textarea name="body" label="Resource text" rows={5} defaultValue={resource?.body ?? ""} />
       <Input name="embedUrl" label="Approved embed URL" type="url" placeholder="https://" defaultValue={resource?.embedUrl ?? ""} />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button type="submit" loading={loading}>{submitLabel}</Button>
+        <Button className={`${productionButtonClass} bg-[#7857ff] text-white`} type="submit" loading={loading}>{submitLabel}</Button>
         {deleteAction}
       </div>
     </form>

@@ -14,7 +14,6 @@ import {
   Card,
   EmptyState,
   Input,
-  PageHeader,
   Select,
   Textarea,
   Toaster,
@@ -23,6 +22,14 @@ import {
 import type { CreateTaskInput, PortalTaskDefinition, PortalTaskKind, UpdateTaskInput } from "../schema";
 import { createTask, deleteTask, getTaskDefinitions, resolveOrganizerEventId, updateTask } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
+import {
+  ProductionHeader,
+  ProductionSectionLabel,
+  ProductionStats,
+  productionButtonClass,
+  productionCardClass,
+  productionFormClass,
+} from "../components/production-ui";
 
 export const path = "/e/:eventSlug/tasks";
 
@@ -109,10 +116,24 @@ export function OrganizerTasksContent({
   readonly onUpdate: (task: PortalTaskDefinition, form: HTMLFormElement) => void;
   readonly onDelete: (task: PortalTaskDefinition) => void;
 }) {
+  const datedTasks = tasks.filter((task) => task.dueAt !== null).length;
+  const linkedForms = tasks.filter((task) => task.kind === "form" && task.formId).length;
   return (
-    <div className="space-y-7">
-      <PageHeader title="Speaker tasks" description="Define the ordered checklist that drives speaker readiness across the portal and organizer dashboard." />
-      <Card title="Create task">
+    <div className="space-y-8">
+      <ProductionHeader
+        eyebrow="Organizer control room / Cue stack"
+        title="Speaker tasks"
+        description="Define the ordered checklist that drives speaker readiness across the portal and organizer dashboard."
+        accent="purple"
+      />
+      <ProductionStats
+        stats={[
+          { label: "Cues", value: tasks.length, tone: "purple" },
+          { label: "With deadlines", value: datedTasks, tone: "coral" },
+          { label: "Linked forms", value: linkedForms, tone: "sky" },
+        ]}
+      />
+      <Card className={productionCardClass} title="New cue / Create task">
         <TaskFields
           submitLabel="Create task"
           loading={busyId === "new"}
@@ -123,40 +144,49 @@ export function OrganizerTasksContent({
         />
       </Card>
       {tasks.length === 0 ? (
-        <EmptyState title="No readiness tasks" description="Create the first production task so speakers know what to complete next." />
-      ) : (
-        <div className="space-y-4">
-          {[...tasks].sort((left, right) => left.order - right.order).map((task) => (
-            <Card key={task.id} title={task.name}>
-              <TaskFields
-                task={task}
-                submitLabel="Save changes"
-                loading={busyId === task.id}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  onUpdate(task, event.currentTarget);
-                }}
-                deleteAction={
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button type="button" variant="ghost" size="sm" disabled={busyId !== null}>Delete task</Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete {task.name}?</AlertDialogTitle>
-                        <AlertDialogDescription>Existing completion history for this version will no longer count toward readiness.</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Keep task</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => onDelete(task)}>Delete task</AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                }
-              />
-            </Card>
-          ))}
+        <div className="border-2 border-[#171714] bg-[#fffdf7] p-6 shadow-[6px_6px_0_#171714]">
+          <EmptyState title="No readiness tasks" description="Create the first production task so speakers know what to complete next." />
         </div>
+      ) : (
+        <section>
+          <ProductionSectionLabel>Active cue stack</ProductionSectionLabel>
+          <div className="grid gap-5 xl:grid-cols-2">
+            {[...tasks].sort((left, right) => left.order - right.order).map((task) => (
+              <Card
+                className={`${productionCardClass} [&>header]:bg-[#caff4a]`}
+                key={task.id}
+                title={`Cue ${String(task.order).padStart(2, "0")} / ${task.name}`}
+              >
+                <TaskFields
+                  task={task}
+                  submitLabel="Save changes"
+                  loading={busyId === task.id}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    onUpdate(task, event.currentTarget);
+                  }}
+                  deleteAction={
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button className={productionButtonClass} type="button" variant="ghost" size="sm" disabled={busyId !== null}>Delete task</Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete {task.name}?</AlertDialogTitle>
+                          <AlertDialogDescription>Existing completion history for this version will no longer count toward readiness.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Keep task</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => onDelete(task)}>Delete task</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  }
+                />
+              </Card>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );
@@ -177,7 +207,7 @@ function TaskFields({
 }) {
   const dateValue = localDateTimeValue(task?.dueAt);
   return (
-    <form className="space-y-4" onSubmit={onSubmit}>
+    <form className={`space-y-4 ${productionFormClass}`} onSubmit={onSubmit}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Input name="name" label="Task name" required defaultValue={task?.name ?? ""} />
         <Select name="kind" label="Task type" defaultValue={task?.kind ?? "confirm"}>
@@ -189,7 +219,7 @@ function TaskFields({
       </div>
       <Textarea name="description" label="Instructions" defaultValue={task?.description ?? ""} />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button type="submit" loading={loading}>{submitLabel}</Button>
+        <Button className={`${productionButtonClass} bg-[#7857ff] text-white`} type="submit" loading={loading}>{submitLabel}</Button>
         {deleteAction}
       </div>
     </form>

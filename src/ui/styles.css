@@ -1,48 +1,54 @@
 @import "tailwindcss";
 
 /*
- * session-party design tokens — Luma-flavored.
- * Calm, editorial, event-first: warm near-white canvas, deep neutral ink,
- * one electric-violet accent, generous radii, soft layered shadows.
+ * Session Party design tokens — a backstage call sheet translated into UI.
+ * Warm paper, hard rules, loud production colors, square geometry, and
+ * offset-print shadows keep the operations cockpit energetic and legible.
  */
 @theme {
   --font-sans: "Inter", "SF Pro Text", ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 
-  /* Warm neutrals — never pure black or pure white */
-  --color-canvas: #faf9f7;
-  --color-surface: #fffefc;
-  --color-surface-muted: #f3f1ed;
-  --color-ink: #1c1b18;
-  --color-ink-secondary: #55524b;
-  --color-ink-faint: #6f6b63;
-  --color-line: #eae7e1;
-  --color-line-strong: #dcd8d0;
+  /* Warm production paper + press ink */
+  --color-canvas: #f3efe3;
+  --color-surface: #fffdf7;
+  --color-surface-muted: #e8e2d5;
+  --color-ink: #171714;
+  --color-ink-secondary: #4f4a40;
+  --color-ink-faint: #665f52;
+  --color-line: #cfc7b8;
+  --color-line-strong: #171714;
 
-  /* The one accent — electric violet */
-  --color-accent: #6c3bf4;
-  --color-accent-hover: #5c2de4;
-  --color-accent-soft: #f0eafe;
-  --color-accent-deep: #4a21c4;
-  --color-on-accent: #fdfbff;
+  /* Production inks */
+  --color-accent: #7857ff;
+  --color-accent-hover: #6543ed;
+  --color-accent-soft: #e2daff;
+  --color-accent-deep: #3e268f;
+  --color-on-accent: #fffdf7;
+  --color-production-lime: #caff4a;
+  --color-production-coral: #ff714f;
+  --color-production-sky: #8fdcff;
+  --color-production-yellow: #ffd34e;
 
   /* Status */
-  --color-success: #177244;
-  --color-success-soft: #e3f4ea;
-  --color-warning: #8a5b00;
-  --color-warning-soft: #fdf2d7;
-  --color-danger: #c92c34;
-  --color-danger-hover: #b02229;
-  --color-danger-soft: #fdeaea;
+  --color-success: #245c25;
+  --color-success-soft: #caff4a;
+  --color-warning: #6a4800;
+  --color-warning-soft: #ffd34e;
+  --color-danger: #7d1f19;
+  --color-danger-hover: #681510;
+  --color-danger-soft: #ffb4a2;
 
   /* Shape */
-  --radius-card: 14px;
-  --radius-control: 10px;
+  --radius-card: 2px;
+  --radius-control: 2px;
 
-  /* Soft layered elevation */
-  --shadow-card: 0 1px 2px rgb(28 27 24 / 0.04), 0 4px 16px rgb(28 27 24 / 0.05);
-  --shadow-pop: 0 2px 8px rgb(28 27 24 / 0.08), 0 16px 40px rgb(28 27 24 / 0.14);
-  --shadow-sheet: -1px 0 4px rgb(28 27 24 / 0.05), -12px 0 48px rgb(28 27 24 / 0.14);
+  /* Offset-print elevation */
+  --shadow-xs: 2px 2px 0 rgb(23 23 20 / 0.3);
+  --shadow-button: 3px 3px 0 #171714;
+  --shadow-card: 5px 5px 0 #171714;
+  --shadow-pop: 8px 8px 0 #171714;
+  --shadow-sheet: -8px 0 0 #171714;
 
   /* Motion — exponential ease-out, no bounce */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -78,7 +84,16 @@
   }
 
   ::selection {
-    background-color: var(--color-accent-soft);
-    color: var(--color-accent-deep);
+    background-color: var(--color-production-lime);
+    color: var(--color-ink);
+  }
+}
+
+@layer utilities {
+  .production-grid {
+    background-image:
+      linear-gradient(rgb(23 23 20 / 0.055) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(23 23 20 / 0.055) 1px, transparent 1px);
+    background-size: 44px 44px;
   }
 }

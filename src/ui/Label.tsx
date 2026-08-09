@@ -7,7 +7,7 @@ export type LabelProps = ComponentPropsWithRef<typeof RadixLabel.Root>;
 export function Label({ className, ...props }: LabelProps) {
   return (
     <RadixLabel.Root
-      className={cx("text-[13px] font-medium leading-none text-ink peer-disabled:cursor-not-allowed peer-disabled:opacity-60", className)}
+      className={cx("text-[11px] font-black uppercase leading-none tracking-[0.08em] text-ink peer-disabled:cursor-not-allowed peer-disabled:opacity-60", className)}
       {...props}
     />
   );

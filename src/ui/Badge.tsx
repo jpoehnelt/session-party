@@ -5,15 +5,15 @@ import { cx } from "./cx";
 export type BadgeTone = "neutral" | "accent" | "success" | "warning" | "danger";
 
 const badgeVariants = cva(
-  "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium",
+  "inline-flex items-center gap-1 whitespace-nowrap rounded-control border-2 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.1em]",
   {
     variants: {
       tone: {
-        neutral: "border-line bg-surface-muted text-ink-secondary",
-        accent: "border-accent/20 bg-accent-soft text-accent-deep",
-        success: "border-success/20 bg-success-soft text-success",
-        warning: "border-warning/20 bg-warning-soft text-warning",
-        danger: "border-danger/20 bg-danger-soft text-danger",
+        neutral: "border-line-strong bg-surface-muted text-ink-secondary",
+        accent: "border-line-strong bg-accent text-on-accent",
+        success: "border-line-strong bg-success-soft text-ink",
+        warning: "border-line-strong bg-warning-soft text-ink",
+        danger: "border-line-strong bg-danger-soft text-danger",
       },
     },
     defaultVariants: {

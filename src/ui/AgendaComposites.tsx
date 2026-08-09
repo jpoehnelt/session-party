@@ -38,12 +38,12 @@ export function ConflictIndicator({
     <section
       role={blocking ? "alert" : "status"}
       className={cx(
-        "rounded-control border px-4 py-3",
-        blocking ? "border-danger/30 bg-danger-soft" : "border-warning/30 bg-warning-soft",
+        "rounded-control border-2 border-line-strong px-4 py-3 shadow-[3px_3px_0_#171714]",
+        blocking ? "bg-danger-soft" : "bg-warning-soft",
         className,
       )}
     >
-      <h3 className="text-sm font-semibold text-ink">Resolve schedule conflicts</h3>
+      <h3 className="text-xs font-black uppercase tracking-[0.1em] text-ink">Resolve schedule conflicts</h3>
       <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink-secondary">
         {conflicts.map((conflict, index) => (
           <li key={`${conflict.kind}-${conflict.itemIds.join("-")}-${index}`}>{conflict.explanation}</li>
@@ -100,16 +100,16 @@ export function AgendaBoard({
       <div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(16rem,1fr))]">
         {groups.map((group) => (
           <section key={group.id} aria-labelledby={`agenda-group-${group.id}`}>
-            <h2 id={`agenda-group-${group.id}`} className="mb-2 text-sm font-semibold text-ink">{group.label}</h2>
+            <h2 id={`agenda-group-${group.id}`} className="mb-3 border-2 border-line-strong bg-ink px-3 py-2 text-xs font-black uppercase tracking-[0.1em] text-on-accent shadow-[3px_3px_0_#7857ff]">{group.label}</h2>
             <div className="space-y-2">
               {group.items.map((item) => (
                 <Card
                   key={item.id}
-                  className={cx(selectedItemId === item.id && "ring-2 ring-accent/40")}
+                  className={cx("shadow-[3px_3px_0_#171714]", selectedItemId === item.id && "ring-4 ring-accent")}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <h3 className="font-medium text-ink">{item.title}</h3>
+                      <h3 className="font-black tracking-[-0.02em] text-ink">{item.title}</h3>
                       <p className="mt-1 text-xs text-ink-faint">
                         {[item.startsAt, item.durationMin ? `${item.durationMin} min` : undefined, item.room, item.track]
                           .filter(Boolean)

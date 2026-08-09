@@ -650,15 +650,25 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const selectedConflicts = selectedTalk
     ? agenda.conflicts.filter(({ talkIds }) => talkIds.includes(selectedTalk.id))
     : [];
+  const scheduledTalkCount = agenda.talks.filter(
+    ({ startsAt, status }) => startsAt !== null && status !== "cancelled",
+  ).length;
+  const confirmedTalkCount = agenda.talks.filter(({ status }) => status === "confirmed").length;
 
   return (
     <>
       <PageHeader
-        title={agenda.eventName}
+        className="relative"
+        title={
+          <span>
+            <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.2em] text-accent">Run of show / live desk</span>
+            {agenda.eventName}
+          </span>
+        }
         description={
-          <span className="flex flex-wrap items-center gap-2">
-            <span>Agenda operations</span>
-            <span aria-hidden="true">·</span>
+          <span className="flex flex-wrap items-center gap-2 font-black uppercase tracking-[0.08em]">
+            <span>Agenda control room</span>
+            <span aria-hidden="true">◆</span>
             <span>{agenda.timezone}</span>
             <Badge tone={agenda.publication.revision > 0 ? "success" : "neutral"}>
               {agenda.publication.revision > 0 ? `Published r${agenda.publication.revision}` : "Private draft"}
@@ -679,21 +689,49 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               loading={busy && intent.acknowledgement === "pending"}
               onClick={() => void publish()}
             >
-              Publish revision
+              Publish run sheet
             </Button>
           </div>
         }
       />
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <section aria-label="Agenda production status" className="mb-7 grid border-2 border-line-strong bg-surface shadow-card sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          [String(scheduledTalkCount).padStart(2, "0"), "Talks placed", `${confirmedTalkCount} confirmed`, "bg-production-sky"],
+          [String(agenda.rooms.length).padStart(2, "0"), "Rooms online", `${agenda.tracks.length} tracks`, "bg-production-lime"],
+          [String(agenda.conflicts.length).padStart(2, "0"), "Conflicts", agenda.conflicts.length === 0 ? "Clear to publish" : "Needs attention", agenda.conflicts.length === 0 ? "bg-production-yellow" : "bg-production-coral"],
+          [agenda.publication.revision > 0 ? `R${agenda.publication.revision}` : "—", "Public release", agenda.publication.publishedAt === null ? "Not on air" : "Snapshot locked", "bg-accent text-on-accent"],
+        ].map(([value, label, detail, color], index) => (
+          <div className={`min-h-28 p-4 ${color} ${
+            index === 1
+              ? "border-t-2 border-line-strong sm:border-l-2 sm:border-t-0"
+              : index === 2
+                ? "border-t-2 border-line-strong xl:border-l-2 xl:border-t-0"
+                : index === 3
+                  ? "border-t-2 border-line-strong sm:border-l-2 xl:border-t-0"
+                  : ""
+          }`} key={label}>
+            <div className="flex h-full items-end justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.14em] opacity-65">{label}</p>
+                <p className="mt-2 text-xs font-black uppercase tracking-[0.06em]">{detail}</p>
+              </div>
+              <p className="text-4xl font-black leading-none tracking-[-0.07em]">{value}</p>
+            </div>
+          </div>
+        ))}
+      </section>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-4 border-b-2 border-line-strong pb-5">
         <Tabs
           tabs={views}
           active={view}
           onChange={(id) => setView(id as AgendaView)}
         />
-        <p className="w-full text-xs text-ink-faint md:w-auto">Confirmed talks stay private until this revision is published.</p>
+        <p className="w-full max-w-md border-l-4 border-production-coral pl-3 text-xs font-bold text-ink-secondary md:w-auto">
+          Confirmed talks stay backstage until this run sheet is published.
+        </p>
       </div>
       {refresh.status !== "idle" && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-ink-secondary" role="status" aria-live="polite">
+        <div className="mb-5 flex flex-wrap items-center gap-2 border-2 border-line-strong bg-production-yellow px-3 py-2.5 text-sm font-semibold text-ink shadow-[3px_3px_0_#171714]" role="status" aria-live="polite">
           <Badge tone={refresh.status === "error" ? "danger" : "neutral"}>
             {refresh.status === "error" ? "Refresh failed" : "Refreshing"}
           </Badge>
@@ -731,24 +769,25 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       >
         <div className="space-y-8">
           <section aria-labelledby="agenda-track-setup-heading" className="space-y-4">
-            <div>
-              <h2 id="agenda-track-setup-heading" className="text-base font-semibold text-ink">Tracks</h2>
-              <p className="mt-1 text-sm text-ink-secondary">Create program lanes and control their stable display order.</p>
+            <div className="border-l-4 border-accent pl-3">
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent">Signal routing</p>
+              <h2 id="agenda-track-setup-heading" className="mt-1 text-2xl font-black tracking-[-0.04em] text-ink">Tracks</h2>
+              <p className="mt-1 text-sm font-semibold text-ink-secondary">Create program lanes and control their stable display order.</p>
             </div>
             {agenda.tracks.length > 0 && (
-              <ul className="divide-y divide-line rounded-control border border-line bg-surface">
+              <ul className="divide-y-2 divide-line-strong border-2 border-line-strong bg-surface shadow-[4px_4px_0_#171714]">
                 {agenda.tracks.map((track) => (
                   <li key={track.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-ink">{track.name}</p>
-                      <p className="text-xs text-ink-secondary">Order {track.order} · Version {track.version}{track.color ? ` · ${track.color}` : ""}</p>
+                      <p className="truncate text-sm font-black text-ink">{track.name}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-ink-secondary">Order {track.order} · Version {track.version}{track.color ? ` · ${track.color}` : ""}</p>
                     </div>
                     <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => editTrack(track)}>Edit</Button>
                   </li>
                 ))}
               </ul>
             )}
-            <form className="space-y-3 rounded-control border border-line bg-surface-muted p-4" onSubmit={(event) => void saveTrack(event)}>
+            <form className="space-y-3 border-2 border-line-strong bg-production-sky/35 p-4 shadow-[4px_4px_0_#171714]" onSubmit={(event) => void saveTrack(event)}>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Input
                   required
@@ -781,24 +820,25 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           </section>
 
           <section aria-labelledby="agenda-room-setup-heading" className="space-y-4">
-            <div>
-              <h2 id="agenda-room-setup-heading" className="text-base font-semibold text-ink">Rooms</h2>
-              <p className="mt-1 text-sm text-ink-secondary">Add physical or virtual spaces before scheduling talks.</p>
+            <div className="border-l-4 border-production-coral pl-3">
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-danger">Venue map</p>
+              <h2 id="agenda-room-setup-heading" className="mt-1 text-2xl font-black tracking-[-0.04em] text-ink">Rooms</h2>
+              <p className="mt-1 text-sm font-semibold text-ink-secondary">Add physical or virtual spaces before scheduling talks.</p>
             </div>
             {agenda.rooms.length > 0 && (
-              <ul className="divide-y divide-line rounded-control border border-line bg-surface">
+              <ul className="divide-y-2 divide-line-strong border-2 border-line-strong bg-surface shadow-[4px_4px_0_#171714]">
                 {agenda.rooms.map((room) => (
                   <li key={room.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-ink">{room.name}</p>
-                      <p className="text-xs text-ink-secondary">Order {room.order} · Version {room.version}{room.capacity === null ? "" : ` · ${room.capacity} seats`}</p>
+                      <p className="truncate text-sm font-black text-ink">{room.name}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-ink-secondary">Order {room.order} · Version {room.version}{room.capacity === null ? "" : ` · ${room.capacity} seats`}</p>
                     </div>
                     <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => editRoom(room)}>Edit</Button>
                   </li>
                 ))}
               </ul>
             )}
-            <form className="space-y-3 rounded-control border border-line bg-surface-muted p-4" onSubmit={(event) => void saveRoom(event)}>
+            <form className="space-y-3 border-2 border-line-strong bg-production-coral/25 p-4 shadow-[4px_4px_0_#171714]" onSubmit={(event) => void saveRoom(event)}>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Input
                   required
@@ -851,10 +891,10 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       >
         {selectedTalk && (
           <form id="agenda-move-form" className="space-y-5" onSubmit={(event) => void saveSchedule(event)}>
-            <div className="rounded-control border border-line bg-surface-muted p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Speakers</p>
-              <p className="mt-1 text-sm text-ink">{selectedTalk.speakerNames.join(", ")}</p>
-              <p className="mt-1 text-xs text-ink-secondary">Current version {selectedTalk.version}</p>
+            <div className="border-2 border-line-strong bg-production-sky p-4 shadow-[4px_4px_0_#171714]">
+              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-ink/65">On stage</p>
+              <p className="mt-1 text-lg font-black tracking-[-0.025em] text-ink">{selectedTalk.speakerNames.join(", ")}</p>
+              <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-secondary">Cue version {selectedTalk.version}</p>
             </div>
             <ConflictIndicator conflicts={selectedConflicts} />
             <Select

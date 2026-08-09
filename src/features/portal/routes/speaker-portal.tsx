@@ -12,7 +12,6 @@ import {
   Dropzone,
   EmptyState,
   Input,
-  PageHeader,
   ProgressChecklist,
   Select,
   Skeleton,
@@ -44,6 +43,15 @@ import {
   uploadSpeakerAsset,
 } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
+import {
+  ProductionBareFrame,
+  ProductionHeader,
+  ProductionSectionLabel,
+  ProductionStats,
+  productionButtonClass,
+  productionCardClass,
+  productionFormClass,
+} from "../components/production-ui";
 
 export const path = "/e/:eventSlug/portal/*";
 export const layout = "bare" as const;
@@ -103,11 +111,7 @@ function profileInput(profile: SpeakerProfile, form: HTMLFormElement): UpdatePro
 }
 
 function SpeakerPortalFrame({ children }: { readonly children: ReactNode }) {
-  return (
-    <main className="min-h-dvh bg-canvas px-4 py-8 text-ink sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl">{children}</div>
-    </main>
-  );
+  return <ProductionBareFrame>{children}</ProductionBareFrame>;
 }
 
 export default function SpeakerPortalRoute() {
@@ -246,23 +250,27 @@ export function SpeakerClaimPrompt({
   readonly onRetry: () => void;
 }) {
   return (
-    <div className="mx-auto max-w-xl space-y-4">
+    <div className="mx-auto max-w-xl space-y-6 pt-6 sm:pt-12">
+      <div className="border-[3px] border-[#171714] bg-[#7857ff] px-5 py-4 text-white shadow-[7px_7px_0_#171714]">
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-white/65">Speaker entrance / Secure access</p>
+        <h1 className="mt-2 text-3xl font-black tracking-[-0.05em]">Step up to the portal.</h1>
+      </div>
       {error && (
         <Alert tone="danger">
           <AlertTitle>Account could not be linked</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      <Card>
+      <Card className={productionCardClass}>
         <EmptyState
           title={claim ? "Speaker account linked" : "Claim your speaker access"}
           description={claim
             ? "Your accepted speaker record is linked. The event team can now finish provisioning; check again after they do."
             : "If this account email matches the accepted submission’s speaker email, link it securely to continue onboarding."}
           action={claim
-            ? <Button type="button" onClick={onRetry}>Check portal access</Button>
+            ? <Button className={`${productionButtonClass} bg-[#caff4a] text-[#171714]`} type="button" onClick={onRetry}>Check portal access</Button>
             : (
-              <Button type="button" loading={busy} disabled={busy} onClick={onClaim}>
+              <Button className={`${productionButtonClass} bg-[#caff4a] text-[#171714]`} type="button" loading={busy} disabled={busy} onClick={onClaim}>
                 Claim speaker access
               </Button>
             )}
@@ -298,16 +306,30 @@ export function SpeakerPortalContent({
   const [activeFormTaskId, setActiveFormTaskId] = useState<string | null>(null);
   const incompleteFormTasks = snapshot.tasks.filter((task) => task.kind === "form" && !task.completed);
   const activeFormTask = incompleteFormTasks.find((task) => task.id === activeFormTaskId);
+  const remainingTasks = snapshot.readiness.tasksTotal - snapshot.readiness.tasksDone;
   return (
-    <div className="space-y-8">
-      <PageHeader
+    <div className="space-y-9">
+      <ProductionHeader
+        eyebrow="Speaker call sheet / Your workspace"
         title={snapshot.event.name}
         description="Your speaker production workspace. Complete each step here before the event."
+        accent={snapshot.readiness.state === "ready" ? "lime" : "purple"}
         actions={
-          <Badge tone={snapshot.readiness.state === "ready" ? "success" : "accent"}>
+          <Badge
+            className="rounded-none border-2 border-[#171714] bg-[#caff4a] px-3 py-2 font-black uppercase tracking-[0.1em] text-[#171714] shadow-[3px_3px_0_#171714]"
+            tone={snapshot.readiness.state === "ready" ? "success" : "accent"}
+          >
             {snapshot.readiness.tasksDone} of {snapshot.readiness.tasksTotal} ready
           </Badge>
         }
+      />
+      <ProductionStats
+        stats={[
+          { label: "Cues complete", value: snapshot.readiness.tasksDone, tone: "lime" },
+          { label: "Cues remaining", value: remainingTasks, tone: "coral" },
+          { label: "Files delivered", value: snapshot.assets.length, tone: "sky" },
+          { label: "Resources", value: snapshot.resources.length, tone: "purple" },
+        ]}
       />
       {error && (
         <Alert tone="danger">
@@ -315,16 +337,17 @@ export function SpeakerPortalContent({
         </Alert>
       )}
 
-      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.65fr)]">
-        <div className="min-w-0 space-y-8">
+      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.58fr)]">
+        <div className="min-w-0 space-y-9">
           {snapshot.submission && (
-            <section className="border-y border-line py-5" aria-labelledby="accepted-session-title">
-              <p className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Accepted session</p>
-              <h2 id="accepted-session-title" className="mt-2 text-xl font-semibold text-ink">
+            <section className="relative overflow-hidden border-[3px] border-[#171714] bg-[#ff714f] p-5 shadow-[7px_7px_0_#171714] sm:p-7" aria-labelledby="accepted-session-title">
+              <span aria-hidden="true" className="absolute -right-6 -top-8 text-8xl font-black tracking-[-0.08em] opacity-10">ON</span>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#171714]/65">Accepted session / Cleared for production</p>
+              <h2 id="accepted-session-title" className="mt-3 max-w-2xl text-2xl font-black leading-tight tracking-[-0.04em] text-[#171714] sm:text-3xl">
                 {snapshot.submission.title}
               </h2>
               {snapshot.submission.category && (
-                <p className="mt-1 text-sm text-ink-secondary">{snapshot.submission.category}</p>
+                <p className="mt-3 inline-block border-2 border-[#171714] bg-[#fffdf7] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[#171714]">{snapshot.submission.category}</p>
               )}
             </section>
           )}
@@ -359,8 +382,9 @@ export function SpeakerPortalContent({
         </div>
 
         <aside className="min-w-0 space-y-5 xl:sticky xl:top-6 xl:self-start" aria-label="Speaker readiness">
+          <ProductionSectionLabel>Next cues</ProductionSectionLabel>
           {snapshot.tasks.length === 0 ? (
-            <Card>
+            <Card className={productionCardClass}>
               <EmptyState
                 title="No production tasks"
                 description="The event team has not assigned any speaker tasks yet."
@@ -369,7 +393,7 @@ export function SpeakerPortalContent({
           ) : (
             <>
               {incompleteFormTasks.length > 0 && (
-                <Card title="Forms to complete">
+                <Card className={`${productionCardClass} [&>header]:bg-[#8fdcff]`} title="Forms to complete">
                   <ul className="space-y-4">
                     {incompleteFormTasks.map((task) => {
                       const open = task.id === activeFormTask?.id;
@@ -384,6 +408,7 @@ export function SpeakerPortalContent({
                               type="button"
                               variant="secondary"
                               size="sm"
+                              className={productionButtonClass}
                               disabled={busyAction !== null}
                               aria-expanded={open}
                               aria-controls={`speaker-task-form-${task.id}`}
@@ -400,8 +425,9 @@ export function SpeakerPortalContent({
                   </ul>
                 </Card>
               )}
-              <Card>
+              <Card className={`${productionCardClass} [&>div]:bg-[#fffdf7]`}>
                 <ProgressChecklist
+                  className="[&_h3]:font-black [&_h3]:uppercase [&_h3]:tracking-[0.1em]"
                   items={snapshot.tasks.map((task) => ({
                     id: task.id,
                     label: task.name,
@@ -487,14 +513,14 @@ export function SpeakerTaskFormPanel({
 
   return (
     <section id={`speaker-task-form-${task.id}`} aria-labelledby={`speaker-task-form-title-${task.id}`}>
-      <Card title={task.name}>
+      <Card className={`${productionCardClass} [&>header]:bg-[#8fdcff]`} title={`Open form / ${task.name}`}>
         <div className="space-y-5">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 id={`speaker-task-form-title-${task.id}`} className="font-semibold text-ink">Linked speaker form</h2>
+              <h2 id={`speaker-task-form-title-${task.id}`} className="text-xl font-black tracking-[-0.035em] text-[#171714]">Linked speaker form</h2>
               {task.description && <p className="mt-1 text-sm text-ink-secondary">{task.description}</p>}
             </div>
-            <Button type="button" variant="ghost" size="sm" onClick={onClose}>Close</Button>
+            <Button className={productionButtonClass} type="button" variant="ghost" size="sm" onClick={onClose}>Close</Button>
           </div>
           {form === undefined ? (
             <div className="space-y-3" aria-label="Loading linked form">
@@ -504,7 +530,7 @@ export function SpeakerTaskFormPanel({
           ) : form === null ? (
             <EmptyState title="Linked form unavailable" description={loadError ?? "Ask the event team to check this task's form."} />
           ) : (
-            <form className="space-y-5" onSubmit={(event) => void submit(event)}>
+            <form className={`space-y-5 ${productionFormClass}`} onSubmit={(event) => void submit(event)}>
               <div>
                 <p className="text-sm font-medium text-ink">{form.form.name}</p>
                 {form.form.description && <p className="mt-1 text-sm text-ink-secondary">{form.form.description}</p>}
@@ -530,7 +556,7 @@ export function SpeakerTaskFormPanel({
                   <AlertDescription>{submitError}</AlertDescription>
                 </Alert>
               )}
-              {accepting && <Button type="submit" loading={busy}>Submit form</Button>}
+              {accepting && <Button className={`${productionButtonClass} bg-[#7857ff] text-white`} type="submit" loading={busy}>Submit form</Button>}
             </form>
           )}
         </div>
@@ -554,10 +580,15 @@ function ProfileEditor({
     onSave(profileInput(profile, event.currentTarget));
   };
   return (
-    <form className="space-y-5" onSubmit={submit} aria-labelledby="profile-heading">
+    <form
+      className={`space-y-5 border-[3px] border-[#171714] bg-[#fffdf7] p-5 shadow-[7px_7px_0_#171714] sm:p-7 ${productionFormClass}`}
+      onSubmit={submit}
+      aria-labelledby="profile-heading"
+    >
       <div>
-        <h2 id="profile-heading" className="text-lg font-semibold text-ink">Speaker profile</h2>
-        <p className="mt-1 text-sm text-ink-secondary">This information is used by the event team and, when published, the speaker gallery.</p>
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7857ff]">Profile desk / Public identity</p>
+        <h2 id="profile-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Speaker profile</h2>
+        <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">This information is used by the event team and, when published, the speaker gallery.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Input name="displayName" label="Display name" required defaultValue={profile.displayName} />
@@ -566,7 +597,7 @@ function ProfileEditor({
       </div>
       <Textarea name="bio" label="Biography" rows={6} defaultValue={profile.bio ?? ""} />
       <fieldset className="space-y-3">
-        <legend className="text-sm font-semibold text-ink">Public links</legend>
+        <legend className="text-xs font-black uppercase tracking-[0.12em] text-[#171714]">Public links</legend>
         {Array.from({ length: linkCount }, (_, index) => (
           <div key={index} className="grid gap-3 sm:grid-cols-[minmax(8rem,0.4fr)_minmax(0,1fr)]">
             <Input name="linkLabel" aria-label={`Link ${index + 1} label`} placeholder="Website" defaultValue={profile.links[index]?.label ?? ""} />
@@ -580,9 +611,9 @@ function ProfileEditor({
             />
           </div>
         ))}
-        <Button type="button" variant="ghost" size="sm" onClick={() => setLinkCount((count) => count + 1)}>Add another link</Button>
+        <Button className={productionButtonClass} type="button" variant="ghost" size="sm" onClick={() => setLinkCount((count) => count + 1)}>Add another link</Button>
       </fieldset>
-      <Button type="submit" loading={loading}>Save profile</Button>
+      <Button className={`${productionButtonClass} bg-[#7857ff] text-white`} type="submit" loading={loading}>Save profile</Button>
       {profile.pendingSyncFields.length > 0 && (
         <p className="text-sm text-ink-secondary">
           Pending organizer sync: {profile.pendingSyncFields.join(", ")}
@@ -610,10 +641,11 @@ function UploadWorkspace({
   const [purpose, setPurpose] = useState<UploadPortalAssetInput["purpose"]>("slides");
   const uploadTask = tasks.find((task) => task.kind === "upload");
   return (
-    <section className="space-y-4" aria-labelledby="uploads-heading">
+    <section className={`space-y-5 border-[3px] border-[#171714] bg-[#fffdf7] p-5 shadow-[7px_7px_0_#ff714f] sm:p-7 ${productionFormClass}`} aria-labelledby="uploads-heading">
       <div>
-        <h2 id="uploads-heading" className="text-lg font-semibold text-ink">Production files</h2>
-        <p className="mt-1 text-sm text-ink-secondary">
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#ff714f]">Asset drop / Final files</p>
+        <h2 id="uploads-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Production files</h2>
+        <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">
           Upload the final files the event team should use. Up to 10 MiB with the current upload transport.
         </p>
       </div>
@@ -623,6 +655,7 @@ function UploadWorkspace({
         <option value="headshot">Headshot</option>
       </Select>
       <Dropzone
+        className="rounded-none border-2 border-[#171714] bg-[#ece8dc] [&>div]:rounded-none [&>div]:border-2 [&>div]:border-[#171714] [&>div]:bg-[#caff4a] [&>div]:text-[#171714] [&_button]:font-black [&_button]:text-[#7857ff]"
         multiple={false}
         disabled={loading}
         accept={purpose === "headshot"
@@ -655,11 +688,11 @@ function UploadWorkspace({
       {assets.length === 0 ? (
         <EmptyState title="No files uploaded" description="Your uploaded headshots, slides, and documents will be listed here." />
       ) : (
-        <ul className="divide-y divide-line border-y border-line">
+        <ul className="divide-y-2 divide-[#171714] border-2 border-[#171714] bg-[#f3efe3]">
           {assets.map((asset) => (
-            <li key={asset.id} className="flex items-center justify-between gap-4 py-3 text-sm">
-              <span className="min-w-0 truncate font-medium text-ink">{asset.filename}</span>
-              <span className="shrink-0 text-ink-faint">{asset.purpose} · {Math.ceil(asset.size / 1024)} KB</span>
+            <li key={asset.id} className="flex items-center justify-between gap-4 px-3 py-3 text-sm">
+              <span className="min-w-0 truncate font-bold text-[#171714]">{asset.filename}</span>
+              <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.08em] text-[#665f52]">{asset.purpose} · {Math.ceil(asset.size / 1024)} KB</span>
             </li>
           ))}
         </ul>
@@ -670,31 +703,41 @@ function UploadWorkspace({
 
 export function ResourceList({ resources }: { readonly resources: readonly PortalResource[] }) {
   if (resources.length === 0) {
-    return <EmptyState title="No speaker resources yet" description="Event guidance and production resources will appear here." />;
+    return (
+      <div className="border-2 border-[#171714] bg-[#fffdf7] p-6 shadow-[6px_6px_0_#171714]">
+        <EmptyState title="No speaker resources yet" description="Event guidance and production resources will appear here." />
+      </div>
+    );
   }
   return (
-    <section className="space-y-4" aria-labelledby="resources-heading">
-      <h2 id="resources-heading" className="text-lg font-semibold text-ink">Speaker resources</h2>
-      {resources.map((resource) => {
-        const embedUrl = allowlistedEmbedUrl(resource.embedUrl);
-        return (
-          <article key={resource.id} className="border-t border-line pt-4">
-            <h3 className="font-semibold text-ink">{resource.title}</h3>
-            {resource.body && <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-ink-secondary">{resource.body}</p>}
-            {embedUrl && (
-              <iframe
-                className="mt-4 aspect-video w-full rounded-card border border-line bg-surface"
-                src={embedUrl}
-                title={resource.title}
-                loading="lazy"
-                sandbox="allow-scripts allow-same-origin allow-presentation"
-                referrerPolicy="no-referrer"
-                allow="fullscreen"
-              />
-            )}
-          </article>
-        );
-      })}
+    <section aria-labelledby="resources-heading">
+      <ProductionSectionLabel>Speaker resources</ProductionSectionLabel>
+      <h2 id="resources-heading" className="sr-only">Speaker resources</h2>
+      <div className="grid gap-5 md:grid-cols-2">
+        {resources.map((resource, index) => {
+          const embedUrl = allowlistedEmbedUrl(resource.embedUrl);
+          return (
+            <article key={resource.id} className="border-[3px] border-[#171714] bg-[#fffdf7] p-5 shadow-[6px_6px_0_#171714]">
+              <p className={`inline-block border-2 border-[#171714] px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] ${index % 2 === 0 ? "bg-[#8fdcff]" : "bg-[#caff4a]"}`}>
+                Resource {String(index + 1).padStart(2, "0")}
+              </p>
+              <h3 className="mt-4 text-xl font-black tracking-[-0.035em] text-[#171714]">{resource.title}</h3>
+              {resource.body && <p className="mt-3 whitespace-pre-line text-sm font-medium leading-6 text-[#4f4a40]">{resource.body}</p>}
+              {embedUrl && (
+                <iframe
+                  className="mt-5 aspect-video w-full border-2 border-[#171714] bg-[#ece8dc]"
+                  src={embedUrl}
+                  title={resource.title}
+                  loading="lazy"
+                  sandbox="allow-scripts allow-same-origin allow-presentation"
+                  referrerPolicy="no-referrer"
+                  allow="fullscreen"
+                />
+              )}
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
 }

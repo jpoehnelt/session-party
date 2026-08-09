@@ -48,7 +48,7 @@ export function Tabs({ tabs, active, onChange, className }: TabsProps) {
 
   return (
     <RadixTabs.Root value={active} onValueChange={onChange}>
-      <RadixTabs.List className={cx("flex gap-1 border-b border-line", className)}>
+      <RadixTabs.List className={cx("flex overflow-x-auto border-2 border-line-strong bg-surface shadow-[3px_3px_0_#171714]", className)}>
         {tabs.map((tab, index) => (
           <RadixTabs.Trigger
             key={tab.id}
@@ -62,8 +62,7 @@ export function Tabs({ tabs, active, onChange, className }: TabsProps) {
             }}
             onKeyDown={(event) => moveFocus(event, index)}
             className={cx(
-              "-mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium text-ink-faint outline-none transition-colors motion-reduce:transition-none hover:text-ink-secondary focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset data-[state=active]:border-accent data-[state=active]:text-ink",
-              "border-transparent",
+              "whitespace-nowrap border-r-2 border-line-strong px-4 py-2.5 text-[11px] font-black uppercase tracking-[0.09em] text-ink-faint outline-none transition-colors motion-reduce:transition-none last:border-r-0 hover:bg-surface-muted hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset data-[state=active]:bg-accent data-[state=active]:text-on-accent",
             )}
           >
             {tab.label}

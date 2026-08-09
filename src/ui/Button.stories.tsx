@@ -40,7 +40,7 @@ export const NativeFormAssociation: Story = {
     <div className="space-y-3">
       <form id="story-form" onSubmit={(event) => event.preventDefault()}>
         <label className="text-sm font-medium text-ink" htmlFor="story-name">Session name</label>
-        <input id="story-name" className="mt-1 block rounded-control border border-line-strong px-3 py-2" />
+        <input id="story-name" className="mt-1 block rounded-control border-2 border-line-strong px-3 py-2 font-bold" />
       </form>
       <Button type="submit" form="story-form">Save session</Button>
     </div>

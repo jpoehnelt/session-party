@@ -10,7 +10,7 @@ export type TooltipContentProps = ComponentPropsWithRef<typeof Primitive.Content
 export function TooltipContent({ className, sideOffset = 5, ...props }: TooltipContentProps) {
   return (
     <Primitive.Portal>
-      <Primitive.Content sideOffset={sideOffset} className={cx("z-50 max-w-xs rounded-md bg-ink px-3 py-1.5 text-xs leading-snug text-canvas shadow-pop", className)} {...props}>
+      <Primitive.Content sideOffset={sideOffset} className={cx("z-50 max-w-xs rounded-control border-2 border-on-accent bg-ink px-3 py-1.5 text-xs font-bold leading-snug text-canvas shadow-pop", className)} {...props}>
         {props.children}
         <Primitive.Arrow className="fill-ink" />
       </Primitive.Content>

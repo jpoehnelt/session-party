@@ -96,7 +96,7 @@ export function ReviewRoundSetup({
   };
 
   return (
-    <Card title="Review rounds">
+    <Card className="[&>header]:bg-production-coral [&>header_h3]:text-ink" title="Review rounds / handoff sequence">
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(18rem,0.8fr)]">
         <div>
           {ordered.length === 0 ? (
@@ -110,9 +110,9 @@ export function ReviewRoundSetup({
                   ? ordered.find((candidate) => candidate.status === "pending" && candidate.order > round.order)
                   : undefined;
                 return (
-                  <li key={round.id} className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-line bg-surface-muted px-3 py-2">
+                  <li key={round.id} className="flex flex-wrap items-center justify-between gap-3 rounded-control border-2 border-line-strong bg-surface-muted px-3 py-3 shadow-[3px_3px_0_#171714]">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-ink">{round.order}. {round.name}</p>
+                      <p className="truncate text-sm font-black text-ink"><span className="mr-2 bg-ink px-1.5 py-1 font-mono text-[10px] text-production-lime">{String(round.order).padStart(2, "0")}</span>{round.name}</p>
                       <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-ink-faint">
                         <Badge tone={statusTone[round.status]}>{round.status}</Badge>
                         <span>version {round.version}</span>
@@ -142,7 +142,7 @@ export function ReviewRoundSetup({
           )}
         </div>
 
-        <div className="space-y-3 border-t border-line pt-4 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
+        <div className="space-y-3 border-t-2 border-line-strong bg-production-sky/30 p-4 xl:border-l-2 xl:border-t-0 xl:pt-4">
           <Input
             label="New round name"
             value={name}
@@ -164,7 +164,7 @@ export function ReviewRoundSetup({
           </Button>
         </div>
       </div>
-      {error && <p role="alert" className="mt-3 text-sm text-danger">{error}</p>}
+      {error && <p role="alert" className="mt-4 border-2 border-line-strong bg-danger-soft p-3 text-sm font-bold text-danger shadow-[3px_3px_0_#171714]">{error}</p>}
     </Card>
   );
 }

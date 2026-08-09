@@ -50,10 +50,10 @@ export function FormRenderer({
         const id = `${idPrefix}-${field.id}`;
         const value = values[field.id];
         if (field.type === "heading") {
-          return <h2 key={field.id} className="text-lg font-semibold text-ink">{field.label}</h2>;
+          return <h2 key={field.id} className="border-b-2 border-line-strong pb-2 text-2xl font-black tracking-[-0.04em] text-ink">{field.label}</h2>;
         }
         if (field.type === "guidance") {
-          return <p key={field.id} className="text-sm leading-relaxed text-ink-secondary">{field.helpText ?? field.label}</p>;
+          return <p key={field.id} className="border-l-4 border-accent bg-accent-soft px-4 py-3 text-sm font-semibold leading-relaxed text-ink-secondary">{field.helpText ?? field.label}</p>;
         }
         if (field.type === "textarea") {
           return (

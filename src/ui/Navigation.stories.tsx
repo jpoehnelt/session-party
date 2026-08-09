@@ -45,7 +45,7 @@ export const PopoverEditor: Story = {
         <div><p className="font-semibold">Event timezone</p><p className="text-sm text-ink-secondary">All agenda times use this zone.</p></div>
         <Separator />
         <Label htmlFor="timezone-story">IANA timezone</Label>
-        <input id="timezone-story" className="h-10 w-full rounded-control border border-line-strong bg-surface px-3 text-sm outline-none focus:ring-2 focus:ring-accent/30" defaultValue="America/Los_Angeles" />
+        <input id="timezone-story" className="h-10 w-full rounded-control border-2 border-line-strong bg-surface px-3 text-sm font-bold outline-none focus:ring-2 focus:ring-accent/30" defaultValue="America/Los_Angeles" />
       </PopoverContent>
     </Popover>
   ),
@@ -56,7 +56,7 @@ export const TooltipAndScrollArea: Story = {
     <TooltipProvider>
       <div className="grid gap-4">
         <Tooltip><TooltipTrigger asChild><Button variant="ghost">Publication status</Button></TooltipTrigger><TooltipContent>Only confirmed talks appear on the public schedule.</TooltipContent></Tooltip>
-        <ScrollArea className="h-40 w-72 rounded-control border border-line bg-surface p-3">
+        <ScrollArea className="h-40 w-72 rounded-control border-2 border-line-strong bg-surface p-3 shadow-card">
           <div className="space-y-3">{Array.from({ length: 12 }, (_, index) => <div key={index}><p className="text-sm font-medium">Activity {index + 1}</p><p className="text-xs text-ink-faint">Organizer updated the event workspace.</p>{index < 11 && <Separator className="mt-3" />}</div>)}</div>
         </ScrollArea>
       </div>

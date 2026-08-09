@@ -14,7 +14,7 @@ type Story = StoryObj<typeof meta>;
 
 export const CommandPalette: Story = {
   render: () => (
-    <Command className="w-[min(34rem,calc(100vw-2rem))] border border-line shadow-card">
+    <Command className="w-[min(34rem,calc(100vw-2rem))] border-2 border-line-strong shadow-card">
       <CommandInput aria-label="Search event actions" placeholder="Search event actions…" />
       <CommandList>
         <CommandEmpty>No actions found.</CommandEmpty>

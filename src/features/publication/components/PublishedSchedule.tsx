@@ -27,6 +27,13 @@ const VIEW_LABELS: Record<AgendaView, string> = {
   room: "Room",
 };
 
+const GROUP_ACCENTS = [
+  "bg-production-sky",
+  "bg-production-lime",
+  "bg-production-coral",
+  "bg-production-yellow",
+] as const;
+
 const zonedDateParts = (startsAt: number, timezone: string) => {
   const parts = new Intl.DateTimeFormat("en-US", {
     day: "2-digit",
@@ -135,39 +142,59 @@ export function PublishedSchedule({
   }
 
   const groups = scheduleGroups(agenda, view);
+  const sessionLabel = `${agenda.talks.length} ${agenda.talks.length === 1 ? "session" : "sessions"}`;
 
   return (
-    <div className={compact ? "space-y-4" : "space-y-6"}>
-      <div className="space-y-2">
-        <Tabs
-          tabs={tabs}
-          active={view}
-          onChange={(id) => setSelectedView(id as AgendaView)}
-          className="max-w-full overflow-x-auto"
-        />
-        <p className="text-xs text-ink-faint">
-          Dates and times shown in {agenda.timezone}.
-        </p>
-      </div>
+    <div className={compact ? "space-y-5" : "space-y-8"}>
+      <section
+        aria-label="Schedule display controls"
+        className="grid border-2 border-line-strong bg-surface shadow-[5px_5px_0_#171714] lg:grid-cols-[minmax(0,1fr)_auto]"
+      >
+        <div className="min-w-0 p-3 sm:p-4">
+          <p className="mb-2 text-[10px] font-black uppercase tracking-[0.18em] text-accent-deep">
+            Cut the schedule by
+          </p>
+          <Tabs
+            tabs={tabs}
+            active={view}
+            onChange={(id) => setSelectedView(id as AgendaView)}
+            className="max-w-full overflow-x-auto shadow-none"
+          />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t-2 border-line-strong bg-ink px-4 py-3 text-on-accent lg:min-w-52 lg:flex-col lg:items-start lg:justify-center lg:border-l-2 lg:border-t-0">
+          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-production-sky">Audience clock</p>
+          <p className="text-sm font-black">{agenda.timezone}</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-white/55">{sessionLabel} on air</p>
+        </div>
+      </section>
       <div
         role="region"
         aria-label={`${VIEW_LABELS[view]} schedule view`}
-        className={compact ? "space-y-5" : "space-y-8"}
+        className={compact ? "space-y-6" : "space-y-10"}
       >
         {groups.map((group, index) => (
-          <section key={group.key} aria-labelledby={`schedule-group-${index}`}>
+          <section
+            key={group.key}
+            {...(view === "list"
+              ? { "aria-label": "All sessions" }
+              : { "aria-labelledby": `schedule-group-${index}` })}
+          >
             {view === "list" ? null : (
-              <div className="mb-3 flex items-center gap-3">
+              <div className="mb-4 flex items-stretch">
                 <h2
                   id={`schedule-group-${index}`}
-                  className="min-w-0 text-base font-semibold text-ink sm:text-lg"
+                  className={`min-w-0 border-2 border-line-strong px-3 py-2.5 text-sm font-black uppercase tracking-[0.08em] text-ink shadow-[3px_3px_0_#171714] sm:px-4 sm:text-base ${GROUP_ACCENTS[index % GROUP_ACCENTS.length] ?? "bg-production-sky"}`}
                 >
                   {group.label}
                 </h2>
-                <span className="h-px min-w-4 flex-1 bg-line" aria-hidden="true" />
+                <span className="my-auto h-0.5 min-w-4 flex-1 bg-line-strong" aria-hidden="true" />
+                <span className="my-auto border-y-2 border-r-2 border-line-strong bg-surface px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-ink-faint">
+                  {String(group.talks.length).padStart(2, "0")} cues
+                </span>
               </div>
             )}
             <ScheduleList
+              className="rounded-none shadow-[6px_6px_0_#171714] [&>li:nth-child(even)>div:last-child]:bg-production-sky/15"
               timezone={agenda.timezone}
               talks={group.talks.map((talk) => ({
                 id: talk.id,
