@@ -850,6 +850,65 @@ describe("agenda service", () => {
     expect(stillPublished.talks[0]?.startsAt).toBe(FIXED_DAY_START);
   });
 
+  it.each([
+    {
+      name: "missing-start",
+      startsAt: null,
+      endsAt: new Date(FIXED_DAY_START + 2 * 86_400_000),
+      message: "Agenda publication requires an event start time",
+    },
+    {
+      name: "missing-end",
+      startsAt: new Date(FIXED_DAY_START),
+      endsAt: null,
+      message: "Agenda publication requires an event end time",
+    },
+    {
+      name: "unordered",
+      startsAt: new Date(FIXED_DAY_START),
+      endsAt: new Date(FIXED_DAY_START),
+      message: "Agenda publication requires the event end time to be after the start time",
+    },
+  ])("rejects publication with Validation when event bounds are $name", async ({ name, startsAt, endsAt, message }) => {
+    const seeded = await seedAgenda(`publication-bounds-${name}`, { scheduled: true });
+    await seeded.db
+      .update(events)
+      .set({ startsAt, endsAt })
+      .where(eq(events.id, seeded.eventId));
+
+    const result = await runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: `publish-bounds-${name}-0001`,
+    }));
+
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: { _tag: "Validation", message },
+    });
+  });
+
+  it("publishes with non-null ordered event bounds", async () => {
+    const seeded = await seedAgenda("publication-valid-bounds", { scheduled: true });
+    const published = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-valid-bounds-0001",
+    }));
+
+    await expect(runAs(
+      seeded.user,
+      getAgendaDeliveryProjection({ eventId: seeded.eventId, revision: published.revision }),
+    )).resolves.toMatchObject({
+      eventStartsAt: FIXED_DAY_START,
+      eventEndsAt: FIXED_DAY_START + 2 * 86_400_000,
+    });
+  });
+
   it("keeps the internal delivery companion byte-for-byte immutable", async () => {
     const seeded = await seedAgenda("delivery-immutable", { scheduled: true });
     await seeded.db.batch([
