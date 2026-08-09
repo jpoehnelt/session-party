@@ -1,0 +1,483 @@
+import {
+  applyD1Migrations,
+  createExecutionContext,
+  env,
+  runInDurableObject,
+  runDurableObjectAlarm,
+  SELF,
+  type D1Migration,
+} from "cloudflare:test";
+import { beforeAll, describe, expect, it } from "vitest";
+import { hashBearerMaterial } from "./auth";
+import worker from "./index";
+import {
+  isExplicitLocalEnvironment,
+  mailFrom,
+  requireMailConfiguration,
+  sendMail,
+  sessionSecret,
+} from "./services";
+
+type TestEnv = Cloudflare.Env & {
+  readonly TEST_MIGRATIONS: readonly D1Migration[];
+};
+
+let sourceSequence = 0;
+const requestLink = (
+  email: string,
+  name?: string,
+  source = `192.0.2.${++sourceSequence}`,
+): Promise<Response> =>
+  SELF.fetch("https://example.test/api/v1/auth/request-link", {
+    method: "POST",
+    headers: {
+      "cf-connecting-ip": source,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ email, name }),
+  });
+
+const requestLinkBody = (
+  body: string,
+  source = `192.0.2.${++sourceSequence}`,
+): Promise<Response> =>
+  SELF.fetch("https://example.test/api/v1/auth/request-link", {
+    method: "POST",
+    headers: {
+      "cf-connecting-ip": source,
+      "Content-Type": "application/json",
+    },
+    body,
+  });
+
+const magicLinkFor = async (email: string): Promise<string> => {
+  const row = await env.DB.prepare(
+    "SELECT s.rendered_text FROM mail_delivery_snapshots s WHERE s.recipient_email = ? ORDER BY s.created_at DESC LIMIT 1",
+  ).bind(email).first<{ rendered_text: string }>();
+  const url = row?.rendered_text.match(/https?:\/\/\S+/)?.[0];
+  if (!url) throw new Error("Magic-link snapshot is missing its server-only URL");
+  return url;
+};
+
+beforeAll(async () => {
+  if (!("TEST_MIGRATIONS" in env)) {
+    throw new Error("TEST_MIGRATIONS test binding is unavailable");
+  }
+  await applyD1Migrations(env.DB, [...(env as TestEnv).TEST_MIGRATIONS]);
+});
+
+describe("durable magic-link authentication", () => {
+  it("coalesces concurrent requests into one token, snapshot, and delivery", async () => {
+    const email = "concurrent-auth@example.com";
+    const responses = await Promise.all([
+      requestLink(email, "Concurrent Auth"),
+      requestLink(email, "Concurrent Auth"),
+    ]);
+    expect(responses.map(({ status }) => status)).toEqual([202, 202]);
+
+    const counts = await env.DB.prepare(
+      `SELECT
+        (SELECT count(*) FROM users WHERE email = ?) AS users_count,
+        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link' AND t.consumed_at IS NULL) AS token_count,
+        (SELECT count(*) FROM mail_delivery_snapshots WHERE recipient_email = ?) AS snapshot_count,
+        (SELECT count(*) FROM mail_deliveries d JOIN mail_delivery_snapshots s ON s.id = d.snapshot_id WHERE s.recipient_email = ?) AS delivery_count`,
+    ).bind(email, email, email, email).first();
+    expect(counts).toEqual({
+      users_count: 1,
+      token_count: 1,
+      snapshot_count: 1,
+      delivery_count: 1,
+    });
+
+    const snapshot = await env.DB.prepare(
+      `SELECT
+        s.event_id,
+        s.template_id,
+        s.recipient_email,
+        s.recipient_name,
+        s.from_email,
+        s.reply_to_email,
+        s.subject,
+        s.ics_filename,
+        s.ics_content,
+        d.idempotency_key,
+        t.id AS token_id
+      FROM mail_delivery_snapshots s
+      JOIN mail_deliveries d ON d.snapshot_id = s.id
+      JOIN users u ON u.id = s.recipient_user_id
+      JOIN auth_tokens t ON t.user_id = u.id AND t.kind = 'magic_link' AND t.consumed_at IS NULL
+      WHERE s.recipient_email = ?`,
+    ).bind(email).first();
+    expect(snapshot).toMatchObject({
+      event_id: null,
+      template_id: null,
+      recipient_email: email,
+      recipient_name: "Concurrent Auth",
+      from_email: "Session Party <onboarding@resend.dev>",
+      reply_to_email: null,
+      subject: "Sign in to Session Party",
+      ics_filename: null,
+      ics_content: null,
+    });
+    expect(snapshot?.idempotency_key).toBe(`auth-magic-link:${snapshot?.token_id}`);
+  });
+  it("repokes an outstanding delivery after the initial notification fails", async () => {
+    const email = "repoke-existing@example.com";
+    let failPoke = true;
+    const schedulerNamespace = env.SCHEDULER;
+    const schedulerNamespaceKey = crypto.randomUUID();
+    let pokeAttempts = 0;
+    const mailSchedulerId = schedulerNamespace.idFromName(
+      `${schedulerNamespaceKey}:mail`,
+    );
+    const scheduler = {
+      idFromName(name: string): DurableObjectId {
+        return name === "mail"
+          ? mailSchedulerId
+          : schedulerNamespace.idFromName(name);
+      },
+      get(id: DurableObjectId) {
+        if (id.toString() !== mailSchedulerId.toString()) {
+          return schedulerNamespace.get(id);
+        }
+        return {
+          fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+            const request = new Request(input, init);
+            if (new URL(request.url).pathname !== "/poke") {
+              return new Response("Not Found", { status: 404 });
+            }
+            pokeAttempts += 1;
+            return failPoke
+              ? new Response("forced initial poke failure", { status: 503 })
+              : new Response(null, { status: 202 });
+          },
+        };
+      },
+    } as unknown as Env["SCHEDULER"];
+    const wrappedEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        return property === "SCHEDULER"
+          ? scheduler
+          : Reflect.get(target, property, receiver);
+      },
+    }) as Env;
+    const request = (source: string) => worker.fetch(
+      new Request("https://example.test/api/v1/auth/request-link", {
+        method: "POST",
+        headers: {
+          "cf-connecting-ip": source,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      }),
+      wrappedEnv,
+      createExecutionContext(),
+    );
+
+    expect((await request("203.0.113.10")).status).toBe(202);
+    expect(pokeAttempts).toBe(1);
+
+    failPoke = false;
+    expect((await request("203.0.113.11")).status).toBe(202);
+    expect(pokeAttempts).toBe(2);
+    const counts = await env.DB.prepare(
+      `SELECT
+        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link' AND t.consumed_at IS NULL) AS token_count,
+        (SELECT count(*) FROM mail_delivery_snapshots WHERE recipient_email = ?) AS snapshot_count,
+        (SELECT count(*) FROM mail_deliveries d JOIN mail_delivery_snapshots s ON s.id = d.snapshot_id WHERE s.recipient_email = ?) AS delivery_count`,
+    ).bind(email, email, email).first();
+    expect(counts).toEqual({
+      token_count: 1,
+      snapshot_count: 1,
+      delivery_count: 1,
+    });
+  });
+
+  it("never mutates an existing profile from an unauthenticated link request", async () => {
+    const now = Date.now();
+    const email = "protected-profile@example.com";
+    await env.DB.prepare(
+      "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('protected-profile-user', ?, 'Protected Name', 1, ?, ?)",
+    ).bind(email, now, now).run();
+    expect((await requestLink(email, "Attacker Name")).status).toBe(202);
+    expect(await env.DB.prepare(
+      "SELECT name, updated_at FROM users WHERE id = 'protected-profile-user'",
+    ).first()).toEqual({ name: "Protected Name", updated_at: now });
+  });
+  it("invalidates an expired link and cancels its queued delivery before replacement", async () => {
+    const email = "expired-replacement@example.com";
+    expect((await requestLink(email)).status).toBe(202);
+    const old = await env.DB.prepare(
+      `SELECT t.id AS token_id
+       FROM auth_tokens t
+       JOIN users u ON u.id = t.user_id
+       WHERE u.email = ? AND t.kind = 'magic_link' AND t.consumed_at IS NULL`,
+    ).bind(email).first<{ token_id: string }>();
+    if (!old) throw new Error("Expected outstanding magic link");
+    await env.DB.batch([
+      env.DB.prepare("UPDATE auth_tokens SET expires_at = ? WHERE id = ?")
+        .bind(Date.now() - 1, old.token_id),
+      env.DB.prepare(
+        "UPDATE mail_deliveries SET status = 'pending', available_at = ?, lease_owner = NULL, lease_expires_at = NULL, provider_message_id = NULL, sent_at = NULL WHERE idempotency_key = ?",
+      ).bind(Date.now() + 60_000, `auth-magic-link:${old.token_id}`),
+    ]);
+
+    expect((await requestLink(email)).status).toBe(202);
+    const key = `auth-magic-link:${old.token_id}`;
+    const state = await env.DB.prepare(
+      `SELECT
+        (SELECT consumed_at IS NOT NULL FROM auth_tokens WHERE id = ?) AS old_consumed,
+        (SELECT status FROM mail_deliveries WHERE idempotency_key = ?) AS old_delivery_status,
+        (SELECT s.redacted_at IS NOT NULL
+         FROM mail_delivery_snapshots s
+         JOIN mail_deliveries d ON d.snapshot_id = s.id
+         WHERE d.idempotency_key = ?) AS old_snapshot_redacted,
+        (SELECT s.rendered_html IS NULL
+         FROM mail_delivery_snapshots s
+         JOIN mail_deliveries d ON d.snapshot_id = s.id
+         WHERE d.idempotency_key = ?) AS old_body_removed,
+        (SELECT count(*) FROM mail_deliveries WHERE idempotency_key = ?) AS old_delivery_evidence,
+        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link' AND t.consumed_at IS NULL) AS active_magic`,
+    ).bind(old.token_id, key, key, key, key, email).first();
+    expect(state).toEqual({
+      old_consumed: 1,
+      old_delivery_status: "cancelled",
+      old_snapshot_redacted: 1,
+      old_body_removed: 1,
+      old_delivery_evidence: 1,
+      active_magic: 1,
+    });
+  });
+  it("enforces per-source and per-recipient limits before durable writes", async () => {
+    const source = "198.51.100.44";
+    for (let index = 0; index < 10; index += 1) {
+      expect((await requestLink(`source-limit-${index}@example.com`, undefined, source)).status).toBe(202);
+    }
+    const rejectedEmail = "source-limit-rejected@example.com";
+    expect((await requestLink(rejectedEmail, undefined, source)).status).toBe(202);
+    expect(await env.DB.prepare(
+      `SELECT
+        (SELECT count(*) FROM users WHERE email = ?) AS users_count,
+        (SELECT count(*) FROM mail_delivery_snapshots WHERE recipient_email = ?) AS snapshot_count`,
+    ).bind(rejectedEmail, rejectedEmail).first()).toEqual({
+      users_count: 0,
+      snapshot_count: 0,
+    });
+
+    const recipient = "recipient-limit@example.com";
+    for (let index = 0; index < 5; index += 1) {
+      expect((await requestLink(recipient)).status).toBe(202);
+    }
+    const mailStub = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail"));
+    await runDurableObjectAlarm(mailStub);
+    const delayedAlarm = Date.now() + 5 * 60_000;
+    await runInDurableObject(mailStub, async (_instance, state) => {
+      await state.storage.setAlarm(delayedAlarm);
+    });
+    const beforeRejected = await runInDurableObject(
+      mailStub,
+      async (_instance, state) => state.storage.getAlarm(),
+    );
+    expect(beforeRejected).not.toBeNull();
+    expect((await requestLink(recipient)).status).toBe(202);
+    expect(await runInDurableObject(
+      mailStub,
+      async (_instance, state) => state.storage.getAlarm(),
+    )).toBe(beforeRejected);
+    expect(await env.DB.prepare(
+      `SELECT
+        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link' AND t.consumed_at IS NULL) AS token_count,
+        (SELECT count(*) FROM mail_delivery_snapshots WHERE recipient_email = ?) AS snapshot_count,
+        (SELECT count(*) FROM mail_deliveries d JOIN mail_delivery_snapshots s ON s.id = d.snapshot_id WHERE s.recipient_email = ?) AS delivery_count`,
+    ).bind(recipient, recipient, recipient).first()).toEqual({
+      token_count: 1,
+      snapshot_count: 1,
+      delivery_count: 1,
+    });
+  });
+
+  it("accepts exact request bounds and rejects each bound plus one", async () => {
+    const exactEmail = `${"a".repeat(242)}@example.com`;
+    const longEmail = `${"a".repeat(243)}@example.com`;
+    expect(exactEmail).toHaveLength(254);
+    expect(longEmail).toHaveLength(255);
+    expect((await requestLink(exactEmail)).status).toBe(202);
+    expect((await requestLink(longEmail)).status).toBe(400);
+
+    const exactName = "n".repeat(120);
+    const nameEmail = "exact-name@example.com";
+    expect((await requestLink(nameEmail, exactName)).status).toBe(202);
+    expect(await env.DB.prepare(
+      "SELECT recipient_name FROM mail_delivery_snapshots WHERE recipient_email = ?",
+    ).bind(nameEmail).first()).toEqual({ recipient_name: exactName });
+    const longNameEmail = "long-name@example.com";
+    expect((await requestLink(longNameEmail, `${exactName}n`)).status).toBe(400);
+
+    const bodyEmail = "exact-body@example.com";
+    const bodyJson = JSON.stringify({ email: bodyEmail });
+    const exactBody = bodyJson + " ".repeat(1_024 - bodyJson.length);
+    expect(new TextEncoder().encode(exactBody)).toHaveLength(1_024);
+    expect((await requestLinkBody(exactBody)).status).toBe(202);
+    const overBodyEmail = "over-body@example.com";
+    const overBodyJson = JSON.stringify({ email: overBodyEmail });
+    const overBody = overBodyJson + " ".repeat(1_025 - overBodyJson.length);
+    expect(new TextEncoder().encode(overBody)).toHaveLength(1_025);
+    expect((await requestLinkBody(overBody)).status).toBe(400);
+    expect(await env.DB.prepare(
+      `SELECT
+        (SELECT count(*) FROM users WHERE email = ?) AS long_email_users,
+        (SELECT count(*) FROM users WHERE email = ?) AS long_name_users,
+        (SELECT count(*) FROM users WHERE email = ?) AS over_body_users`,
+    ).bind(longEmail, longNameEmail, overBodyEmail).first()).toEqual({
+      long_email_users: 0,
+      long_name_users: 0,
+      over_body_users: 0,
+    });
+  });
+
+
+  it("rolls back user, token, and snapshot when delivery enqueue fails", async () => {
+    const email = "rollback-request@example.com";
+    await env.DB.prepare(
+      "CREATE TRIGGER fail_magic_delivery BEFORE INSERT ON mail_deliveries BEGIN SELECT RAISE(ABORT, 'forced enqueue rollback'); END",
+    ).run();
+    try {
+      const response = await requestLink(email, "Rollback Request");
+      expect(response.status).toBe(202);
+      const counts = await env.DB.prepare(
+        `SELECT
+          (SELECT count(*) FROM users WHERE email = ?) AS users_count,
+          (SELECT count(*) FROM mail_delivery_snapshots WHERE recipient_email = ?) AS snapshot_count`,
+      ).bind(email, email).first();
+      expect(counts).toEqual({ users_count: 0, snapshot_count: 0 });
+    } finally {
+      await env.DB.prepare("DROP TRIGGER fail_magic_delivery").run();
+    }
+  });
+
+  it("atomically consumes a link once under concurrent verification", async () => {
+    const email = "double-verify@example.com";
+    expect((await requestLink(email)).status).toBe(202);
+    const link = await magicLinkFor(email);
+    const responses = await Promise.all([
+      SELF.fetch(link, { redirect: "manual" }),
+      SELF.fetch(link, { redirect: "manual" }),
+    ]);
+    expect(responses.map(({ status }) => status).sort()).toEqual([302, 401]);
+    const localCookie = responses.find(({ status }) => status === 302)?.headers.get("set-cookie");
+    expect(localCookie).toContain("HttpOnly");
+    expect(localCookie).not.toContain("Secure");
+
+    const sessions = await env.DB.prepare(
+      "SELECT count(*) AS count FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'session' AND t.consumed_at IS NULL",
+    ).bind(email).first<{ count: number }>();
+    expect(sessions?.count).toBe(1);
+  });
+
+  it("rolls back session creation when magic-token consumption fails", async () => {
+    const email = "rollback-verify@example.com";
+    expect((await requestLink(email)).status).toBe(202);
+    const link = await magicLinkFor(email);
+    await env.DB.prepare(
+      "CREATE TRIGGER fail_magic_consume BEFORE UPDATE OF consumed_at ON auth_tokens WHEN OLD.kind = 'magic_link' BEGIN SELECT RAISE(ABORT, 'forced verify rollback'); END",
+    ).run();
+    try {
+      const response = await SELF.fetch(link, { redirect: "manual" });
+      expect(response.status).toBe(502);
+      const state = await env.DB.prepare(
+        `SELECT
+          (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link' AND t.consumed_at IS NULL) AS active_magic,
+          (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'session') AS sessions`,
+      ).bind(email, email).first();
+      expect(state).toEqual({ active_magic: 1, sessions: 0 });
+    } finally {
+      await env.DB.prepare("DROP TRIGGER fail_magic_consume").run();
+    }
+  });
+
+  it("deduplicates local provider receipts without exposing the idempotency key", async () => {
+    const payload = {
+      fromEmail: "Sender <sender@example.com>",
+      replyToEmail: "reply@example.com",
+      to: "recipient@example.com",
+      subject: "Stable delivery",
+      html: "<p>Stable</p>",
+      icsFilename: "session.ics",
+      ics: "BEGIN:VCALENDAR\nEND:VCALENDAR",
+      idempotencyKey: "private-stable-delivery-key",
+    } as const;
+    const first = await sendMail(env, payload);
+    const second = await sendMail(env, payload);
+    expect(first.provider).toBe("local-fake");
+    expect(first.providerMessageId).toBe(second.providerMessageId);
+    expect(first.providerMessageId).toMatch(/^local-fake:[a-f0-9]{64}$/);
+    expect(first.providerMessageId).not.toContain(payload.idempotencyKey);
+  });
+  it("forces deterministic local secrets and fake mail despite production-looking secrets", async () => {
+    const localEnv = Object.assign(Object.create(env), {
+      LOCAL_MODE: "1",
+      SESSION_SECRET: "must-not-win",
+      RESEND_API_KEY: "must-not-egress",
+      MAIL_FROM: "must-not-win@example.com",
+    }) as Env & {
+      LOCAL_MODE: string;
+      SESSION_SECRET: string;
+      RESEND_API_KEY: string;
+    };
+    expect(isExplicitLocalEnvironment(localEnv)).toBe(true);
+    expect(sessionSecret(localEnv)).toBe("explicit-local-only-session-secret-v1");
+    expect(mailFrom(localEnv)).toBe("Session Party <onboarding@resend.dev>");
+    expect((await sendMail(localEnv, {
+      fromEmail: mailFrom(localEnv),
+      to: "sensitive-recipient@example.com",
+      subject: "Sensitive subject",
+      html: "<p>Sensitive body</p>",
+      idempotencyKey: "local-no-egress",
+    })).provider).toBe("local-fake");
+  });
+
+  it("fails production secrets closed, hides local smoke, and sets Secure cookies", async () => {
+    const productionMissing = Object.assign(Object.create(env), {
+      LOCAL_MODE: undefined,
+      SESSION_SECRET: undefined,
+      RESEND_API_KEY: undefined,
+      MAIL_FROM: "Session Party <mail@example.com>",
+    }) as Env;
+    expect(isExplicitLocalEnvironment(productionMissing)).toBe(false);
+    expect(() => sessionSecret(productionMissing)).toThrow(/SESSION_SECRET/);
+    expect(() => requireMailConfiguration(productionMissing)).toThrow(/RESEND_API_KEY/);
+    const smokeContext = createExecutionContext();
+    const smoke = await worker.fetch(
+      new Request("https://example.test/__local/smoke", { method: "POST" }),
+      productionMissing,
+      smokeContext,
+    );
+    expect(smoke.status).toBe(404);
+
+    const productionEnv = Object.assign(Object.create(env), {
+      LOCAL_MODE: undefined,
+      SESSION_SECRET: "production-cookie-test-secret",
+      RESEND_API_KEY: "production-mail-test-secret",
+      MAIL_FROM: "Session Party <mail@example.com>",
+    }) as Env;
+    const rawToken = "production-secure-cookie-token";
+    const now = Date.now();
+    const tokenHash = await hashBearerMaterial(productionEnv, rawToken);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('production-cookie-user', 'production-cookie@example.com', 'Production Cookie', 1, ?, ?)",
+      ).bind(now, now),
+      env.DB.prepare(
+        "INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('production-cookie-magic', ?, 'production-cookie-user', 'magic_link', ?, NULL, ?)",
+      ).bind(tokenHash, now + 60_000, now),
+    ]);
+    const verifyContext = createExecutionContext();
+    const verified = await worker.fetch(
+      new Request(`https://example.test/api/v1/auth/verify?token=${rawToken}`),
+      productionEnv,
+      verifyContext,
+    );
+    expect(verified.status).toBe(302);
+    expect(verified.headers.get("set-cookie")).toContain("Secure");
+  });
+});

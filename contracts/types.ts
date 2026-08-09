@@ -5,6 +5,7 @@
  * WS messages) with these via Schema.decodeUnknown.
  */
 import { Schema as S } from "effect";
+export { ApiScope, ApiScopes } from "./principal";
 
 // ---------- common persisted values ----------
 
@@ -13,11 +14,6 @@ export type Sha256Hex = typeof Sha256Hex.Type;
 
 export const ExternalSecretRef = S.String.pipe(S.minLength(1), S.maxLength(255));
 export type ExternalSecretRef = typeof ExternalSecretRef.Type;
-
-export const ApiScope = S.String.pipe(S.pattern(/^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/));
-export type ApiScope = typeof ApiScope.Type;
-export const ApiScopes = S.NonEmptyArray(ApiScope);
-export type ApiScopes = typeof ApiScopes.Type;
 
 export const EventRole = S.Literal("owner", "admin", "reviewer");
 export type EventRole = typeof EventRole.Type;

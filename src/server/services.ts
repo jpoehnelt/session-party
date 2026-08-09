@@ -6,7 +6,7 @@ import {
   type Principal,
 } from "contracts/principal";
 import * as schema from "contracts/schema";
-import type { ServerMessage } from "contracts/protocol";
+import type { EventRoomBroadcast, ServerMessage } from "contracts/protocol";
 import { Context, Effect, Layer } from "effect";
 import { and, eq } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
@@ -14,21 +14,28 @@ import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 export type AppDatabase = DrizzleD1Database<typeof schema>;
 
 export interface MailPayload {
+  readonly fromEmail: string;
+  readonly replyToEmail?: string;
   readonly to: string;
   readonly subject: string;
   readonly html: string;
+  readonly icsFilename?: string;
   readonly ics?: string;
+  readonly idempotencyKey?: string;
 }
 
-/** Compatibility name for the per-invocation principal capability. */
-export type CurrentUserValue = Principal;
+export interface MailReceipt {
+  readonly provider: "resend" | "local-fake";
+  readonly providerMessageId: string;
+  readonly providerResult: Readonly<Record<string, unknown>>;
+}
 
 export class Db extends Context.Tag("session-party/Db")<Db, { readonly db: AppDatabase }>() {}
 
 export class Mail extends Context.Tag("session-party/Mail")<
   Mail,
   {
-    readonly send: (payload: MailPayload) => Effect.Effect<void, External>;
+    readonly send: (payload: MailPayload) => Effect.Effect<MailReceipt, External>;
   }
 >() {}
 
@@ -62,10 +69,11 @@ export class AiService extends Context.Tag("session-party/AiService")<
 
 export class CurrentUser extends Context.Tag("session-party/CurrentUser")<
   CurrentUser,
-  CurrentUserValue
+  Principal
 >() {}
 
 type SecretBindings = {
+  readonly LOCAL_MODE?: string;
   readonly RESEND_API_KEY?: string;
   readonly SESSION_SECRET?: string;
 };
@@ -80,21 +88,13 @@ const optionalSecret = (
   return typeof value === "string" && value.length > 0 ? value : undefined;
 };
 
-export const isExplicitLocalEnvironment = (env: Pick<Env, "APP_URL">): boolean => {
-  const url = new URL(env.APP_URL);
-  return (
-    url.protocol === "http:" &&
-    (url.hostname === "localhost" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname === "::1" ||
-      url.hostname === "[::1]")
-  );
-};
+export const isExplicitLocalEnvironment = (env: object): boolean =>
+  "LOCAL_MODE" in env && env.LOCAL_MODE === "1";
 
-export const sessionSecret = (env: Env): string => {
+export const sessionSecret = (env: Env & SecretBindings): string => {
+  if (isExplicitLocalEnvironment(env)) return LOCAL_SESSION_SECRET;
   const configured = optionalSecret(env, "SESSION_SECRET");
   if (configured) return configured;
-  if (isExplicitLocalEnvironment(env)) return LOCAL_SESSION_SECRET;
   throw new Error("Missing required production secret: SESSION_SECRET");
 };
 
@@ -104,31 +104,71 @@ const toBase64 = (value: string): string => {
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
 };
+const sha256Hex = async (value: string): Promise<string> => {
+  const digest = new Uint8Array(await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  ));
+  let hex = "";
+  for (const byte of digest) hex += byte.toString(16).padStart(2, "0");
+  return hex;
+};
+
+const LOCAL_MAIL_FROM = "Session Party <onboarding@resend.dev>";
+
+export const mailFrom = (env: Env & SecretBindings): string => {
+  if (isExplicitLocalEnvironment(env)) return LOCAL_MAIL_FROM;
+  const configured = typeof env.MAIL_FROM === "string" ? env.MAIL_FROM.trim() : "";
+  if (configured) return configured;
+  throw new Error("Missing required production binding: MAIL_FROM");
+};
+
+
+export const requireMailConfiguration = (env: Env & SecretBindings): void => {
+  mailFrom(env);
+  if (!isExplicitLocalEnvironment(env) && !optionalSecret(env, "RESEND_API_KEY")) {
+    throw new Error("Missing required production secret: RESEND_API_KEY");
+  }
+};
 
 /** Shared by the Effect Mail service and Scheduler DO. */
-export const sendMail = async (env: Env, payload: MailPayload): Promise<void> => {
-  const apiKey = optionalSecret(env, "RESEND_API_KEY");
+export const sendMail = async (
+  env: Env & SecretBindings,
+  payload: MailPayload,
+): Promise<MailReceipt> => {
+  requireMailConfiguration(env);
+  const apiKey = isExplicitLocalEnvironment(env)
+    ? undefined
+    : optionalSecret(env, "RESEND_API_KEY");
   if (!apiKey) {
-    if (!isExplicitLocalEnvironment(env)) {
-      throw new Error("Missing required production secret: RESEND_API_KEY");
-    }
-    console.log(JSON.stringify({ deliveryMode: "local-fake", message: "dev email", ...payload }));
-    return;
+    const providerMessageId = payload.idempotencyKey
+      ? `local-fake:${await sha256Hex(payload.idempotencyKey)}`
+      : `local-fake:${crypto.randomUUID()}`;
+    console.log(JSON.stringify({ deliveryMode: "local-fake", providerMessageId }));
+    return {
+      provider: "local-fake",
+      providerMessageId,
+      providerResult: { deliveryMode: "local-fake" },
+    };
   }
+
+  const headers = new Headers({
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  });
+  if (payload.idempotencyKey) headers.set("Idempotency-Key", payload.idempotencyKey);
 
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
-      from: "Session Party <onboarding@resend.dev>",
+      from: payload.fromEmail,
+      reply_to: payload.replyToEmail,
       to: [payload.to],
       subject: payload.subject,
       html: payload.html,
       attachments: payload.ics
-        ? [{ filename: "invite.ics", content: toBase64(payload.ics) }]
+        ? [{ filename: payload.icsFilename ?? "invite.ics", content: toBase64(payload.ics) }]
         : undefined,
     }),
   });
@@ -137,6 +177,21 @@ export const sendMail = async (env: Env, payload: MailPayload): Promise<void> =>
     const detail = (await response.text()).slice(0, 2_000);
     throw new Error(`Resend returned ${response.status}: ${detail}`);
   }
+
+  const result: unknown = await response.json();
+  if (
+    typeof result !== "object"
+    || result === null
+    || !("id" in result)
+    || typeof result.id !== "string"
+  ) {
+    throw new Error("Resend returned an invalid delivery receipt");
+  }
+  return {
+    provider: "resend",
+    providerMessageId: result.id,
+    providerResult: { id: result.id },
+  };
 };
 
 const externalEffect = <A>(service: string, run: () => Promise<A>): Effect.Effect<A, External> =>
@@ -244,7 +299,7 @@ export const AppLayer = (env: Env) => {
           const response = await env.EVENT_ROOM.get(id).fetch("https://event-room/broadcast", {
             method: "POST",
             headers,
-            body: JSON.stringify(message),
+            body: JSON.stringify({ message } satisfies EventRoomBroadcast),
           });
           if (!response.ok) throw new Error(`Event room returned ${response.status}`);
         }),
