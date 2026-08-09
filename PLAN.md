@@ -3,16 +3,30 @@
 Open-source Sessionboard replacement for the “Kill My SaaS” competition.
 
 - Deadline: **Wednesday, August 12, 10 PM PT**
-- Evaluation: nine required workflows, a deployed walkthrough, and real use by non-technical event-production staff
+- Evaluation: nine brief feature areas, a deployed testable site and walkthrough, and real use by non-technical event-production staff; the aggregate onboarding dashboard is explicitly best-effort
 - Product direction: Sessionboard capabilities with Luma’s calm, event-first public UX and a denser operations cockpit
 - Authority: **the user is final authority**; Main coordinates and recommends; Sol, Ops, advisors, and subagents are advisory or scoped executors
 - Current scope: local implementation is authorized; external provisioning, migration, deployment, secrets, routes, DNS, and production promotion remain separately gated
 
 ## Outcome
 
-A usable event-production system in which organizers can collect proposals, review and accept them, onboard speakers, build a conflict-free agenda, communicate with speakers, synchronize mapped records with Airtable, import Accelevents data, and publish speaker/schedule embeds.
+A usable event-production system in which organizers can collect routed proposals, review and accept them, onboard speakers through tasks/resources/uploads, build a conflict-free agenda, deliver scheduled personalized mail and calendar invites, import Accelevents data without re-entry, and publish mobile speaker/schedule outputs. Airtable synchronization is bonus scope.
 
 The primary interface is the admin UI. MCP is a thin test/automation transport and bonus—not a substitute for the organizer experience.
+
+### Brief-first priority
+
+The release critical path is the observable workflow, not route count:
+
+1. conditional/routed CFP
+2. multi-round review and acceptance
+3. one coherent speaker portal for submissions, profile, tasks, task-linked forms, headshot, slides, supporting documents, and resource/wiki pages
+4. agenda conflict resolution with list/day/week/track/room views
+5. scheduled personalized text/HTML reminders with a confirmed-agenda `.ics` attachment that reaches the speaker's calendar
+6. mobile public speaker gallery and published schedule
+7. idempotent one-way Accelevents import through the production adapter interface
+
+The aggregate onboarding dashboard and admin CMS/embed builder are best-effort polish. Task status remains required in the portal and organizer task workflow. Airtable synchronization remains bonus scope. A route, configuration form, or truthful placeholder does not satisfy a workflow by itself.
 
 ## Locked decisions
 
@@ -31,7 +45,7 @@ The primary interface is the admin UI. MCP is a thin test/automation transport a
 | Realtime audiences | Rooms admit only event-member `owner`/`admin`/`reviewer` or exact event-scoped API-key scopes. Presence excludes API-key identities; `review`/`submissions` target organizer+reviewer readers, `dashboard` targets organizer readers, agenda targets agenda readers, and errors are direct replies |
 | Agenda realtime commands | Clean pre-`spine-v1` cutover: EventRoom derives event/principal; mutation messages carry request/idempotency/version and complete command state; success/error replies correlate by `replyTo` |
 | Working database | D1 + Drizzle |
-| Synchronized field authority | **Field-scoped:** every mapped field is declared Airtable-authoritative or D1-authoritative; there is no global winner |
+| Airtable bonus authority | **Field-scoped if enabled:** every mapped field is declared Airtable-authoritative or D1-authoritative; there is no global winner |
 | D1 role | Fast transactional working copy, pending-edit overlay, outbox/event log, and read cache; D1 owns app workflow fields unless explicitly mapped |
 | Agenda publication | Latest immutable `domainChanges` snapshot (`agenda-publication` / event ID / `agenda/published`) is the P0 public projection; payload is validated and contains only confirmed scheduled talks plus visible speaker data |
 | Files | R2 |
@@ -46,9 +60,9 @@ The primary interface is the admin UI. MCP is a thin test/automation transport a
 | AI review identity | AI suggestions are `reviews` rows with `ai=true` and no reviewer; only a separate human-authored row enters human evidence. Event-scoped MCP/API keys may request labeled AI suggestions with `reviews:write`, but never human-score, accept, or act on behalf of a reviewer |
 | Internal contention records | `forms.primaryClaim` and `forms.versionClaim` are approved internal-only `domainChanges` records committed atomically with idempotency/audit evidence; they are not semantic operation emits and are never broadcast |
 | Cloudflare account | `jpoehnelt` (`9cfedefc6185f3dad8ab91241b401135`) |
-| Airtable target | Base `apphFjgebe5pq9gez`; initial table `tblA29jIMOPD42pDj`; optional view `viwsCbJ68dks4nb0s` |
-| Airtable P0 topology | Three entity tables: `Speakers`, `Submissions`, `Talks`; all other entities deferred |
-| Wave 0B Airtable boundary | Durable schema, preserving migration, and transaction/claim-state proofs only; no live Airtable call. Production adapter/per-base lane and fake parity are later Main-owned integration gates |
+| Airtable bonus target | Base `apphFjgebe5pq9gez`; initial table `tblA29jIMOPD42pDj`; optional view `viwsCbJ68dks4nb0s` |
+| Airtable bonus topology | Three entity tables: `Speakers`, `Submissions`, `Talks`; all other entities deferred |
+| Required integration | Idempotent one-way Accelevents import is P0. The deterministic demo uses the production adapter interface; live credentials are optional enhanced proof |
 | Status cadence | Paseo heartbeat every 30 minutes through August 13 |
 
 ## Architecture
@@ -131,7 +145,7 @@ Adapters only decode, authorize, invoke, encode, and map errors. They never cont
 - OpenAPI/MCP output schemas derive from the same Effect schemas
 
 
-## Airtable: field-scoped authority and near-live synchronization
+## Airtable bonus: field-scoped authority and near-live synchronization
 
 ### Authority
 
@@ -141,9 +155,9 @@ Adapters only decode, authorize, invoke, encode, and map errors. They never cont
 - D1-authoritative workflow changes commit immediately and enter the outbound projection.
 - Outbound payloads include only the fields changed by the typed intent/projection; they never replay a full stale D1 row.
 
-### P0 field map
+### Bonus field map
 
-| Table | Airtable-authoritative | D1-authoritative outbound | Unsynchronized in P0 |
+| Table | Airtable-authoritative | D1-authoritative outbound | Unsynchronized |
 |---|---|---|---|
 | `Speakers` | display name, job title, company, bio | visibility | email/account identity, links, headshot/assets, onboarding |
 | `Submissions` | title, one explicitly selected abstract answer, category | status, submitted time, speaker links | other answers, reviews, scores, conflicts |
@@ -321,7 +335,7 @@ Organizer:
 /e/:eventSlug/comms                Communications
 /e/:eventSlug/resources            Speaker resources
 /e/:eventSlug/publication          Gallery/schedule/embed preview
-/e/:eventSlug/integrations         Airtable/Accelevents health
+/e/:eventSlug/integrations         Accelevents import; Airtable bonus health
 /e/:eventSlug/settings             Event/team/security settings
 ```
 
@@ -351,11 +365,11 @@ One feature directory owns each route and operation prefix. A producer may serve
 | `tasks` | `/e/:eventSlug/tasks` | `tasks.*` | `/events/:eventId/tasks/**`, `/events/:eventId/speakers/:speakerId/task-completions/**` | definitions use owner/admin; completion requires exact speaker-self proof; organizer shell |
 | `resources` | `/e/:eventSlug/resources` | `resources.*` | `/events/:eventId/resources/**` | owner/admin writes; exact event speaker reads; organizer management route |
 | `portal` | `/e/:eventSlug/portal/*` | `portal.*` | `/events/:eventId/portal/**` | browser session plus exact `speakers.userId` ownership; bare; consumes speakers/tasks/resources and owns provisioning orchestration, not their stores |
-| `dashboard` | `/e/:eventSlug/dashboard` | `dashboard.*` | `/events/:eventId/dashboard/**` | owner/admin or approved read scope; organizer shell; starts after the tasks completion read/event contract |
-| `comms` | `/e/:eventSlug/comms` | `comms.*` | `/events/:eventId/comms/**` | owner/admin or communications scope; organizer shell; template/preview may precede delivery, scheduled ICS consumes agenda artifacts |
-| `integrations` | `/e/:eventSlug/integrations` | `integrations.*` | `/events/:eventId/integrations/**` | owner/admin or integrations scope; organizer shell; health must name observed `fake` or `live` adapter mode |
+| `dashboard` | `/e/:eventSlug/dashboard` | `dashboard.*` | `/events/:eventId/dashboard/**` | optional best-effort aggregate after portal/tasks/resources and the core walkthrough |
+| `comms` | `/e/:eventSlug/comms` | `comms.*` | `/events/:eventId/comms/**` | owner/admin or communications scope; accepted only with scheduled personalized text/HTML, confirmed-agenda ICS, durable dispatch, and recipient-visible delivery evidence |
+| `integrations` | `/e/:eventSlug/integrations` | `integrations.*` | `/events/:eventId/integrations/**` | owner/admin or integrations scope; Accelevents one-way import is required and fixture/live modes are explicit; Airtable administration is bonus |
 
-The public CFP operations above are the only anonymous submission producer. The agenda owner is the only schedule-publication producer and serves the schedule embed from its immutable published projection. The speakers owner is the only public-speaker projection producer. Dashboard never derives readiness from forms/review/agenda; it consumes the tasks completion read model and post-commit event. Central navigation is updated once after accepted routes exist, never by a slice writer.
+The public CFP operations above are the only anonymous submission producer. The agenda owner is the only schedule-publication producer and serves the schedule embed from its immutable published projection. The speakers owner is the only public-speaker projection producer. Portal/tasks/resources must expose readiness without depending on the optional dashboard. Central navigation is updated once after accepted routes exist, never by a slice writer.
 
 ### Signature interaction
 
@@ -515,7 +529,7 @@ The combined head passed tree-equivalence comparison, `pnpm check`, 3/3 local Wo
 Before contract work begins:
 
 - camelCase wire casing is locked
-- the three-table logical authority map and connector metadata semantics above are locked; physical IDs are runtime integration configuration
+- the optional three-table Airtable authority map and connector metadata semantics above are locked; physical IDs remain runtime bonus configuration
 - implementation approval “according to PLAN.md” adopts the concrete security defaults above, or the user supplies overrides
 - acceptance/provisioning event contract is defined for review → portal/agenda/comms consumers
 
@@ -529,8 +543,8 @@ Main updates:
 - tenant foreign keys and schema invariants
 - token hashing and secret references
 - row versions, idempotency, change log, audit
-- separate mail and Airtable outbox/lease contracts
-- Airtable field map/link/outbox/pending-edit/refresh state
+- durable mail outbox/lease contracts; existing Airtable bonus outbox/lease contracts remain isolated from release gates
+- optional Airtable field map/link/outbox/pending-edit/refresh state
 - generic role-filtered realtime envelope/replay
 - form publication version and primary-speaker provisioning
 - public publication projection
@@ -545,8 +559,7 @@ Exit: clean blank-DB migration plus targeted upgrade/rebuild proof, including on
 4. EventRoom rejects non-members and filters audiences
 5. local UI lab boots with deterministic seed/reset
 6. router, API/socket clients, frozen UI primitives/composites, and one organizer page compile and render through a single AppShell
-7. Airtable fake proves pending edit/projection → delivery → inbound confirmation/refresh
-8. Mail fake proves durable claim → captured delivery → idempotent retry
+7. Mail fake proves durable claim → captured delivery → idempotent retry
 
 ### `spine-v1` gate
 
@@ -571,10 +584,10 @@ flowchart TD
   FORMS --> SUBMIT[submit]
   SUBMIT --> REVIEW[review + acceptance]
   REVIEW --> ACCEPT[accepted/provisioned speaker contract]
-  ACCEPT --> PORTAL[portal]
+  ACCEPT --> PORTAL[portal + tasks + resources]
   ACCEPT --> AGENDA[agenda]
-  PORTAL --> DASH[dashboard]
-  AGENDA --> ICS[scheduled ICS comms]
+  PORTAL -. optional .-> DASH[aggregate dashboard]
+  AGENDA --> ICS[scheduled reminder + ICS comms]
   PORTAL --> EMBED[public speakers]
   AGENDA --> EMBED2[public schedule]
   SPINE --> HOME[home/settings]
@@ -649,10 +662,10 @@ Start after `spine-v1`:
 | `submit` | public CFP and submission creation | forms operation artifact |
 | `portal` | speaker profile, tasks, resources, uploads | scaffold on frozen acceptance contract; activate after acceptance artifact |
 | `home` | event settings, members, overview | events |
-| `comms` | templates and preview only | spine; scheduling activates after agenda |
-| `integrations` | configuration/mapping operations and sync-status UI | Main-owned adapter/lane contract |
+| `comms` | templates and preview; scheduled delivery activates after agenda | spine; acceptance requires real outbox wake/replay, reminder timing, and confirmed-agenda ICS |
+| `integrations` | Accelevents one-way import and status UI first; Airtable configuration/sync is bonus | frozen external-adapter boundary |
 
-Main owns Airtable/Accelevents infrastructure adapters and sync lanes under `src/server/**`; the integrations lead owns slice operations, mapping workflows, tests, and UI only.
+Main owns shared infrastructure adapters and sync lanes under `src/server/**`; the integrations lead owns slice operations, idempotent import/mapping workflows, tests, and UI only.
 
 ### Wave 1B — Acceptance and downstream workflows
 
@@ -661,9 +674,9 @@ Main owns Airtable/Accelevents infrastructure adapters and sync lanes under `src
 | `review` + acceptance | submit artifact |
 | `portal` activation/provisioning | acceptance artifact |
 | `agenda` | acceptance artifact |
-| `dashboard` | portal task event artifact |
-| `comms` scheduling/ICS pass | agenda scheduled-talk artifact |
-| `embed` speakers/schedule | portal visibility + published agenda artifacts |
+| `dashboard` | optional; portal task event artifact |
+| `comms` scheduling/ICS pass | agenda scheduled-talk artifact; wake replay and recipient-visible invite proof |
+| public speaker/schedule outputs | portal visibility + published agenda artifacts |
 
 Each row starts independently only when its producer artifact and contract tests are green. Peak source-writer count is the sum of active, unblocked slices—not a fixed target.
 
@@ -688,17 +701,17 @@ Maximum: one release owner, two demo operators, up to three isolated bug owners.
 
 ## Feature acceptance
 
-All nine are P0:
+The nine brief feature areas define scope, with the dashboard explicitly best-effort:
 
-1. **CFP forms:** one primary form with one-or-more track options/routing, optional additional forms, conditional fields, public mobile submission, closed-state and idempotency proof
-2. **Speaker portal:** primary-speaker account, editable accepted submission, profile/headshot/slides/docs, ownership and edit policy; independent co-speaker accounts are P1
-3. **Communications:** template preview, reminders, auditable delivery, valid ICS with no video link; include room details when assigned and support an updated invite after schedule changes
-4. **Reviews:** rounds, assignments, bounded rubric scores, optional labeled AI assist
-5. **Agenda:** backlog, drag/move alternative, room/speaker conflicts, list/day/week/track/room views
-6. **Live dashboard:** task completion updates organizer readiness without refresh
-7. **Integrations:** visible Airtable outbound/inbound sync state and truthful Accelevents live/fixture mode
-8. **Resources:** speaker-only wiki/resources and sandboxed embeds
-9. **Public embeds:** mobile gallery/schedule showing only visible speakers and published sessions
+1. **CFP forms — required:** one primary form with one-or-more track options/routing, optional additional forms, conditional fields, public mobile submission, closed-state and idempotency proof
+2. **Speaker portal — required:** primary-speaker account; accepted submission/profile/tasks together; bio/headshot/slides/supporting docs; task-linked forms; speaker-only resources/wiki with safe embeds; independent co-speaker accounts are P1
+3. **Communications — required:** immutable personalized text/HTML, scheduled reminders, auditable actual dispatch, valid confirmed-agenda ICS with no video link, room details when assigned, and updated invite after schedule changes
+4. **Reviews — required:** rounds, assignments, bounded rubric scores, optional labeled AI assist
+5. **Agenda — required:** backlog, drag/move alternative, room/speaker conflicts, list/day/week/track/room views
+6. **Onboarding visibility — required in portal/tasks; aggregate dashboard optional:** speakers and organizers can observe real task completion state; realtime dashboard aggregation is best-effort
+7. **Accelevents — required:** fixture-demonstrable, production-interface, idempotent one-way import that eliminates re-entry; Airtable sync is bonus
+8. **Resources — required:** speaker-only wiki/resources and sandboxed allowlisted embeds; admin CMS/embed authoring is optional
+9. **Public outputs — required:** mobile speaker gallery and published schedule showing only visible speakers and published sessions
 
 ## Verification
 
@@ -728,7 +741,7 @@ Exactly once per train:
 10. browser admin walkthrough, accessibility, and visual evidence
 
 
-Before release, run one minimal **live Airtable authority smoke** against the configured base/table: write a D1-authoritative field through the app and observe its Airtable upsert; edit an Airtable-authoritative field in Airtable and observe on-load/background refresh commit it to D1 and update the UI. Record IDs/hashes/status without exposing the PAT, then restore the demo fixture. Accelevents and real email remain optional enhanced paths.
+Before release, prove the deterministic Accelevents fixture through the same production-shaped one-way import interface, including repeat-import idempotency and imported/updated/skipped/error evidence. Live Accelevents credentials and Airtable authority synchronization are enhanced/bonus paths, not release gates.
 Preview/release consume the same green artifact; they do not rebuild it.
 
 ## Demo
@@ -743,14 +756,14 @@ Deterministic `AI Engineer Sandbox` seed:
 - 5 speaker tasks
 - resources and a safe embed
 - communications with local mail/ICS evidence
-- fake Airtable/Accelevents adapters using production interfaces
+- required fake Accelevents adapter through the production interface; optional fake Airtable adapter for bonus proof
 - public speaker and schedule embeds
 
 Primary walkthrough follows one proposal:
 
-CFP → review → acceptance → primary-speaker portal/edit → onboarding dashboard → agenda conflict/resolution → initial/updated ICS communication → resources → Airtable sync → public embed.
+CFP → review → acceptance → primary-speaker portal/profile/uploads → tasks and task-linked forms → resources/wiki → agenda conflict/resolution → scheduled personalized reminder + confirmed-agenda ICS → public speaker/schedule outputs → Accelevents one-way import.
 
-A fake-backed demo is the reliable critical path. Because Airtable participates as the authoritative system for mapped Airtable-owned fields, the minimal live Airtable authority smoke above is a release gate once the PAT and field map are available. Live Accelevents and email delivery remain optional enhanced proof. Fake/seeded/live artifacts are labeled truthfully.
+A deterministic fake-backed external adapter is the reliable critical path, but it must exercise the production interface and persist real domain state. Live Airtable, live Accelevents credentials, and live email delivery are enhanced proof; seeded/fixture/live artifacts are labeled truthfully. The optional dashboard and admin embed-builder never block this walkthrough.
 
 ## Human blockers
 
@@ -763,20 +776,20 @@ A fake-backed demo is the reliable critical path. Because Airtable participates 
 | Local implementation authorization | Wave 0A application/configuration changes authorized; external writes remain separately gated |
 | Cloudflare security observation | OAuth app access enabled; account-wide two-factor enforcement currently disabled (release-hardening observation, not a local blocker) |
 | TypeScript server style | Effect v3 |
-| Airtable authority | field-scoped; Airtable mapped fields, D1 workflow fields |
-| Airtable base/table/view | IDs recorded above |
-| Airtable P0 topology | three tables: Speakers, Submissions, Talks; field authority map recorded above |
-| Airtable connector metadata | `SessionPartyId`, `sp_revision`, `sp_hash`, `sp_origin` retained with scoped semantics above |
-| Status cadence | every 30 minutes |
+| Airtable authority (bonus) | field-scoped; Airtable mapped fields, D1 workflow fields |
+| Airtable base/table/view (bonus) | IDs recorded above |
+| Airtable bonus topology | three tables: Speakers, Submissions, Talks; field authority map recorded above |
+| Airtable connector metadata (bonus) | `SessionPartyId`, `sp_revision`, `sp_hash`, `sp_origin` retained with scoped semantics above |
+| Status cadence (if bonus enabled) | every 30 minutes |
 | CFP shape | one form with one-or-more track options/routing; additional forms supported |
 | Accepted edits | speakers may edit after acceptance; edit-lock time deferred |
 | Co-speaker portals | P1/nice-to-have; primary-speaker portal is P0 |
 | Calendar invite | no video link; room when assigned; updated ICS after scheduling changes |
 | Accelevents demo fallback | truthful fixture uses the production adapter interface; live credentials are optional enhanced proof |
 
-### Wave 0B entry
+### Optional Airtable bonus entry
 
-Logical topology, field authority, and connector metadata are resolved. Physical Airtable table/field IDs are runtime integration configuration, not a contract-design blocker. The read-only schema inventory is in progress; missing schema writes remain separately authorization-gated.
+Logical topology, field authority, and connector metadata are resolved. Physical Airtable table/field IDs are runtime bonus configuration, not a release or contract-design blocker. Missing schema writes remain separately authorization-gated.
 
 ### Before fake-backed preview
 
@@ -785,7 +798,7 @@ Logical topology, field authority, and connector metadata are resolved. Physical
 | H2 | User | Preview origin | Approve the preview origin |
 | H3 | User/Ops | External authorization path | Explicitly authorize preview provisioning/deployment/migration and approve a write-capable Wrangler OAuth or short-lived scoped token; read-only MCP OAuth is insufficient |
 
-### Before live Airtable/release smoke
+### Before optional live Airtable bonus smoke
 
 | ID | Owner | Blocker | Required action |
 |---|---|---|---|
@@ -816,13 +829,11 @@ Logical topology, field authority, and connector metadata are resolved. Physical
 
 ## Current repository state
 
-The shared checkout is based on `2ab0c11`; `f1a1467` remains the last recorded pushed Phase-0 boundary. Three intentional local coordination commits follow the implementation base: `5b4b749` mirrors `cloudflare-api`, `airtable`, and `helens-foundry` across both MCP config files; `adcaa76` records implementation ownership gates; and this commit records the dependency queue, handoff route, and candidate acceptance matrix.
+Current `main` is `35eb43657bd00a3b08de1b60d5711ad4c8cac121`, containing the forms/seed repair, event settings route, and Cloudflare Email cutover through migration `0002_empty_hulk.sql`. Exact-main CI is green. No post-cutover production deployment or remote migration has been authorized or observed.
 
-The tracked checkout is clean. Five local tool directories remain untracked and untouched: `.claude/`, `.cursor/`, `.devin/`, `.factory/`, and `.smolforge/`.
+The active dependency train is PRs #16–#19: Accelevents import, public speaker/schedule outputs, public submission producer, and communications. Each must rebase onto current main, regenerate shared artifacts through Main, pass current-head CI, and prove its brief workflow rather than only route/configuration presence.
 
-The exact integration gate is still `BaselineGreen`. Its queue includes the reviewed Events commits `0e9d63e` then `a505992`. Fixture-backed forms, review/acceptance, and agenda branches may complete and enter read-only commit review independently, but they remain holding candidates until the queue gates above are satisfied.
-
-No Cloudflare/Airtable resource write, deployment, migration, secret injection, route, DNS, or production action occurred. No `spine-v1` tag exists.
+Production still serves the previously deployed green revision. External deployment, remote migration, live email, credentials, routes, and DNS remain separately authorization-gated.
 
 ## Reporting
 
@@ -838,4 +849,4 @@ Heartbeat `11747f36` sends a status report every 30 minutes through August 13. E
 
 ## Immediate integration path
 
-Accept one exact green `BaselineGreen` SHA, complete its independent auth/migration/transport reviews, and integrate it. Then process the holding queue in dependency order: forms → submit producer → review/acceptance → agenda. Keep fixture-backed branch work parallel; keep shared integration serial and evidence-gated.
+Keep four implementation lanes parallel—communications/outbox/ICS, coherent portal/tasks/resources, public speaker/schedule outputs, and Accelevents one-way import—while Main integrates one exact green head at a time. Then integrate the public submission producer, regenerate centrally, run one full deterministic walkthrough (`CFP → review/accept → portal onboarding → agenda/conflict → reminder+ICS → public outputs → Accelevents import`), and request separate deployment authorization. Dashboard aggregation, admin CMS/embed authoring, and Airtable synchronization follow only after that path is green.
