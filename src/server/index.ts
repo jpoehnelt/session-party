@@ -305,7 +305,10 @@ async function fetchPublicProgram(request: Request, env: Env): Promise<Response>
   if (typeof agenda.eventName !== "string") return env.ASSETS.fetch(request);
   const canonicalUrl = `${url.origin}${url.pathname}`;
   const metadata = publicProgramMetadata(url.pathname, agenda.eventName, canonicalUrl);
-  const shell = await env.ASSETS.fetch(new Request(`${url.origin}/index.html`, request));
+  // Workers Static Assets canonicalizes `/index.html` to `/`. Request the
+  // canonical shell directly so the metadata response remains a 200 instead
+  // of forwarding that redirect to public-program visitors and crawlers.
+  const shell = await env.ASSETS.fetch(new Request(`${url.origin}/`, request));
   return new HTMLRewriter()
     .on("title", { element(element) { element.setInnerContent(metadata.title); } })
     .on('meta[name="description"]', { element(element) { element.setAttribute("content", metadata.description); } })
