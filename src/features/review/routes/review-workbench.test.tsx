@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server.edge";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewWorkbench } from "../schema";
 import {
+  errorFrom,
   decideQueueInteraction,
   loadReviewWorkbench,
   path,
@@ -10,6 +11,7 @@ import {
   ReviewWorkbenchContent,
   selectVisibleFallback,
 } from "./review-workbench";
+
 
 const workbench: ReviewWorkbench = {
   eventId: "event_summit",
@@ -106,6 +108,20 @@ describe("review workbench route", () => {
     expect(selectVisibleFallback("submission_fallback", undefined, visibleSubmissionIds)).toBeUndefined();
   });
 
+
+  it("keeps the queue and filters mounted while selected detail reloads", () => {
+    const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
+      workbench,
+      isDetailLoading: true,
+      onSelectSubmission: () => undefined,
+    }));
+
+    expect(markup).toContain("Search proposals");
+    expect(markup).toContain("All statuses");
+    expect(markup).toContain("Authoritative proposal");
+    expect(markup).toContain("Loading selected proposal");
+    expect(markup).not.toContain("Loading submissions, rounds, and assignments.");
+  });
   it("renders a sign-in state without queue data or mutation controls", () => {
     const markup = renderToStaticMarkup(createElement(ReviewLoadFailure, {
       error: { kind: "unauthenticated" },
@@ -145,5 +161,20 @@ describe("review workbench route", () => {
     expect(markup).not.toContain("Fixture snapshot");
     expect(markup).not.toContain("reviewWorkbenchFixture");
     expect(markup).not.toContain("Accept &amp; provision primary speaker");
+  });
+
+  it("treats a malformed event response as a recoverable load error without fetching review", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      name: "Summit 2026",
+      slug: "summit-2026",
+      timezone: "America/Los_Angeles",
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await loadReviewWorkbench("summit-2026").catch((caught: unknown) => caught);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/events/summit-2026", expect.any(Object));
+    expect(errorFrom(error)).toMatchObject({ kind: "failed" });
   });
 });

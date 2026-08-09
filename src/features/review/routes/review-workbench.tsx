@@ -1,5 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
+import { Schema } from "effect";
+import { EntityId } from "contracts/domain";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { Badge, Button, Card, EmptyState, Input, Select, Skeleton } from "@/ui";
@@ -9,12 +11,14 @@ import { SubmissionReviewPane } from "../components/SubmissionReviewPane";
 
 export const path = "/e/:eventSlug/review";
 
-interface EventIdentity {
-  readonly id: string;
-  readonly name: string;
-  readonly slug: string;
-  readonly timezone: string;
-}
+const EventIdentitySchema = Schema.Struct({
+  id: EntityId,
+  name: Schema.String.pipe(Schema.minLength(1)),
+  slug: Schema.String.pipe(Schema.minLength(1)),
+  timezone: Schema.String.pipe(Schema.minLength(1)),
+});
+
+type EventIdentity = typeof EventIdentitySchema.Type;
 
 export type LoadError =
   | { readonly kind: "unauthenticated" }
@@ -37,7 +41,9 @@ export async function loadReviewWorkbench(
 ): Promise<{ readonly event: EventIdentity; readonly workbench: ReviewWorkbench }> {
   let event: EventIdentity;
   try {
-    event = await apiFetch<EventIdentity>(`/api/v1/events/${encodeURIComponent(eventSlug)}`);
+    event = await apiFetch<EventIdentity>(`/api/v1/events/${encodeURIComponent(eventSlug)}`, {
+      schema: EventIdentitySchema,
+    });
   } catch (error) {
     throw new ReviewLoadError("event", error);
   }
@@ -126,7 +132,7 @@ function LoadingWorkbench() {
   );
 }
 
-function errorFrom(error: unknown): LoadError {
+export function errorFrom(error: unknown): LoadError {
   if (error instanceof ReviewLoadError) {
     if (error.cause instanceof ApiError && error.cause.status === 401) return { kind: "unauthenticated" };
     if (error.cause instanceof ApiError && error.cause.status === 404) {
@@ -195,13 +201,21 @@ export default function ReviewWorkbenchRoute() {
   const { eventSlug = "" } = useParams();
   const [result, setResult] = useState<{ readonly event: EventIdentity; readonly workbench: ReviewWorkbench }>();
   const [loadError, setLoadError] = useState<LoadError>();
-  const [request, setRequest] = useState({ version: 0, selectedSubmissionId: undefined as string | undefined });
+  const [initialRequestVersion, setInitialRequestVersion] = useState(0);
+  const [detailRequest, setDetailRequest] = useState<{
+    readonly eventSlug: string;
+    readonly submissionId: string;
+    readonly version: number;
+  }>();
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
     setLoadError(undefined);
     setResult(undefined);
-    void loadReviewWorkbench(eventSlug, request.selectedSubmissionId)
+    setDetailRequest(undefined);
+    setIsDetailLoading(false);
+    void loadReviewWorkbench(eventSlug)
       .then((loaded) => {
         if (active) setResult(loaded);
       })
@@ -209,17 +223,47 @@ export default function ReviewWorkbenchRoute() {
         if (active) setLoadError(errorFrom(error));
       });
     return () => { active = false; };
-  }, [eventSlug, request]);
+  }, [eventSlug, initialRequestVersion]);
 
-  const reload = useCallback((selectedSubmissionId?: string) => {
-    setRequest((current) => ({ version: current.version + 1, selectedSubmissionId }));
-  }, []);
+  useEffect(() => {
+    if (!detailRequest || detailRequest.eventSlug !== eventSlug) return;
+    let active = true;
+    setLoadError(undefined);
+    setIsDetailLoading(true);
+    void loadReviewWorkbench(eventSlug, detailRequest.submissionId)
+      .then((loaded) => {
+        if (active) setResult(loaded);
+      })
+      .catch((error: unknown) => {
+        if (active) setLoadError(errorFrom(error));
+      })
+      .finally(() => {
+        if (active) setIsDetailLoading(false);
+      });
+    return () => { active = false; };
+  }, [detailRequest, eventSlug]);
+
+  const requestDetail = useCallback((submissionId: string) => {
+    setDetailRequest((current) => (
+      current?.eventSlug === eventSlug && current.submissionId === submissionId
+        ? current
+        : { eventSlug, submissionId, version: (current?.version ?? 0) + 1 }
+    ));
+  }, [eventSlug]);
+
+  const retry = () => {
+    if (result && detailRequest?.eventSlug === eventSlug) {
+      setDetailRequest((current) => current && { ...current, version: current.version + 1 });
+      return;
+    }
+    setInitialRequestVersion((version) => version + 1);
+  };
 
   if (loadError) {
     return (
       <ReviewLoadFailure
         error={loadError}
-        onRetry={() => reload(request.selectedSubmissionId)}
+        onRetry={retry}
         onSignIn={() => navigate(loginPathForLocation(location))}
       />
     );
@@ -230,16 +274,19 @@ export default function ReviewWorkbenchRoute() {
     <ReviewWorkbenchContent
       key={result.event.id}
       workbench={result.workbench}
-      onSelectSubmission={(submissionId) => reload(submissionId)}
+      isDetailLoading={isDetailLoading}
+      onSelectSubmission={requestDetail}
     />
   );
 }
 
 export function ReviewWorkbenchContent({
   workbench,
+  isDetailLoading = false,
   onSelectSubmission,
 }: {
   readonly workbench: ReviewWorkbench;
+  readonly isDetailLoading?: boolean;
   readonly onSelectSubmission: (submissionId: string) => void;
 }) {
   const [focusedId, setFocusedId] = useState(workbench.selected?.id ?? workbench.queue[0]?.id ?? "");
@@ -255,8 +302,8 @@ export function ReviewWorkbenchContent({
 
   const queue = workbench.queue;
   const authoritativeSelectedId = workbench.selected?.id;
-  const selected = workbench.selected ?? null;
-  const loadedRound = selected?.round
+  const selected = isDetailLoading ? null : workbench.selected ?? null;
+  const loadedRound = workbench.selected?.round
     ?? workbench.rounds.find((round) => round.status === "active")
     ?? workbench.rounds[0]
     ?? null;
