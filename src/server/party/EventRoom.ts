@@ -1,18 +1,20 @@
 import { ApiScope, ApiScopes, type EventRole, type Principal } from "contracts/principal";
-import type {
-  ClientMessage,
-  EventAudience,
-  EventRoomBroadcast,
-  PresenceUser,
-  ServerMessage,
+import {
+  decodeServerMessage,
+  type ClientMessage,
+  type EventAudience,
+  type EventRoomBroadcast,
+  type PresenceUser,
+  type ServerMessage,
 } from "contracts/protocol";
 import { apiKeys, authTokens, eventMembers } from "contracts/schema";
 import { Server, type Connection, type ConnectionContext, type WSMessage } from "partyserver";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Schema } from "effect";
+import { runTransportOperation } from "../adapt";
 import { userFromRequest } from "../auth";
-import { partyHandlers } from "../registry.gen";
+import { operationById, partyHandlers, partyIntents } from "../registry.gen";
 import { sessionSecret } from "../services";
 
 const MAX_MESSAGE_BYTES = 32 * 1024;
@@ -54,6 +56,10 @@ const decodeClientMessage = (value: unknown): ClientMessage | null => {
     case "room/hello":
       return typeof input.surface === "string" && input.surface.length <= MAX_SURFACE_LENGTH
         ? { t: input.t, surface: input.surface }
+        : null;
+    case "events/get":
+      return isBoundedString(input.requestId, MAX_CORRELATION_LENGTH)
+        ? { t: input.t, requestId: input.requestId }
         : null;
     case "agenda/move":
       return isBoundedString(input.requestId, MAX_CORRELATION_LENGTH) &&
@@ -150,6 +156,7 @@ export const audiencesForServerMessage = (
     case "room/presence":
       return ["members"];
     case "room/error":
+    case "room/result":
       return null;
     case "agenda/talk_upserted":
     case "agenda/talk_deleted":
@@ -174,10 +181,76 @@ const decodeBroadcast = (value: unknown): EventRoomBroadcast | null => {
   ) {
     return null;
   }
-  const message = input.message as ServerMessage;
-  return typeof message.t === "string" && audiencesForServerMessage(message)
-    ? { message }
-    : null;
+  const message = decodeServerMessage(input.message);
+  return message && audiencesForServerMessage(message) ? { message } : null;
+};
+const PublicFailureWire = Schema.Struct({
+  error: Schema.Literal(
+    "NotFound",
+    "Unauthenticated",
+    "Forbidden",
+    "Validation",
+    "Conflict",
+    "External",
+  ),
+  message: Schema.String,
+  requestId: Schema.String,
+});
+
+const publicFailureFrom = (
+  error: unknown,
+): Omit<Extract<ServerMessage, { t: "room/error" }>, "t" | "replyTo"> | null => {
+  if (!(error instanceof Error)) return null;
+  try {
+    const decoded = Schema.decodeUnknownEither(PublicFailureWire)(JSON.parse(error.message));
+    return decoded._tag === "Right" ? decoded.right : null;
+  } catch {
+    return null;
+  }
+};
+
+const principalFromState = (
+  state: EventRoomConnectionState,
+  eventId: string,
+): Principal =>
+  state.authorization.kind === "browser-session"
+    ? {
+        kind: "browser-session",
+        userId: state.user.userId,
+        email: "",
+        name: state.user.name,
+        sessionId: state.authorization.credentialId,
+        expiresAt: state.authorization.expiresAt,
+      }
+    : {
+        kind: "api-key",
+        userId: state.user.userId as `api-key:${string}`,
+        apiKeyId: state.authorization.credentialId,
+        eventId,
+        name: state.user.name,
+        scopes: state.authorization.capabilities,
+        expiresAt: state.authorization.expiresAt,
+      };
+
+const operationInput = (
+  message: Exclude<ClientMessage, { t: "room/hello" }>,
+  eventId: string,
+): Readonly<Record<string, unknown>> => {
+  if (message.t === "events/get") return { eventId, idOrSlug: eventId };
+  const { t: _type, requestId: _requestId, ...input } = message;
+  return { ...input, eventId };
+};
+
+const sendServerMessage = (
+  connection: Connection<EventRoomConnectionState>,
+  value: unknown,
+): void => {
+  const message = decodeServerMessage(value);
+  if (!message) {
+    console.error(JSON.stringify({ message: "invalid outbound room message" }));
+    return;
+  }
+  connection.send(JSON.stringify(message));
 };
 
 export class EventRoom extends Server<Env> {
@@ -225,7 +298,7 @@ export class EventRoom extends Server<Env> {
     const state = this.consumeMessageBudget(connection);
     if (!state) return;
     if (messageBytes(rawMessage) > MAX_MESSAGE_BYTES) {
-      connection.send(JSON.stringify({ t: "room/error", message: "Message too large" } satisfies ServerMessage));
+      sendServerMessage(connection, { t: "room/error", message: "Message too large" });
       return;
     }
 
@@ -237,7 +310,7 @@ export class EventRoom extends Server<Env> {
     }
 
     if (!message) {
-      connection.send(JSON.stringify({ t: "room/error", message: "Invalid message" } satisfies ServerMessage));
+      sendServerMessage(connection, { t: "room/error", message: "Invalid message" });
       return;
     }
 
@@ -249,27 +322,67 @@ export class EventRoom extends Server<Env> {
       await this.broadcastPresence();
       return;
     }
+    const operationIntent = partyIntents.find(({ intentType }) => intentType === message.t);
+    if (operationIntent) {
+      const operation = operationById[operationIntent.operationId];
+      if (!operation) {
+        sendServerMessage(connection, {
+          t: "room/error",
+          message: `No operation for ${message.t}`,
+          replyTo: replyToFor(message),
+        });
+        return;
+      }
+      try {
+        const result = await runTransportOperation(
+          this.env,
+          principalFromState(refreshed, this.name),
+          operation,
+          operationInput(message, this.name),
+        );
+        sendServerMessage(connection, {
+          t: "room/result",
+          operationId: operation.id,
+          result,
+          replyTo: message.requestId,
+        });
+      } catch (error) {
+        const failure = publicFailureFrom(error);
+        console.error(JSON.stringify({
+          message: "party operation failed",
+          room: this.name,
+          type: message.t,
+          error: failure?.error ?? (error instanceof Error ? error.message : String(error)),
+        }));
+        sendServerMessage(connection, {
+          t: "room/error",
+          message: failure?.message ?? "Message could not be applied",
+          error: failure?.error,
+          requestId: failure?.requestId,
+          replyTo: message.requestId,
+        });
+      }
+      return;
+    }
 
     const requiredCapability = await this.requiredCapability(message);
     if (!requiredCapability || !refreshed.authorization.capabilities.includes(requiredCapability)) {
-      connection.send(JSON.stringify({
+      sendServerMessage(connection, {
         t: "room/error",
         message: "Access denied",
         replyTo: replyToFor(message),
-      } satisfies ServerMessage));
+      });
       return;
     }
 
     const prefix = message.t.split("/", 1)[0];
     const handler = prefix ? partyHandlers[prefix] : undefined;
     if (!handler) {
-      connection.send(
-        JSON.stringify({
-          t: "room/error",
-          message: `No handler for ${message.t}`,
-          replyTo: replyToFor(message),
-        } satisfies ServerMessage),
-      );
+      sendServerMessage(connection, {
+        t: "room/error",
+        message: `No handler for ${message.t}`,
+        replyTo: replyToFor(message),
+      });
       return;
     }
 
@@ -284,13 +397,11 @@ export class EventRoom extends Server<Env> {
           error: error instanceof Error ? error.message : String(error),
         }),
       );
-      connection.send(
-        JSON.stringify({
-          t: "room/error",
-          message: "Message could not be applied",
-          replyTo: replyToFor(message),
-        } satisfies ServerMessage),
-      );
+      sendServerMessage(connection, {
+        t: "room/error",
+        message: "Message could not be applied",
+        replyTo: replyToFor(message),
+      });
     }
   }
 
@@ -453,7 +564,12 @@ export class EventRoom extends Server<Env> {
     return Schema.decodeUnknownPromise(ApiScope)(`${prefix}:write`).catch(() => null);
   }
 
-  private async broadcastAuthorized(message: ServerMessage): Promise<void> {
+  private async broadcastAuthorized(input: ServerMessage): Promise<void> {
+    const message = decodeServerMessage(input);
+    if (!message) {
+      console.error(JSON.stringify({ message: "invalid outbound room broadcast" }));
+      return;
+    }
     const audiences = audiencesForServerMessage(message);
     if (!audiences) return;
     const encoded = JSON.stringify(message);
@@ -479,11 +595,11 @@ export class EventRoom extends Server<Env> {
         surface: state.surface,
       });
     }
-    const encoded = JSON.stringify({
+    const presence = {
       t: "room/presence",
       users: [...usersById.values()],
-    } satisfies ServerMessage);
-    for (const connection of recipients) connection.send(encoded);
+    } satisfies ServerMessage;
+    for (const connection of recipients) sendServerMessage(connection, presence);
   }
 }
 
