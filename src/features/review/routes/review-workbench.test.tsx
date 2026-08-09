@@ -1,64 +1,180 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server.edge";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReviewWorkbench } from "../schema";
 import {
-  acceptedSubmissionFixture,
-  assignedSubmissionFixture,
-  emptyReviewFixture,
-  fixtureReviewerId,
-  reviewWorkbenchFixture,
-} from "../fixtures";
-import ReviewWorkbenchRoute, { path } from "./review-workbench";
+  errorFrom,
+  decideQueueInteraction,
+  loadReviewWorkbench,
+  path,
+  ReviewLoadFailure,
+  ReviewWorkbenchContent,
+  selectVisibleFallback,
+} from "./review-workbench";
+
+
+const workbench: ReviewWorkbench = {
+  eventId: "event_summit",
+  eventName: "Summit 2026",
+  timezone: "America/Los_Angeles",
+  viewerRole: "admin",
+  rounds: [{
+    id: "round_active",
+    name: "Main review",
+    order: 1,
+    status: "active",
+    rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] },
+    version: 1,
+  }],
+  queue: [{
+    id: "submission_authoritative",
+    title: "Authoritative proposal",
+    category: "Engineering",
+    status: "submitted",
+    submittedAt: 1_700_000_000_000,
+    version: 3,
+    reviewState: "unassigned",
+    assignmentCount: 0,
+    completedReviewCount: 0,
+    averageScore: null,
+  }],
+  selected: {
+    id: "submission_authoritative",
+    title: "Authoritative proposal",
+    category: "Engineering",
+    status: "submitted",
+    submittedAt: 1_700_000_000_000,
+    version: 3,
+    reviewState: "unassigned",
+    assignmentCount: 0,
+    completedReviewCount: 0,
+    averageScore: null,
+    abstract: "Returned by the review API.",
+    speakers: [{ id: "speaker_ada", displayName: "Ada Rivera", isPrimary: true }],
+    round: {
+      id: "round_active",
+      name: "Main review",
+      order: 1,
+      status: "active",
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] },
+      version: 1,
+    },
+    assignments: [],
+    reviews: [],
+    aiSuggestions: [],
+    acceptance: null,
+  },
+  pagination: { page: 1, pageSize: 60, total: 1, pageCount: 1 },
+  lastUpdatedAt: 1_700_000_000_000,
+};
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("review workbench route", () => {
   it("exports the review navigation route", () => {
     expect(path).toBe("/e/:eventSlug/review");
   });
 
-  it("renders organizer evidence read-only and distinguishes a truly empty round", () => {
-    const organizerMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute));
-    expect(organizerMarkup).toContain("Ada Rivera · read-only evidence");
-    expect(organizerMarkup).not.toContain("Save my review");
-    expect(organizerMarkup).not.toContain(">Round</label>");
+  it("keeps queue focus local and does not reload the current authoritative submission", () => {
+    expect(decideQueueInteraction("focus", "submission_other", "submission_authoritative", undefined)).toEqual({
+      focusedSubmissionId: "submission_other",
+      loadSubmissionId: undefined,
+    });
+    expect(decideQueueInteraction(
+      "focus",
+      "submission_authoritative",
+      "submission_authoritative",
+      undefined,
+    ).loadSubmissionId).toBeUndefined();
+    expect(decideQueueInteraction(
+      "open",
+      "submission_authoritative",
+      "submission_authoritative",
+      undefined,
+    ).loadSubmissionId).toBeUndefined();
+    expect(decideQueueInteraction(
+      "open",
+      "submission_authoritative",
+      "submission_other",
+      "submission_authoritative",
+    ).loadSubmissionId).toBeUndefined();
+  });
 
-    const reviewerMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
-      snapshot: { ...reviewWorkbenchFixture, viewerRole: "reviewer" },
+  it("loads the first visible fallback exactly once when filters hide the authoritative selection", () => {
+    const visibleSubmissionIds = ["submission_fallback", "submission_other"];
+
+    expect(selectVisibleFallback("submission_authoritative", undefined, visibleSubmissionIds)).toBe("submission_fallback");
+    expect(selectVisibleFallback("submission_authoritative", "submission_fallback", visibleSubmissionIds)).toBeUndefined();
+    expect(selectVisibleFallback("submission_fallback", undefined, visibleSubmissionIds)).toBeUndefined();
+  });
+
+
+  it("keeps the queue and filters mounted while selected detail reloads", () => {
+    const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
+      workbench,
+      isDetailLoading: true,
+      onSelectSubmission: () => undefined,
     }));
-    expect(reviewerMarkup).toContain("Save my review");
 
-    const emptyMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
-      snapshot: emptyReviewFixture,
+    expect(markup).toContain("Search proposals");
+    expect(markup).toContain("All statuses");
+    expect(markup).toContain("Authoritative proposal");
+    expect(markup).toContain("Loading selected proposal");
+    expect(markup).not.toContain("Loading submissions, rounds, and assignments.");
+  });
+  it("renders a sign-in state without queue data or mutation controls", () => {
+    const markup = renderToStaticMarkup(createElement(ReviewLoadFailure, {
+      error: { kind: "unauthenticated" },
+      onRetry: () => undefined,
+      onSignIn: () => undefined,
     }));
-    expect(emptyMarkup).toContain("No submissions in this round");
-    expect(emptyMarkup).not.toContain("Clear filters");
 
-    expect(organizerMarkup).toContain('aria-labelledby="proposal-heading-submission_05"');
-    expect(organizerMarkup).toContain('id="proposal-heading-submission_05"');
-    expect(organizerMarkup).not.toContain(`<option value="${fixtureReviewerId}"`);
-    expect(organizerMarkup).not.toContain('<option value="user_reviewer_dev"');
-    expect(reviewerMarkup).toContain("min-h-11 min-w-11");
+    expect(markup).toContain("Sign in to review proposals");
+    expect(markup).toContain("Sign in");
+    expect(markup).not.toContain("Authoritative proposal");
+    expect(markup).not.toContain("Assign reviewer");
+    expect(markup).not.toContain("Save my review");
+    expect(markup).not.toContain("Fixture snapshot");
+  });
 
-    const completedSelectionMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
-      snapshot: { ...reviewWorkbenchFixture, selected: acceptedSubmissionFixture },
+  it("resolves the slug before loading and renders authoritative review data", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: "event_summit",
+        name: "Summit 2026",
+        slug: "summit-2026",
+        timezone: "America/Los_Angeles",
+      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(workbench)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const loaded = await loadReviewWorkbench("summit-2026");
+    const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
+      workbench: loaded.workbench,
+      onSelectSubmission: () => undefined,
     }));
-    expect(completedSelectionMarkup.split("Blind screen · complete")).toHaveLength(3);
 
-    const noAvailableMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
-      snapshot: {
-        ...reviewWorkbenchFixture,
-        selected: {
-          ...assignedSubmissionFixture,
-          assignments: [
-            ...assignedSubmissionFixture.assignments,
-            { id: "assignment_mina_01", reviewerUserId: "user_reviewer_mina", reviewerName: "Mina Okafor", version: 1 },
-          ],
-        },
-      },
-    }));
-    expect(noAvailableMarkup).toContain("All available reviewers are already assigned to this proposal.");
-    expect(noAvailableMarkup).toContain("No available reviewers");
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/events/summit-2026", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/events/event_summit/review", expect.any(Object));
+    expect(markup).toContain("Authoritative proposal");
+    expect(markup).toContain("Returned by the review API.");
+    expect(markup).not.toContain("Fixture snapshot");
+    expect(markup).not.toContain("reviewWorkbenchFixture");
+    expect(markup).not.toContain("Accept &amp; provision primary speaker");
+  });
 
-    const loadingMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, { state: "loading" }));
-    expect(loadingMarkup.match(/motion-reduce:animate-none/g)).toHaveLength(4);
+  it("treats a malformed event response as a recoverable load error without fetching review", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      name: "Summit 2026",
+      slug: "summit-2026",
+      timezone: "America/Los_Angeles",
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await loadReviewWorkbench("summit-2026").catch((caught: unknown) => caught);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/events/summit-2026", expect.any(Object));
+    expect(errorFrom(error)).toMatchObject({ kind: "failed" });
   });
 });

@@ -45,6 +45,8 @@ export interface FormBuilderProps {
   onSave: (form: FormDetail) => void;
   onPublish: (form: FormDetail) => void;
   onStatusChange: (status: Extract<FormStatus, "open" | "closed">) => void;
+  /** False when the client cannot yet send the write headers these operations require. Defaults to true. */
+  mutationsAvailable?: boolean;
 }
 
 
@@ -77,7 +79,7 @@ const toDateTimeLocal = (value: number | null): string => {
   return date.toISOString().slice(0, 16);
 };
 
-export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange }: FormBuilderProps) {
+export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange, mutationsAvailable = true }: FormBuilderProps) {
   const [message, setMessage] = useState<string | null>(null);
   const {
     control,
@@ -193,7 +195,7 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
     const submitter = (event?.nativeEvent as SubmitEvent | undefined)?.submitter as HTMLButtonElement | null;
     clearErrors();
     if (submitter?.value === "save") {
-      setMessage("Draft changes saved locally for this fixture preview.");
+      setMessage("Draft saved.");
       onSave(values);
       return;
     }
@@ -218,7 +220,13 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
   const conditionalFields = watchedFields.filter((field) => field.logic !== null);
   const fieldLabels = Object.fromEntries(watchedFields.map((field) => [field.id, field.label]));
   return (
-    <form className="space-y-5" noValidate onSubmit={submit}>
+    <form noValidate onSubmit={mutationsAvailable ? submit : (event) => event.preventDefault()}>
+      <fieldset disabled={!mutationsAvailable} className="m-0 min-w-0 space-y-5 border-0 p-0">
+      {!mutationsAvailable && (
+        <div className="rounded-control border border-line bg-surface-muted px-4 py-3 text-sm text-ink-secondary" role="status">
+          This form is read-only right now. This client can't yet send the idempotency headers organizer edits require.
+        </div>
+      )}
       {errors.root?.publish?.message && (
         <div className="rounded-control border border-danger bg-danger-soft px-4 py-3 text-sm text-ink" role="alert">
           <h2 className="font-semibold">Fix these issues before publishing</h2>
@@ -628,6 +636,7 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange 
           </Button>
         </div>
       </div>
+      </fieldset>
     </form>
   );
 }

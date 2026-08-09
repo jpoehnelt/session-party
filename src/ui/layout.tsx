@@ -3,14 +3,20 @@ import { cx } from "./cx";
 
 export interface AppShellProps {
   sidebar: ReactNode;
+  sidebarClassName?: string;
   topbar?: ReactNode;
   children: ReactNode;
 }
 
-export function AppShell({ sidebar, topbar, children }: AppShellProps) {
+export function AppShell({ sidebar, sidebarClassName, topbar, children }: AppShellProps) {
   return (
     <div className="min-h-dvh bg-canvas text-ink lg:grid lg:h-dvh lg:grid-cols-[15rem_minmax(0,1fr)] lg:overflow-hidden">
-      <aside className="border-b border-line bg-surface lg:sticky lg:top-0 lg:h-dvh lg:overflow-y-auto lg:border-b-0 lg:border-r">
+      <aside
+        className={cx(
+          "border-b border-line bg-surface lg:sticky lg:top-0 lg:h-dvh lg:overflow-y-auto lg:border-b-0 lg:border-r",
+          sidebarClassName,
+        )}
+      >
         {sidebar}
       </aside>
       <div className="min-w-0 lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden">

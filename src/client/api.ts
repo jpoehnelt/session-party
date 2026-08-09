@@ -17,10 +17,33 @@ export interface ApiFetchOptions<T> {
   schema?: Schema.Schema<T, any, never>;
 }
 
+const pendingGetRequests = new Map<string, Promise<unknown>>();
+
 export async function apiFetch<T>(
   path: string,
   { method = "GET", body, schema }: ApiFetchOptions<T> = {},
 ): Promise<T> {
+  const normalizedMethod = method.toUpperCase();
+  const requestKey =
+    normalizedMethod === "GET" ? `${path}\n${body === undefined ? "" : JSON.stringify(body)}` : undefined;
+  let request = requestKey ? pendingGetRequests.get(requestKey) : undefined;
+
+  if (!request) {
+    request = fetchPayload(path, method, body);
+    if (requestKey) {
+      pendingGetRequests.set(requestKey, request);
+      void request.then(
+        () => pendingGetRequests.delete(requestKey),
+        () => pendingGetRequests.delete(requestKey),
+      );
+    }
+  }
+
+  const payload = await request;
+  return schema ? Schema.decodeUnknownSync(schema)(payload) : (payload as T);
+}
+
+async function fetchPayload(path: string, method: string, body: unknown): Promise<unknown> {
   const response = await fetch(path, {
     method,
     credentials: "include",
@@ -32,26 +55,34 @@ export async function apiFetch<T>(
     throw new ApiError(response.status, await responseMessage(response));
   }
 
-  const payload: unknown = response.status === 204 ? undefined : await response.json();
-  return schema ? Schema.decodeUnknownSync(schema)(payload) : (payload as T);
+  return response.status === 204 ? undefined : response.json();
 }
 
-async function responseMessage(response: Response): Promise<string> {
-  const payload: unknown = await response.json().catch(() => undefined);
-  if (typeof payload !== "object" || payload === null || !("error" in payload)) {
+function responseMessage(response: Response): Promise<string> {
+  return response.json().catch(() => undefined).then((payload: unknown) => {
+    if (typeof payload !== "object" || payload === null) {
+      return response.statusText || `Request failed with status ${response.status}`;
+    }
+
+    if ("message" in payload && typeof payload.message === "string") {
+      return payload.message;
+    }
+
+    if (!("error" in payload)) {
+      return response.statusText || `Request failed with status ${response.status}`;
+    }
+
+    const error = payload.error;
+    if (typeof error === "string") return error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof error.message === "string"
+    ) {
+      return error.message;
+    }
+
     return response.statusText || `Request failed with status ${response.status}`;
-  }
-
-  const error = payload.error;
-  if (typeof error === "string") return error;
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-
-  return response.statusText || `Request failed with status ${response.status}`;
+  });
 }

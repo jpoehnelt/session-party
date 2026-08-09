@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router";
-import { apiFetch } from "@/client/api";
+import { useLocation, useNavigate, useParams } from "react-router";
+import { ApiError, apiFetch } from "@/client/api";
+import { loginPathForLocation } from "@/client/return-to";
 import {
   Badge,
+  Button,
   Card,
   EmptyState,
   PageHeader,
@@ -23,23 +25,78 @@ interface EventOverview {
 
 export const path = "/e/:eventSlug";
 
+type EventLoadError =
+  | { readonly kind: "unauthenticated" }
+  | { readonly kind: "not-found" }
+  | { readonly kind: "failed"; readonly message: string };
+
 export default function EventOverviewPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const { eventSlug = "" } = useParams();
   const [event, setEvent] = useState<EventOverview | null | undefined>(undefined);
+  const [loadError, setLoadError] = useState<EventLoadError | null>(null);
+  const [request, setRequest] = useState(0);
 
   useEffect(() => {
+    let active = true;
+    setEvent(undefined);
+    setLoadError(null);
     void apiFetch<EventOverview>(`/api/v1/events/${encodeURIComponent(eventSlug)}`)
-      .then(setEvent)
+      .then((loaded) => {
+        if (!active) return;
+        setEvent(loaded);
+      })
       .catch((error) => {
+        if (!active) return;
         setEvent(null);
-        toast(error instanceof Error ? error.message : "Could not load event", { tone: "danger" });
+        if (error instanceof ApiError && error.status === 401) {
+          setLoadError({ kind: "unauthenticated" });
+          return;
+        }
+        if (error instanceof ApiError && error.status === 404) {
+          setLoadError({ kind: "not-found" });
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Could not load event";
+        setLoadError({ kind: "failed", message });
+        toast(message, { tone: "danger" });
       });
-  }, [eventSlug]);
+
+    return () => {
+      active = false;
+    };
+  }, [eventSlug, request]);
 
   return (
     <>
       {event === undefined ? (
         <Skeleton />
+      ) : loadError?.kind === "unauthenticated" ? (
+        <EmptyState
+          title="Sign in to view this event"
+          description="Sign in to continue to this event."
+          action={
+            <Button
+              className="min-h-11"
+              onClick={() => navigate(loginPathForLocation(location))}
+            >
+              Sign in
+            </Button>
+          }
+        />
+      ) : loadError?.kind === "not-found" ? (
+        <EmptyState title="Event not found" description="This event may have moved or been removed." />
+      ) : loadError?.kind === "failed" ? (
+        <EmptyState
+          title="Could not load event"
+          description={loadError.message}
+          action={
+            <Button className="min-h-11" onClick={() => setRequest((current) => current + 1)}>
+              Try again
+            </Button>
+          }
+        />
       ) : event === null ? (
         <EmptyState title="Event not found" description="This event may have moved or been removed." />
       ) : (

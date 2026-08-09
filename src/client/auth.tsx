@@ -1,8 +1,12 @@
 import { type ChangeEvent, type FormEvent, useState } from "react";
+import { useLocation } from "react-router";
 import { Button, Card, Input } from "@/ui";
 import { apiFetch } from "./api";
+import { validReturnTo } from "./return-to";
 
 export default function LoginPage() {
+  const { search } = useLocation();
+  const returnTo = validReturnTo(search);
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string>();
@@ -16,7 +20,7 @@ export default function LoginPage() {
     try {
       await apiFetch("/api/v1/auth/request-link", {
         method: "POST",
-        body: { email },
+        body: { email, ...(returnTo ? { returnTo } : {}) },
       });
       setSubmitted(true);
     } catch (cause) {
@@ -49,7 +53,7 @@ export default function LoginPage() {
               />
             </label>
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
-            <Button className="w-full" type="submit" disabled={isSubmitting}>
+            <Button className="min-h-11 w-full" type="submit" disabled={isSubmitting}>
               {isSubmitting ? "Sending link…" : "Email me a sign-in link"}
             </Button>
           </form>
