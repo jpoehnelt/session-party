@@ -72,6 +72,15 @@ export const PublicationSummary = Schema.Struct({
 });
 export type PublicationSummary = typeof PublicationSummary.Type;
 
+/** Informational draft-workspace counters; publication, not saving, enforces them. */
+export const AgendaWarnings = Schema.Struct({
+  unplacedTalkCount: Schema.Int.pipe(Schema.nonNegative()),
+  conflictCount: Schema.Int.pipe(Schema.nonNegative()),
+  roomConflictCount: Schema.Int.pipe(Schema.nonNegative()),
+  speakerConflictCount: Schema.Int.pipe(Schema.nonNegative()),
+});
+export type AgendaWarnings = typeof AgendaWarnings.Type;
+
 const ExpectedVersion = Schema.Int.pipe(Schema.positive());
 export const AgendaSnapshot = Schema.Struct({
   eventId: EntityId,
@@ -86,6 +95,7 @@ export const AgendaSnapshot = Schema.Struct({
   backlog: Schema.Array(BacklogProposal),
   talks: Schema.Array(AgendaTalk),
   conflicts: Schema.Array(AgendaConflict),
+  warnings: AgendaWarnings,
   publication: PublicationSummary,
 });
 export type AgendaSnapshot = typeof AgendaSnapshot.Type;
@@ -194,8 +204,8 @@ export const MoveTalkInput = Schema.Struct({
   eventId: EntityId,
   talkId: EntityId,
   trackId: NullableEntityId,
-  roomId: EntityId,
-  startsAt: UnixTimestampMs,
+  roomId: NullableEntityId,
+  startsAt: NullableTimestamp,
   durationMin: DurationMinutes,
   expectedVersion: ExpectedVersion,
   idempotencyKey: IdempotencyKey,

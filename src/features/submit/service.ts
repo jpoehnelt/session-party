@@ -329,6 +329,57 @@ type ValidatedSubmission = {
   readonly category: string | null;
 };
 
+type NormalizedSpeaker = {
+  readonly name: string;
+  readonly email: string | null;
+  readonly title: string | null;
+  readonly organization: string | null;
+};
+
+const normalizeOptionalText = (value: string | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+};
+
+const normalizePublicSpeakers = (
+  input: Pick<CreatePublicSubmissionInput, "coSpeakers" | "primarySpeakerTitle" | "primarySpeakerOrganization">,
+  primaryEmail: string | null,
+): Effect.Effect<{ readonly primary: Pick<NormalizedSpeaker, "title" | "organization">; readonly coSpeakers: readonly NormalizedSpeaker[] }, Validation> =>
+  Effect.gen(function* () {
+    const normalizedPrimaryEmail = primaryEmail === null ? null : normalizePublicEmail(primaryEmail);
+    const emails = new Set<string>();
+    if (normalizedPrimaryEmail) emails.add(normalizedPrimaryEmail);
+    const coSpeakers: NormalizedSpeaker[] = [];
+    for (const [index, speaker] of (input.coSpeakers ?? []).entries()) {
+      const name = speaker.name.trim();
+      if (!name) {
+        return yield* Effect.fail(new Validation({ message: `Co-speaker ${index + 1} needs a name.` }));
+      }
+      const email = normalizeOptionalText(speaker.email);
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return yield* Effect.fail(new Validation({ message: `Co-speaker ${index + 1} must have a valid email address.` }));
+      }
+      const normalizedEmail = email === null ? null : normalizePublicEmail(email);
+      if (normalizedEmail && emails.has(normalizedEmail)) {
+        return yield* Effect.fail(new Validation({ message: "Each speaker email must be unique." }));
+      }
+      if (normalizedEmail) emails.add(normalizedEmail);
+      coSpeakers.push({
+        name,
+        email: normalizedEmail,
+        title: normalizeOptionalText(speaker.title),
+        organization: normalizeOptionalText(speaker.organization),
+      });
+    }
+    return {
+      primary: {
+        title: normalizeOptionalText(input.primarySpeakerTitle),
+        organization: normalizeOptionalText(input.primarySpeakerOrganization),
+      },
+      coSpeakers,
+    };
+  });
+
 const validateAnswers = (
   loaded: LoadedPublicForm,
   input: { readonly answers: CreatePublicSubmissionInput["answers"] },
@@ -477,7 +528,12 @@ export const createPublicSubmission = (
     }
     const [keyHash, requestHash] = yield* Effect.all([
       sha256(input.idempotencyKey),
-      sha256(stableStringify(input.answers)),
+      sha256(stableStringify({
+        answers: input.answers,
+        primarySpeakerTitle: input.primarySpeakerTitle ?? null,
+        primarySpeakerOrganization: input.primarySpeakerOrganization ?? null,
+        coSpeakers: input.coSpeakers ?? [],
+      })),
     ]);
     const replay = yield* loadReplay(
       loaded.eventId,
@@ -488,6 +544,7 @@ export const createPublicSubmission = (
     );
     if (replay) return replay;
     const validated = yield* validateAnswers(loaded, input);
+    const publicSpeakers = yield* normalizePublicSpeakers(input, validated.speakerEmail);
     const abuse = yield* PublicSubmissionAbuse;
     const request = yield* PublicSubmissionRequest;
     yield* abuse.authorize({
@@ -501,6 +558,7 @@ export const createPublicSubmission = (
     const now = new Date();
     const submissionId = nanoid();
     const speakerId = nanoid();
+    const coSpeakerIds = publicSpeakers.coSpeakers.map(() => nanoid());
     const idempotencyId = nanoid();
     const requestId = nanoid();
     const output = {
@@ -560,9 +618,16 @@ export const createPublicSubmission = (
             id: sql<string>`${speakerId}`.as("id"),
             eventId: submissions.eventId,
             userId: sql<string | null>`null`.as("user_id"),
+            contactEmail: validated.speakerEmail === null
+              ? sql<string | null>`null`.as("contact_email")
+              : sql<string | null>`${normalizePublicEmail(validated.speakerEmail)}`.as("contact_email"),
             displayName: sql<string>`${validated.speakerName}`.as("display_name"),
-            title: sql<string | null>`null`.as("title"),
-            company: sql<string | null>`null`.as("company"),
+            title: publicSpeakers.primary.title === null
+              ? sql<string | null>`null`.as("title")
+              : sql<string | null>`${publicSpeakers.primary.title}`.as("title"),
+            company: publicSpeakers.primary.organization === null
+              ? sql<string | null>`null`.as("company")
+              : sql<string | null>`${publicSpeakers.primary.organization}`.as("company"),
             bio: sql<string | null>`null`.as("bio"),
             headshotAssetId: sql<string | null>`null`.as("headshot_asset_id"),
             links: sql<unknown>`null`.as("links"),
@@ -582,11 +647,68 @@ export const createPublicSubmission = (
             submissionId: submissions.id,
             speakerId: sql<string>`${speakerId}`.as("speaker_id"),
             isPrimary: sql<boolean>`1`.as("is_primary"),
+            titleAtTime: publicSpeakers.primary.title === null
+              ? sql<string | null>`null`.as("title_at_time")
+              : sql<string | null>`${publicSpeakers.primary.title}`.as("title_at_time"),
+            organizationAtTime: publicSpeakers.primary.organization === null
+              ? sql<string | null>`null`.as("organization_at_time")
+              : sql<string | null>`${publicSpeakers.primary.organization}`.as("organization_at_time"),
             createdAt: sql<Date>`${nowMs}`.as("created_at"),
           })
           .from(submissions)
           .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
       ),
+      ...publicSpeakers.coSpeakers.flatMap((speaker, index) => {
+        const coSpeakerId = coSpeakerIds[index]!;
+        return [
+          db.insert(speakers).select(
+            db
+              .select({
+                id: sql<string>`${coSpeakerId}`.as("id"),
+                eventId: submissions.eventId,
+                userId: sql<string | null>`null`.as("user_id"),
+                contactEmail: speaker.email === null
+                  ? sql<string | null>`null`.as("contact_email")
+                  : sql<string | null>`${speaker.email}`.as("contact_email"),
+                displayName: sql<string>`${speaker.name}`.as("display_name"),
+                title: speaker.title === null
+                  ? sql<string | null>`null`.as("title")
+                  : sql<string | null>`${speaker.title}`.as("title"),
+                company: speaker.organization === null
+                  ? sql<string | null>`null`.as("company")
+                  : sql<string | null>`${speaker.organization}`.as("company"),
+                bio: sql<string | null>`null`.as("bio"),
+                headshotAssetId: sql<string | null>`null`.as("headshot_asset_id"),
+                links: sql<unknown>`null`.as("links"),
+                visible: sql<boolean>`1`.as("visible"),
+                version: sql<number>`1`.as("version"),
+                createdAt: sql<Date>`${nowMs}`.as("created_at"),
+                updatedAt: sql<Date>`${nowMs}`.as("updated_at"),
+              })
+              .from(submissions)
+              .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
+          ),
+          db.insert(submissionSpeakers).select(
+            db
+              .select({
+                id: sql<string>`${nanoid()}`.as("id"),
+                eventId: submissions.eventId,
+                submissionId: submissions.id,
+                speakerId: sql<string>`${coSpeakerId}`.as("speaker_id"),
+                isPrimary: sql<boolean>`0`.as("is_primary"),
+                titleAtTime: speaker.title === null
+                  ? sql<string | null>`null`.as("title_at_time")
+                  : sql<string | null>`${speaker.title}`.as("title_at_time"),
+                organizationAtTime: speaker.organization === null
+                  ? sql<string | null>`null`.as("organization_at_time")
+                  : sql<string | null>`${speaker.organization}`.as("organization_at_time"),
+                createdAt: sql<Date>`${nowMs}`.as("created_at"),
+              })
+              .from(submissions)
+              .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
+          ),
+        ];
+      }),
       ...validated.answers.map(({ field, value }) =>
         db.insert(submissionAnswers).select(
           db
@@ -911,6 +1033,8 @@ export const createTaskSubmission = (
             submissionId: submissions.id,
             speakerId: sql<string>`${actor.speaker.id}`.as("speaker_id"),
             isPrimary: sql<boolean>`1`.as("is_primary"),
+            titleAtTime: sql<string | null>`${actor.speaker.title}`.as("title_at_time"),
+            organizationAtTime: sql<string | null>`${actor.speaker.company}`.as("organization_at_time"),
             createdAt: sql<Date>`${nowMs}`.as("created_at"),
           })
           .from(submissions)

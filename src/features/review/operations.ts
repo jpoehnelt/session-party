@@ -5,6 +5,8 @@ import {
   AcceptSubmissionOutput,
   AdvanceReviewRoundInput,
   AdvanceReviewRoundOutput,
+  AppendReviewCommentInput,
+  AppendReviewCommentOutput,
   AssignReviewerInput,
   AssignReviewerOutput,
   CreateReviewRoundInput,
@@ -21,6 +23,7 @@ import {
 import {
   acceptSubmission,
   advanceReviewRound,
+  appendReviewComment,
   assignReviewer,
   createReviewRound,
   getWorkbench,
@@ -50,6 +53,11 @@ const reviewWrite = eventAuthorization(
 );
 
 const humanReviewWrite = eventAuthorization(
+  { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
+  { kind: "deny" },
+);
+
+const humanCommentWrite = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
   { kind: "deny" },
 );
@@ -103,6 +111,30 @@ const advanceRoundOperation = {
   idempotency: "required",
   concurrency: "required",
   emits: ["review.round.completed", "review.round.activated"],
+} as const satisfies AnyOperationDef;
+
+const appendCommentOperation = {
+  id: "review.appendComment",
+  kind: "command",
+  input: AppendReviewCommentInput,
+  output: AppendReviewCommentOutput,
+  authorize: humanCommentWrite,
+  invoke: appendReviewComment,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/submissions/:submissionId/comments",
+    input: {
+      path: ["eventId", "submissionId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["body"],
+    },
+    summary: "Append a human message to the event-private review committee thread",
+    successStatus: 201,
+  },
+  party: { intentType: "review/appendComment" },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["review.comment.created"],
 } as const satisfies AnyOperationDef;
 
 const assignReviewerOperation = {
@@ -172,14 +204,14 @@ const getWorkbenchOperation = {
     path: "/events/:eventId/review",
     input: {
       path: ["eventId"],
-      query: ["selectedSubmissionId", "status", "category", "roundId", "assignedToMe", "page", "pageSize"],
+      query: ["selectedSubmissionId", "status", "category", "roundId", "assignedToMe", "order", "page", "pageSize"],
     },
     summary: "Load the role-filtered review workbench",
     successStatus: 200,
   },
   mcp: {
     name: "review_get_workbench",
-    description: "List the review queue and selected proposal detail, filtered to the caller's event authority and assignments.",
+    description: "List the event-authorized review queue and selected proposal detail, optionally filtered to the caller's assignments and ordered for coverage or decisions.",
   },
   idempotency: "none",
   concurrency: "none",
@@ -265,6 +297,7 @@ const saveScoreOperation = {
 export const operations = [
   acceptSubmissionOperation,
   advanceRoundOperation,
+  appendCommentOperation,
   assignReviewerOperation,
   createRoundOperation,
   getWorkbenchOperation,

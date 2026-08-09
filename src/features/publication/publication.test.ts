@@ -70,7 +70,7 @@ const seedPublication = async (name: string) => {
   const visibleSpeakerId = id("speaker-visible");
   const hiddenSpeakerId = id("speaker-hidden");
   const confirmedTalkId = id("talk-confirmed");
-  const draftTalkId = id("talk-draft");
+  const cancelledTalkId = id("talk-cancelled");
 
   const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
     db.insert(users).values({
@@ -151,16 +151,16 @@ const seedPublication = async (name: string) => {
         updatedAt: now,
       },
       {
-        id: draftTalkId,
+        id: cancelledTalkId,
         eventId,
         submissionId: null,
-        title: "Private draft talk",
-        description: "Never publish this draft.",
+        title: "Private cancelled talk",
+        description: "Never publish this cancelled session.",
         trackId,
         roomId,
         startsAt: new Date(STARTS_AT + 3_600_000),
         durationMin: 30,
-        status: "draft",
+        status: "cancelled",
         createdAt: now,
         updatedAt: now,
       },
@@ -230,7 +230,7 @@ describe("publication boundary", () => {
     );
     expect(result).toMatchObject({ _tag: "Left", left: { _tag: "NotFound" } });
     expect(JSON.stringify(result)).not.toContain("Effects at scale");
-    expect(JSON.stringify(result)).not.toContain("Private draft talk");
+    expect(JSON.stringify(result)).not.toContain("Private cancelled talk");
   });
 
   it("publishes only confirmed talks and visible speaker names as an immutable snapshot", async () => {
@@ -257,7 +257,7 @@ describe("publication boundary", () => {
       }),
     ]);
     expect(JSON.stringify(published)).not.toContain("Private Speaker");
-    expect(JSON.stringify(published)).not.toContain("Private draft talk");
+    expect(JSON.stringify(published)).not.toContain("Private cancelled talk");
     expect(published.talks[0]).not.toHaveProperty("submissionId");
     expect(published.talks[0]).not.toHaveProperty("version");
 

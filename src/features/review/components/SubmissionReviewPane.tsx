@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Select, Textarea } from "@/ui";
 import {
   acceptSubmissionRequest,
+  appendReviewCommentRequest,
   assignReviewerRequest,
   rejectSubmissionRequest,
   requestAiSuggestionRequest,
@@ -45,35 +46,59 @@ const statusLabel = {
 
 const operationRequestId = (operation: string) => `${operation}-${crypto.randomUUID()}`;
 
-function ReadOnlyReviewEvidence({
-  review,
+function ScoreRationales({
+  reviews,
   submission,
-  isCurrentReviewer,
+  viewerUserId,
+  timezone,
 }: {
-  readonly review: HumanReview;
+  readonly reviews: readonly HumanReview[];
   readonly submission: SubmissionReviewDetail;
-  readonly isCurrentReviewer: boolean;
+  readonly viewerUserId: string;
+  readonly timezone: string;
 }) {
-  const scoreByCriterion: Record<string, number> = {};
-  for (const entry of review.scores) scoreByCriterion[entry.criterionKey] = entry.score;
   return (
-    <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title={`${isCurrentReviewer ? "Your review" : review.reviewerName} · read-only evidence`}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-line-strong pb-3">
-        <Badge tone="neutral">Human review · version {review.version}</Badge>
-        <span className="font-mono text-sm font-semibold tabular-nums text-ink">{review.score.toFixed(1)} / 5</span>
-      </div>
-      <dl className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {submission.round?.rubric.criteria.map((criterion) => (
-          <div key={criterion.key} className="rounded-control border-2 border-line-strong bg-surface-muted px-3 py-2">
-            <dt className="text-[10px] font-black uppercase tracking-[0.08em] text-ink-faint">{criterion.label}</dt>
-            <dd className="mt-0.5 font-mono text-sm font-black tabular-nums text-ink">{scoreByCriterion[criterion.key] ?? "—"} / 5</dd>
-          </div>
-        ))}
-      </dl>
-      <div className="mt-3">
-        <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">Private rationale</p>
-        <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-ink-secondary">{review.comment || "No private rationale supplied."}</p>
-      </div>
+    <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title="Score rationales">
+      <p className="text-sm leading-6 text-ink-secondary">
+        Rationale attached to each reviewer’s rubric score. These remain distinct from the append-only committee thread.
+      </p>
+      {reviews.length === 0 ? (
+        <p className="mt-4 text-sm text-ink-faint">No human score rationales yet.</p>
+      ) : (
+        <ol className="mt-4 divide-y-2 divide-line-strong border-y-2 border-line-strong" aria-label="Human score rationales">
+          {reviews.map((review) => {
+            const scoreByCriterion: Record<string, number> = {};
+            for (const entry of review.scores) scoreByCriterion[entry.criterionKey] = entry.score;
+            const author = review.reviewerUserId === viewerUserId ? `You · ${review.reviewerName}` : review.reviewerName;
+            return (
+              <li key={review.id} className="py-4">
+                <article aria-label={`${author} human review`}>
+                  <header className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-black text-ink">{author}</p>
+                      <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-ink-faint">
+                        {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(review.updatedAt)} {timezone} · version {review.version}
+                      </p>
+                    </div>
+                    <Badge tone="neutral">Human · {review.score.toFixed(1)} / 5</Badge>
+                  </header>
+                  <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-ink-secondary">
+                    {review.comment || "No written comment supplied."}
+                  </p>
+                  <dl className="mt-3 flex flex-wrap gap-2">
+                    {submission.round?.rubric.criteria.map((criterion) => (
+                      <div key={criterion.key} className="rounded-control border-2 border-line-strong bg-surface-muted px-2.5 py-1.5">
+                        <dt className="inline text-[10px] font-black uppercase tracking-[0.06em] text-ink-faint">{criterion.label}: </dt>
+                        <dd className="inline font-mono text-xs font-black tabular-nums text-ink">{scoreByCriterion[criterion.key] ?? "—"} / 5</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </article>
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </Card>
   );
 }
@@ -89,21 +114,20 @@ export function SubmissionReviewPane({
 }: SubmissionReviewPaneProps) {
   const round = submission.round;
   const organizer = viewerRole === "owner" || viewerRole === "admin";
-  const currentAssignment = submission.assignments.find(
-    (assignment) => assignment.reviewerUserId === viewerUserId,
-  );
   const currentReview = submission.reviews.find((review) => review.reviewerUserId === viewerUserId);
-  const canScore = Boolean(round?.status === "active" && currentAssignment);
-  const canRequestAi = Boolean(round?.status === "active" && (organizer || currentAssignment));
+  const canScore = round?.status === "active";
+  const canRequestAi = round?.status === "active";
   const primarySpeaker = submission.speakers.find((speaker) => speaker.isPrimary);
   const [selectedReviewerUserId, setSelectedReviewerUserId] = useState("");
   const [scores, setScores] = useState<readonly CriterionScore[]>(currentReview?.scores ?? []);
   const [comment, setComment] = useState(currentReview?.comment ?? "");
+  const [threadBody, setThreadBody] = useState("");
   const [confirmedAiSuggestionId, setConfirmedAiSuggestionId] = useState<string>();
-  const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "ai" | "accept" | "reject">();
+  const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "comment" | "ai" | "accept" | "reject">();
   const [mutationError, setMutationError] = useState<string>();
   const acceptanceKey = useRef(`review-accept-${crypto.randomUUID()}`);
   const rejectionKey = useRef(`review-reject-${crypto.randomUUID()}`);
+  const commentKey = useRef(`review-comment-${crypto.randomUUID()}`);
 
   useEffect(() => {
     setScores(currentReview?.scores ?? []);
@@ -111,6 +135,11 @@ export function SubmissionReviewPane({
     setConfirmedAiSuggestionId(undefined);
     setMutationError(undefined);
   }, [currentReview?.version, submission.id, round?.id]);
+
+  useEffect(() => {
+    setThreadBody("");
+    commentKey.current = `review-comment-${crypto.randomUUID()}`;
+  }, [submission.id]);
 
   const runMutation = async (
     operation: NonNullable<typeof pendingOperation>,
@@ -171,6 +200,22 @@ export function SubmissionReviewPane({
     }));
   };
 
+  const appendComment = () => {
+    const body = threadBody.trim();
+    if (!body) return;
+    void runMutation("comment", async () => {
+      await appendReviewCommentRequest({
+        eventId,
+        submissionId: submission.id,
+        body,
+        idempotencyKey: commentKey.current,
+        requestId: operationRequestId("review-comment"),
+      });
+      setThreadBody("");
+      commentKey.current = `review-comment-${crypto.randomUUID()}`;
+    });
+  };
+
   const acceptSubmission = () => {
     if (!organizer || submission.acceptance || submission.status === "rejected" || !primarySpeaker) return;
     void runMutation("accept", () => acceptSubmissionRequest({
@@ -222,7 +267,57 @@ export function SubmissionReviewPane({
 
       <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title="Proposal brief"><p className="max-w-4xl whitespace-pre-wrap text-sm font-medium leading-6 text-ink-secondary">{submission.abstract}</p></Card>
 
+      <Card className="[&>header]:bg-production-coral [&>header_h3]:text-ink" title="Committee thread">
+        <p className="text-sm leading-6 text-ink-secondary">
+          Append-only discussion private to this event’s owners, admins, and reviewers. Speakers and API keys cannot author as a human committee member.
+        </p>
+        {submission.comments.length === 0 ? (
+          <p className="mt-4 text-sm text-ink-faint">No committee messages yet.</p>
+        ) : (
+          <ol className="mt-4 divide-y-2 divide-line-strong border-y-2 border-line-strong" aria-label="Committee thread messages">
+            {submission.comments.map((threadComment) => {
+              const author = threadComment.authorUserId === viewerUserId
+                ? `You · ${threadComment.authorName}`
+                : threadComment.authorName;
+              return (
+                <li key={threadComment.id} className="py-4">
+                  <article aria-label={`${author} committee message`}>
+                    <header className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-sm font-black text-ink">{author}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.06em] text-ink-faint">
+                        {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(threadComment.createdAt)} {timezone}
+                      </p>
+                    </header>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-ink-secondary">{threadComment.body}</p>
+                  </article>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+        <div className="mt-4 border-t-2 border-line-strong pt-4">
+          <Textarea
+            label="Add committee message"
+            hint="Independent from scoring. Messages are append-only and visible only to this event’s review committee."
+            maxLength={5_000}
+            rows={3}
+            value={threadBody}
+            disabled={pendingOperation !== undefined}
+            onChange={(event) => setThreadBody(event.target.value)}
+          />
+          <Button
+            className="mt-3"
+            disabled={!threadBody.trim() || pendingOperation !== undefined}
+            loading={pendingOperation === "comment"}
+            onClick={appendComment}
+          >
+            Post message
+          </Button>
+        </div>
+      </Card>
+
       <Card className="[&>header]:bg-production-coral [&>header_h3]:text-ink" title="Reviewer assignments">
+        <p className="mb-3 text-sm text-ink-secondary">Assignments are optional workload markers. Every event reviewer can open and score this proposal.</p>
         {submission.assignments.length === 0 ? (
           <p className="text-sm text-ink-faint">No reviewers are assigned in this round.</p>
         ) : (
@@ -272,7 +367,7 @@ export function SubmissionReviewPane({
               />
               <Textarea
                 label="Private rationale"
-                hint="Visible to event organizers and you. AI text remains a draft until you save it."
+                hint="Visible to this event’s review committee. AI text remains a draft until you save it."
                 maxLength={5_000}
                 rows={5}
                 value={comment}
@@ -309,9 +404,12 @@ export function SubmissionReviewPane({
         </Card>
       )}
 
-      {submission.reviews
-        .filter((review) => !canScore || review.reviewerUserId !== viewerUserId)
-        .map((review) => <ReadOnlyReviewEvidence key={review.id} review={review} submission={submission} isCurrentReviewer={review.reviewerUserId === viewerUserId} />)}
+      <ScoreRationales
+        reviews={submission.reviews}
+        submission={submission}
+        viewerUserId={viewerUserId}
+        timezone={timezone}
+      />
 
       {submission.aiSuggestions.map((suggestion) => (
         <Card className="[&>header]:bg-warning-soft [&>header_h3]:text-ink" key={suggestion.id} title="AI suggestion · non-authoritative">
@@ -352,6 +450,7 @@ export function SubmissionReviewPane({
           <p className="text-sm text-ink-secondary">
             Accepting records this exact proposal version and requests portal provisioning for {primarySpeaker?.displayName ?? "the primary speaker"}.
           </p>
+          <p className="mt-2 text-sm text-ink-secondary">Accepting or rejecting updates the proposal dashboard only. No email is sent.</p>
           {!primarySpeaker && <p role="alert" className="mt-2 text-sm text-danger">A primary speaker is required before acceptance.</p>}
           <div className="mt-4 flex flex-wrap gap-3">
             <Button

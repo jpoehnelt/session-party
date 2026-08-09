@@ -180,7 +180,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(4);
+    expect(migrations).toHaveLength(8);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
     await applyOneByOne(db, migrations.slice(1));
@@ -210,6 +210,31 @@ describe("baseline migration parity", () => {
       "SELECT (SELECT semantic_key FROM form_fields WHERE id = 'legacy-field') AS draft_semantic_key, (SELECT semantic_key FROM form_version_fields WHERE id = 'legacy-field') AS version_semantic_key",
     ).first();
     expect(semantics).toEqual({ draft_semantic_key: null, version_semantic_key: null });
+    const historicalSpeakerContext = await db.prepare(
+      "SELECT title_at_time, organization_at_time FROM submission_speakers WHERE id = 'legacy-submission-speaker'",
+    ).first();
+    expect(historicalSpeakerContext).toEqual({ title_at_time: null, organization_at_time: null });
+    expect(await db.prepare(
+      "SELECT contact_email FROM speakers WHERE id = 'legacy-speaker'",
+    ).first()).toEqual({ contact_email: null });
+    await db.prepare(
+      `INSERT INTO speaker_contacts
+        (id, event_id, speaker_id, actor_user_id, medium, note, contacted_at, created_at)
+       VALUES ('legacy-contact', 'legacy-event', 'legacy-speaker', 'legacy-user', 'personalEmail',
+        'Migration verification', 1700000003000, 1700000003000)`,
+    ).run();
+    expect(await db.prepare(
+      "SELECT medium, contacted_at FROM speaker_contacts WHERE id = 'legacy-contact'",
+    ).first()).toEqual({ medium: "personalEmail", contacted_at: 1_700_000_003_000 });
+    await db.prepare(
+      `INSERT INTO review_comments
+        (id, event_id, submission_id, author_user_id, body, created_at)
+       VALUES ('legacy-review-comment', 'legacy-event', 'legacy-submission', 'legacy-user',
+        'Committee follow-up', 1700000004000)`,
+    ).run();
+    expect(await db.prepare(
+      "SELECT body FROM review_comments WHERE id = 'legacy-review-comment'",
+    ).first()).toEqual({ body: "Committee follow-up" });
 
     const mail = await db.prepare(
       `SELECT
@@ -281,7 +306,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(4);
+    expect(migrations).toHaveLength(8);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(

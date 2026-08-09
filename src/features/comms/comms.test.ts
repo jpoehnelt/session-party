@@ -28,6 +28,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, Authorizer, CurrentUser, Db, MailQueue, type AppDatabase } from "@/server/services";
 import {
   enqueueCommunication,
+  listAudience,
   listTemplates,
   previewCommunication,
   retryDelivery,
@@ -347,6 +348,50 @@ describe("communications authorization and validation", () => {
       expiresAt: now.getTime() + 86_400_000,
     };
     await expect(runAs(scopedApiKey, listTemplates({ eventId: seeded.eventId }))).resolves.toHaveLength(1);
+  });
+
+  it("uses an event-scoped contact address when an accepted speaker has no account", async () => {
+    const seeded = await seedCommunication("contact-email");
+    await seeded.db.batch([
+      seeded.db.update(speakers).set({
+        userId: null,
+        contactEmail: "speaker-contact@example.com",
+      }).where(eq(speakers.id, seeded.speakerId)),
+      seeded.db.insert(speakers).values({
+        id: "co-speaker-comms-contact-email",
+        eventId: seeded.eventId,
+        userId: null,
+        contactEmail: "co-speaker@example.com",
+        displayName: "Co-speaker",
+        createdAt: now,
+        updatedAt: now,
+      }),
+      seeded.db.insert(submissionSpeakers).values({
+        id: "co-association-comms-contact-email",
+        eventId: seeded.eventId,
+        submissionId: "submission-comms-contact-email",
+        speakerId: "co-speaker-comms-contact-email",
+        isPrimary: false,
+        createdAt: now,
+      }),
+    ]);
+
+    const audience = await runAs(seeded.owner, listAudience({ eventId: seeded.eventId }));
+    expect(audience.recipients).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        speakerId: seeded.speakerId,
+        userId: null,
+        email: "speaker-contact@example.com",
+        eligibility: "eligible",
+      }),
+      expect.objectContaining({
+        speakerId: "co-speaker-comms-contact-email",
+        userId: null,
+        email: "co-speaker@example.com",
+        eligibility: "eligible",
+      }),
+    ]));
+    expect(audience.eligibleCount).toBe(2);
   });
 
   it("accepts the frozen dotted merge contract and rejects unknown or malformed variables", async () => {

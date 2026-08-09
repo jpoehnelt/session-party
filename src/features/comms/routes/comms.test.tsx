@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server.edge";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildEnqueueRequest,
+  buildMailtoDraft,
   ScheduleControl,
 } from "./comms";
 
@@ -14,6 +15,16 @@ const baseRequest = {
 } as const;
 
 describe("communications scheduling control", () => {
+  it("builds a human-controlled mail draft without dispatching it", () => {
+    expect(buildMailtoDraft({
+      recipientEmail: "speaker@example.com",
+      subject: "Slides & employer approval",
+      text: "Hi Ada,\n\nCould you confirm both items?",
+    })).toBe(
+      "mailto:speaker%40example.com?subject=Slides%20%26%20employer%20approval&body=Hi%20Ada%2C%0A%0ACould%20you%20confirm%20both%20items%3F",
+    );
+  });
+
   it("renders explicit send-now and event-timezone scheduling controls", () => {
     const markup = renderToStaticMarkup(createElement(ScheduleControl, {
       mode: "scheduled",

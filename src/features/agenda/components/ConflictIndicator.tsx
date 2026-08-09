@@ -10,7 +10,7 @@ export interface ConflictIndicatorProps {
 export function ConflictIndicator({
   conflicts,
   compact = false,
-  blocking = true,
+  blocking = false,
 }: ConflictIndicatorProps) {
   if (conflicts.length === 0) {
     return compact ? null : (

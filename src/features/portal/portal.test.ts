@@ -11,6 +11,7 @@ import {
   integrations,
   pages,
   speakers,
+  speakerContacts,
   submissionSpeakers,
   submissions,
   taskCompletions,
@@ -36,8 +37,10 @@ import {
   createPortalTask,
   deletePortalResource,
   deletePortalTask,
+  getPortalDashboard,
   getPortalSnapshot,
   getSpeakerDirectory,
+  logSpeakerContact,
   getPublicSpeakers,
   updateSpeakerProfile,
   provisionSpeaker,
@@ -188,6 +191,8 @@ describe("portal service", () => {
     const setup = await fixture();
     await expectFailure(otherUser, createPortalTask({ eventId: setup.eventId, name: "Bio", description: null, kind: "profile", formId: null, dueAt: null, order: 1 }), "Forbidden");
     await expectFailure(reviewer, getSpeakerDirectory({ eventId: setup.eventId }), "Forbidden");
+    await expectFailure(reviewer, getPortalDashboard({ eventId: setup.eventId }), "Forbidden");
+    await expectFailure(reviewer, logSpeakerContact({ eventId: setup.eventId, speakerId: setup.speakerId, medium: "text", note: null, idempotencyKey: `contact-${setup.eventId}` }), "Forbidden");
     await expectFailure(speakerUser, getPortalSnapshot({ eventId: setup.eventId }), "Forbidden");
     await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
     await expectFailure(otherUser, getPortalSnapshot({ eventId: setup.eventId }), "Forbidden");
@@ -413,6 +418,128 @@ describe("portal service", () => {
         eq(domainChanges.eventType, "portal.task.completion.changed"),
       ));
     expect(completionChanges.map(({ aggregateVersion }) => aggregateVersion)).toEqual([1, 2, 3]);
+  });
+
+  it("builds an owner-only speaker chase from missing, overdue, and confirm tasks", async () => {
+    const setup = await fixture();
+    const missingProfile = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Speaker profile",
+      description: null,
+      kind: "profile",
+      formId: null,
+      dueAt: null,
+      order: 1,
+    }));
+    const employerApproval = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Employer approval",
+      description: "Confirm approval to attend.",
+      kind: "confirm",
+      formId: null,
+      dueAt: Date.now() - 60_000,
+      order: 2,
+    }));
+    const completeSpeakerId = `${setup.speakerId}-ready`;
+    const completeSubmissionId = `${setup.submissionId}-ready`;
+    const completeAssociationId = `${completeSubmissionId}-speaker`;
+    const completeAcceptanceId = `${completeSubmissionId}-accepted`;
+    const completeProvisioningId = `${completeSubmissionId}-provisioning`;
+    const completedAt = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("insert into submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, accepted_at, version, created_at, updated_at) values (?, ?, ?, ?, 'Ready talk', 'accepted', ?, ?, 1, ?, ?)").bind(completeSubmissionId, setup.eventId, setup.formId, setup.formVersionId, completedAt, completedAt, completedAt, completedAt),
+      env.DB.prepare("insert into speakers (id, event_id, user_id, display_name, links, visible, version, created_at, updated_at) values (?, ?, null, 'A Ready speaker', '[]', 0, 1, ?, ?)").bind(completeSpeakerId, setup.eventId, completedAt, completedAt),
+      env.DB.prepare("insert into submission_speakers (id, event_id, submission_id, speaker_id, is_primary, created_at) values (?, ?, ?, ?, 1, ?)").bind(completeAssociationId, setup.eventId, completeSubmissionId, completeSpeakerId, completedAt),
+      env.DB.prepare("insert into acceptance_events (id, event_id, submission_id, primary_submission_speaker_id, primary_speaker_id, primary_association_is_primary, type, submission_version, occurred_at) values (?, ?, ?, ?, ?, 1, 'accepted', 1, ?)").bind(completeAcceptanceId, setup.eventId, completeSubmissionId, completeAssociationId, completeSpeakerId, completedAt),
+      env.DB.prepare("insert into speaker_provisioning (id, event_id, acceptance_event_id, submission_id, primary_speaker_id, status, available_at, attempt_count, version, created_at, updated_at) values (?, ?, ?, ?, ?, 'provisioned', ?, 0, 1, ?, ?)").bind(completeProvisioningId, setup.eventId, completeAcceptanceId, completeSubmissionId, completeSpeakerId, completedAt, completedAt, completedAt),
+      env.DB.prepare("insert into task_completions (id, event_id, task_id, speaker_id, completed_at, data, version, created_at, updated_at) values (?, ?, ?, ?, ?, null, 1, ?, ?)").bind(`${completeSpeakerId}-${missingProfile.id}`, setup.eventId, missingProfile.id, completeSpeakerId, completedAt, completedAt, completedAt),
+      env.DB.prepare("insert into task_completions (id, event_id, task_id, speaker_id, completed_at, data, version, created_at, updated_at) values (?, ?, ?, ?, ?, null, 1, ?, ?)").bind(`${completeSpeakerId}-${employerApproval.id}`, setup.eventId, employerApproval.id, completeSpeakerId, completedAt, completedAt, completedAt),
+    ]);
+
+    const dashboard = await runAs(owner, getPortalDashboard({ eventId: setup.eventId }));
+    const speaker = dashboard.speakers[0]!;
+    expect(dashboard.speakers.map((item) => item.speaker.id)).toEqual([setup.speakerId, completeSpeakerId]);
+    expect(dashboard.totals).toMatchObject({ speakers: 2, ready: 1, needsAttention: 1, overdue: 1, tasksDone: 2, tasksTotal: 4 });
+    expect(speaker.readiness).toMatchObject({
+      outstandingTaskIds: [employerApproval.id, missingProfile.id],
+      overdueCount: 1,
+      clearestBlocker: "Overdue: Employer approval",
+      recommendedNextAction: "Send a tool email about Employer approval",
+    });
+    expect(speaker.readiness.missingItems).toMatchObject([
+      { id: employerApproval.id, overdue: true, blocker: "Overdue: Employer approval" },
+      { id: missingProfile.id, overdue: false, recommendedAction: "Complete the speaker profile" },
+    ]);
+  });
+
+  it("appends only explicit organizer contact evidence and projects the latest contact", async () => {
+    const setup = await fixture();
+    await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Travel confirmation",
+      description: null,
+      kind: "confirm",
+      formId: null,
+      dueAt: null,
+      order: 1,
+    }));
+    expect((await runAs(owner, getPortalDashboard({ eventId: setup.eventId }))).speakers[0]?.readiness.recommendedNextAction)
+      .toBe("Send a tool email about Travel confirmation");
+    const first = await runAs(owner, logSpeakerContact({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      medium: "toolEmail",
+      note: "Sent the readiness reminder.",
+      idempotencyKey: `contact-first-${setup.eventId}`,
+    }));
+    const replay = await runAs(owner, logSpeakerContact({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      medium: "toolEmail",
+      note: "Sent the readiness reminder.",
+      idempotencyKey: `contact-first-${setup.eventId}`,
+    }));
+    expect(replay).toEqual(first);
+    expect(await drizzle(env.DB).select().from(speakerContacts).where(eq(speakerContacts.eventId, setup.eventId))).toHaveLength(1);
+    expect((await runAs(owner, getPortalDashboard({ eventId: setup.eventId }))).speakers[0]?.readiness.recommendedNextAction)
+      .toBe("Send a personal email about Travel confirmation");
+    await runAs(owner, logSpeakerContact({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      medium: "personalEmail",
+      note: null,
+      idempotencyKey: `contact-second-${setup.eventId}`,
+    }));
+    expect((await runAs(owner, getPortalDashboard({ eventId: setup.eventId }))).speakers[0]?.readiness.recommendedNextAction)
+      .toBe("Send a text about Travel confirmation");
+    await runAs(owner, logSpeakerContact({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      medium: "text",
+      note: null,
+      idempotencyKey: `contact-third-${setup.eventId}`,
+    }));
+    expect((await runAs(owner, getPortalDashboard({ eventId: setup.eventId }))).speakers[0]?.readiness.recommendedNextAction)
+      .toBe("Call about Travel confirmation");
+    await runAs(owner, logSpeakerContact({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      medium: "phone",
+      note: null,
+      idempotencyKey: `contact-fourth-${setup.eventId}`,
+    }));
+    const dashboard = await runAs(owner, getPortalDashboard({ eventId: setup.eventId }));
+    expect(dashboard.speakers[0]?.latestContact).toMatchObject({ medium: "phone", note: null });
+    expect(dashboard.speakers[0]?.readiness.recommendedNextAction)
+      .toBe("Follow up by phone or coordinate manually about Travel confirmation");
+    expect(await drizzle(env.DB).select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, setup.eventId),
+      eq(domainChanges.eventType, "portal.speaker.contact.logged"),
+    ))).toHaveLength(4);
+    expect(await drizzle(env.DB).select().from(auditLog).where(and(
+      eq(auditLog.eventId, setup.eventId),
+      eq(auditLog.action, "portal.speaker.contact.logged"),
+    ))).toHaveLength(4);
   });
 
   it("stores a policy-validated R2 upload and links headshot and task completion", async () => {

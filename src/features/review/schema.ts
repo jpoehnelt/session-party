@@ -20,6 +20,9 @@ export type ReviewRoundStatus = typeof ReviewRoundStatus.Type;
 export const ReviewState = Schema.Literal("unassigned", "assigned", "in_progress", "complete");
 export type ReviewState = typeof ReviewState.Type;
 
+export const WorkbenchOrder = Schema.Literal("coverage", "decision");
+export type WorkbenchOrder = typeof WorkbenchOrder.Type;
+
 export const ScoreValue = Schema.Int.pipe(Schema.between(1, 5));
 export type ScoreValue = typeof ScoreValue.Type;
 
@@ -114,6 +117,15 @@ export const HumanReview = Schema.Struct({
 });
 export type HumanReview = typeof HumanReview.Type;
 
+export const ReviewThreadComment = Schema.Struct({
+  id: EntityId,
+  authorUserId: EntityId,
+  authorName: NonEmptyText,
+  body: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(5_000)),
+  createdAt: UnixTimestampMs,
+});
+export type ReviewThreadComment = typeof ReviewThreadComment.Type;
+
 export const AiSuggestion = Schema.Struct({
   id: EntityId,
   label: Schema.Literal("AI suggestion — requires human confirmation"),
@@ -161,6 +173,7 @@ export const SubmissionReviewSummary = Schema.Struct({
   submittedAt: UnixTimestampMs,
   version: Schema.Int.pipe(Schema.positive()),
   reviewState: ReviewState,
+  assignedToMe: Schema.Boolean,
   assignmentCount: Schema.Int.pipe(Schema.nonNegative()),
   completedReviewCount: Schema.Int.pipe(Schema.nonNegative()),
   averageScore: Schema.NullOr(Schema.Number.pipe(Schema.between(1, 5))),
@@ -174,6 +187,7 @@ export const SubmissionReviewDetail = Schema.Struct({
   round: Schema.NullOr(ReviewRound),
   assignments: Schema.Array(ReviewerAssignment),
   reviews: Schema.Array(HumanReview),
+  comments: Schema.Array(ReviewThreadComment),
   aiSuggestions: Schema.Array(AiSuggestion),
   acceptance: Schema.NullOr(AcceptanceSummary),
 });
@@ -184,6 +198,7 @@ export const WorkbenchFilters = Schema.Struct({
   category: OptionalFilter,
   roundId: Schema.optional(EntityId),
   assignedToMe: Schema.optional(Schema.BooleanFromString),
+  order: Schema.optional(WorkbenchOrder),
   page: Schema.optionalWith(Schema.NumberFromString.pipe(Schema.int(), Schema.positive()), {
     default: () => 1,
   }),
@@ -215,6 +230,7 @@ export const ReviewWorkbench = Schema.Struct({
   viewerUserId: EntityId,
   reviewers: Schema.Array(ReviewMember),
   rounds: Schema.Array(ReviewRound),
+  order: WorkbenchOrder,
   queue: Schema.Array(SubmissionReviewSummary),
   selected: Schema.NullOr(SubmissionReviewDetail),
   pagination: WorkbenchPagination,
@@ -258,6 +274,21 @@ export const SaveScoreOutput = Schema.Struct({
   submissionStatus: SubmissionStatus,
 });
 export type SaveScoreOutput = typeof SaveScoreOutput.Type;
+
+export const AppendReviewCommentInput = Schema.Struct({
+  eventId: EntityId,
+  submissionId: EntityId,
+  body: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(5_000)),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type AppendReviewCommentInput = typeof AppendReviewCommentInput.Type;
+
+export const AppendReviewCommentOutput = Schema.Struct({
+  comment: ReviewThreadComment,
+  idempotent: Schema.Boolean,
+});
+export type AppendReviewCommentOutput = typeof AppendReviewCommentOutput.Type;
 
 export const RequestAiSuggestionInput = Schema.Struct({
   eventId: EntityId,

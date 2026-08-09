@@ -123,7 +123,7 @@ export function OrganizerTasksContent({
       <ProductionHeader
         eyebrow="Organizer control room / Cue stack"
         title="Speaker tasks"
-        description="Define the ordered checklist that drives speaker readiness across the portal and organizer dashboard."
+        description="Define the ordered checklist that drives speaker readiness across the portal and organizer dashboard. Use confirm tasks for employer approvals or co-speaker confirmations."
         accent="purple"
       />
       <ProductionStats

@@ -122,6 +122,12 @@ const baseSnapshot = (overrides: Partial<AgendaSnapshot> = {}): AgendaSnapshot =
   backlog: [],
   talks: [],
   conflicts: [],
+  warnings: {
+    unplacedTalkCount: 0,
+    conflictCount: 0,
+    roomConflictCount: 0,
+    speakerConflictCount: 0,
+  },
   publication: { revision: 0, publishedAt: null, talkCount: 0 },
   ...overrides,
 });
@@ -159,7 +165,6 @@ const speakerConflict: AgendaConflict = {
 
 export const speakerConflictAgendaFixture: AgendaScenarioFixture = {
   name: "speaker-conflict",
-  expectedError: "Conflict",
   snapshot: baseSnapshot({
     talks: [
       talkA,
@@ -173,6 +178,12 @@ export const speakerConflictAgendaFixture: AgendaScenarioFixture = {
       },
     ],
     conflicts: [speakerConflict],
+    warnings: {
+      unplacedTalkCount: 0,
+      conflictCount: 1,
+      roomConflictCount: 0,
+      speakerConflictCount: 1,
+    },
   }),
 };
 
@@ -186,7 +197,6 @@ const roomConflict: AgendaConflict = {
 
 export const roomConflictAgendaFixture: AgendaScenarioFixture = {
   name: "room-conflict",
-  expectedError: "Conflict",
   snapshot: baseSnapshot({
     talks: [
       talkA,
@@ -200,6 +210,12 @@ export const roomConflictAgendaFixture: AgendaScenarioFixture = {
       },
     ],
     conflicts: [roomConflict],
+    warnings: {
+      unplacedTalkCount: 0,
+      conflictCount: 1,
+      roomConflictCount: 1,
+      speakerConflictCount: 0,
+    },
   }),
 };
 

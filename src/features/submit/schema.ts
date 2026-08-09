@@ -76,6 +76,19 @@ export const SubmissionAnswer = Schema.Struct({
 });
 export type SubmissionAnswer = typeof SubmissionAnswer.Type;
 
+const SpeakerName = Schema.String.pipe(Schema.maxLength(200));
+const SpeakerEmail = Schema.String.pipe(Schema.maxLength(320));
+const SpeakerProfileText = Schema.String.pipe(Schema.maxLength(200));
+
+/** A public co-speaker never needs an account to be recorded against a CFP submission. */
+export const PublicCoSpeaker = Schema.Struct({
+  name: SpeakerName,
+  email: Schema.optional(SpeakerEmail),
+  title: Schema.optional(SpeakerProfileText),
+  organization: Schema.optional(SpeakerProfileText),
+});
+export type PublicCoSpeaker = typeof PublicCoSpeaker.Type;
+
 export const CreatePublicSubmissionInput = Schema.Struct({
   eventSlug: EventSlug,
   formId: EntityId,
@@ -83,6 +96,11 @@ export const CreatePublicSubmissionInput = Schema.Struct({
   /** Omitted only for a known idempotent replay; fresh production writes fail closed. */
   turnstileToken: Schema.optional(TurnstileToken),
   answers: Schema.Array(SubmissionAnswer),
+  /** Optional public profile context for the primary speaker. */
+  primarySpeakerTitle: Schema.optional(SpeakerProfileText),
+  primarySpeakerOrganization: Schema.optional(SpeakerProfileText),
+  /** Bounded so one public submission cannot reserve an unbounded number of speaker records. */
+  coSpeakers: Schema.optional(Schema.Array(PublicCoSpeaker).pipe(Schema.maxItems(10))),
 });
 export type CreatePublicSubmissionInput = typeof CreatePublicSubmissionInput.Type;
 

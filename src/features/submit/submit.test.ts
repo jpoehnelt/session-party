@@ -432,6 +432,8 @@ beforeAll(async () => {
       eventId: EVENT_ID,
       userId: owner.userId,
       displayName: "Seeded Speaker",
+      title: "Principal Engineer",
+      company: "Latticework Systems",
       createdAt: now,
       updatedAt: now,
     }),
@@ -537,6 +539,102 @@ describe("public submission creation", () => {
     expect(speaker?.name).toBe("Sam Rivera");
     expect(change).toMatchObject({ eventType: "submit.created", idempotencyRecordId: expect.any(String) });
     expect(audit).toMatchObject({ action: "submit.create", actorUserId: null, actorApiKeyId: null });
+  });
+
+  it("creates trimmed primary and repeatable co-speaker snapshots atomically and replays without duplicates", async () => {
+    const input: CreatePublicSubmissionInput = {
+      ...submissionInput("submit-co-speakers-001", OPEN_FORM_ID, "A panel with co-speakers"),
+      primarySpeakerTitle: "  Staff Engineer  ",
+      primarySpeakerOrganization: "  Open Systems  ",
+      coSpeakers: [
+        { name: "  Alex Chen  ", email: " ALEX@example.com ", title: "  Principal  ", organization: "  Acme Labs  " },
+        { name: "Jordan Patel", title: "Designer", organization: "Studio North" },
+      ],
+    };
+    const first = await runPublic(createPublicSubmission(input));
+    const replay = await runPublic(createPublicSubmission(input));
+    expect(replay).toEqual(first);
+
+    const db = drizzle(env.DB);
+    const associations = await db
+      .select({
+        associationId: submissionSpeakers.id,
+        speakerId: speakers.id,
+        name: speakers.displayName,
+        contactEmail: speakers.contactEmail,
+        title: speakers.title,
+        organization: speakers.company,
+        isPrimary: submissionSpeakers.isPrimary,
+        titleAtTime: submissionSpeakers.titleAtTime,
+        organizationAtTime: submissionSpeakers.organizationAtTime,
+      })
+      .from(submissionSpeakers)
+      .innerJoin(speakers, and(eq(speakers.eventId, submissionSpeakers.eventId), eq(speakers.id, submissionSpeakers.speakerId)))
+      .where(eq(submissionSpeakers.submissionId, first.submissionId));
+    expect(associations).toHaveLength(3);
+    expect(associations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "Sam Rivera",
+        contactEmail: "sam@example.com",
+        title: "Staff Engineer",
+        organization: "Open Systems",
+        isPrimary: true,
+        titleAtTime: "Staff Engineer",
+        organizationAtTime: "Open Systems",
+      }),
+      expect.objectContaining({
+        name: "Alex Chen",
+        contactEmail: "alex@example.com",
+        title: "Principal",
+        organization: "Acme Labs",
+        isPrimary: false,
+        titleAtTime: "Principal",
+        organizationAtTime: "Acme Labs",
+      }),
+      expect.objectContaining({
+        name: "Jordan Patel",
+        contactEmail: null,
+        title: "Designer",
+        organization: "Studio North",
+        isPrimary: false,
+        titleAtTime: "Designer",
+        organizationAtTime: "Studio North",
+      }),
+    ]));
+
+    await Promise.all(associations.map((association) =>
+      db.update(speakers).set({ title: "Changed", company: "Changed" }).where(eq(speakers.id, association.speakerId))));
+    const frozen = await db
+      .select({ titleAtTime: submissionSpeakers.titleAtTime, organizationAtTime: submissionSpeakers.organizationAtTime })
+      .from(submissionSpeakers)
+      .where(eq(submissionSpeakers.submissionId, first.submissionId));
+    expect(frozen).toEqual(expect.arrayContaining([
+      { titleAtTime: "Staff Engineer", organizationAtTime: "Open Systems" },
+      { titleAtTime: "Principal", organizationAtTime: "Acme Labs" },
+      { titleAtTime: "Designer", organizationAtTime: "Studio North" },
+    ]));
+  });
+
+  it("rejects normalized duplicate co-speaker emails, including the primary speaker, before reserving rows", async () => {
+    const db = drizzle(env.DB);
+    const before = await Promise.all([
+      db.select({ id: submissions.id }).from(submissions),
+      db.select({ id: speakers.id }).from(speakers),
+      db.select({ id: submissionSpeakers.id }).from(submissionSpeakers),
+    ]);
+    const result = await runPublic(createPublicSubmission({
+      ...submissionInput("submit-co-speakers-duplicate-001"),
+      coSpeakers: [{ name: "Alex Chen", email: " SAM@EXAMPLE.COM " }],
+    }).pipe(Effect.either));
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({ _tag: "Validation", message: "Each speaker email must be unique." });
+    }
+    expect(await Promise.all([
+      db.select({ id: submissions.id }).from(submissions),
+      db.select({ id: speakers.id }).from(speakers),
+      db.select({ id: submissionSpeakers.id }).from(submissionSpeakers),
+    ])).toEqual(before);
   });
 
   it("scopes a speaker dashboard by signed-in email and edits the canonical abstract while the CFP is open", async () => {
@@ -908,7 +1006,12 @@ describe("provisioned speaker task-form submission", () => {
       category: null,
       status: "submitted",
     });
-    expect(association).toMatchObject({ speakerId: "speaker-seeded", isPrimary: true });
+    expect(association).toMatchObject({
+      speakerId: "speaker-seeded",
+      isPrimary: true,
+      titleAtTime: "Principal Engineer",
+      organizationAtTime: "Latticework Systems",
+    });
     expect(answers).toHaveLength(1);
     expect(answers[0]).toMatchObject({
       formVersionId: TASK_VERSION_ID,

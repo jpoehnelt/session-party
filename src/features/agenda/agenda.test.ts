@@ -793,7 +793,7 @@ describe("agenda service", () => {
     expect(audits).toHaveLength(4);
   });
 
-  it("rejects room and speaker overlaps server-side", async () => {
+  it("saves room and speaker overlaps as named non-blocking agenda warnings", async () => {
     const roomSeed = await seedAgenda("room-conflict", { scheduled: true });
     const roomTalk = await runAs(roomSeed.user, createTalk({
       eventId: roomSeed.eventId,
@@ -804,7 +804,7 @@ describe("agenda service", () => {
       durationMin: 30,
       idempotencyKey: "room-conflict-create-0001",
     }));
-    const roomResult = await runEither(roomSeed.user, scheduleTalk({
+    const roomResult = await runAs(roomSeed.user, scheduleTalk({
       eventId: roomSeed.eventId,
       talkId: roomTalk.talk.id,
       trackId: roomSeed.trackId,
@@ -814,11 +814,26 @@ describe("agenda service", () => {
       expectedVersion: roomTalk.talk.version,
       idempotencyKey: "room-conflict-schedule-0001",
     }));
-    expect(roomResult._tag).toBe("Left");
-    if (roomResult._tag === "Left") {
-      expect(roomResult.left).toMatchObject({ _tag: "Conflict" });
-      expect(roomResult.left.message).toContain("Harbor");
-    }
+    expect(roomResult).toMatchObject({
+      talk: { status: "confirmed" },
+      conflicts: [expect.objectContaining({ kind: "room_overlap", roomName: "Harbor" })],
+    });
+    const roomSnapshot = await runAs(roomSeed.user, listAgenda({ eventId: roomSeed.eventId, view: "day" }));
+    expect(roomSnapshot.warnings).toEqual({
+      unplacedTalkCount: 0,
+      conflictCount: 1,
+      roomConflictCount: 1,
+      speakerConflictCount: 0,
+    });
+    const roomPublication = await runEither(roomSeed.user, publishAgenda({
+      eventId: roomSeed.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 2,
+      expectedEventVersion: 1,
+      idempotencyKey: "room-conflict-publish-0001",
+    }));
+    expect(roomPublication).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+    if (roomPublication._tag === "Left") expect(roomPublication.left.message).toContain("Harbor");
 
     const speakerSeed = await seedAgenda("speaker-conflict", { scheduled: true, sharedSpeaker: true });
     const speakerTalk = await runAs(speakerSeed.user, createTalk({
@@ -830,7 +845,7 @@ describe("agenda service", () => {
       durationMin: 30,
       idempotencyKey: "speaker-conflict-create-0001",
     }));
-    const speakerResult = await runEither(speakerSeed.user, scheduleTalk({
+    const speakerResult = await runAs(speakerSeed.user, scheduleTalk({
       eventId: speakerSeed.eventId,
       talkId: speakerTalk.talk.id,
       trackId: speakerSeed.trackId,
@@ -840,11 +855,56 @@ describe("agenda service", () => {
       expectedVersion: speakerTalk.talk.version,
       idempotencyKey: "speaker-conflict-schedule-0001",
     }));
-    expect(speakerResult._tag).toBe("Left");
-    if (speakerResult._tag === "Left") {
-      expect(speakerResult.left).toMatchObject({ _tag: "Conflict" });
-      expect(speakerResult.left.message).toContain("Ada Rivera");
-    }
+    expect(speakerResult).toMatchObject({
+      talk: { status: "confirmed" },
+      conflicts: [expect.objectContaining({ kind: "speaker_overlap", speakerName: "Ada Rivera" })],
+    });
+    const speakerSnapshot = await runAs(speakerSeed.user, listAgenda({ eventId: speakerSeed.eventId, view: "day" }));
+    expect(speakerSnapshot.warnings).toEqual({
+      unplacedTalkCount: 0,
+      conflictCount: 1,
+      roomConflictCount: 0,
+      speakerConflictCount: 1,
+    });
+  });
+
+  it("saves TBD placement through the versioned move operation and defers completeness to publication", async () => {
+    const seeded = await seedAgenda("partial-draft", { scheduled: true });
+
+    const saved = await runAs(seeded.user, moveTalk({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      trackId: seeded.trackId,
+      roomId: null,
+      startsAt: null,
+      durationMin: 30,
+      expectedVersion: 2,
+      idempotencyKey: "partial-draft-save-0001",
+    }));
+    expect(saved.talk).toMatchObject({ status: "draft", roomId: null, startsAt: null, version: 3 });
+
+    const snapshot = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }));
+    expect(snapshot.warnings).toEqual({
+      unplacedTalkCount: 1,
+      conflictCount: 0,
+      roomConflictCount: 0,
+      speakerConflictCount: 0,
+    });
+
+    const publication = await runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 1,
+      expectedEventVersion: 1,
+      idempotencyKey: "partial-draft-publish-0001",
+    }));
+    expect(publication).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "Validation",
+        message: "Agenda publication requires all active talks to be placed; 1 talk is still TBD",
+      },
+    });
   });
 
   it("rejects stale moves without writing state or evidence", async () => {

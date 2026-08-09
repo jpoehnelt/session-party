@@ -89,6 +89,9 @@ describe("public submit route", () => {
     expect(markup).toContain("Proposal title");
     expect(markup).toContain("Submit proposal");
     expect(markup).toContain("Save draft");
+    expect(markup).toContain("Speaker details");
+    expect(markup).toContain("Accounts are not required");
+    expect(markup).toContain("Add co-speaker");
     expect(markup).not.toContain("AppShell");
   });
 
@@ -141,6 +144,41 @@ describe("public submit route", () => {
         body: JSON.stringify({
           answers: [{ fieldId: "field-title", value: "Effect at the edge" }],
           turnstileToken: "test-turnstile-token",
+        }),
+      }),
+    );
+  });
+
+  it("includes optional primary details and repeatable co-speakers in the public create payload", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      submissionId: "submission-created",
+      status: "submitted",
+      submittedAt: Date.UTC(2026, 7, 8, 12),
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await postPublicSubmission(
+      "architecture-summit",
+      "form-public",
+      "submit-route-speakers-001",
+      { "field-title": "Effect at the edge" },
+      "test-turnstile-token",
+      {
+        primarySpeakerTitle: "Staff Engineer",
+        primarySpeakerOrganization: "Open Systems",
+        coSpeakers: [{ name: "Alex Chen", email: "alex@example.com", title: "Principal", organization: "Acme Labs" }],
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/public/events/architecture-summit/forms/form-public/submissions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          answers: [{ fieldId: "field-title", value: "Effect at the edge" }],
+          turnstileToken: "test-turnstile-token",
+          primarySpeakerTitle: "Staff Engineer",
+          primarySpeakerOrganization: "Open Systems",
+          coSpeakers: [{ name: "Alex Chen", email: "alex@example.com", title: "Principal", organization: "Acme Labs" }],
         }),
       }),
     );
