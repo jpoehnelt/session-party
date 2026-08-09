@@ -395,6 +395,10 @@ export function buildEventPatch(values: EventFormValues, originalEvent?: EventMe
     accentColor: values.accentColor === "" ? null : values.accentColor,
   };
 
+  if (patch.startsAt !== null && patch.endsAt !== null && patch.endsAt < patch.startsAt) {
+    throw new Error("End must be at or after start.");
+  }
+
   try {
     return Schema.decodeUnknownSync(UpdateEventInput)(patch);
   } catch {

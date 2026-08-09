@@ -138,6 +138,27 @@ const dates = (input: {
   endsAt: input.endsAt === undefined ? undefined : input.endsAt === null ? null : new Date(input.endsAt),
 });
 
+const validateDateOrder = (startsAt: number | null, endsAt: number | null) =>
+  startsAt !== null && endsAt !== null && endsAt < startsAt
+    ? Effect.fail(new Validation({ message: "End must be at or after start." }))
+    : Effect.void;
+
+const isDateOrderConstraint = (error: External): boolean =>
+  error.detail?.includes("events_date_order") ?? false;
+
+const eventDatabaseFailure = (
+  error: External,
+  slug: string,
+): Effect.Effect<never, External | Validation | Conflict> => {
+  if (isDateOrderConstraint(error)) {
+    return Effect.fail(new Validation({ message: "End must be at or after start." }));
+  }
+  if (error.detail?.includes("UNIQUE constraint failed: events.slug")) {
+    return Effect.fail(new Conflict({ message: `Event slug '${slug}' is already in use` }));
+  }
+  return Effect.fail(error);
+};
+
 const findEvent = (idOrSlug: string) =>
   Effect.gen(function* () {
     const { db } = yield* Db;
@@ -163,6 +184,8 @@ export const createEvent = (
         new Forbidden({ reason: "This operation requires a browser session" }),
       );
     }
+
+    yield* validateDateOrder(input.startsAt ?? null, input.endsAt ?? null);
 
     const [existing] = yield* database(() =>
       db.select({ id: events.id }).from(events).where(eq(events.slug, input.slug)).limit(1),
@@ -204,12 +227,7 @@ export const createEvent = (
     }
     return event;
   }).pipe(
-    Effect.catchIf(
-      (error): error is External =>
-        error._tag === "External" &&
-        (error.detail?.includes("UNIQUE constraint failed: events.slug") ?? false),
-      () => Effect.fail(new Conflict({ message: `Event slug '${input.slug}' is already in use` })),
-    ),
+    Effect.catchTag("External", (error) => eventDatabaseFailure(error, input.slug)),
   );
 
 export const getEvent = (
@@ -259,6 +277,11 @@ export const updateEvent = (
     const event = yield* findEvent(idOrSlug);
     yield* authorizeCurrent(eventWriteAuthorization, event.id);
 
+    yield* validateDateOrder(
+      input.startsAt === undefined ? event.startsAt?.getTime() ?? null : input.startsAt,
+      input.endsAt === undefined ? event.endsAt?.getTime() ?? null : input.endsAt,
+    );
+
     if (input.slug && input.slug !== event.slug) {
       const [slugOwner] = yield* database(() =>
         db.select({ id: events.id }).from(events).where(eq(events.slug, input.slug!)).limit(1),
@@ -284,12 +307,7 @@ export const updateEvent = (
     if (!updated) return yield* Effect.fail(new NotFound({ entity: "event", id: idOrSlug }));
     return updated;
   }).pipe(
-    Effect.catchIf(
-      (error): error is External =>
-        error._tag === "External" &&
-        (error.detail?.includes("UNIQUE constraint failed: events.slug") ?? false),
-      () => Effect.fail(new Conflict({ message: `Event slug '${input.slug}' is already in use` })),
-    ),
+    Effect.catchTag("External", (error) => eventDatabaseFailure(error, input.slug ?? idOrSlug)),
   );
 
 type MemberActor = { readonly userId: string; readonly role: ManagedRole };
