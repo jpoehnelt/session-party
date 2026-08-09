@@ -685,7 +685,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         className="relative"
         title={
           <span>
-            <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.2em] text-accent">Run of show / live desk</span>
+            <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.2em] text-accent-deep">Run of show / live desk</span>
             {agenda.eventName}
           </span>
         }
@@ -720,10 +720,10 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       />
       <section aria-label="Agenda production status" className="mb-7 grid border-2 border-line-strong bg-surface shadow-card sm:grid-cols-2 xl:grid-cols-4">
         {[
-          [String(scheduledTalkCount).padStart(2, "0"), "Talks placed", `${confirmedTalkCount} confirmed`, "bg-production-sky"],
-          [String(agenda.rooms.length).padStart(2, "0"), "Rooms online", `${agenda.tracks.length} tracks`, "bg-production-lime"],
+          [String(scheduledTalkCount).padStart(2, "0"), "Talks placed", `${confirmedTalkCount} confirmed`, "bg-surface-muted"],
+          [String(agenda.rooms.length).padStart(2, "0"), "Rooms online", `${agenda.tracks.length} tracks`, "bg-surface-muted"],
           [String(agenda.conflicts.length).padStart(2, "0"), "Conflicts", agenda.conflicts.length === 0 ? "Clear to publish" : "Needs attention", agenda.conflicts.length === 0 ? "bg-production-yellow" : "bg-production-coral"],
-          [agenda.publication.revision > 0 ? `R${agenda.publication.revision}` : "—", "Public release", agenda.publication.publishedAt === null ? "Not on air" : "Snapshot locked", "bg-accent text-on-accent"],
+          [agenda.publication.revision > 0 ? `R${agenda.publication.revision}` : "—", "Public release", agenda.publication.publishedAt === null ? "Not on air" : "Snapshot locked", "bg-surface-muted"],
         ].map(([value, label, detail, color], index) => (
           <div className={`min-h-28 p-4 ${color} ${
             index === 1
@@ -794,7 +794,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         <div className="space-y-8">
           <section aria-labelledby="agenda-track-setup-heading" className="space-y-4">
             <div className="border-l-4 border-accent pl-3">
-              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent">Signal routing</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Signal routing</p>
               <h2 id="agenda-track-setup-heading" className="mt-1 text-2xl font-black tracking-[-0.04em] text-ink">Tracks</h2>
               <p className="mt-1 text-sm font-semibold text-ink-secondary">Create program lanes and control their stable display order.</p>
             </div>

@@ -630,7 +630,7 @@ export function FormsWorkspace({
       <PageHeader
         title="CFP & forms"
         description="Build routed proposal forms, publish immutable versions, and control submission availability."
-        className="border-[3px] border-[#171714] bg-[#7857ff] p-5 text-white shadow-[7px_7px_0_#171714] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-none [&_h1]:tracking-[-0.055em] [&_h1]:text-white sm:[&_h1]:text-5xl [&_p]:mt-3 [&_p]:max-w-xl [&_p]:font-semibold [&_p]:text-white/80"
+        className="border-[3px] border-[#171714] bg-[#896aff] p-5 text-[#171714] shadow-[7px_7px_0_#171714] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-none [&_h1]:tracking-[-0.055em] [&_h1]:text-[#171714] sm:[&_h1]:text-5xl [&_p]:mt-3 [&_p]:max-w-xl [&_p]:font-semibold [&_p]:text-[#171714]"
         actions={summaries.length > 0 ? (
           <Button
             className="min-h-11 rounded-none border-2 border-[#171714] bg-[#caff4a] px-5 text-xs font-black uppercase tracking-[0.1em] text-[#171714] shadow-[4px_4px_0_#171714] hover:bg-[#d7ff78]"
@@ -650,9 +650,9 @@ export function FormsWorkspace({
 
       <div className="-mt-3 mb-7 ml-3 grid max-w-2xl grid-cols-3 border-2 border-[#171714] bg-[#fffdf7] shadow-[4px_4px_0_#171714]" aria-label="Form lifecycle totals">
         {[
-          ["Open", summaries.filter((form) => form.status === "open").length, "bg-[#caff4a]"],
-          ["Draft", summaries.filter((form) => form.status === "draft").length, "bg-[#8fdcff]"],
-          ["Versions", summaries.reduce((total, form) => total + (form.publishedVersionNumber ? 1 : 0), 0), "bg-[#ff714f]"],
+          ["Open", summaries.filter((form) => form.status === "open").length, "bg-[#ece8dc]"],
+          ["Draft", summaries.filter((form) => form.status === "draft").length, "bg-[#ece8dc]"],
+          ["Versions", summaries.reduce((total, form) => total + (form.publishedVersionNumber ? 1 : 0), 0), "bg-[#ece8dc]"],
         ].map(([label, value, color], index) => (
           <div className={`px-3 py-2.5 ${color} ${index > 0 ? "border-l-2 border-[#171714]" : ""}`} key={label}>
             <span className="block text-xl font-black leading-none tracking-[-0.04em] sm:text-2xl">{value}</span>
@@ -708,15 +708,15 @@ export function FormsWorkspace({
                       aria-current={active ? "page" : undefined}
                       onClick={() => setSelectedId(form.id)}
                       className={`h-auto w-full flex-col items-stretch whitespace-normal rounded-none border-2 border-[#171714] px-3 py-3 text-left transition-transform hover:-translate-y-0.5 ${
-                        active ? "bg-[#7857ff] text-white shadow-[3px_3px_0_#171714]" : "bg-[#f3efe3] hover:bg-[#caff4a]"
+                        active ? "bg-[#896aff] text-[#171714] shadow-[3px_3px_0_#171714]" : "bg-[#f3efe3] hover:bg-[#caff4a]"
                       }`}
                     >
-                      <span className={`block truncate text-sm font-black ${active ? "text-white" : "text-[#171714]"}`}>{form.name}</span>
+                      <span className="block truncate text-sm font-black text-[#171714]">{form.name}</span>
                       <span className="mt-1 flex flex-wrap items-center gap-1.5">
                         <Badge className="rounded-none border-[#171714] bg-[#fffdf7] font-black uppercase text-[#171714]" tone={form.status === "open" ? "success" : form.status === "closed" ? "warning" : "neutral"}>
                           {form.status}
                         </Badge>
-                        <span className={`text-[10px] font-bold uppercase tracking-[0.08em] ${active ? "text-white/75" : "text-[#665f52]"}`}>
+                        <span className={`text-[10px] font-bold uppercase tracking-[0.08em] ${active ? "text-[#171714]" : "text-[#665f52]"}`}>
                           {form.purpose === "primary-cfp" ? "Primary CFP" : "Additional"}
                         </span>
                       </span>
@@ -725,7 +725,7 @@ export function FormsWorkspace({
                 })}
               </div>
             </Card>
-            <Card className="rounded-none border-2 border-[#171714] bg-[#8fdcff] shadow-[5px_5px_0_#171714] [&>header]:border-b-2 [&>header]:border-[#171714] [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.12em]" title="Lifecycle">
+            <Card className="rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[5px_5px_0_#171714] [&>header]:border-b-2 [&>header]:border-[#171714] [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.12em]" title="Lifecycle">
               <dl className="space-y-0 border-2 border-[#171714] bg-[#fffdf7] text-sm">
                 <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                   <dt className="font-bold uppercase tracking-[0.08em] text-[#665f52]">Open</dt>

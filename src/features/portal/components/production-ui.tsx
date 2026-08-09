@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 export const productionCardClass =
-  "rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[6px_6px_0_#171714] [&>header]:border-[#171714] [&>header]:bg-[#ece8dc] [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.1em] [&>div]:p-5 sm:[&>div]:p-6";
+  "rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[6px_6px_0_#171714] [&>header]:border-[#171714] [&>header]:bg-[#ece8dc] [&>header]:text-[#171714] [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.1em] [&>header_h3]:text-[#171714] [&>div]:p-5 sm:[&>div]:p-6";
 
 export const productionFormClass =
   "[&_input]:rounded-none [&_input]:border-[#171714] [&_input]:bg-[#fffdf7] [&_input]:focus:ring-[#7857ff] [&_select]:rounded-none [&_select]:border-[#171714] [&_select]:bg-[#fffdf7] [&_select]:focus:ring-[#7857ff] [&_textarea]:rounded-none [&_textarea]:border-[#171714] [&_textarea]:bg-[#fffdf7] [&_textarea]:focus:ring-[#7857ff] [&_label]:font-bold [&_label]:text-[#171714]";
@@ -21,7 +21,7 @@ interface ProductionHeaderProps {
 }
 
 const accentClass = {
-  purple: "bg-[#7857ff] text-white",
+  purple: "bg-[#896aff] text-[#171714]",
   lime: "bg-[#caff4a] text-[#171714]",
   coral: "bg-[#ff714f] text-[#171714]",
   sky: "bg-[#8fdcff] text-[#171714]",
@@ -66,10 +66,10 @@ interface ProductionStatProps {
 
 const statToneClass = {
   paper: "bg-[#fffdf7] text-[#171714]",
-  purple: "bg-[#7857ff] text-white",
-  lime: "bg-[#caff4a] text-[#171714]",
-  coral: "bg-[#ff714f] text-[#171714]",
-  sky: "bg-[#8fdcff] text-[#171714]",
+  purple: "bg-[#ece8dc] text-[#171714]",
+  lime: "bg-[#ece8dc] text-[#171714]",
+  coral: "bg-[#ece8dc] text-[#171714]",
+  sky: "bg-[#ece8dc] text-[#171714]",
 } as const;
 
 export function ProductionStats({ stats }: { readonly stats: readonly ProductionStatProps[] }) {

@@ -30,16 +30,16 @@ const PHASE_PRESENTATION: Record<EventPhase, { label: string; tone: "neutral" | 
 };
 
 const EVENT_TONES = [
-  "[&>header]:bg-accent",
-  "[&>header]:bg-production-coral [&>header]:text-ink [&>header_h3]:text-ink",
-  "[&>header]:bg-production-sky [&>header]:text-ink [&>header_h3]:text-ink",
+  "[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink",
+  "[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink",
+  "[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink",
 ] as const;
 
 const PRODUCTION_LANES = [
-  { index: "01", label: "Forms & CFP", description: "Collect and route proposals", segment: "forms", tone: "bg-production-sky" },
-  { index: "02", label: "Review", description: "Score and select the program", segment: "review", tone: "bg-production-coral" },
-  { index: "03", label: "Speakers", description: "Track onboarding readiness", segment: "speakers", tone: "bg-production-yellow" },
-  { index: "04", label: "Agenda", description: "Build the conflict-free run of show", segment: "agenda", tone: "bg-production-lime" },
+  { index: "01", label: "Forms & CFP", description: "Collect and route proposals", segment: "forms", tone: "bg-surface-muted" },
+  { index: "02", label: "Review", description: "Score and select the program", segment: "review", tone: "bg-surface-muted" },
+  { index: "03", label: "Speakers", description: "Track onboarding readiness", segment: "speakers", tone: "bg-surface-muted" },
+  { index: "04", label: "Agenda", description: "Build the conflict-free run of show", segment: "agenda", tone: "bg-surface-muted" },
 ] as const;
 
 export function eventPhase(event: EventSummary, now = new Date()): EventPhase {
@@ -163,7 +163,7 @@ export function EventsWorkspace({ events, now = new Date() }: { events: readonly
           </p>
         </div>
         <Card
-          className="overflow-hidden [&>div]:p-0 [&>header]:bg-production-yellow [&>header]:text-ink [&>header_h3]:text-ink"
+          className="overflow-hidden [&>div]:p-0 [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink"
           title={(
             <span className="flex items-center justify-between gap-4">
               <span>Featured event</span>
@@ -199,7 +199,7 @@ export function EventsWorkspace({ events, now = new Date() }: { events: readonly
 
               <div className="mt-8 flex flex-wrap gap-3">
                 <Link
-                  className="inline-flex min-h-11 items-center border-2 border-line-strong bg-accent px-4 py-2 text-xs font-black uppercase tracking-[0.08em] text-on-accent shadow-button transition-transform hover:-translate-y-0.5 hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3"
+                  className="inline-flex min-h-11 items-center border-2 border-line-strong bg-accent px-4 py-2 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button transition-transform hover:-translate-y-0.5 hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3"
                   to={featuredBase}
                 >
                   Open production board →
@@ -245,7 +245,7 @@ export function EventsWorkspace({ events, now = new Date() }: { events: readonly
                   {lane.index}
                 </span>
                 <span>
-                  <span className="block text-xs font-black uppercase tracking-[0.08em] group-hover:text-accent">{lane.label} →</span>
+                  <span className="block text-xs font-black uppercase tracking-[0.08em] group-hover:text-accent-deep">{lane.label} →</span>
                   <span className="mt-1.5 block text-xs font-semibold leading-5 text-ink-secondary">{lane.description}</span>
                 </span>
               </Link>
@@ -258,7 +258,7 @@ export function EventsWorkspace({ events, now = new Date() }: { events: readonly
         <section aria-labelledby="other-events-heading">
           <div className="mb-4 flex items-end justify-between gap-4 border-b-2 border-line-strong pb-3">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-accent">All workspaces</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep">All workspaces</p>
               <h2 id="other-events-heading" className="mt-1 text-2xl font-black tracking-[-0.035em]">Other events</h2>
             </div>
             <p className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-faint">{otherEvents.length} more</p>
@@ -278,7 +278,7 @@ export function EventsWorkspace({ events, now = new Date() }: { events: readonly
                   <p className="mt-4 min-h-12 text-sm font-semibold leading-6 text-ink-secondary">
                     {event.description || event.location || "Ready for its production brief."}
                   </p>
-                  <p className="mt-5 border-t-2 border-line-strong pt-3 text-[10px] font-black uppercase tracking-[0.12em] text-accent">
+                  <p className="mt-5 border-t-2 border-line-strong pt-3 text-[10px] font-black uppercase tracking-[0.12em] text-accent-deep">
                     Open production board →
                   </p>
                 </Card>

@@ -140,7 +140,7 @@ export function OrganizerResourcesContent({
           <div className="grid gap-5 xl:grid-cols-2">
             {[...resources].sort((left, right) => left.order - right.order).map((resource) => (
               <Card
-                className={`${productionCardClass} [&>header]:bg-[#8fdcff]`}
+                className={productionCardClass}
                 key={resource.id}
                 title={`Asset ${String(resource.order).padStart(2, "0")} / ${resource.title}`}
               >
@@ -206,7 +206,7 @@ function ResourceFields({
       <Textarea name="body" label="Resource text" rows={5} defaultValue={resource?.body ?? ""} />
       <Input name="embedUrl" label="Approved embed URL" type="url" placeholder="https://" defaultValue={resource?.embedUrl ?? ""} />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button className={`${productionButtonClass} bg-[#7857ff] text-white`} type="submit" loading={loading}>{submitLabel}</Button>
+        <Button className={`${productionButtonClass} bg-[#896aff] text-[#171714]`} type="submit" loading={loading}>{submitLabel}</Button>
         {deleteAction}
       </div>
     </form>

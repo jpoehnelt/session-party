@@ -66,7 +66,7 @@ export function Dropzone({
         }}
         className="sr-only"
       />
-      <div className="mb-3 flex size-10 items-center justify-center rounded-control border-2 border-line-strong bg-accent text-on-accent shadow-[2px_2px_0_#171714]">
+      <div className="mb-3 flex size-10 items-center justify-center rounded-control border-2 border-line-strong bg-accent text-ink shadow-[2px_2px_0_#171714]">
         <UploadIcon className="size-5" />
       </div>
       <p className="text-sm font-bold text-ink">

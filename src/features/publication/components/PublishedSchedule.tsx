@@ -28,10 +28,10 @@ const VIEW_LABELS: Record<AgendaView, string> = {
 };
 
 const GROUP_ACCENTS = [
-  "bg-production-sky",
-  "bg-production-lime",
-  "bg-production-coral",
-  "bg-production-yellow",
+  "bg-surface-muted",
+  "bg-surface-muted",
+  "bg-surface-muted",
+  "bg-surface-muted",
 ] as const;
 
 const zonedDateParts = (startsAt: number, timezone: string) => {

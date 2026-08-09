@@ -72,7 +72,7 @@ export function FormPreview({ form, now }: FormPreviewProps) {
           <Card className="overflow-hidden rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-none [&>div]:px-4 [&>div]:py-4">
             <div className="mb-5 border-b-2 border-[#171714] pb-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[#7857ff]">
+                <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[#3e268f]">
                   Submission preview
                 </span>
                 <Badge className={PREVIEW_BADGE} tone={

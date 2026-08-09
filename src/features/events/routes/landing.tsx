@@ -18,7 +18,7 @@ const workflow = [
     title: "Review",
     description: "Give reviewers clear assignments, useful rubrics, and one place to land decisions.",
     detail: "3 rounds · 12 reviewers",
-    className: "bg-[#7857ff] text-white lg:col-span-7",
+    className: "bg-[#896aff] text-[#171714] lg:col-span-7",
   },
   {
     number: "03",
@@ -72,7 +72,7 @@ function Brand({ inverse = false }: { inverse?: boolean }) {
 function ProductPreview() {
   const navItems = ["Overview", "Forms", "Review", "Speakers", "Agenda"] as const;
   const cues = [
-    ["09:00", "CFP closes", "bg-[#7857ff] text-white"],
+    ["09:00", "CFP closes", "bg-[#896aff] text-[#171714]"],
     ["13:00", "Review lock", "bg-[#ff714f] text-[#171714]"],
     ["17:30", "Speaker brief", "bg-[#caff4a] text-[#171714]"],
   ] as const;
@@ -103,7 +103,7 @@ function ProductPreview() {
             {navItems.map((label, index) => (
               <div
                 className={`mb-1.5 px-2.5 py-2 text-[11px] font-bold ${
-                  index === 0 ? "bg-[#7857ff] text-white shadow-[3px_3px_0_#171714]" : "text-[#665f52]"
+                  index === 0 ? "bg-[#896aff] text-[#171714] shadow-[3px_3px_0_#171714]" : "text-[#665f52]"
                 }`}
                 key={label}
               >
@@ -115,7 +115,7 @@ function ProductPreview() {
           <div className="p-4 sm:p-5">
             <div className="flex items-start justify-between gap-4 border-b-2 border-[#171714] pb-4">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7857ff]">Sep 17 · San Francisco</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#3e268f]">Sep 17 · San Francisco</p>
                 <h2 className="mt-1 text-xl font-black tracking-[-0.045em] sm:text-2xl">AI Engineer Sandbox</h2>
               </div>
               <div className="bg-[#caff4a] px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.12em]">On track</div>
@@ -221,7 +221,7 @@ export default function LandingPage() {
               <h1 className="mt-8 text-[clamp(3rem,7vw,7.25rem)] font-black leading-[0.82] tracking-[-0.075em]">
                 Your whole
                 <span className="block">program,</span>
-                <span className="relative mt-2 inline-block bg-[#7857ff] px-2 pb-2 text-white shadow-[8px_8px_0_#171714]">ready on cue.</span>
+                <span className="relative mt-2 inline-block bg-[#896aff] px-2 pb-2 text-[#171714] shadow-[8px_8px_0_#171714]">ready on cue.</span>
               </h1>
               <p className="mt-8 max-w-xl text-lg font-semibold leading-8 text-[#4f4a40]">
                 Proposals, reviews, speakers, schedules, and every deadline in between—moving toward the same show.
@@ -230,7 +230,7 @@ export default function LandingPage() {
                 <Link className={primaryLinkClass} to="/login?returnTo=%2Fevents">
                   Start producing <span aria-hidden="true">→</span>
                 </Link>
-                <a className="text-sm font-black uppercase tracking-[0.08em] underline decoration-2 underline-offset-4 hover:text-[#7857ff]" href="#workflow">
+                <a className="text-sm font-black uppercase tracking-[0.08em] underline decoration-2 underline-offset-4 hover:text-[#3e268f]" href="#workflow">
                   Follow the workflow ↓
                 </a>
               </div>
@@ -262,7 +262,7 @@ export default function LandingPage() {
           <div className="mx-auto max-w-[90rem] px-5 py-20 sm:px-8 sm:py-28 lg:px-10">
             <div className="grid items-end gap-8 lg:grid-cols-[1fr_0.7fr]">
               <div>
-                <p className="text-xs font-black uppercase tracking-[0.18em] text-[#7857ff]">One connected workflow</p>
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-[#3e268f]">One connected workflow</p>
                 <h2 className="mt-4 max-w-4xl text-5xl font-black leading-[0.93] tracking-[-0.065em] sm:text-7xl">
                   From open call<br />to showtime.
                 </h2>
@@ -309,7 +309,7 @@ export default function LandingPage() {
               <ol>
                 {capabilities.map(([number, capability, status], index) => (
                   <li className={`grid grid-cols-[2.25rem_1fr] items-center gap-3 py-4 sm:grid-cols-[2.5rem_1fr_auto] sm:gap-5 ${index > 0 ? "border-t-2 border-[#171714]" : ""}`} key={capability}>
-                    <span className={`grid size-9 place-items-center text-xs font-black ${index % 3 === 0 ? "bg-[#ff714f]" : index % 3 === 1 ? "bg-[#8fdcff]" : "bg-[#7857ff] text-white"}`}>{number}</span>
+                    <span className="grid size-9 place-items-center bg-[#ece8dc] text-xs font-black text-[#171714]">{number}</span>
                     <span className="text-sm font-black sm:text-base">{capability}</span>
                     <span className="col-start-2 text-[9px] font-black uppercase tracking-[0.12em] text-[#665f52] sm:col-start-auto sm:text-right">{status}</span>
                   </li>
@@ -328,7 +328,7 @@ export default function LandingPage() {
                 Get everyone<br />ready for showtime.
               </h2>
             </div>
-            <Link className="inline-flex min-h-14 shrink-0 items-center justify-center border-[3px] border-[#171714] bg-[#7857ff] px-7 text-sm font-black uppercase tracking-[0.1em] text-white shadow-[7px_7px_0_#171714] transition-transform hover:-translate-y-1" to="/login?returnTo=%2Fevents">
+            <Link className="inline-flex min-h-14 shrink-0 items-center justify-center border-[3px] border-[#171714] bg-[#896aff] px-7 text-sm font-black uppercase tracking-[0.1em] text-[#171714] shadow-[7px_7px_0_#171714] transition-transform hover:-translate-y-1" to="/login?returnTo=%2Fevents">
               Start producing <span className="ml-3" aria-hidden="true">→</span>
             </Link>
           </div>

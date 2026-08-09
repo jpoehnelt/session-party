@@ -36,10 +36,10 @@ const SURFACES: readonly { readonly id: PublicProgramSurface; readonly label: st
 ];
 
 const PRODUCTION_ACCENTS = [
-  "bg-production-sky",
-  "bg-production-lime",
-  "bg-production-coral",
-  "bg-production-yellow",
+  "bg-surface-muted",
+  "bg-surface-muted",
+  "bg-surface-muted",
+  "bg-surface-muted",
 ] as const;
 
 const normalize = (value: string) => value.trim().toLocaleLowerCase();
@@ -658,7 +658,7 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
         titleId="public-widgets-title"
         description="Generate a link or snippet backed by the currently published program."
       />
-      <Card className="rounded-none [&>header]:bg-production-sky [&>header_h3]:text-ink" title="Widget builder / output patch bay">
+      <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Widget builder / output patch bay">
         <div className="grid gap-4 md:grid-cols-3">
           <Select label="Widget type" value={widget} onChange={(event) => setWidget(event.currentTarget.value as Exclude<PublicProgramSurface, "widgets">)}>
             <option value="sessions">Sessions list</option>
@@ -737,7 +737,7 @@ export function PublicProgram({
                 to={`/event/${agenda.eventSlug}/${item.id}`}
                 aria-current={surface === item.id ? "page" : undefined}
                 className={surface === item.id
-                  ? "whitespace-nowrap border-r-2 border-line-strong bg-accent px-4 py-3 text-[10px] font-black uppercase tracking-[0.1em] text-on-accent first:border-l-2 sm:px-5"
+                  ? "whitespace-nowrap border-r-2 border-line-strong bg-accent px-4 py-3 text-[10px] font-black uppercase tracking-[0.1em] text-ink first:border-l-2 sm:px-5"
                   : "whitespace-nowrap border-r-2 border-line-strong px-4 py-3 text-[10px] font-black uppercase tracking-[0.1em] text-ink-secondary first:border-l-2 hover:bg-production-sky hover:text-ink sm:px-5"}
               >
                 {item.label}

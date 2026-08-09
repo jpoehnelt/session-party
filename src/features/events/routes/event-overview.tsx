@@ -102,7 +102,7 @@ export default function EventOverviewPage() {
       ) : (
         <>
           <PageHeader title={event.name} description={event.description || "Your live production overview."} />
-          <Card className="[&>header]:bg-accent" title="Production brief">
+          <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Production brief">
             <Table
               columns={[
                 { key: "label", header: "Detail" },
