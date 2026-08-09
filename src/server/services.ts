@@ -10,6 +10,15 @@ import type { EventRoomBroadcast, ServerMessage } from "contracts/protocol";
 import { Context, Effect, Layer } from "effect";
 import { and, eq } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
+import {
+  createAcceleventsImports,
+  createFixtureAcceleventsAdapter,
+  createLiveAcceleventsAdapter,
+  createSecretResolver,
+  type AcceleventsAdapterService,
+  type AcceleventsImportsService,
+  type SecretResolverService,
+} from "./accelevents";
 
 export type AppDatabase = DrizzleD1Database<typeof schema>;
 
@@ -32,6 +41,21 @@ export interface MailReceipt {
 }
 
 export class Db extends Context.Tag("session-party/Db")<Db, { readonly db: AppDatabase }>() {}
+
+export class SecretResolver extends Context.Tag("session-party/SecretResolver")<
+  SecretResolver,
+  SecretResolverService
+>() {}
+
+export class AcceleventsAdapter extends Context.Tag("session-party/AcceleventsAdapter")<
+  AcceleventsAdapter,
+  AcceleventsAdapterService
+>() {}
+
+export class AcceleventsImports extends Context.Tag("session-party/AcceleventsImports")<
+  AcceleventsImports,
+  AcceleventsImportsService
+>() {}
 
 export class Mail extends Context.Tag("session-party/Mail")<
   Mail,
@@ -85,6 +109,7 @@ export class CurrentUser extends Context.Tag("session-party/CurrentUser")<
 type SecretBindings = {
   readonly LOCAL_MODE?: string;
   readonly SESSION_SECRET?: string;
+  readonly ACCELEVENTS_API_TOKEN?: string;
 };
 
 const LOCAL_SESSION_SECRET = "explicit-local-only-session-secret-v1";
@@ -305,9 +330,21 @@ export class Authorizer extends Context.Tag("session-party/Authorizer")<
 
 export const AppLayer = (env: Env) => {
   const db = drizzle(env.DB, { schema });
+  const secrets = createSecretResolver(optionalSecret(env, "ACCELEVENTS_API_TOKEN"));
+  const acceleventsAdapter = isExplicitLocalEnvironment(env)
+    ? createFixtureAcceleventsAdapter()
+    : createLiveAcceleventsAdapter();
+  const acceleventsImports = createAcceleventsImports({
+    db,
+    adapter: acceleventsAdapter,
+    secrets,
+  });
 
   return Layer.mergeAll(
     Layer.succeed(Db, { db }),
+    Layer.succeed(SecretResolver, secrets),
+    Layer.succeed(AcceleventsAdapter, acceleventsAdapter),
+    Layer.succeed(AcceleventsImports, acceleventsImports),
     Layer.succeed(Authorizer, { authorize: authorizePrincipal }),
     Layer.succeed(Mail, {
       send: (payload) => externalEffect("cloudflare-email", () => sendMail(env, payload)),
@@ -371,5 +408,15 @@ export const AppLayer = (env: Env) => {
   );
 };
 
-export type AppServices = Db | Mail | Files | Rooms | AiService | Authorizer;
+export type AppServices =
+  | Db
+  | SecretResolver
+  | AcceleventsAdapter
+  | AcceleventsImports
+  | Mail
+  | MailQueue
+  | Files
+  | Rooms
+  | AiService
+  | Authorizer;
 

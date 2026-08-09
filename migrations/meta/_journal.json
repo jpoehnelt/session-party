@@ -22,6 +22,13 @@
       "when": 1786255566984,
       "tag": "0002_empty_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786285040073,
+      "tag": "0003_thin_jackpot",
+      "breakpoints": true
     }
   ]
 }

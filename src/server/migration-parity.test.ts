@@ -101,6 +101,14 @@ const assertDatabaseIntegrity = async (db: D1Database): Promise<void> => {
     "INSERT INTO mail_delivery_snapshots (id, event_id, template_id, recipient_email, from_email, subject, rendered_html, created_at) VALUES ('valid-global-auth', NULL, NULL, 'recipient@example.com', 'sender@example.com', 'Subject', '<p>Body</p>', 1700000000000)",
   ).run();
   await db.prepare("DELETE FROM mail_delivery_snapshots WHERE id = 'valid-global-auth'").run();
+  const acceleventsTables = await db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'accelevents_%' ORDER BY name",
+  ).all<{ name: string }>();
+  expect(acceleventsTables.results.map(({ name }) => name)).toEqual([
+    "accelevents_external_identities",
+    "accelevents_import_items",
+    "accelevents_import_runs",
+  ]);
 };
 
 const insertAuthenticatedUser = async (): Promise<string> => {
@@ -172,7 +180,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(3);
+    expect(migrations).toHaveLength(4);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
     await applyOneByOne(db, migrations.slice(1));
@@ -268,5 +276,103 @@ describe("baseline migration parity", () => {
     await expect(db.prepare(
       "INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, created_by, version, created_at, updated_at) VALUES ('invalid-scope-key', 'legacy-event', 'Invalid', ?, '[\"bogus:scope\"]', 1800000000000, 'legacy-user', 1, 1700000000000, 1700000000000)",
     ).bind("f".repeat(64)).run()).rejects.toThrow(/known scopes/);
+  });
+
+  it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
+    const migrations = testMigrations();
+    const db = (env as TestEnv).MIGRATION_DB;
+    expect(migrations).toHaveLength(4);
+    await applyOneByOne(db, migrations.slice(0, 3));
+    await db.batch([
+      db.prepare(
+        "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('accel-user', 'accel@example.com', 'Accel Owner', 1, 1700000000000, 1700000000000)",
+      ),
+      db.prepare(
+        "INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('accel-event', 'accel-event', 'Accel Event', 'UTC', 1, 1700000000000, 1700000000000)",
+      ),
+      db.prepare(
+        `INSERT INTO integrations
+          (id, event_id, kind, secret_ref, config, cursor, last_sync_at, last_error, version, created_at, updated_at)
+         VALUES
+          ('accel-integration', 'accel-event', 'accelevents', 'ACCELEVENTS_API_TOKEN',
+           '{\"kind\":\"accelevents\",\"accelEventId\":\"provider-1\",\"eventUrl\":\"event-one\"}',
+           NULL, 1700000000000, NULL, 2, 1700000000000, 1700000000000)`,
+      ),
+    ]);
+    await applyOneByOne(db, migrations.slice(3));
+    await assertDatabaseIntegrity(db);
+
+    const integration = await db.prepare(
+      "SELECT id, event_id, secret_ref, config, last_sync_at, version FROM integrations WHERE id = 'accel-integration'",
+    ).first();
+    expect(integration).toEqual({
+      id: "accel-integration",
+      event_id: "accel-event",
+      secret_ref: "ACCELEVENTS_API_TOKEN",
+      config: "{\"kind\":\"accelevents\",\"accelEventId\":\"provider-1\",\"eventUrl\":\"event-one\"}",
+      last_sync_at: 1_700_000_000_000,
+      version: 2,
+    });
+    const tableDefinitions = await db.prepare(
+      "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name LIKE 'accelevents_%'",
+    ).all<{ name: string; sql: string }>();
+    const definitions = tableDefinitions.results.map(({ sql }) => sql).join("\n");
+    expect(definitions).toContain("accelevents_identities_entity_type");
+    expect(definitions).toContain("accelevents_runs_mode");
+    expect(definitions).toContain("accelevents_runs_status");
+    expect(definitions).toContain("accelevents_items_entity_type");
+    expect(definitions).toContain("accelevents_items_action");
+    await db.prepare(
+      `INSERT INTO accelevents_import_runs
+        (id, event_id, integration_id, source_event_id, event_url, mode, status,
+         total_count, created_count, updated_count, unchanged_count, failed_count,
+         error_code, error_detail, started_at, completed_at)
+       VALUES
+        ('valid-enum-run', 'accel-event', 'accel-integration', 'provider-1', 'event-one',
+         'fixture', 'succeeded', 0, 0, 0, 0, 0, NULL, NULL, 1700000000000, 1700000000001)`,
+    ).run();
+    await expect(db.prepare(
+      `INSERT INTO accelevents_import_runs
+        (id, event_id, integration_id, source_event_id, event_url, mode, status,
+         total_count, created_count, updated_count, unchanged_count, failed_count,
+         error_code, error_detail, started_at, completed_at)
+       VALUES
+        ('bad-mode', 'accel-event', 'accel-integration', 'provider-1', 'event-one',
+         'preview', 'succeeded', 0, 0, 0, 0, 0, NULL, NULL, 1700000000000, 1700000000001)`,
+    ).run()).rejects.toThrow();
+    await expect(db.prepare(
+      `INSERT INTO accelevents_import_runs
+        (id, event_id, integration_id, source_event_id, event_url, mode, status,
+         total_count, created_count, updated_count, unchanged_count, failed_count,
+         error_code, error_detail, started_at, completed_at)
+       VALUES
+        ('bad-status', 'accel-event', 'accel-integration', 'provider-1', 'event-one',
+         'fixture', 'abandoned', 0, 0, 0, 0, 0, NULL, NULL, 1700000000000, 1700000000001)`,
+    ).run()).rejects.toThrow();
+    await expect(db.prepare(
+      `INSERT INTO accelevents_import_items
+        (id, event_id, integration_id, run_id, item_order, entity_type, external_id,
+         action, local_id, error_code, error_detail, created_at)
+       VALUES
+        ('bad-entity', 'accel-event', 'accel-integration', 'valid-enum-run', 0, 'session',
+         'external-1', 'failed', NULL, 'invalid', 'invalid entity', 1700000000001)`,
+    ).run()).rejects.toThrow();
+    await expect(db.prepare(
+      `INSERT INTO accelevents_import_items
+        (id, event_id, integration_id, run_id, item_order, entity_type, external_id,
+         action, local_id, error_code, error_detail, created_at)
+       VALUES
+        ('bad-action', 'accel-event', 'accel-integration', 'valid-enum-run', 0, 'speaker',
+         'external-2', 'deleted', 'speaker-1', NULL, NULL, 1700000000001)`,
+    ).run()).rejects.toThrow();
+    await expect(db.prepare(
+      `INSERT INTO accelevents_import_runs
+        (id, event_id, integration_id, source_event_id, event_url, mode, status,
+         total_count, created_count, updated_count, unchanged_count, failed_count,
+         error_code, error_detail, started_at, completed_at)
+       VALUES
+        ('bad-counts', 'accel-event', 'accel-integration', 'provider-1', 'event-one',
+         'fixture', 'succeeded', 2, 1, 0, 0, 0, NULL, NULL, 1700000000000, 1700000000001)`,
+    ).run()).rejects.toThrow();
   });
 });

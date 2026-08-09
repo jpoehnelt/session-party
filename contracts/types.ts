@@ -134,7 +134,12 @@ export type AirtableConfig = typeof AirtableConfig.Type;
 
 export const AccelConfig = S.Struct({
   kind: S.Literal("accelevents"),
-  accelEventId: S.String,
+  accelEventId: S.String.pipe(S.minLength(1), S.maxLength(255)),
+  eventUrl: S.String.pipe(
+    S.minLength(1),
+    S.maxLength(255),
+    S.pattern(/^[A-Za-z0-9_-]+$/),
+  ),
 });
 export type AccelConfig = typeof AccelConfig.Type;
 
@@ -143,6 +148,104 @@ export type IntegrationConfig = typeof IntegrationConfig.Type;
 
 export const AirtableMappedValues = JsonObject;
 export type AirtableMappedValues = typeof AirtableMappedValues.Type;
+
+// ---------- Accelevents import ----------
+
+export const AcceleventsImportMode = S.Literal("fixture", "live");
+export type AcceleventsImportMode = typeof AcceleventsImportMode.Type;
+
+export const AcceleventsEntityType = S.Literal("speaker", "talk");
+export type AcceleventsEntityType = typeof AcceleventsEntityType.Type;
+
+export const AcceleventsSourceSpeaker = S.Struct({
+  externalId: S.String.pipe(S.minLength(1)),
+  displayName: S.String.pipe(S.minLength(1)),
+  title: S.NullOr(S.String),
+  company: S.NullOr(S.String),
+  bio: S.NullOr(S.String),
+});
+export type AcceleventsSourceSpeaker = typeof AcceleventsSourceSpeaker.Type;
+
+export const AcceleventsSourceTalk = S.Struct({
+  externalId: S.String.pipe(S.minLength(1)),
+  title: S.String.pipe(S.minLength(1)),
+  description: S.NullOr(S.String),
+  startsAt: S.NullOr(S.Number),
+  durationMin: S.Int.pipe(S.positive()),
+  status: S.Literal("draft", "confirmed", "cancelled"),
+  speakerExternalIds: S.Array(S.String.pipe(S.minLength(1))),
+});
+export type AcceleventsSourceTalk = typeof AcceleventsSourceTalk.Type;
+
+export const AcceleventsSnapshot = S.Struct({
+  providerEventId: S.String.pipe(S.minLength(1)),
+  speakers: S.Array(AcceleventsSourceSpeaker),
+  talks: S.Array(AcceleventsSourceTalk),
+});
+export type AcceleventsSnapshot = typeof AcceleventsSnapshot.Type;
+
+export const AcceleventsImportAction = S.Literal(
+  "created",
+  "updated",
+  "unchanged",
+  "failed",
+);
+export type AcceleventsImportAction = typeof AcceleventsImportAction.Type;
+
+export const AcceleventsImportItem = S.Struct({
+  order: S.Int.pipe(S.nonNegative()),
+  entityType: AcceleventsEntityType,
+  externalId: S.String,
+  action: AcceleventsImportAction,
+  localId: S.NullOr(S.String),
+  errorCode: S.NullOr(S.String),
+  errorDetail: S.NullOr(S.String),
+});
+export type AcceleventsImportItem = typeof AcceleventsImportItem.Type;
+
+export const AcceleventsImportCounts = S.Struct({
+  total: S.Int.pipe(S.nonNegative()),
+  created: S.Int.pipe(S.nonNegative()),
+  updated: S.Int.pipe(S.nonNegative()),
+  unchanged: S.Int.pipe(S.nonNegative()),
+  failed: S.Int.pipe(S.nonNegative()),
+});
+export type AcceleventsImportCounts = typeof AcceleventsImportCounts.Type;
+
+export const AcceleventsImportRun = S.Struct({
+  runId: S.String,
+  mode: AcceleventsImportMode,
+  eventId: S.String,
+  integrationId: S.String,
+  providerEventId: S.String,
+  eventUrl: S.String,
+  startedAt: S.Number,
+  completedAt: S.Number,
+  status: S.Literal("succeeded", "partial", "failed"),
+  counts: AcceleventsImportCounts,
+  errorCode: S.NullOr(S.String),
+  errorDetail: S.NullOr(S.String),
+  items: S.Array(AcceleventsImportItem),
+});
+export type AcceleventsImportRun = typeof AcceleventsImportRun.Type;
+
+export const AcceleventsCapability = S.Struct({
+  mode: S.NullOr(AcceleventsImportMode),
+  state: S.Literal("ready", "unavailable"),
+  reason: S.NullOr(S.String),
+});
+export type AcceleventsCapability = typeof AcceleventsCapability.Type;
+
+export const AcceleventsImportStatus = S.Struct({
+  configured: S.Boolean,
+  config: S.NullOr(AccelConfig),
+  capability: AcceleventsCapability,
+  latestRun: S.NullOr(AcceleventsImportRun),
+});
+export type AcceleventsImportStatus = typeof AcceleventsImportStatus.Type;
+
+export const AcceleventsIdempotencyKey = S.String.pipe(S.minLength(8), S.maxLength(200));
+export type AcceleventsIdempotencyKey = typeof AcceleventsIdempotencyKey.Type;
 
 // ---------- durable operation metadata ----------
 
