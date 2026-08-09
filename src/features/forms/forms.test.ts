@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import type { Principal } from "contracts/principal";
-import { auditLog, domainChanges, eventMembers, events, formVersionFields, forms, idempotencyRecords, users } from "contracts/schema";
+import { auditLog, domainChanges, eventMembers, events, formFields, formVersionFields, formVersions, forms, idempotencyRecords, users } from "contracts/schema";
 import { and, asc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer, Schema } from "effect";
@@ -46,6 +46,7 @@ const fixtureDraftFields = routedFormsFixture.forms[0]!.fields.map((field) => ({
   id: field.id,
   type: field.type,
   label: field.label,
+  semanticKey: field.semanticKey,
   helpText: field.helpText,
   required: field.required,
   options: field.options,
@@ -168,6 +169,28 @@ describe("forms fixtures and operations", () => {
 describe("forms organizer behavior", () => {
   it("validates publish intent and preserves every conditional rule update", () => {
     const valid = routedFormsFixture.forms[0]!;
+
+    const duplicateSemantic: typeof valid = {
+      ...valid,
+      fields: valid.fields.map((field) =>
+        field.id === "field-session-abstract"
+          ? { ...field, semanticKey: "submissionTitle" }
+          : field),
+    };
+    expect(validatePublishIntent(duplicateSemantic)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        controlId: "builder-field-field-session-abstract-semantic-key",
+        message: expect.stringContaining("already assigned"),
+      }),
+      expect.objectContaining({ message: "The primary CFP needs exactly one submissionAbstract field." }),
+    ]));
+
+    const missingPrimarySemantics: typeof valid = {
+      ...valid,
+      fields: valid.fields.map((field) => ({ ...field, semanticKey: null })),
+    };
+    expect(validatePublishIntent(missingPrimarySemantics).filter((issue) =>
+      issue.message.startsWith("The primary CFP needs exactly one"))).toHaveLength(2);
     expect(validatePublishIntent(valid)).toEqual([]);
 
     const invalid: typeof valid = {
@@ -274,6 +297,7 @@ describe("forms organizer behavior", () => {
         order: 1,
         type: "select",
         label: "A",
+        semanticKey: null,
         helpText: null,
         required: true,
         options: ["yes", "no"],
@@ -286,6 +310,7 @@ describe("forms organizer behavior", () => {
         order: 2,
         type: "text",
         label: "B",
+        semanticKey: null,
         helpText: null,
         required: false,
         options: [],
@@ -302,6 +327,7 @@ describe("forms organizer behavior", () => {
         order: 3,
         type: "text",
         label: "C",
+        semanticKey: null,
         helpText: null,
         required: false,
         options: [],
@@ -334,6 +360,7 @@ describe("forms organizer behavior", () => {
         order: 1,
         type: "file",
         label: "Supporting file",
+        semanticKey: null,
         helpText: null,
         required: false,
         options: [],
@@ -346,6 +373,7 @@ describe("forms organizer behavior", () => {
         order: 2,
         type: "text",
         label: "File details",
+        semanticKey: null,
         helpText: null,
         required: false,
         options: [],
@@ -384,6 +412,10 @@ describe("forms service", () => {
     expect(created.purpose).toBe("primary-cfp");
     expect(created.status).toBe("draft");
     expect(created.fields[2]?.options).toEqual(["AI systems", "Developer tools", "Research"]);
+    expect(created.fields.slice(0, 2).map((field) => field.semanticKey)).toEqual([
+      "submissionTitle",
+      "submissionAbstract",
+    ]);
 
     const published = await runAs(owner, publishForm({
       eventId: FORMS_FIXTURE_EVENT_ID,
@@ -399,6 +431,7 @@ describe("forms service", () => {
       id: field.id,
       type: field.type,
       label: field.order === 1 ? "Revised draft session title" : field.label,
+      semanticKey: field.order === 1 ? "speakerName" as const : field.semanticKey,
       helpText: field.helpText,
       required: field.required,
       options: field.options,
@@ -418,9 +451,12 @@ describe("forms service", () => {
     }));
 
     expect(updated.fields[0]?.label).toBe("Revised draft session title");
+    expect(updated.fields[0]?.semanticKey).toBe("speakerName");
     expect(updated.publishedVersion?.fields[0]?.label).toBe("Session title");
+    expect(updated.publishedVersion?.fields[0]?.semanticKey).toBe("submissionTitle");
     const loaded = await runAs(owner, getForm({ eventId: FORMS_FIXTURE_EVENT_ID, formId: created.id }));
     expect(loaded.publishedVersion?.fields[0]?.label).toBe("Session title");
+    expect(loaded.publishedVersion?.fields[0]?.semanticKey).toBe("submissionTitle");
 
     const db = drizzle(env.DB);
     const snapshotRows = await db
@@ -432,6 +468,7 @@ describe("forms service", () => {
       ))
       .orderBy(asc(formVersionFields.order));
     expect(snapshotRows[0]?.label).toBe("Session title");
+    expect(snapshotRows[0]?.semanticKey).toBe("submissionTitle");
 
     const closed = await runAs(owner, setFormStatus({
       eventId: FORMS_FIXTURE_EVENT_ID,
@@ -548,6 +585,7 @@ describe("forms service", () => {
       db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, eventId)),
     ]);
     expect(formRows).toHaveLength(1);
+
     expect(changes.map((change) => change.eventType).sort()).toEqual([
       "forms.created",
       "forms.versionClaim",
@@ -561,6 +599,162 @@ describe("forms service", () => {
     }).pipe(Effect.either));
     expect(mismatched._tag).toBe("Left");
     if (mismatched._tag === "Left") expect(mismatched.left._tag).toBe("Conflict");
+  });
+  it("validates semantic uniqueness, primary publication requirements, and legacy null reads", async () => {
+    const db = drizzle(env.DB);
+    const now = new Date(FORMS_FIXTURE_NOW);
+    const duplicateEventId = "event-semantic-duplicates";
+    const primaryEventId = "event-semantic-primary";
+    const additionalEventId = "event-semantic-additional";
+    const legacyEventId = "event-semantic-legacy";
+    await db.insert(events).values([
+      { id: duplicateEventId, slug: "semantic-duplicates", name: "Semantic duplicates", createdAt: now, updatedAt: now },
+      { id: primaryEventId, slug: "semantic-primary", name: "Semantic primary", createdAt: now, updatedAt: now },
+      { id: additionalEventId, slug: "semantic-additional", name: "Semantic additional", createdAt: now, updatedAt: now },
+      { id: legacyEventId, slug: "semantic-legacy", name: "Semantic legacy", createdAt: now, updatedAt: now },
+    ]);
+
+    const duplicateFields = prefixDraftFields("semantic-duplicate").map((field, index) => ({
+      ...field,
+      semanticKey: index < 2 ? "submissionTitle" as const : field.semanticKey,
+    })) as CreateFormInput["fields"];
+    const duplicate = await runAs(owner, createForm({
+      eventId: duplicateEventId,
+      purpose: "additional",
+      name: "Duplicate semantics",
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: duplicateFields,
+      idempotencyKey: "forms-semantic-duplicate-001",
+    }).pipe(Effect.either));
+    expect(duplicate._tag).toBe("Left");
+    if (duplicate._tag === "Left") {
+      expect(duplicate.left).toMatchObject({
+        _tag: "Validation",
+        message: "Semantic key 'submissionTitle' is duplicated",
+      });
+    }
+
+    const titleOnlyFields = prefixDraftFields("semantic-primary").map((field, index) => ({
+      ...field,
+      semanticKey: index === 0 ? "submissionTitle" as const : null,
+    })) as CreateFormInput["fields"];
+    const primary = await runAs(owner, createForm({
+      eventId: primaryEventId,
+      purpose: "primary-cfp",
+      name: "Primary missing abstract semantics",
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: titleOnlyFields,
+      idempotencyKey: "forms-semantic-primary-create-001",
+    }));
+    expect(primary.fields[0]?.semanticKey).toBe("submissionTitle");
+    expect(primary.fields[1]?.semanticKey).toBeNull();
+    const rejectedPublish = await runAs(owner, publishForm({
+      eventId: primaryEventId,
+      formId: primary.id,
+      expectedVersion: primary.version,
+      idempotencyKey: "forms-semantic-primary-publish-001",
+    }).pipe(Effect.either));
+    expect(rejectedPublish._tag).toBe("Left");
+    if (rejectedPublish._tag === "Left") {
+      expect(rejectedPublish.left).toMatchObject({
+        _tag: "Validation",
+        message: "The primary CFP needs exactly one 'submissionAbstract' field",
+      });
+    }
+
+    const nullSemanticFields = prefixDraftFields("semantic-additional").map((field) => ({
+      ...field,
+      semanticKey: null,
+    })) as CreateFormInput["fields"];
+    const additional = await runAs(owner, createForm({
+      eventId: additionalEventId,
+      purpose: "additional",
+      name: "Additional form without submission semantics",
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: nullSemanticFields,
+      idempotencyKey: "forms-semantic-additional-create-001",
+    }));
+    const additionalPublished = await runAs(owner, publishForm({
+      eventId: additionalEventId,
+      formId: additional.id,
+      expectedVersion: additional.version,
+      idempotencyKey: "forms-semantic-additional-publish-001",
+    }));
+    expect(additionalPublished.publishedVersion?.fields.every((field) =>
+      field.semanticKey === null)).toBe(true);
+
+    await db.batch([
+      db.insert(forms).values({
+        id: "form-semantic-legacy",
+        eventId: legacyEventId,
+        kind: "task",
+        name: "Legacy form",
+        description: null,
+        status: "open",
+        opensAt: null,
+        closesAt: null,
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      db.insert(formFields).values({
+        id: "field-semantic-legacy",
+        eventId: legacyEventId,
+        formId: "form-semantic-legacy",
+        order: 1,
+        type: "text",
+        label: "Submission title",
+        helpText: null,
+        semanticKey: null,
+        required: true,
+        options: [],
+        logic: null,
+        routing: null,
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      db.insert(formVersions).values({
+        id: "version-semantic-legacy",
+        eventId: legacyEventId,
+        formId: "form-semantic-legacy",
+        versionNumber: 1,
+        name: "Legacy form",
+        description: null,
+        publishedAt: now,
+        retiredAt: null,
+        createdAt: now,
+      }),
+      db.insert(formVersionFields).values({
+        id: "version-field-semantic-legacy",
+        eventId: legacyEventId,
+        formVersionId: "version-semantic-legacy",
+        sourceFieldId: "field-semantic-legacy",
+        order: 1,
+        type: "text",
+        label: "Submission title",
+        helpText: null,
+        semanticKey: null,
+        required: true,
+        options: [],
+        logic: null,
+        routing: null,
+        createdAt: now,
+      }),
+    ]);
+    const legacy = await runAs(owner, getForm({ eventId: legacyEventId, formId: "form-semantic-legacy" }));
+    expect(legacy.fields[0]?.semanticKey).toBeNull();
+    expect(legacy.publishedVersion?.fields[0]?.semanticKey).toBeNull();
+    expect((await runAs(owner, listForms({ eventId: legacyEventId })))[0]).toMatchObject({
+      id: "form-semantic-legacy",
+      publishedVersionNumber: 1,
+    });
   });
 
   it("rejects trim-empty names in create, update, and publish service paths", async () => {

@@ -116,6 +116,7 @@ const toField = (row: DraftFieldRow): FormField => ({
   order: row.order,
   type: fieldType(row.type),
   label: row.label,
+  semanticKey: row.semanticKey,
   helpText: row.helpText,
   required: row.required,
   options: row.options ?? [],
@@ -132,6 +133,7 @@ const toVersionField = (row: VersionFieldRow) => ({
   order: row.order,
   type: fieldType(row.type),
   label: row.label,
+  semanticKey: row.semanticKey,
   helpText: row.helpText,
   required: row.required,
   options: row.options ?? [],
@@ -244,6 +246,7 @@ const normalizeFields = (
       order: index + 1,
       type: field.type,
       label: field.label.trim(),
+      semanticKey: field.semanticKey,
       helpText: field.helpText?.trim() || null,
       required: field.required,
       options,
@@ -265,8 +268,15 @@ const validationProblem = (
     return "Close time must be at or after open time";
   }
   const seenIds = new Set<string>();
+  const seenSemanticKeys = new Set<string>();
   for (const field of fields) {
     if (seenIds.has(field.id)) return `Field id '${field.id}' is duplicated`;
+    if (field.semanticKey !== null) {
+      if (seenSemanticKeys.has(field.semanticKey)) {
+        return `Semantic key '${field.semanticKey}' is duplicated`;
+      }
+      seenSemanticKeys.add(field.semanticKey);
+    }
     if (field.label.length === 0) return "Every field needs a label";
     const optionSet = new Set(field.options);
     if (optionSet.size !== field.options.length) return `Field '${field.label}' has duplicate options`;
@@ -320,6 +330,22 @@ const validateFields = (
 ): Effect.Effect<void, Validation> => {
   const problem = validationProblem(name, purposeValue, opensAt, closesAt, fields);
   return problem ? Effect.fail(new Validation({ message: problem })) : Effect.void;
+};
+
+const validatePrimaryPublishSemantics = (
+  purposeValue: FormDetail["purpose"],
+  fields: readonly FormField[],
+): Effect.Effect<void, Validation> => {
+  if (purposeValue !== "primary-cfp") return Effect.void;
+  for (const semanticKey of ["submissionTitle", "submissionAbstract"] as const) {
+    const count = fields.filter((field) => field.semanticKey === semanticKey).length;
+    if (count !== 1) {
+      return Effect.fail(new Validation({
+        message: `The primary CFP needs exactly one '${semanticKey}' field`,
+      }));
+    }
+  }
+  return Effect.void;
 };
 
 const loadCommandReplay = (
@@ -498,6 +524,7 @@ const fieldRows = (eventId: string, formId: string, fields: readonly FormField[]
     order: field.order,
     type: field.type,
     label: field.label,
+    semanticKey: field.semanticKey,
     helpText: field.helpText,
     required: field.required,
     options: field.options,
@@ -729,6 +756,7 @@ export const publishForm = (
       return yield* Effect.fail(new Conflict({ message: `Expected form version ${input.expectedVersion}, found ${before.version}` }));
     }
     yield* validateFields(before.name, before.purpose, before.opensAt, before.closesAt, before.fields);
+    yield* validatePrimaryPublishSemantics(before.purpose, before.fields);
     const now = new Date();
     const versionId = nanoid();
     const versionNumber = (before.publishedVersion?.versionNumber ?? 0) + 1;
@@ -738,6 +766,7 @@ export const publishForm = (
       order: field.order,
       type: field.type,
       label: field.label,
+      semanticKey: field.semanticKey,
       helpText: field.helpText,
       required: field.required,
       options: field.options,
