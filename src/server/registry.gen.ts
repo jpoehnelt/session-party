@@ -2,6 +2,7 @@ import { operations as agendaOperations } from "../features/agenda/operations";
 import { operations as eventsOperations } from "../features/events/operations";
 import { operations as formsOperations } from "../features/forms/operations";
 import { operations as portalOperations } from "../features/portal/operations";
+import publicationApi from "../features/publication/api";
 import { operations as reviewOperations } from "../features/review/operations";
 import { operations as submitOperations } from "../features/submit/operations";
 import type { McpToolDescriptor, ToolDef } from "contracts/mcp";
@@ -26690,6 +26691,6 @@ export const ownershipManifest = {
 } as const satisfies RegistryOwnershipManifest;
 
 // Compatibility exports include only slices that have not cut over to OperationDefs.
-export const apiRouters: readonly Hono<{ Bindings: Env }>[] = [];
+export const apiRouters: readonly Hono<{ Bindings: Env }>[] = [publicationApi];
 export const tools: readonly ToolDef[] = [];
 export const partyHandlers: Readonly<Record<string, PartyHandler>> = {};
