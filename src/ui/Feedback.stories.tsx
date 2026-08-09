@@ -28,10 +28,23 @@ export const BadgeTones: Story = {
 
 function ControlledTabs() {
   const [active, setActive] = useState("board");
+  const tabs = [
+    { id: "board", label: "Board", panelId: "feedback-board" },
+    { id: "list", label: "List", panelId: "feedback-list" },
+    { id: "published", label: "Published", panelId: "feedback-published" },
+  ];
   return (
     <div className="w-[min(38rem,calc(100vw-2rem))] space-y-4">
-      <Tabs tabs={[{ id: "board", label: "Board" }, { id: "list", label: "List" }, { id: "published", label: "Published" }]} active={active} onChange={setActive} />
-      <p className="text-sm text-ink-secondary">The {active} view is selected. Arrow keys move between tabs.</p>
+      <Tabs tabs={tabs} active={active} onChange={setActive} />
+      <section
+        id={`feedback-${active}`}
+        role="tabpanel"
+        tabIndex={0}
+        aria-labelledby={`feedback-${active}-tab`}
+        className="rounded-card border border-line bg-surface p-4 text-sm text-ink-secondary"
+      >
+        The {active} view is selected. Arrow keys move between tabs.
+      </section>
     </div>
   );
 }

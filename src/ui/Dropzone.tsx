@@ -53,6 +53,7 @@ export function Dropzone({
       <input
         ref={inputRef}
         type="file"
+        aria-label="Choose files"
         accept={accept}
         multiple={multiple}
         disabled={disabled}

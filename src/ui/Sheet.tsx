@@ -21,12 +21,12 @@ export function Sheet({ open, onClose, title, id, children, footer, size = "md" 
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 animate-fade-in bg-ink/40" />
+        <Dialog.Overlay className="fixed inset-0 z-50 animate-fade-in bg-ink/40 motion-reduce:animate-none" />
         <Dialog.Content
           id={id}
           aria-describedby={undefined}
           className={cx(
-            "fixed inset-y-0 right-0 z-50 flex w-full animate-slide-in-right flex-col bg-surface shadow-sheet outline-none",
+            "fixed inset-y-0 right-0 z-50 flex w-full animate-slide-in-right flex-col bg-surface shadow-sheet outline-none motion-reduce:animate-none",
             SIZES[size],
           )}
         >

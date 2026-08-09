@@ -75,7 +75,7 @@ export function Toaster() {
           role={item.tone === "danger" ? "alert" : "status"}
           onOpenChange={(nextOpen) => { if (!nextOpen) dismiss(item.id); }}
           className={cx(
-            "pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-control border px-4 py-3 shadow-pop",
+            "pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-control border px-4 py-3 shadow-pop motion-reduce:animate-none",
             TONES[item.tone],
           )}
         >

@@ -20,12 +20,12 @@ export function Modal({ open, onClose, title, children, footer, size = "md" }: M
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 animate-fade-in bg-ink/40" />
+        <Dialog.Overlay className="fixed inset-0 z-50 animate-fade-in bg-ink/40 motion-reduce:animate-none" />
         <div className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-[10vh] sm:p-8 sm:pt-[12vh]">
           <Dialog.Content
             aria-describedby={undefined}
             className={cx(
-              "pointer-events-auto relative w-full animate-slide-up rounded-card border border-line bg-surface shadow-pop outline-none",
+              "pointer-events-auto relative w-full animate-slide-up rounded-card border border-line bg-surface shadow-pop outline-none motion-reduce:animate-none",
               SIZES[size],
             )}
           >

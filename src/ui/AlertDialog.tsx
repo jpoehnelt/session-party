@@ -8,7 +8,7 @@ export const AlertDialogPortal = Primitive.Portal;
 
 export type AlertDialogOverlayProps = ComponentPropsWithRef<typeof Primitive.Overlay>;
 export function AlertDialogOverlay({ className, ...props }: AlertDialogOverlayProps) {
-  return <Primitive.Overlay className={cx("fixed inset-0 z-50 animate-fade-in bg-ink/40", className)} {...props} />;
+  return <Primitive.Overlay className={cx("fixed inset-0 z-50 animate-fade-in bg-ink/40 motion-reduce:animate-none", className)} {...props} />;
 }
 
 export type AlertDialogContentProps = ComponentPropsWithRef<typeof Primitive.Content>;

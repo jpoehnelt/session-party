@@ -4,6 +4,8 @@ import { cx } from "./cx";
 export interface TabItem {
   id: string;
   label: string;
+  /** DOM id of the consumer-rendered visible tab panel. */
+  panelId?: string;
 }
 
 export interface TabsProps {
@@ -21,8 +23,10 @@ export function Tabs({ tabs, active, onChange, className }: TabsProps) {
           <RadixTabs.Trigger
             key={tab.id}
             value={tab.id}
+            id={tab.panelId ? `${tab.panelId}-tab` : undefined}
+            aria-controls={tab.panelId}
             className={cx(
-              "-mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium text-ink-faint outline-none transition-colors hover:text-ink-secondary focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset data-[state=active]:border-accent data-[state=active]:text-ink",
+              "-mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium text-ink-faint outline-none transition-colors motion-reduce:transition-none hover:text-ink-secondary focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset data-[state=active]:border-accent data-[state=active]:text-ink",
               "border-transparent",
             )}
           >
@@ -30,7 +34,7 @@ export function Tabs({ tabs, active, onChange, className }: TabsProps) {
           </RadixTabs.Trigger>
         ))}
       </RadixTabs.List>
-      {tabs.map((tab) => (
+      {tabs.filter((tab) => tab.panelId == null).map((tab) => (
         <RadixTabs.Content key={tab.id} value={tab.id} className="sr-only">
           {tab.label} view selected
         </RadixTabs.Content>

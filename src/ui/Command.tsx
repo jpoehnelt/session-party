@@ -30,7 +30,7 @@ export function CommandGroup({ className, ...props }: CommandGroupProps) {
 
 export type CommandSeparatorProps = ComponentPropsWithRef<typeof Primitive.Separator>;
 export function CommandSeparator({ className, ...props }: CommandSeparatorProps) {
-  return <Primitive.Separator className={cx("-mx-1 h-px bg-line", className)} {...props} />;
+  return <div {...props} role="presentation" className={cx("-mx-1 h-px bg-line", className)} />;
 }
 
 export type CommandItemProps = ComponentPropsWithRef<typeof Primitive.Item>;
