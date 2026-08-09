@@ -405,6 +405,21 @@ export const CreateFormInput = Schema.Struct({
 });
 export type CreateFormInput = typeof CreateFormInput.Type;
 
+export const DeleteFormInput = Schema.Struct({
+  eventId: EntityId,
+  formId: EntityId,
+  expectedVersion: ExpectedVersion,
+  idempotencyKey: IdempotencyKey,
+});
+export type DeleteFormInput = typeof DeleteFormInput.Type;
+
+export const DeleteFormOutput = Schema.Struct({
+  formId: EntityId,
+  deleted: Schema.Boolean,
+  idempotent: Schema.Boolean,
+});
+export type DeleteFormOutput = typeof DeleteFormOutput.Type;
+
 export const UpdateFormInput = Schema.Struct({
   eventId: EntityId,
   formId: EntityId,

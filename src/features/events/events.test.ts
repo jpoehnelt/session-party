@@ -9,7 +9,7 @@ import type {
 import { auditLog, domainChanges, eventMembers, events } from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   type Authorizer,
@@ -28,6 +28,8 @@ import {
   updateEvent,
   updateEventMember,
 } from "./service";
+import { operations } from "./operations";
+import { operationEffect, runEffect } from "@/server/adapt";
 
 type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -296,7 +298,7 @@ describe("events service", () => {
   it("adds an existing user by normalized email, lists it, and records replayable evidence", async () => {
     const created = await runAs(owner, createEvent({ name: "Members", slug: "event-members" }));
     const first = await runAs(owner, addEventMember({
-      idOrSlug: created.slug,
+      eventId: created.id,
       email: `  ${reviewer.email.toUpperCase()}  `,
       role: "reviewer",
       idempotencyKey: "event-members-add-reviewer",
@@ -304,13 +306,13 @@ describe("events service", () => {
     expect(first.created).toBe(true);
     expect(first.member.email).toBe(reviewer.email);
     const replayed = await runAs(owner, addEventMember({
-      idOrSlug: created.id,
+      eventId: created.id,
       email: reviewer.email,
       role: "reviewer",
       idempotencyKey: "event-members-add-reviewer",
     }));
     expect(replayed).toMatchObject({ created: true, idempotent: true, member: { id: first.member.id } });
-    const listed = await runAs(owner, listEventMembers({ idOrSlug: created.id }));
+    const listed = await runAs(owner, listEventMembers({ eventId: created.id }));
     expect(listed.map((member) => member.email)).toEqual([owner.email, reviewer.email]);
     const db = drizzle(env.DB);
     const changes = await db.select().from(domainChanges).where(eq(domainChanges.eventId, created.id));
@@ -319,42 +321,59 @@ describe("events service", () => {
     expect(audits.some((audit) => audit.action === "events.addMember")).toBe(true);
   });
 
+  it("authorizes member management at the operation boundary with canonical eventId", async () => {
+    const created = await runAs(owner, createEvent({ name: "Member adapter", slug: "member-adapter" }));
+    const operation = operations.find((candidate) => candidate.id === "events.listMembers");
+    if (!operation) throw new Error("events.listMembers operation missing");
+
+    const exit = await runEffect(env, owner, operationEffect(operation, {
+      eventId: created.id,
+    }, owner));
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual(expect.arrayContaining([
+        expect.objectContaining({ userId: owner.userId, role: "owner" }),
+      ]));
+    }
+  });
+
   it("keeps owner/admin escalation, tenant boundaries, and last-owner safety intact", async () => {
     const created = await runAs(owner, createEvent({ name: "Guarded", slug: "guarded-members" }));
     await runAs(owner, addEventMember({
-      idOrSlug: created.id, email: admin.email, role: "admin", idempotencyKey: "guarded-add-admin",
+      eventId: created.id, email: admin.email, role: "admin", idempotencyKey: "guarded-add-admin",
     }));
     await expectFailure(admin, addEventMember({
-      idOrSlug: created.id, email: reviewer.email, role: "admin", idempotencyKey: "admin-escalation",
+      eventId: created.id, email: reviewer.email, role: "admin", idempotencyKey: "admin-escalation",
     }), "Forbidden");
     const reviewerMember = await runAs(admin, addEventMember({
-      idOrSlug: created.id, email: reviewer.email, role: "reviewer", idempotencyKey: "admin-add-reviewer",
+      eventId: created.id, email: reviewer.email, role: "reviewer", idempotencyKey: "admin-add-reviewer",
     }));
     await expectFailure(admin, updateEventMember({
-      idOrSlug: created.id, memberId: reviewerMember.member.id, role: "admin", expectedVersion: 1,
+      eventId: created.id, memberId: reviewerMember.member.id, role: "admin", expectedVersion: 1,
       idempotencyKey: "admin-promote-reviewer",
     }), "Forbidden");
     const other = await runAs(owner, createEvent({ name: "Other guarded", slug: "other-guarded-members" }));
     const foreignMember = await runAs(owner, addEventMember({
-      idOrSlug: other.id, email: outsider.email, role: "reviewer", idempotencyKey: "other-event-reviewer",
+      eventId: other.id, email: outsider.email, role: "reviewer", idempotencyKey: "other-event-reviewer",
     }));
     await expectFailure(owner, updateEventMember({
-      idOrSlug: created.id, memberId: foreignMember.member.id, role: "admin", expectedVersion: 1,
+      eventId: created.id, memberId: foreignMember.member.id, role: "admin", expectedVersion: 1,
       idempotencyKey: "missing-member-is-not-cross-tenant",
     }), "NotFound");
-    const ownerMember = (await runAs(owner, listEventMembers({ idOrSlug: created.id })))
+    const ownerMember = (await runAs(owner, listEventMembers({ eventId: created.id })))
       .find((member) => member.userId === owner.userId)!;
     await expectFailure(owner, removeEventMember({
-      idOrSlug: created.id, memberId: ownerMember.id, expectedVersion: ownerMember.version,
+      eventId: created.id, memberId: ownerMember.id, expectedVersion: ownerMember.version,
       idempotencyKey: "cannot-delete-last-owner",
     }), "Conflict");
     const updated = await runAs(owner, updateEventMember({
-      idOrSlug: created.id, memberId: reviewerMember.member.id, role: "admin", expectedVersion: 1,
+      eventId: created.id, memberId: reviewerMember.member.id, role: "admin", expectedVersion: 1,
       idempotencyKey: "owner-promote-reviewer",
     }));
     expect(updated.member).toMatchObject({ role: "admin", version: 2 });
     await expectFailure(owner, updateEventMember({
-      idOrSlug: created.id, memberId: reviewerMember.member.id, role: "reviewer", expectedVersion: 1,
+      eventId: created.id, memberId: reviewerMember.member.id, role: "reviewer", expectedVersion: 1,
       idempotencyKey: "stale-member-update",
     }), "Conflict");
   });
@@ -362,17 +381,17 @@ describe("events service", () => {
   it("allows owner transfer before removal and makes a completed removal replayable", async () => {
     const created = await runAs(owner, createEvent({ name: "Transfer", slug: "member-transfer" }));
     await runAs(owner, addEventMember({
-      idOrSlug: created.id, email: secondOwner.email, role: "owner", idempotencyKey: "transfer-add-owner",
+      eventId: created.id, email: secondOwner.email, role: "owner", idempotencyKey: "transfer-add-owner",
     }));
-    const members = await runAs(owner, listEventMembers({ idOrSlug: created.id }));
+    const members = await runAs(owner, listEventMembers({ eventId: created.id }));
     const ownerMember = members.find((member) => member.userId === secondOwner.userId)!;
     const removed = await runAs(owner, removeEventMember({
-      idOrSlug: created.id, memberId: ownerMember.id, expectedVersion: ownerMember.version,
+      eventId: created.id, memberId: ownerMember.id, expectedVersion: ownerMember.version,
       idempotencyKey: "transfer-remove-owner",
     }));
     expect(removed).toMatchObject({ deleted: true, idempotent: false });
     const replayed = await runAs(owner, removeEventMember({
-      idOrSlug: created.id, memberId: ownerMember.id, expectedVersion: ownerMember.version,
+      eventId: created.id, memberId: ownerMember.id, expectedVersion: ownerMember.version,
       idempotencyKey: "transfer-remove-owner",
     }));
     expect(replayed).toMatchObject({ deleted: true, idempotent: true });

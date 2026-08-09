@@ -9,6 +9,7 @@ import {
   formVersionFields,
   formVersions,
   idempotencyRecords,
+  tasks,
 } from "contracts/schema";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { Effect, Schema } from "effect";
@@ -19,8 +20,11 @@ import { CurrentUser } from "@/server/services";
 import {
   ConditionalLogic,
   FormDetail,
+  DeleteFormOutput,
   Routing,
   type CreateFormInput,
+  type DeleteFormInput,
+  type DeleteFormOutput as DeleteFormOutputType,
   type FormField,
   type FormFieldDraft,
   type FormFieldType,
@@ -381,6 +385,39 @@ const loadCommandReplay = (
     );
   });
 
+const loadDeleteReplay = (
+  eventId: string,
+  principalId: string,
+  keyHash: string,
+  requestHash: string,
+): Effect.Effect<DeleteFormOutputType | null, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [record] = yield* database(() =>
+      db
+        .select()
+        .from(idempotencyRecords)
+        .where(and(
+          eq(idempotencyRecords.eventId, eventId),
+          eq(idempotencyRecords.operationId, "forms.deleteDraft"),
+          eq(idempotencyRecords.principalId, principalId),
+          eq(idempotencyRecords.keyHash, keyHash),
+        ))
+        .limit(1),
+    );
+    if (!record) return null;
+    if (record.requestHash !== requestHash) {
+      return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different request" }));
+    }
+    if (record.status !== "completed" || record.responseBody === null) {
+      return yield* Effect.fail(new Conflict({ message: "An operation with this idempotency key is still in progress" }));
+    }
+    const decoded = yield* Schema.decodeUnknown(DeleteFormOutput)(record.responseBody).pipe(
+      Effect.mapError((error) => new External({ service: "database", detail: String(error) })),
+    );
+    return { ...decoded, idempotent: true };
+  });
+
 const prepareCommand = (
   operationId: string,
   eventId: string,
@@ -679,6 +716,141 @@ export const createForm = (
       prepared,
       after,
     );
+  });
+
+export const deleteForm = (
+  input: DeleteFormInput,
+): Effect.Effect<DeleteFormOutputType, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentUser;
+    yield* assertPrincipalTenant(principal, input.eventId);
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(stableStringify(input));
+    const replay = yield* loadDeleteReplay(
+      input.eventId,
+      principal.userId,
+      keyHash,
+      requestHash,
+    );
+    if (replay) return replay;
+
+    const before = yield* loadFormDetail(input.eventId, input.formId);
+    if (before.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({
+        message: `Expected form version ${input.expectedVersion}, found ${before.version}`,
+      }));
+    }
+    if (before.purpose !== "additional") {
+      return yield* Effect.fail(new Conflict({ message: "The primary CFP cannot be deleted" }));
+    }
+    if (before.status !== "draft" || before.publishedVersion !== null) {
+      return yield* Effect.fail(new Conflict({ message: "Only an unpublished additional-form draft can be deleted" }));
+    }
+
+    const { db } = yield* Db;
+    const [linkedTask] = yield* database(() =>
+      db.select({ id: tasks.id }).from(tasks).where(and(
+        eq(tasks.eventId, input.eventId),
+        eq(tasks.formId, input.formId),
+      )).limit(1),
+    );
+    if (linkedTask) {
+      return yield* Effect.fail(new Conflict({
+        message: "Remove this form from its onboarding task before deleting the draft",
+      }));
+    }
+
+    const deletedAt = new Date();
+    const output: DeleteFormOutputType = {
+      formId: input.formId,
+      deleted: true,
+      idempotent: false,
+    };
+    const idempotencyId = nanoid();
+    const requestId = nanoid();
+    const aggregateVersion = before.version + 1;
+    const actors = actorColumns(principal);
+    const commit = database(() => db.batch([
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId,
+        eventId: input.eventId,
+        operationId: "forms.deleteDraft",
+        principalId: principal.userId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 200,
+        responseBody: output,
+        expiresAt: new Date(deletedAt.getTime() + COMMAND_TTL_MS),
+        completedAt: deletedAt,
+        createdAt: deletedAt,
+      }),
+      db.delete(forms).where(and(
+        eq(forms.eventId, input.eventId),
+        eq(forms.id, input.formId),
+        eq(forms.version, input.expectedVersion),
+        eq(forms.kind, "task"),
+        eq(forms.status, "draft"),
+      )),
+      db.insert(domainChanges).values({
+        id: nanoid(),
+        eventId: input.eventId,
+        aggregateType: "form",
+        aggregateId: input.formId,
+        aggregateVersion,
+        eventType: "forms.versionClaim",
+        audiences: [{ kind: "admins" }],
+        payload: { operationId: "forms.deleteDraft", eventType: "forms.deleted" },
+        ...actors,
+        requestId,
+        idempotencyRecordId: idempotencyId,
+        occurredAt: deletedAt,
+      }),
+      db.insert(domainChanges).values({
+        id: nanoid(),
+        eventId: input.eventId,
+        aggregateType: "form",
+        aggregateId: input.formId,
+        aggregateVersion,
+        eventType: "forms.deleted",
+        audiences: [{ kind: "admins" }],
+        payload: output,
+        ...actors,
+        requestId,
+        idempotencyRecordId: idempotencyId,
+        occurredAt: deletedAt,
+      }),
+      db.insert(auditLog).values({
+        id: nanoid(),
+        eventId: input.eventId,
+        requestId,
+        ...actors,
+        action: "forms.deleteDraft",
+        resourceType: "form",
+        resourceId: input.formId,
+        before,
+        after: null,
+        metadata: { eventType: "forms.deleted" },
+        occurredAt: deletedAt,
+      }),
+    ])).pipe(
+      Effect.as(output),
+      Effect.catchIf(
+        (error): error is External =>
+          error._tag === "External" &&
+          (error.detail?.includes("idempotency_key_unique") === true ||
+            error.detail?.includes("UNIQUE constraint failed: idempotency_records.event_id") === true),
+        () => loadDeleteReplay(input.eventId, principal.userId, keyHash, requestHash).pipe(
+          Effect.flatMap((racedReplay) => racedReplay
+            ? Effect.succeed(racedReplay)
+            : Effect.fail(new External({
+                service: "database",
+                detail: "Idempotency collision committed without a replayable response",
+              }))),
+        ),
+      ),
+    );
+    return yield* commit;
   });
 
 export const updateForm = (

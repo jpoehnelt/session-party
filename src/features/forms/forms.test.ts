@@ -7,7 +7,7 @@ import { Effect, Layer, Schema } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, type Db, CurrentUser } from "@/server/services";
 import { FORMS_FIXTURE_EVENT_ID, FORMS_FIXTURE_NOW, formsFixtures, routedFormsFixture } from "./fixtures";
-import { operations, publishFormOperation, setFormStatusOperation, updateFormOperation } from "./operations";
+import { deleteFormOperation, operations, publishFormOperation, setFormStatusOperation, updateFormOperation } from "./operations";
 import {
   getFormAvailability,
   normalizeOptionDraft,
@@ -18,7 +18,7 @@ import {
   type CreateFormInput,
   type FormField,
 } from "./schema";
-import { createForm, getForm, listForms, publishForm, setFormStatus, updateForm } from "./service";
+import { createForm, deleteForm, getForm, listForms, publishForm, setFormStatus, updateForm } from "./service";
 
 type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -153,6 +153,7 @@ describe("forms fixtures and operations", () => {
     expect(ids).toEqual([...ids].sort());
     expect(ids).toEqual([
       "forms.create",
+      "forms.deleteDraft",
       "forms.get",
       "forms.list",
       "forms.publish",
@@ -161,6 +162,7 @@ describe("forms fixtures and operations", () => {
     ]);
     expect(operations.filter((operation) => "mcp" in operation).map((operation) => operation.id)).toEqual([
       "forms.create",
+      "forms.deleteDraft",
       "forms.get",
       "forms.list",
       "forms.update",
@@ -168,6 +170,13 @@ describe("forms fixtures and operations", () => {
   });
 
   it("decodes REST If-Match headers and preserves direct numeric command input", () => {
+    expect(Schema.decodeUnknownSync(deleteFormOperation.input)({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: "form-header-delete",
+      expectedVersion: "\"6\"",
+      idempotencyKey: "forms-header-delete-001",
+    }).expectedVersion).toBe(6);
+
     const update = Schema.decodeUnknownSync(updateFormOperation.input)({
       eventId: FORMS_FIXTURE_EVENT_ID,
       formId: "form-header-update",
@@ -904,6 +913,79 @@ describe("forms service", () => {
       id: "form-semantic-legacy",
       publishedVersionNumber: 1,
     });
+  });
+
+  it("deletes only unpublished additional drafts with replay and evidence", async () => {
+    const created = await runAs(owner, createForm({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      purpose: "additional",
+      name: "Unpublished speaker follow-up",
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: prefixDraftFields("delete-draft"),
+      idempotencyKey: "forms-create-delete-draft",
+    }));
+
+    const input = {
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: created.id,
+      expectedVersion: created.version,
+      idempotencyKey: "forms-delete-draft-001",
+    };
+    const deleted = await runAs(owner, deleteForm(input));
+    const replayed = await runAs(owner, deleteForm(input));
+
+    expect(deleted).toEqual({ formId: created.id, deleted: true, idempotent: false });
+    expect(replayed).toEqual({ formId: created.id, deleted: true, idempotent: true });
+    const missing = await runAs(owner, getForm({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: created.id,
+    }).pipe(Effect.either));
+    expect(missing._tag).toBe("Left");
+    if (missing._tag === "Left") expect(missing.left._tag).toBe("NotFound");
+
+    const db = drizzle(env.DB);
+    const changes = await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, FORMS_FIXTURE_EVENT_ID),
+      eq(domainChanges.aggregateId, created.id),
+    ));
+    expect(changes.map((change) => change.eventType)).toEqual([
+      "forms.versionClaim",
+      "forms.created",
+      "forms.versionClaim",
+      "forms.deleted",
+    ]);
+    const [audit] = await db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, FORMS_FIXTURE_EVENT_ID),
+      eq(auditLog.resourceId, created.id),
+      eq(auditLog.action, "forms.deleteDraft"),
+    ));
+    expect(audit?.after).toBeNull();
+
+    const published = await runAs(owner, createForm({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      purpose: "additional",
+      name: "Published speaker follow-up",
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: prefixDraftFields("delete-published"),
+      idempotencyKey: "forms-create-delete-published",
+    })).then((form) => runAs(owner, publishForm({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: form.id,
+      expectedVersion: form.version,
+      idempotencyKey: "forms-publish-delete-guard",
+    })));
+    const publishedDelete = await runAs(owner, deleteForm({
+      eventId: FORMS_FIXTURE_EVENT_ID,
+      formId: published.id,
+      expectedVersion: published.version,
+      idempotencyKey: "forms-delete-published-guard",
+    }).pipe(Effect.either));
+    expect(publishedDelete._tag).toBe("Left");
+    if (publishedDelete._tag === "Left") expect(publishedDelete.left._tag).toBe("Conflict");
   });
 
   it("rejects trim-empty names in create, update, and publish service paths", async () => {
