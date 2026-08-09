@@ -48,8 +48,8 @@ const snapshotTables = [
   "accelevents_import_runs",
   "accelevents_import_items",
   "audit_log",
-  "domain_changes",
   "idempotency_records",
+  "domain_changes",
 ] as const;
 
 const verificationSql = `
@@ -147,6 +147,10 @@ const verifyDemo = (row: Record<string, unknown>, location: "local" | "productio
   return counts;
 };
 
+const localInventory = query(false, "SELECT count(*) AS events FROM events;");
+if (localInventory.events !== 1) {
+  throw new Error(`Local promotion source must contain exactly the demo event; found ${String(localInventory.events)} events.`);
+}
 const localCounts = verifyDemo(query(false, verificationSql), "local");
 const localAssets = queryRows(
   false,
@@ -217,7 +221,77 @@ const provenance = [
   "-- Authentication tokens and API keys are deliberately excluded.",
   "",
 ].join("\n");
-writeFileSync(outputPath, provenance + exported, "utf8");
+const insertsByTable = new Map<string, string[]>();
+for (const line of exported.split("\n")) {
+  if (!line.startsWith("INSERT INTO ")) continue;
+  const table = /^INSERT INTO "([^"]+)"/.exec(line)?.[1];
+  if (!table || !snapshotTables.includes(table as typeof snapshotTables[number])) {
+    throw new Error(`Unexpected table in demo export: ${table ?? line.slice(0, 80)}`);
+  }
+  const statements = insertsByTable.get(table) ?? [];
+  statements.push(line);
+  insertsByTable.set(table, statements);
+}
+const orderedInserts = snapshotTables.flatMap((table) => insertsByTable.get(table) ?? []);
+const productionImportBatches = snapshotTables.flatMap((table) => {
+  const statements = insertsByTable.get(table) ?? [];
+  if (statements.length === 0) return [];
+  const file = join(temporaryDirectory, `import-${table}.sql`);
+  writeFileSync(file, `${statements.join("\n")}\n`, "utf8");
+  return [{ table, file, statementCount: statements.length }];
+});
+writeFileSync(
+  outputPath,
+  `${provenance}PRAGMA defer_foreign_keys=TRUE;\n${orderedInserts.join("\n")}\n`,
+  "utf8",
+);
+
+const validationState = join(temporaryDirectory, "validation-state");
+run([
+  "wrangler",
+  "d1",
+  "migrations",
+  "apply",
+  "session-party",
+  "--local",
+  "--config",
+  "wrangler.local.jsonc",
+  "--persist-to",
+  validationState,
+]);
+run([
+  "wrangler",
+  "d1",
+  "execute",
+  "session-party",
+  "--local",
+  "--config",
+  "wrangler.local.jsonc",
+  "--persist-to",
+  validationState,
+  "--file",
+  outputPath,
+]);
+const validationOutput = run([
+  "wrangler",
+  "d1",
+  "execute",
+  "session-party",
+  "--local",
+  "--config",
+  "wrangler.local.jsonc",
+  "--persist-to",
+  validationState,
+  "--json",
+  "--command",
+  verificationSql,
+], true);
+const validationDecoded = JSON.parse(validationOutput) as Array<{
+  readonly results?: readonly Record<string, unknown>[];
+}>;
+const validationRow = validationDecoded[0]?.results?.[0];
+if (!validationRow) throw new Error("Isolated demo import validation returned no row");
+verifyDemo(validationRow, "local");
 
 if (!applyProduction) {
   console.log(JSON.stringify({
@@ -272,18 +346,21 @@ for (const asset of localAssets) {
     "--force",
   ]);
 }
-run([
-  "wrangler",
-  "d1",
-  "execute",
-  "session-party",
-  "--remote",
-  "--config",
-  "wrangler.jsonc",
-  "--yes",
-  "--file",
-  outputPath,
-]);
+for (const batch of productionImportBatches) {
+  run([
+    "wrangler",
+    "d1",
+    "execute",
+    "session-party",
+    "--remote",
+    "--config",
+    "wrangler.jsonc",
+    "--yes",
+    "--file",
+    batch.file,
+  ]);
+  console.log(JSON.stringify({ importedTable: batch.table, statements: batch.statementCount }));
+}
 const membershipNow = Date.now();
 run([
   "wrangler",
