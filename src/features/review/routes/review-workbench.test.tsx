@@ -8,9 +8,13 @@ import {
   fixtureReviewerId,
   reviewWorkbenchFixture,
 } from "../fixtures";
-import ReviewWorkbenchRoute from "./review-workbench";
+import ReviewWorkbenchRoute, { path } from "./review-workbench";
 
 describe("review workbench route", () => {
+  it("exports the review navigation route", () => {
+    expect(path).toBe("/e/:eventSlug/review");
+  });
+
   it("renders organizer evidence read-only and distinguishes a truly empty round", () => {
     const organizerMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute));
     expect(organizerMarkup).toContain("Ada Rivera · read-only evidence");

@@ -17,6 +17,8 @@ import type {
 } from "../schema";
 import { SubmissionReviewPane } from "../components/SubmissionReviewPane";
 
+export const path = "/e/:eventSlug/review";
+
 export interface ReviewWorkbenchRouteProps {
   snapshot?: ReviewWorkbench;
   currentReviewerUserId?: string;
