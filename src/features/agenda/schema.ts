@@ -76,6 +76,7 @@ export const AgendaSnapshot = Schema.Struct({
   eventSlug: Schema.String,
   timezone: Schema.String,
   view: AgendaView,
+  workspaceVersion: Schema.Int.pipe(Schema.nonNegative()),
   tracks: Schema.Array(Track),
   rooms: Schema.Array(Room),
   backlog: Schema.Array(BacklogProposal),
@@ -176,6 +177,7 @@ export type PublishedAgenda = typeof PublishedAgenda.Type;
 export const PublishAgendaInput = Schema.Struct({
   eventId: EntityId,
   expectedRevision: Schema.Int.pipe(Schema.nonNegative()),
+  expectedWorkspaceVersion: Schema.Int.pipe(Schema.nonNegative()),
   idempotencyKey: IdempotencyKey,
 });
 export type PublishAgendaInput = typeof PublishAgendaInput.Type;

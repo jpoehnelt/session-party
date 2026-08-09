@@ -453,6 +453,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           method: "POST",
           body: {
             expectedRevision: agenda.publication.revision,
+            expectedWorkspaceVersion: agenda.workspaceVersion,
             idempotencyKey: idempotencyKey("publish-agenda"),
           },
           schema: PublishedAgenda,

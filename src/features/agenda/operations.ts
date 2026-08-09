@@ -164,7 +164,7 @@ export const publishAgendaOperation = {
   rest: {
     method: "post",
     path: "/events/:eventId/agenda/publications",
-    input: { path: ["eventId"], body: ["expectedRevision", "idempotencyKey"] },
+    input: { path: ["eventId"], body: ["expectedRevision", "expectedWorkspaceVersion", "idempotencyKey"] },
     summary: "Publish an agenda revision",
     successStatus: 201,
   },

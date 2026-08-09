@@ -67,6 +67,17 @@ export type AgendaMutationInterlock = (
   reservation: AgendaMutationReservation,
 ) => Effect.Effect<void, never>;
 
+export interface AgendaPublicationReservation {
+  readonly eventId: string;
+  readonly expectedWorkspaceVersion: number;
+  readonly nextRevision: number;
+}
+
+/** Feature-local deterministic publication seam; transport operations never provide it. */
+export type AgendaPublicationInterlock = (
+  reservation: AgendaPublicationReservation,
+) => Effect.Effect<void, never>;
+
 const waitAfterWorkspaceSample = (
   interlock: AgendaMutationInterlock | undefined,
   reservation: AgendaMutationReservation,
@@ -352,7 +363,7 @@ const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | nul
     return yield* decodePublishedAgenda(change.payload);
   });
 
-const nextWorkspaceVersion = (eventId: string): Effect.Effect<number, AppError, Db> =>
+const currentWorkspaceVersion = (eventId: string): Effect.Effect<number, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     const [change] = yield* database(() =>
@@ -368,8 +379,11 @@ const nextWorkspaceVersion = (eventId: string): Effect.Effect<number, AppError, 
         .orderBy(desc(domainChanges.aggregateVersion), desc(domainChanges.sequence))
         .limit(1),
     );
-    return (change?.aggregateVersion ?? 0) + 1;
+    return change?.aggregateVersion ?? 0;
   });
+
+const nextWorkspaceVersion = (eventId: string): Effect.Effect<number, AppError, Db> =>
+  currentWorkspaceVersion(eventId).pipe(Effect.map((version) => version + 1));
 
 export const listAgenda = (
   input: ListAgendaInput,
@@ -377,12 +391,13 @@ export const listAgenda = (
   Effect.gen(function* () {
     const { db } = yield* Db;
     const event = yield* getEvent(input.eventId);
-    const [trackRows, roomRows, backlog, agendaTalks, published] = yield* Effect.all([
+    const [trackRows, roomRows, backlog, agendaTalks, published, workspaceVersion] = yield* Effect.all([
       database(() => db.select().from(tracks).where(eq(tracks.eventId, input.eventId)).orderBy(asc(tracks.order), asc(tracks.name))),
       database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name))),
       loadBacklog(input.eventId),
       loadTalkRows(input.eventId),
       latestPublication(input.eventId),
+      currentWorkspaceVersion(input.eventId),
     ]);
     const conflicts = yield* loadConflicts(input.eventId, agendaTalks);
     return {
@@ -391,6 +406,7 @@ export const listAgenda = (
       eventSlug: event.slug,
       timezone: event.timezone,
       view: input.view,
+      workspaceVersion,
       tracks: trackRows.map((track) => ({ id: track.id, name: track.name, color: track.color, order: track.order })),
       rooms: roomRows.map((room) => ({ id: room.id, name: room.name, capacity: room.capacity, order: room.order })),
       backlog,
@@ -843,6 +859,7 @@ export const cancelTalk = (
 
 export const publishAgenda = (
   input: PublishAgendaInput,
+  interlock?: AgendaPublicationInterlock,
 ): Effect.Effect<PublishedAgenda, AppError, Db | CurrentUser> =>
   mutationContention(Effect.gen(function* () {
     const { db } = yield* Db;
@@ -854,6 +871,12 @@ export const publishAgenda = (
     const currentRevision = current?.revision ?? 0;
     if (currentRevision !== input.expectedRevision) {
       return yield* Effect.fail(new Conflict({ message: `Agenda revision is ${currentRevision}; expected ${input.expectedRevision}` }));
+    }
+    const workspaceVersion = yield* currentWorkspaceVersion(input.eventId);
+    if (workspaceVersion !== input.expectedWorkspaceVersion) {
+      return yield* Effect.fail(new Conflict({
+        message: `Agenda workspace version is ${workspaceVersion}; expected ${input.expectedWorkspaceVersion}`,
+      }));
     }
     const [agendaTalks, trackRows, roomRows, visibleSpeakerRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
@@ -904,16 +927,37 @@ export const publishAgenda = (
       publishedAt: prepared.now.getTime(),
       talks: publicTalks,
     });
+    if (interlock) {
+      yield* interlock({
+        eventId: input.eventId,
+        expectedWorkspaceVersion: input.expectedWorkspaceVersion,
+        nextRevision: published.revision,
+      });
+    }
     const actor = actorColumns(principal);
     const changeId = nanoid();
     const auditId = nanoid();
+    const completedIdempotency = idempotencyInsert(
+      prepared,
+      input.eventId,
+      "agenda.publish",
+      published as unknown as JsonValue,
+    );
     yield* database(() => db.batch([
-      db.insert(idempotencyRecords).values(idempotencyInsert(
-        prepared,
-        input.eventId,
-        "agenda.publish",
-        published as unknown as JsonValue,
-      )),
+      db.insert(idempotencyRecords).values({
+        ...completedIdempotency,
+        completedAt: sql<Date>`case when coalesce((
+          select max(${domainChanges.aggregateVersion})
+          from ${domainChanges}
+          where ${domainChanges.eventId} = ${input.eventId}
+            and ${domainChanges.aggregateType} = 'agenda-workspace'
+            and ${domainChanges.aggregateId} = ${input.eventId}
+            and ${domainChanges.eventType} = ${TALK_CHANGE_EVENT}
+        ), 0) = ${input.expectedWorkspaceVersion}
+          then ${prepared.now.getTime()}
+          else null
+        end`,
+      }),
       db.insert(domainChanges).values({
         id: changeId,
         eventId: input.eventId,

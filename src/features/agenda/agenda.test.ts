@@ -27,6 +27,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, CurrentUser, Db, Rooms } from "@/server/services";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
 import { operations, partyDescriptors } from "./operations";
+import type { AgendaMutationResult } from "./schema";
 import {
   cancelTalk,
   createTalk,
@@ -36,6 +37,7 @@ import {
   publishAgenda,
   scheduleTalk,
   type AgendaMutationInterlock,
+  type AgendaPublicationInterlock,
 } from "./service";
 
 interface TestEnv extends Cloudflare.Env {
@@ -101,6 +103,19 @@ const reservationBarrier = () => {
   const sampled = new Promise<void>((resolve) => { announceSampled = resolve; });
   const released = new Promise<void>((resolve) => { release = resolve; });
   const interlock: AgendaMutationInterlock = () =>
+    Effect.promise(async () => {
+      announceSampled();
+      await released;
+    });
+  return { interlock, release, sampled };
+};
+
+const publicationBarrier = () => {
+  let announceSampled!: () => void;
+  let release!: () => void;
+  const sampled = new Promise<void>((resolve) => { announceSampled = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const interlock: AgendaPublicationInterlock = () =>
     Effect.promise(async () => {
       announceSampled();
       await released;
@@ -398,13 +413,13 @@ describe("agenda deterministic fixtures and descriptors", () => {
     expect(partyDescriptors[0].inputSchema.required).not.toContain("eventId");
   });
 
- 
 });
 
 describe("agenda service", () => {
   it("lists only accepted, provisioned proposals in the backlog", async () => {
     const seeded = await seedAgenda("backlog");
     const agenda = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }));
+    expect(agenda.workspaceVersion).toBe(0);
     expect(agenda.timezone).toBe("America/Los_Angeles");
     expect(agenda.backlog.map(({ title }) => title)).toEqual(["Durable workflows", "Effects at scale"]);
     expect(agenda.talks).toEqual([]);
@@ -688,6 +703,7 @@ describe("agenda service", () => {
     const published = await runAs(seeded.user, publishAgenda({
       eventId: seeded.eventId,
       expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
       idempotencyKey: "publish-revision-0001",
     }));
     expect(published).toMatchObject({ revision: 1, timezone: "America/Los_Angeles" });
@@ -720,5 +736,55 @@ describe("agenda service", () => {
     const stillPublished = await runAs(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
     expect(stillPublished.revision).toBe(1);
     expect(stillPublished.talks[0]?.startsAt).toBe(FIXED_DAY_START);
+  });
+
+  it("rejects a stale publication snapshot without replacing the prior revision", async () => {
+    const seeded = await seedAgenda("publication-race", { scheduled: true });
+    const firstPublication = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      idempotencyKey: "publish-race-initial-0001",
+    }));
+    const barrier = publicationBarrier();
+    const stalePublication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 1,
+      expectedWorkspaceVersion: 0,
+      idempotencyKey: "publish-race-stale-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+
+    let moved: AgendaMutationResult | undefined;
+    try {
+      moved = await runAs(seeded.user, moveTalk({
+        eventId: seeded.eventId,
+        talkId: seeded.talkA,
+        trackId: seeded.trackId,
+        roomId: seeded.roomB,
+        startsAt: FIXED_DAY_START + 7_200_000,
+        durationMin: 30,
+        expectedVersion: 2,
+        idempotencyKey: "publish-race-move-0001",
+      }));
+    } finally {
+      barrier.release();
+    }
+    const staleResult = await stalePublication;
+    expect(moved).toMatchObject({
+      talk: { roomId: seeded.roomB, startsAt: FIXED_DAY_START + 7_200_000 },
+    });
+    expect(staleResult).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+
+    const stillPublished = await runAs(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
+    expect(stillPublished).toEqual(firstPublication);
+    const publicationChanges = await seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ));
+    expect(publicationChanges).toHaveLength(1);
+    expect(publicationChanges[0]?.payload).toEqual(firstPublication);
+    await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(2);
+    await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(2);
   });
 });
