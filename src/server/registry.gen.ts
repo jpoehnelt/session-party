@@ -3037,6 +3037,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "required": [],
                 "type": "object"
               },
+              "semanticKey": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "submissionTitle",
+                      "submissionAbstract",
+                      "speakerName",
+                      "speakerEmail"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "text",
@@ -3058,6 +3074,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
             "required": [
               "type",
               "label",
+              "semanticKey",
               "helpText",
               "required",
               "options",
@@ -3298,6 +3315,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "required": [],
                 "type": "object"
               },
+              "semanticKey": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "submissionTitle",
+                      "submissionAbstract",
+                      "speakerName",
+                      "speakerEmail"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "text",
@@ -3327,6 +3360,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "order",
               "type",
               "label",
+              "semanticKey",
               "helpText",
               "required",
               "options",
@@ -3508,6 +3542,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                         "required": [],
                         "type": "object"
                       },
+                      "semanticKey": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "submissionTitle",
+                              "submissionAbstract",
+                              "speakerName",
+                              "speakerEmail"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "sourceFieldId": {
                         "anyOf": [
                           {
@@ -3547,6 +3597,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                       "order",
                       "type",
                       "label",
+                      "semanticKey",
                       "helpText",
                       "required",
                       "options",
@@ -3866,6 +3917,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "required": [],
                 "type": "object"
               },
+              "semanticKey": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "submissionTitle",
+                      "submissionAbstract",
+                      "speakerName",
+                      "speakerEmail"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "text",
@@ -3895,6 +3962,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "order",
               "type",
               "label",
+              "semanticKey",
               "helpText",
               "required",
               "options",
@@ -4076,6 +4144,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                         "required": [],
                         "type": "object"
                       },
+                      "semanticKey": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "submissionTitle",
+                              "submissionAbstract",
+                              "speakerName",
+                              "speakerEmail"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "sourceFieldId": {
                         "anyOf": [
                           {
@@ -4115,6 +4199,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                       "order",
                       "type",
                       "label",
+                      "semanticKey",
                       "helpText",
                       "required",
                       "options",
@@ -4556,6 +4641,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "required": [],
                 "type": "object"
               },
+              "semanticKey": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "submissionTitle",
+                      "submissionAbstract",
+                      "speakerName",
+                      "speakerEmail"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "text",
@@ -4577,6 +4678,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
             "required": [
               "type",
               "label",
+              "semanticKey",
               "helpText",
               "required",
               "options",
@@ -4819,6 +4921,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "required": [],
                 "type": "object"
               },
+              "semanticKey": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "submissionTitle",
+                      "submissionAbstract",
+                      "speakerName",
+                      "speakerEmail"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "text",
@@ -4848,6 +4966,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "order",
               "type",
               "label",
+              "semanticKey",
               "helpText",
               "required",
               "options",
@@ -5029,6 +5148,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                         "required": [],
                         "type": "object"
                       },
+                      "semanticKey": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "submissionTitle",
+                              "submissionAbstract",
+                              "speakerName",
+                              "speakerEmail"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "sourceFieldId": {
                         "anyOf": [
                           {
@@ -5068,6 +5203,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                       "order",
                       "type",
                       "label",
+                      "semanticKey",
                       "helpText",
                       "required",
                       "options",
@@ -10716,6 +10852,22 @@ export const openApi = {
                           "required": [],
                           "type": "object"
                         },
+                        "semanticKey": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "submissionTitle",
+                                "submissionAbstract",
+                                "speakerName",
+                                "speakerEmail"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "type": {
                           "enum": [
                             "text",
@@ -10737,6 +10889,7 @@ export const openApi = {
                       "required": [
                         "type",
                         "label",
+                        "semanticKey",
                         "helpText",
                         "required",
                         "options",
@@ -10974,6 +11127,22 @@ export const openApi = {
                             "required": [],
                             "type": "object"
                           },
+                          "semanticKey": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "submissionTitle",
+                                  "submissionAbstract",
+                                  "speakerName",
+                                  "speakerEmail"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "type": {
                             "enum": [
                               "text",
@@ -11003,6 +11172,7 @@ export const openApi = {
                           "order",
                           "type",
                           "label",
+                          "semanticKey",
                           "helpText",
                           "required",
                           "options",
@@ -11184,6 +11354,22 @@ export const openApi = {
                                     "required": [],
                                     "type": "object"
                                   },
+                                  "semanticKey": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "submissionTitle",
+                                          "submissionAbstract",
+                                          "speakerName",
+                                          "speakerEmail"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "sourceFieldId": {
                                     "anyOf": [
                                       {
@@ -11223,6 +11409,7 @@ export const openApi = {
                                   "order",
                                   "type",
                                   "label",
+                                  "semanticKey",
                                   "helpText",
                                   "required",
                                   "options",
@@ -11578,6 +11765,22 @@ export const openApi = {
                             "required": [],
                             "type": "object"
                           },
+                          "semanticKey": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "submissionTitle",
+                                  "submissionAbstract",
+                                  "speakerName",
+                                  "speakerEmail"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "type": {
                             "enum": [
                               "text",
@@ -11607,6 +11810,7 @@ export const openApi = {
                           "order",
                           "type",
                           "label",
+                          "semanticKey",
                           "helpText",
                           "required",
                           "options",
@@ -11788,6 +11992,22 @@ export const openApi = {
                                     "required": [],
                                     "type": "object"
                                   },
+                                  "semanticKey": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "submissionTitle",
+                                          "submissionAbstract",
+                                          "speakerName",
+                                          "speakerEmail"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "sourceFieldId": {
                                     "anyOf": [
                                       {
@@ -11827,6 +12047,7 @@ export const openApi = {
                                   "order",
                                   "type",
                                   "label",
+                                  "semanticKey",
                                   "helpText",
                                   "required",
                                   "options",
@@ -12179,6 +12400,22 @@ export const openApi = {
                           "required": [],
                           "type": "object"
                         },
+                        "semanticKey": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "submissionTitle",
+                                "submissionAbstract",
+                                "speakerName",
+                                "speakerEmail"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "type": {
                           "enum": [
                             "text",
@@ -12200,6 +12437,7 @@ export const openApi = {
                       "required": [
                         "type",
                         "label",
+                        "semanticKey",
                         "helpText",
                         "required",
                         "options",
@@ -12429,6 +12667,22 @@ export const openApi = {
                             "required": [],
                             "type": "object"
                           },
+                          "semanticKey": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "submissionTitle",
+                                  "submissionAbstract",
+                                  "speakerName",
+                                  "speakerEmail"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "type": {
                             "enum": [
                               "text",
@@ -12458,6 +12712,7 @@ export const openApi = {
                           "order",
                           "type",
                           "label",
+                          "semanticKey",
                           "helpText",
                           "required",
                           "options",
@@ -12639,6 +12894,22 @@ export const openApi = {
                                     "required": [],
                                     "type": "object"
                                   },
+                                  "semanticKey": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "submissionTitle",
+                                          "submissionAbstract",
+                                          "speakerName",
+                                          "speakerEmail"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "sourceFieldId": {
                                     "anyOf": [
                                       {
@@ -12678,6 +12949,7 @@ export const openApi = {
                                   "order",
                                   "type",
                                   "label",
+                                  "semanticKey",
                                   "helpText",
                                   "required",
                                   "options",
@@ -13064,6 +13336,22 @@ export const openApi = {
                             "required": [],
                             "type": "object"
                           },
+                          "semanticKey": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "submissionTitle",
+                                  "submissionAbstract",
+                                  "speakerName",
+                                  "speakerEmail"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "type": {
                             "enum": [
                               "text",
@@ -13093,6 +13381,7 @@ export const openApi = {
                           "order",
                           "type",
                           "label",
+                          "semanticKey",
                           "helpText",
                           "required",
                           "options",
@@ -13274,6 +13563,22 @@ export const openApi = {
                                     "required": [],
                                     "type": "object"
                                   },
+                                  "semanticKey": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "submissionTitle",
+                                          "submissionAbstract",
+                                          "speakerName",
+                                          "speakerEmail"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "sourceFieldId": {
                                     "anyOf": [
                                       {
@@ -13313,6 +13618,7 @@ export const openApi = {
                                   "order",
                                   "type",
                                   "label",
+                                  "semanticKey",
                                   "helpText",
                                   "required",
                                   "options",
@@ -13722,6 +14028,22 @@ export const openApi = {
                             "required": [],
                             "type": "object"
                           },
+                          "semanticKey": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "submissionTitle",
+                                  "submissionAbstract",
+                                  "speakerName",
+                                  "speakerEmail"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "type": {
                             "enum": [
                               "text",
@@ -13751,6 +14073,7 @@ export const openApi = {
                           "order",
                           "type",
                           "label",
+                          "semanticKey",
                           "helpText",
                           "required",
                           "options",
@@ -13932,6 +14255,22 @@ export const openApi = {
                                     "required": [],
                                     "type": "object"
                                   },
+                                  "semanticKey": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "submissionTitle",
+                                          "submissionAbstract",
+                                          "speakerName",
+                                          "speakerEmail"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "sourceFieldId": {
                                     "anyOf": [
                                       {
@@ -13971,6 +14310,7 @@ export const openApi = {
                                   "order",
                                   "type",
                                   "label",
+                                  "semanticKey",
                                   "helpText",
                                   "required",
                                   "options",

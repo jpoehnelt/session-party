@@ -617,7 +617,7 @@ describe("forms service", () => {
     const duplicateFields = prefixDraftFields("semantic-duplicate").map((field, index) => ({
       ...field,
       semanticKey: index < 2 ? "submissionTitle" as const : field.semanticKey,
-    })) as CreateFormInput["fields"];
+    })) as unknown as CreateFormInput["fields"];
     const duplicate = await runAs(owner, createForm({
       eventId: duplicateEventId,
       purpose: "additional",
@@ -639,7 +639,7 @@ describe("forms service", () => {
     const titleOnlyFields = prefixDraftFields("semantic-primary").map((field, index) => ({
       ...field,
       semanticKey: index === 0 ? "submissionTitle" as const : null,
-    })) as CreateFormInput["fields"];
+    })) as unknown as CreateFormInput["fields"];
     const primary = await runAs(owner, createForm({
       eventId: primaryEventId,
       purpose: "primary-cfp",
@@ -669,7 +669,7 @@ describe("forms service", () => {
     const nullSemanticFields = prefixDraftFields("semantic-additional").map((field) => ({
       ...field,
       semanticKey: null,
-    })) as CreateFormInput["fields"];
+    })) as unknown as CreateFormInput["fields"];
     const additional = await runAs(owner, createForm({
       eventId: additionalEventId,
       purpose: "additional",
