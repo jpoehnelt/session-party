@@ -550,13 +550,45 @@ describe("durable magic-link authentication", () => {
       idempotencyKey: "local-no-egress",
     })).provider).toBe("local-fake");
   });
+  it.each([
+    ["production HTTPS", " https://SessionParty.EXAMPLE:443/ ", "https://sessionparty.example"],
+    ["local HTTP", " http://LOCALHOST:5173 ", "http://localhost:5173"],
+  ] as const)("exposes a canonical app origin for %s", async (_kind, configured, expected) => {
+    const configuredEnv = Object.assign(Object.create(env), { APP_URL: configured }) as Env;
+    const origin = await Effect.runPromise(
+      Effect.gen(function* () {
+        const queue = yield* MailQueue;
+        return queue.appOrigin;
+      }).pipe(Effect.provide(AppLayer(configuredEnv))),
+    );
+    expect(origin).toBe(expected);
+    expect(new URL("/api/v1/test", origin).toString()).toBe(`${expected}/api/v1/test`);
+  });
+  it.each([
+    ["missing", "   ", "Missing required binding: APP_URL"],
+    ["malformed", "https://[", "Invalid required binding APP_URL: expected an absolute URL"],
+    ["relative", "/events", "Invalid required binding APP_URL: expected an absolute URL"],
+    ["scheme-relative", "//example.com", "Invalid required binding APP_URL: expected an absolute URL"],
+    ["non-HTTP", "ftp://example.com", "Invalid required binding APP_URL: expected HTTP or HTTPS"],
+    ["credentials", "https://user:password@example.com", "Invalid required binding APP_URL: credentials are not allowed"],
+    ["path", "https://example.com/events", "Invalid required binding APP_URL: pathname must be empty or /"],
+    ["query", "https://example.com?campaign=launch", "Invalid required binding APP_URL: query is not allowed"],
+    ["hash", "https://example.com#agenda", "Invalid required binding APP_URL: hash is not allowed"],
+  ] as const)("rejects an APP_URL with %s", (_kind, configured, message) => {
+    const configuredEnv = Object.assign(Object.create(env), { APP_URL: configured }) as Env;
+    expect(() => AppLayer(configuredEnv)).toThrowError(message);
+  });
+
   it("provides the configured sender and wakes only the canonical mail scheduler", async () => {
+    const configuredEnv = Object.assign(Object.create(env), {
+      APP_URL: "http://localhost:5173",
+    }) as Env;
     const sender = await Effect.runPromise(
       Effect.gen(function* () {
         const queue = yield* MailQueue;
         yield* queue.wake();
         return queue.fromEmail;
-      }).pipe(Effect.provide(AppLayer(env))),
+      }).pipe(Effect.provide(AppLayer(configuredEnv))),
     );
     expect(sender).toBe("Session Party <welcome@sessionparty.com>");
     const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail"));
