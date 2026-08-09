@@ -383,8 +383,24 @@ describe("forms organizer behavior", () => {
     expect(validatePublishIntent(unrestricted)).toEqual([]);
   });
 
+  it("blocks unavailable file fields before publication", () => {
+    const form = primaryPublishFixture();
+    const fileField = {
+      ...form,
+      purpose: "additional" as const,
+      fields: form.fields.map((field, index) => index === 0
+        ? { ...field, type: "file" as const, semanticKey: null, options: [], routing: {} }
+        : { ...field, semanticKey: null }),
+    };
+
+    expect(validatePublishIntent(fileField)).toContainEqual({
+      controlId: `builder-field-${fileField.fields[0]!.id}-type`,
+      message: `${fileField.fields[0]!.label} uses file upload, which is unavailable on public forms.`,
+    });
+  });
+
   it("normalizes committed options and targets malformed routing and dependency controls", () => {
-    expect(normalizeOptionDraft("AI systems\nDeveloper tools\n", {
+    expect(normalizeOptionDraft("AI systems\nDeveloper tools\n", ["AI systems", "Developer tools", "Removed"], {
       "AI systems": "ai-systems",
       "Developer tools": "developer-tools",
       Removed: "removed",
@@ -393,6 +409,16 @@ describe("forms organizer behavior", () => {
       routing: {
         "AI systems": "ai-systems",
         "Developer tools": "developer-tools",
+      },
+    });
+    expect(normalizeOptionDraft("AI systems\nDeveloper tooling\n", ["AI systems", "Developer tools"], {
+      "AI systems": "ai-systems",
+      "Developer tools": "developer-tools",
+    })).toEqual({
+      options: ["AI systems", "Developer tooling"],
+      routing: {
+        "AI systems": "ai-systems",
+        "Developer tooling": "developer-tools",
       },
     });
 
@@ -1014,6 +1040,21 @@ describe("forms service", () => {
     }).pipe(Effect.either));
     expect(invalidCreate._tag).toBe("Left");
     if (invalidCreate._tag === "Left") expect(invalidCreate.left._tag).toBe("Validation");
+
+    const unavailableFile = await runAs(owner, createForm({
+      ...baseInput,
+      name: "Unavailable file field",
+      fields: [
+        { ...baseInput.fields[0]!, type: "file" as const, semanticKey: null, options: [], routing: {} },
+        ...baseInput.fields.slice(1),
+      ],
+      idempotencyKey: "forms-file-create-invalid",
+    }).pipe(Effect.either));
+    expect(unavailableFile._tag).toBe("Left");
+    if (unavailableFile._tag === "Left") expect(unavailableFile.left).toMatchObject({
+      _tag: "Validation",
+      message: expect.stringContaining("File upload field"),
+    });
 
     const created = await runAs(owner, createForm({
       ...baseInput,

@@ -44,11 +44,13 @@ const FIELD_TYPE_LABELS: Record<FormFieldType, string> = {
   checkbox: "Checkbox",
   email: "Email",
   url: "URL",
-  file: "File upload",
+  file: "File upload (unavailable)",
   date: "Date",
   heading: "Section heading",
   html: "Guidance text",
 };
+
+const BUILDER_FIELD_TYPES: readonly FormFieldType[] = FORM_FIELD_TYPES.filter((type) => type !== "file");
 
 const SEMANTIC_KEY_LABELS: Record<FormSemanticKey, string> = {
   submissionTitle: "Submission title",
@@ -98,13 +100,13 @@ function OptionsEditor({ field, error, onCommit }: OptionsEditorProps) {
     <Textarea
       id={`builder-field-${field.id}-options`}
       label="Ordered options"
-      hint="One option per line. Options are normalized when you leave this field."
+      hint="One option per line. Renaming options in place keeps their category routing."
       error={error}
       className={PRODUCTION_FIELD}
       rows={Math.max(3, field.options.length)}
       defaultValue={field.options.join("\n")}
       onBlur={(event) => {
-        const normalized = normalizeOptionDraft(event.currentTarget.value, field.routing);
+        const normalized = normalizeOptionDraft(event.currentTarget.value, field.options, field.routing);
         onCommit(normalized.options, normalized.routing);
       }}
     />
@@ -504,12 +506,19 @@ export function FormBuilder({
                   });
                 }}
               >
-                {FORM_FIELD_TYPES.map((type) => <option key={type} value={type}>{FIELD_TYPE_LABELS[type]}</option>)}
+                {[
+                  ...BUILDER_FIELD_TYPES,
+                  ...(field.type === "file" ? ["file" as const] : []),
+                ].map((type) => (
+                  <option key={type} value={type} disabled={type === "file"}>{FIELD_TYPE_LABELS[type]}</option>
+                ))}
               </Select>
               <Select
                 id={`builder-field-${field.id}-semantic-key`}
-                label="Submission/review meaning"
-                hint="Assign a stable meaning for public submission and review. Labels are never used as a fallback."
+                label="Use this answer as"
+                hint={watchedForm.purpose === "primary-cfp"
+                  ? "Assign proposal title, proposal abstract, and speaker name once each before publishing."
+                  : "Optionally connect this answer to submission and review screens. Each role can be assigned once."}
                 className={PRODUCTION_FIELD}
                 value={field.semanticKey ?? ""}
                 error={errors.fields?.[index]?.semanticKey?.message}
@@ -595,7 +604,13 @@ export function FormBuilder({
                     </Select>
                   </div>
                   <div className="space-y-3">
-                    {field.logic.conditions.map((condition, conditionIndex) => (
+                    {field.logic.conditions.map((condition, conditionIndex) => {
+                      const sourceField = precedingFields.find((candidate) => candidate.id === condition.fieldId);
+                      const sourceOptions = sourceField && FORM_FIELD_OPTION_TYPES[sourceField.type]
+                        ? sourceField.options
+                        : [];
+                      const valueControlId = `builder-field-${field.id}-condition-${conditionIndex}-value`;
+                      return (
                       <div key={conditionIndex} className="grid gap-3 border-2 border-[#171714] bg-[#fffdf7] p-3 shadow-[3px_3px_0_#171714] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
                         <Select
                           id={`builder-field-${field.id}-condition-${conditionIndex}-source`}
@@ -605,6 +620,9 @@ export function FormBuilder({
                           onChange={(event) => patchField(index, {
                             logic: updateConditionAt(field.logic!, conditionIndex, {
                               fieldId: event.currentTarget.value,
+                              value: condition.op === "not_empty"
+                                ? undefined
+                                : condition.op === "in" ? [] : "",
                             }),
                           })}
                         >
@@ -619,7 +637,15 @@ export function FormBuilder({
                             patchField(index, {
                               logic: updateConditionAt(field.logic!, conditionIndex, {
                                 op,
-                                value: op === "not_empty" ? undefined : condition.value ?? "",
+                                value: op === "not_empty"
+                                  ? undefined
+                                  : op === "in"
+                                    ? Array.isArray(condition.value)
+                                      ? condition.value
+                                      : condition.value ? [condition.value] : []
+                                    : Array.isArray(condition.value)
+                                      ? condition.value[0] ?? ""
+                                      : condition.value ?? "",
                               }),
                             });
                           }}
@@ -629,19 +655,44 @@ export function FormBuilder({
                           <option value="in">Is one of</option>
                           <option value="not_empty">Is not empty</option>
                         </Select>
-                        <Input
-                          label="Value"
-                          className={PRODUCTION_FIELD}
-                          disabled={condition.op === "not_empty"}
-                          value={Array.isArray(condition.value) ? condition.value.join(", ") : condition.value ?? ""}
-                          onChange={(event) => patchField(index, {
-                            logic: updateConditionAt(field.logic!, conditionIndex, {
-                              value: condition.op === "in"
-                                ? event.currentTarget.value.split(",").map((value) => value.trim()).filter(Boolean)
-                                : event.currentTarget.value,
-                            }),
-                          })}
-                        />
+                        {sourceOptions.length > 0 && condition.op !== "not_empty" ? (
+                          <Select
+                            id={valueControlId}
+                            label={condition.op === "in" ? "Values" : "Value"}
+                            hint={condition.op === "in" ? "Select one or more answers." : "Select an answer."}
+                            className={condition.op === "in" ? `${PRODUCTION_FIELD} min-h-28` : PRODUCTION_FIELD}
+                            multiple={condition.op === "in"}
+                            value={condition.op === "in"
+                              ? Array.isArray(condition.value) ? condition.value : []
+                              : Array.isArray(condition.value) ? condition.value[0] ?? "" : condition.value ?? ""}
+                            onChange={(event) => patchField(index, {
+                              logic: updateConditionAt(field.logic!, conditionIndex, {
+                                value: condition.op === "in"
+                                  ? Array.from(event.currentTarget.selectedOptions, (option) => option.value)
+                                  : event.currentTarget.value,
+                              }),
+                            })}
+                          >
+                            {condition.op !== "in" && <option value="">Choose an answer</option>}
+                            {sourceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </Select>
+                        ) : (
+                          <Input
+                            id={valueControlId}
+                            label="Value"
+                            hint={condition.op === "in" ? "Separate multiple answers with commas." : undefined}
+                            className={PRODUCTION_FIELD}
+                            disabled={condition.op === "not_empty"}
+                            value={Array.isArray(condition.value) ? condition.value.join(", ") : condition.value ?? ""}
+                            onChange={(event) => patchField(index, {
+                              logic: updateConditionAt(field.logic!, conditionIndex, {
+                                value: condition.op === "in"
+                                  ? event.currentTarget.value.split(",").map((value) => value.trim()).filter(Boolean)
+                                  : event.currentTarget.value,
+                              }),
+                            })}
+                          />
+                        )}
                         <Button
                           className={`${SECONDARY_BUTTON} self-end`}
                           size="sm"
@@ -657,7 +708,8 @@ export function FormBuilder({
                           Remove
                         </Button>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <Button
                     className={SECONDARY_BUTTON}
