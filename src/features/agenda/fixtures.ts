@@ -115,6 +115,8 @@ const baseSnapshot = (overrides: Partial<AgendaSnapshot> = {}): AgendaSnapshot =
   eventSlug: "effect-days-2026",
   timezone: "America/Los_Angeles",
   view: "day",
+  workspaceVersion: 0,
+  eventVersion: 1,
   tracks: [...deterministicTracks],
   rooms: [...deterministicRooms],
   backlog: [],

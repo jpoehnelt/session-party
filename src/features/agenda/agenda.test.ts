@@ -6,6 +6,7 @@ import {
   auditLog,
   domainChanges,
   events,
+  eventMembers,
   formVersions,
   forms,
   idempotencyRecords,
@@ -24,9 +25,11 @@ import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppLayer, CurrentUser, Db, Rooms } from "@/server/services";
+import { AppLayer, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import { updateEvent } from "@/features/events/service";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
 import { operations, partyDescriptors } from "./operations";
+import type { AgendaMutationResult } from "./schema";
 import {
   cancelTalk,
   createTalk,
@@ -36,6 +39,8 @@ import {
   publishAgenda,
   scheduleTalk,
   type AgendaMutationInterlock,
+  type AgendaSnapshotInterlock,
+  type AgendaPublicationInterlock,
 } from "./service";
 
 interface TestEnv extends Cloudflare.Env {
@@ -56,6 +61,14 @@ const owner = (userId: string): CurrentUserValue => ({
 const runAs = <A, E>(
   principal: CurrentUserValue,
   effect: Effect.Effect<A, E, Db | CurrentUser | Rooms>,
+) =>
+  Effect.runPromise(effect.pipe(
+    Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+  ));
+
+const runEventAs = <A, E>(
+  principal: CurrentUserValue,
+  effect: Effect.Effect<A, E, Db | CurrentUser | Authorizer>,
 ) =>
   Effect.runPromise(effect.pipe(
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
@@ -108,6 +121,35 @@ const reservationBarrier = () => {
   return { interlock, release, sampled };
 };
 
+const snapshotBarrier = () => {
+  let blocked = false;
+  let announceSampled!: () => void;
+  let release!: () => void;
+  const sampled = new Promise<void>((resolve) => { announceSampled = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const interlock: AgendaSnapshotInterlock = () => {
+    if (blocked) return Effect.void;
+    blocked = true;
+    return Effect.promise(async () => {
+      announceSampled();
+      await released;
+    });
+  };
+  return { interlock, release, sampled };
+};
+
+const publicationBarrier = () => {
+  let announceSampled!: () => void;
+  let release!: () => void;
+  const sampled = new Promise<void>((resolve) => { announceSampled = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const interlock: AgendaPublicationInterlock = () =>
+    Effect.promise(async () => {
+      announceSampled();
+      await released;
+    });
+  return { interlock, release, sampled };
+};
 interface SeedOptions {
   readonly scheduled?: boolean;
   readonly secondTalk?: boolean;
@@ -150,6 +192,14 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
       timezone: "America/Los_Angeles",
       startsAt: new Date(FIXED_DAY_START),
       endsAt: new Date(FIXED_DAY_START + 2 * 86_400_000),
+      createdAt: now,
+      updatedAt: now,
+    }),
+    db.insert(eventMembers).values({
+      id: id("member-owner"),
+      eventId,
+      userId,
+      role: "owner",
       createdAt: now,
       updatedAt: now,
     }),
@@ -398,16 +448,53 @@ describe("agenda deterministic fixtures and descriptors", () => {
     expect(partyDescriptors[0].inputSchema.required).not.toContain("eventId");
   });
 
- 
+
 });
 
 describe("agenda service", () => {
   it("lists only accepted, provisioned proposals in the backlog", async () => {
     const seeded = await seedAgenda("backlog");
     const agenda = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }));
+    expect(agenda.workspaceVersion).toBe(0);
+    expect(agenda.eventVersion).toBe(1);
     expect(agenda.timezone).toBe("America/Los_Angeles");
     expect(agenda.backlog.map(({ title }) => title)).toEqual(["Durable workflows", "Effects at scale"]);
     expect(agenda.talks).toEqual([]);
+  });
+
+  it("retries when a mutation lands between projection and version reads", async () => {
+    const seeded = await seedAgenda("snapshot-race", { scheduled: true });
+    const barrier = snapshotBarrier();
+    const pendingSnapshot = runAs(
+      seeded.user,
+      listAgenda({ eventId: seeded.eventId, view: "day" }, barrier.interlock),
+    );
+    await barrier.sampled;
+    try {
+      await runAs(seeded.user, moveTalk({
+        eventId: seeded.eventId,
+        talkId: seeded.talkA,
+        trackId: seeded.trackId,
+        roomId: seeded.roomB,
+        startsAt: FIXED_DAY_START + 7_200_000,
+        durationMin: 30,
+        expectedVersion: 2,
+        idempotencyKey: "snapshot-race-move-0001",
+      }));
+    } finally {
+      barrier.release();
+    }
+
+    const snapshot = await pendingSnapshot;
+    expect(snapshot.workspaceVersion).toBe(1);
+    expect(snapshot.talks).toEqual([
+      expect.objectContaining({
+        id: seeded.talkA,
+        roomId: seeded.roomB,
+        startsAt: FIXED_DAY_START + 7_200_000,
+        version: 3,
+      }),
+    ]);
   });
 
   it("creates, schedules, moves, replays idempotently, and cancels a talk with evidence", async () => {
@@ -688,6 +775,8 @@ describe("agenda service", () => {
     const published = await runAs(seeded.user, publishAgenda({
       eventId: seeded.eventId,
       expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
       idempotencyKey: "publish-revision-0001",
     }));
     expect(published).toMatchObject({ revision: 1, timezone: "America/Los_Angeles" });
@@ -720,5 +809,86 @@ describe("agenda service", () => {
     const stillPublished = await runAs(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
     expect(stillPublished.revision).toBe(1);
     expect(stillPublished.talks[0]?.startsAt).toBe(FIXED_DAY_START);
+  });
+
+  it("rejects a stale publication snapshot without replacing the prior revision", async () => {
+    const seeded = await seedAgenda("publication-race", { scheduled: true });
+    const firstPublication = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-race-initial-0001",
+    }));
+    const barrier = publicationBarrier();
+    const stalePublication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 1,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-race-stale-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+
+    let moved: AgendaMutationResult | undefined;
+    try {
+      moved = await runAs(seeded.user, moveTalk({
+        eventId: seeded.eventId,
+        talkId: seeded.talkA,
+        trackId: seeded.trackId,
+        roomId: seeded.roomB,
+        startsAt: FIXED_DAY_START + 7_200_000,
+        durationMin: 30,
+        expectedVersion: 2,
+        idempotencyKey: "publish-race-move-0001",
+      }));
+    } finally {
+      barrier.release();
+    }
+    const staleResult = await stalePublication;
+    expect(moved).toMatchObject({
+      talk: { roomId: seeded.roomB, startsAt: FIXED_DAY_START + 7_200_000 },
+    });
+    expect(staleResult).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+
+    const stillPublished = await runAs(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
+    expect(stillPublished).toEqual(firstPublication);
+    const publicationChanges = await seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ));
+    expect(publicationChanges).toHaveLength(1);
+    expect(publicationChanges[0]?.payload).toEqual(firstPublication);
+    await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(2);
+    await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(2);
+  });
+
+  it("rejects publication when event metadata changes after the agenda read", async () => {
+    const seeded = await seedAgenda("publication-event-race", { scheduled: true });
+    const barrier = publicationBarrier();
+    const stalePublication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-event-race-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+    try {
+      await runEventAs(
+        seeded.user,
+        updateEvent(seeded.eventId, {
+          name: "Conference publication-event-race updated",
+        }),
+      );
+    } finally {
+      barrier.release();
+    }
+
+    const result = await stalePublication;
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+    await expect(seeded.db.select().from(domainChanges).where(eq(domainChanges.eventId, seeded.eventId))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(0);
   });
 });

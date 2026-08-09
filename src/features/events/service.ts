@@ -6,7 +6,7 @@ import {
 } from "contracts/principal";
 import { eventMembers, events } from "contracts/schema";
 import { Effect, Schema } from "effect";
-import { eq, or } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db } from "@/server/services";
 
@@ -224,6 +224,7 @@ export const updateEvent = (
           ...dates(input),
           name: input.name?.trim(),
           updatedAt: new Date(),
+          version: sql`${events.version} + 1`,
         })
         .where(eq(events.id, event.id))
         .returning(),

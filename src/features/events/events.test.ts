@@ -157,6 +157,28 @@ describe("events service", () => {
     await expect(runAs(owner, getEvent(created.slug))).resolves.toEqual(created);
   });
 
+  it("increments the event version on every successful metadata update", async () => {
+    const created = await runAs(
+      owner,
+      createEvent({ name: "Versioned event", slug: "versioned-event" }),
+    );
+
+    const first = await runAs(
+      owner,
+      updateEvent(created.id, { name: "Versioned event — first update" }),
+    );
+    const second = await runAs(
+      owner,
+      updateEvent(created.id, { location: "Updated venue" }),
+    );
+
+    expect(first.version).toBe(created.version + 1);
+    expect(second.version).toBe(first.version + 1);
+
+    const persisted = await runAs(owner, getEvent(created.id));
+    expect(persisted).toEqual(second);
+  });
+
   it("fails with Conflict for a duplicate slug", async () => {
     await runAs(owner, createEvent({ name: "First", slug: "duplicate-event" }));
     await expectFailure(
