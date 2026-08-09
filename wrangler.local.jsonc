@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/mcp", "/parties/*"]
+    "run_worker_first": ["/api/*", "/mcp", "/parties/*", "/__local/*"]
   },
   "observability": { "enabled": false },
   "d1_databases": [

@@ -18,9 +18,9 @@ export default defineConfig({
         d1Databases: ["DB", "MIGRATION_DB"],
         r2Buckets: ["FILES"],
         durableObjects: {
-          EVENT_ROOM: "EventRoom",
-          SCHEDULER: "Scheduler",
-          MCP_OBJECT: "SessionPartyMcp",
+          EVENT_ROOM: { className: "EventRoom", useSQLite: true },
+          SCHEDULER: { className: "Scheduler", useSQLite: true },
+          MCP_OBJECT: { className: "SessionPartyMcp", useSQLite: true },
         },
         bindings: {
           APP_URL: "http://localhost:5173",
@@ -37,4 +37,3 @@ export default defineConfig({
     },
   },
 });
-

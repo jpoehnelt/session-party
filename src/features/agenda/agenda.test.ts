@@ -521,14 +521,15 @@ describe("agenda deterministic fixtures and descriptors", () => {
         path: "/public/events/:eventSlug/agenda/published",
         input: { path: ["eventSlug"] },
       },
-      mcp: { name: "agenda_get_published" },
     });
+    expect("mcp" in getPublishedAgendaOperation).toBe(false);
     for (const operation of [
       createRoomOperation,
       createTrackOperation,
       updateRoomOperation,
       updateTrackOperation,
     ]) {
+      expect("mcp" in operation).toBe(false);
       expect(operation.authorize).toEqual({
         kind: "event",
         eventId: "eventId",

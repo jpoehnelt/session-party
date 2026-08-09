@@ -72,10 +72,6 @@ const acceptSubmissionOperation = {
     summary: "Accept a submission and request primary-speaker provisioning",
     successStatus: 200,
   },
-  mcp: {
-    name: "review_accept_submission",
-    description: "Explicitly accept one version of a submission and create its durable primary-speaker provisioning fact.",
-  },
   idempotency: "required",
   concurrency: "required",
   emits: ["review.submission.accepted", "speaker.provisioning.requested"],
@@ -236,10 +232,6 @@ const rejectSubmissionOperation = {
     summary: "Reject a submission at its current version",
     successStatus: 200,
   },
-  mcp: {
-    name: "review_reject_submission",
-    description: "Explicitly reject one current version of a CFP submission and publish that decision to its speaker audience.",
-  },
   idempotency: "required",
   concurrency: "required",
   emits: ["review.submission.rejected"],
@@ -262,10 +254,6 @@ const saveScoreOperation = {
     },
     summary: "Save a human-confirmed rubric score",
     successStatus: 200,
-  },
-  mcp: {
-    name: "review_save_score",
-    description: "Save the assigned reviewer's bounded 1–5 rubric scores and private comment.",
   },
   party: { intentType: "review/saveScore" },
   idempotency: "none",

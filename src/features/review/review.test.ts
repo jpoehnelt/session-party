@@ -406,7 +406,11 @@ describe("review and acceptance slice", () => {
     for (const operation of operations) {
       expect(operation.authorize.kind).toBe("event");
       expect(operation.rest).toBeDefined();
-      expect(operation.mcp).toBeDefined();
+      if (operation.authorize.kind === "event" && operation.authorize.apiKey.kind === "deny") {
+        expect("mcp" in operation).toBe(false);
+      } else {
+        expect("mcp" in operation).toBe(true);
+      }
     }
     expect(operations[0].emits).toEqual(["review.submission.accepted", "speaker.provisioning.requested"]);
     const acceptanceAuthorization = operations[0].authorize;

@@ -1,21 +1,18 @@
-import { Validation } from "contracts/errors";
-import type { ToolDef } from "contracts/mcp";
 import type { Principal } from "contracts/principal";
 import { API } from "contracts/routes";
-import { Effect, JSONSchema, Schema } from "effect";
 import { Hono } from "hono";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
 import auth, { apiKeyUserFromRequest, userFromRequest } from "./auth";
-import { runMcp, runRestOperation, runTransportOperation } from "./adapt";
+import { runRestOperation, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
 import { Scheduler } from "./party/Scheduler";
+import { mcpToolsForPrincipal } from "./mcp";
 import {
   apiRouters,
   mcpTools,
   operationById,
   restRegistrations,
-  tools,
 } from "./registry.gen";
 import { isExplicitLocalEnvironment, sessionSecret } from "./services";
 
@@ -48,6 +45,7 @@ const isJsonRpcBatch = (
 ): message is readonly JsonRpcRequest[] => Array.isArray(message);
 
 type RequestHandler = (params: unknown) => Promise<unknown>;
+const MCP_BOUND_API_KEY_ID = "mcp-bound-api-key-id";
 
 /**
  * The agents package carries the MCP SDK internally but pnpm does not expose that
@@ -155,15 +153,6 @@ const objectParams = (value: unknown): Record<string, unknown> =>
     ? { ...value }
     : {};
 
-const mcpTool = (tool: ToolDef) => {
-  const inputSchema = JSONSchema.make(tool.args);
-  return {
-    name: tool.name,
-    description: tool.description,
-    inputSchema,
-  };
-};
-
 export class SessionPartyMcp extends McpAgent<Env> {
   private readonly protocol = new LowLevelMcpServer();
   private currentUser: Principal | null = null;
@@ -171,24 +160,31 @@ export class SessionPartyMcp extends McpAgent<Env> {
   override server = this.protocol as never;
 
   override async init(): Promise<void> {
-    this.protocol.setRequestHandler("tools/list", async () => ({
-      tools: [
-        ...mcpTools.map(({ name, description, inputSchema, outputSchema }) => ({
-          name,
-          description,
-          inputSchema,
-          outputSchema,
-        })),
-        ...tools.map(mcpTool),
-      ],
-    }));
+    this.protocol.setRequestHandler("tools/list", async () => {
+      const visibleTools = this.currentUser?.kind === "api-key"
+        ? mcpToolsForPrincipal(this.currentUser, mcpTools)
+        : [];
+      return {
+        tools: [
+          ...visibleTools.map(({ name, description, inputSchema, outputSchema }) => ({
+            name,
+            description,
+            inputSchema,
+            outputSchema,
+          })),
+        ],
+      };
+    });
     this.protocol.setRequestHandler("tools/call", async (rawParams) => {
       if (!this.currentUser) throw new Error("Unauthenticated: a Bearer API key is required");
       const params = objectParams(rawParams);
       const name = params.name;
       const args = objectParams(params.arguments);
+      const visibleTools = this.currentUser.kind === "api-key"
+        ? mcpToolsForPrincipal(this.currentUser, mcpTools)
+        : [];
       const descriptor = typeof name === "string"
-        ? mcpTools.find((candidate) => candidate.name === name)
+        ? visibleTools.find((candidate) => candidate.name === name)
         : undefined;
       if (descriptor) {
         const operation = operationById[descriptor.operationId];
@@ -202,16 +198,7 @@ export class SessionPartyMcp extends McpAgent<Env> {
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       }
 
-      const tool = typeof name === "string"
-        ? tools.find((candidate) => candidate.name === name)
-        : undefined;
-      if (!tool) throw new Error(`Unknown tool: ${String(name)}`);
-      const effect = Schema.decodeUnknown(tool.args)(args).pipe(
-        Effect.mapError((error) => new Validation({ message: String(error) })),
-        Effect.flatMap((decoded) => tool.handler(decoded)),
-      );
-      const result = await runMcp(this.env, this.currentUser, effect);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      throw new Error(`Unknown tool: ${String(name)}`);
     });
   }
 
@@ -221,6 +208,12 @@ export class SessionPartyMcp extends McpAgent<Env> {
       connection.close(4401, "Bearer API key required");
       return;
     }
+    const boundApiKeyId = await this.ctx.storage.get<string>(MCP_BOUND_API_KEY_ID);
+    if (boundApiKeyId && boundApiKeyId !== user.apiKeyId) {
+      connection.close(4403, "MCP session belongs to a different API key");
+      return;
+    }
+    if (!boundApiKeyId) await this.ctx.storage.put(MCP_BOUND_API_KEY_ID, user.apiKeyId);
     this.currentUser = user;
     await super.onConnect(connection, context);
   }
@@ -288,4 +281,3 @@ export default {
       : app.fetch(request, env, ctx);
   },
 } satisfies ExportedHandler<Env>;
-

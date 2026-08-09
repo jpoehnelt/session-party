@@ -86,10 +86,6 @@ export const getPublicSubmissionFormOperation = {
     input: { path: ["eventSlug", "formId"] },
     summary: "Get the current immutable public submission form",
   },
-  mcp: {
-    name: "submit_get_public_form",
-    description: "Inspect the current published version and availability of a public event submission form.",
-  },
   idempotency: "none",
   concurrency: "none",
   emits: [],

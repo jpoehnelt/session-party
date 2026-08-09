@@ -302,6 +302,62 @@ export const UpdateSpeakerPublicationInput = Schema.Struct({
 });
 export type UpdateSpeakerPublicationInput = typeof UpdateSpeakerPublicationInput.Type;
 
+export const DeletePortalEntityOutput = Schema.Struct({ id: EntityId });
+export type DeletePortalEntityOutput = typeof DeletePortalEntityOutput.Type;
+
+export const ManageSpeakerOnboardingInput = Schema.Struct({
+  eventId: EntityId,
+  action: Schema.Union(
+    Schema.Struct({
+      type: Schema.Literal("createTask"),
+      name: NonEmptyText,
+      description: NullableText,
+      kind: PortalTaskKind,
+      formId: Schema.NullOr(EntityId),
+      dueAt: Schema.NullOr(Timestamp),
+      order: Schema.Int,
+    }),
+    Schema.Struct({
+      type: Schema.Literal("updateTask"),
+      taskId: EntityId,
+      expectedVersion: Schema.Int.pipe(Schema.positive()),
+      name: NonEmptyText,
+      description: NullableText,
+      kind: PortalTaskKind,
+      formId: Schema.NullOr(EntityId),
+      dueAt: Schema.NullOr(Timestamp),
+      order: Schema.Int,
+    }),
+    Schema.Struct({
+      type: Schema.Literal("deleteTask"),
+      taskId: EntityId,
+      expectedVersion: Schema.Int.pipe(Schema.positive()),
+    }),
+    Schema.Struct({
+      type: Schema.Literal("provisionSpeaker"),
+      speakerId: EntityId,
+      provisioningId: EntityId,
+      expectedVersion: Schema.Int.pipe(Schema.positive()),
+    }),
+    Schema.Struct({
+      type: Schema.Literal("setSpeakerPublication"),
+      speakerId: EntityId,
+      expectedVersion: Schema.Int.pipe(Schema.positive()),
+      visible: Schema.Boolean,
+    }),
+  ),
+});
+export type ManageSpeakerOnboardingInput = typeof ManageSpeakerOnboardingInput.Type;
+
+export const ManageSpeakerOnboardingOutput = Schema.Union(
+  Schema.Struct({ action: Schema.Literal("createTask"), result: PortalTaskDefinition }),
+  Schema.Struct({ action: Schema.Literal("updateTask"), result: PortalTaskDefinition }),
+  Schema.Struct({ action: Schema.Literal("deleteTask"), result: DeletePortalEntityOutput }),
+  Schema.Struct({ action: Schema.Literal("provisionSpeaker"), result: SpeakerDirectoryItem }),
+  Schema.Struct({ action: Schema.Literal("setSpeakerPublication"), result: SpeakerProfile }),
+);
+export type ManageSpeakerOnboardingOutput = typeof ManageSpeakerOnboardingOutput.Type;
+
 export const PublicPortalEvent = PortalEvent;
 export type PublicPortalEvent = typeof PublicPortalEvent.Type;
 
@@ -321,6 +377,3 @@ export const PublicSpeakerGallery = Schema.Struct({
   speakers: Schema.Array(PublicSpeaker),
 });
 export type PublicSpeakerGallery = typeof PublicSpeakerGallery.Type;
-
-export const DeletePortalEntityOutput = Schema.Struct({ id: EntityId });
-export type DeletePortalEntityOutput = typeof DeletePortalEntityOutput.Type;

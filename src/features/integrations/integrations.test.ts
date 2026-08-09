@@ -371,12 +371,14 @@ describe("Accelevents transport and route contracts", () => {
       input: { path: ["idOrSlug"] },
     });
     expect(getAcceleventsImportStatusOperation.mcp.name).toBe("get_accelevents_import_status");
+    expect(getAcceleventsImportStatusOperation.mcp.scopes).toEqual(["integrations:read"]);
     expect(runAcceleventsImportOperation.rest).toMatchObject({
       method: "post",
       path: "/events/:idOrSlug/integrations/accelevents/imports",
       input: { path: ["idOrSlug"], body: ["idempotencyKey"] },
     });
     expect(runAcceleventsImportOperation.mcp.name).toBe("run_accelevents_import");
+    expect(runAcceleventsImportOperation.mcp.scopes).toEqual(["integrations:write"]);
     expect(runAcceleventsImportOperation.idempotency).toBe("required");
     expect(configureAcceleventsOperation.rest).toMatchObject({
       method: "put",

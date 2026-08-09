@@ -1,6 +1,6 @@
 import type { AppError } from "./errors";
 import type { EventType, JsonObject, OperationId } from "./domain";
-import type { AuthorizationPolicy } from "./principal";
+import type { ApiScope, AuthorizationPolicy } from "./principal";
 import type { HttpMethod, RestInputLocations } from "./routes";
 import type { Effect, Schema } from "effect";
 
@@ -16,6 +16,8 @@ export interface RestOperationMetadata {
 export interface McpOperationMetadata {
   readonly name: string;
   readonly description: string;
+  /** Required only when the operation's authorization policy cannot declare API-key scopes directly. */
+  readonly scopes?: readonly [ApiScope, ...ApiScope[]];
 }
 
 export interface PartyOperationMetadata {

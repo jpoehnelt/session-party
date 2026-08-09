@@ -16,6 +16,8 @@ import {
   PortalTask,
   PortalTaskDefinition,
   PortalTaskDefinitions,
+  ManageSpeakerOnboardingInput,
+  ManageSpeakerOnboardingOutput,
   ProvisionSpeakerInput,
   PublicSpeakerGallery,
   PublicSpeakersInput,
@@ -30,6 +32,7 @@ import {
   UploadPortalAssetInput,
   UploadPortalAssetOutput,
 } from "./schema";
+import { Effect } from "effect";
 import {
   createPortalResource,
   createPortalTask,
@@ -81,6 +84,34 @@ const organizerContentWrite = eventAuthorization(
   { kind: "api-key", scopes: ["content:write"] },
 );
 
+const manageSpeakerOnboarding = (
+  input: typeof ManageSpeakerOnboardingInput.Type,
+) => {
+  const { eventId, action } = input;
+  switch (action.type) {
+    case "createTask":
+      return createPortalTask({ eventId, ...action }).pipe(
+        Effect.map((result) => ({ action: "createTask" as const, result })),
+      );
+    case "updateTask":
+      return updatePortalTask({ eventId, ...action }).pipe(
+        Effect.map((result) => ({ action: "updateTask" as const, result })),
+      );
+    case "deleteTask":
+      return deletePortalTask({ eventId, ...action }).pipe(
+        Effect.map((result) => ({ action: "deleteTask" as const, result })),
+      );
+    case "provisionSpeaker":
+      return provisionSpeaker({ eventId, ...action }).pipe(
+        Effect.map((result) => ({ action: "provisionSpeaker" as const, result })),
+      );
+    case "setSpeakerPublication":
+      return updateSpeakerPublication({ eventId, ...action }).pipe(
+        Effect.map((result) => ({ action: "setSpeakerPublication" as const, result })),
+      );
+  }
+};
+
 const createResourceOperation = {
   id: "portal.createResource",
   kind: "command",
@@ -103,7 +134,6 @@ const createTaskOperation = {
   authorize: organizerSpeakerWrite,
   invoke: createPortalTask,
   rest: { method: "post", path: "/events/:eventId/portal/tasks", input: { path: ["eventId"], body: ["name", "description", "kind", "formId", "dueAt", "order"] }, summary: "Create an onboarding task", successStatus: 201 },
-  mcp: { name: "portal_create_task", description: "Create a versioned speaker onboarding task for one event." },
   idempotency: "none",
   concurrency: "none",
   emits: ["portal.task.created"],
@@ -131,7 +161,6 @@ const deleteTaskOperation = {
   authorize: organizerSpeakerWrite,
   invoke: deletePortalTask,
   rest: { method: "delete", path: "/events/:eventId/portal/tasks/:taskId", input: { path: ["eventId", "taskId"], body: ["expectedVersion"] }, summary: "Delete an onboarding task", successStatus: 200 },
-  mcp: { name: "portal_delete_task", description: "Delete one versioned speaker onboarding task and its persisted completions." },
   idempotency: "none",
   concurrency: "required",
   emits: ["portal.task.deleted"],
@@ -173,7 +202,6 @@ const getPublicSpeakersOperation = {
   authorize: publicAuthorization,
   invoke: getPublicSpeakers,
   rest: { method: "get", path: "/public/events/:eventSlug/speakers", input: { path: ["eventSlug"] }, summary: "Load privacy-filtered public speakers", successStatus: 200 },
-  mcp: { name: "portal_get_public_speakers", description: "Return only visible, accepted, provisioned public speaker fields for an event." },
   idempotency: "none",
   concurrency: "none",
   emits: [],
@@ -206,6 +234,28 @@ const listResourcesOperation = {
   emits: [],
 } as const satisfies AnyOperationDef;
 
+const manageOnboardingOperation = {
+  id: "portal.manageOnboarding",
+  kind: "command",
+  input: ManageSpeakerOnboardingInput,
+  output: ManageSpeakerOnboardingOutput,
+  authorize: organizerSpeakerWrite,
+  invoke: manageSpeakerOnboarding,
+  mcp: {
+    name: "manage_speaker_onboarding",
+    description: "Create, update, or delete onboarding tasks; provision an accepted speaker; or control speaker publication.",
+  },
+  idempotency: "none",
+  concurrency: "required",
+  emits: [
+    "portal.task.created",
+    "portal.task.updated",
+    "portal.task.deleted",
+    "portal.speaker.provisioned",
+    "portal.speaker.publication.updated",
+  ],
+} as const satisfies AnyOperationDef;
+
 const listTasksOperation = {
   id: "portal.listTasks",
   kind: "query",
@@ -228,7 +278,6 @@ const provisionSpeakerOperation = {
   authorize: organizerSpeakerWrite,
   invoke: provisionSpeaker,
   rest: { method: "post", path: "/events/:eventId/portal/speakers/:speakerId/provision", input: { path: ["eventId", "speakerId"], body: ["provisioningId", "expectedVersion"] }, summary: "Provision an accepted user-linked speaker", successStatus: 200 },
-  mcp: { name: "portal_provision_speaker", description: "Transition an accepted user-linked speaker provisioning record to provisioned." },
   idempotency: "none",
   concurrency: "required",
   emits: ["portal.speaker.provisioned"],
@@ -282,7 +331,6 @@ const updateSpeakerPublicationOperation = {
   authorize: organizerSpeakerWrite,
   invoke: updateSpeakerPublication,
   rest: { method: "put", path: "/events/:eventId/portal/speakers/:speakerId/publication", input: { path: ["eventId", "speakerId"], body: ["expectedVersion", "visible"] }, summary: "Toggle speaker public publication", successStatus: 200 },
-  mcp: { name: "portal_update_speaker_publication", description: "Set the privacy publication flag for a versioned event speaker." },
   idempotency: "none",
   concurrency: "required",
   emits: ["portal.speaker.publication.updated"],
@@ -296,7 +344,6 @@ const updateTaskOperation = {
   authorize: organizerSpeakerWrite,
   invoke: updatePortalTask,
   rest: { method: "put", path: "/events/:eventId/portal/tasks/:taskId", input: { path: ["eventId", "taskId"], body: ["expectedVersion", "name", "description", "kind", "formId", "dueAt", "order"] }, summary: "Update an onboarding task", successStatus: 200 },
-  mcp: { name: "portal_update_task", description: "Update a versioned speaker onboarding task." },
   idempotency: "none",
   concurrency: "required",
   emits: ["portal.task.updated"],
@@ -328,6 +375,7 @@ export const operations = [
   getSnapshotOperation,
   listResourcesOperation,
   listTasksOperation,
+  manageOnboardingOperation,
   provisionSpeakerOperation,
   setTaskCompletionOperation,
   updateProfileOperation,

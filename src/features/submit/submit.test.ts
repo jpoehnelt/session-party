@@ -507,7 +507,6 @@ describe("submit operation descriptors", () => {
       ["put", "/events/by-slug/:eventSlug/my-submissions/:submissionId/abstract"],
     ]);
     expect(operations.filter((operation) => "mcp" in operation).map((operation) => operation.mcp.name)).toEqual([
-      "submit_get_public_form",
       "submit_list",
     ]);
   });
