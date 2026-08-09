@@ -6,7 +6,7 @@ import { validReturnTo } from "./return-to";
 
 export default function LoginPage() {
   const { search } = useLocation();
-  const returnTo = validReturnTo(search);
+  const returnTo = validReturnTo(search) ?? "/events";
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string>();
@@ -20,7 +20,7 @@ export default function LoginPage() {
     try {
       await apiFetch("/api/v1/auth/request-link", {
         method: "POST",
-        body: { email, ...(returnTo ? { returnTo } : {}) },
+        body: { email, returnTo },
       });
       setSubmitted(true);
     } catch (cause) {

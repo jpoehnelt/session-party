@@ -46,7 +46,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
         <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-lg font-semibold tracking-tight`} to="/" onClick={onNavigate}>
           Session Party
         </Link>
-        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-sm font-medium`} to="/" onClick={onNavigate}>
+        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-sm font-medium`} to="/events" onClick={onNavigate}>
           Events
         </Link>
       </nav>
@@ -58,6 +58,13 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
     <nav className={navClassName} aria-label="Event navigation">
       <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-lg font-semibold tracking-tight`} to="/" onClick={onNavigate}>
         Session Party
+      </Link>
+      <Link
+        className={`${mobile ? "flex min-h-11 items-center" : "block"} rounded-md px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint hover:bg-surface-muted hover:text-ink`}
+        to="/events"
+        onClick={onNavigate}
+      >
+        ← All events
       </Link>
       <div className="space-y-1">
         {navItems.map(({ label, segment }) => {
@@ -115,7 +122,7 @@ function Topbar({
     try {
       await apiFetch("/api/v1/auth/logout", { method: "POST" });
     } finally {
-      navigate("/login");
+      navigate("/");
     }
   }
 

@@ -1,0 +1,28 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server.edge";
+import { MemoryRouter } from "react-router";
+import { describe, expect, it } from "vitest";
+import EventsHome, { path as eventsPath } from "./events-home";
+import LandingPage, { layout, path } from "./landing";
+
+describe("public landing route", () => {
+  it("owns the bare root route while the authenticated workspace lives at /events", () => {
+    expect(path).toBe("/");
+    expect(layout).toBe("bare");
+    expect(eventsPath).toBe("/events");
+    expect(EventsHome).toBeTypeOf("function");
+  });
+
+  it("renders a public product story with explicit workspace and sign-in paths", () => {
+    const markup = renderToStaticMarkup(
+      createElement(MemoryRouter, null, createElement(LandingPage)),
+    );
+
+    expect(markup).toContain("Your whole program");
+    expect(markup).toContain("One connected workflow");
+    expect(markup).toContain("Production, not busywork");
+    expect(markup).toContain('href="/events"');
+    expect(markup).toContain('href="/login?returnTo=%2Fevents"');
+    expect(markup).not.toContain("Create event");
+  });
+});
