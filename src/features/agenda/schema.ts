@@ -70,6 +70,7 @@ export const PublicationSummary = Schema.Struct({
 });
 export type PublicationSummary = typeof PublicationSummary.Type;
 
+const ExpectedVersion = Schema.Int.pipe(Schema.positive());
 export const AgendaSnapshot = Schema.Struct({
   eventId: EntityId,
   eventName: Schema.String,
@@ -77,6 +78,7 @@ export const AgendaSnapshot = Schema.Struct({
   timezone: Schema.String,
   view: AgendaView,
   workspaceVersion: Schema.Int.pipe(Schema.nonNegative()),
+  eventVersion: ExpectedVersion,
   tracks: Schema.Array(Track),
   rooms: Schema.Array(Room),
   backlog: Schema.Array(BacklogProposal),
@@ -93,7 +95,6 @@ export const ListAgendaInput = Schema.Struct({
 export type ListAgendaInput = typeof ListAgendaInput.Type;
 
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(200));
-const ExpectedVersion = Schema.Int.pipe(Schema.positive());
 const DurationMinutes = Schema.Int.pipe(Schema.between(5, 480));
 const NullableEntityId = Schema.Union(EntityId, Schema.Null);
 const NullableTimestamp = Schema.Union(UnixTimestampMs, Schema.Null);
@@ -178,6 +179,7 @@ export const PublishAgendaInput = Schema.Struct({
   eventId: EntityId,
   expectedRevision: Schema.Int.pipe(Schema.nonNegative()),
   expectedWorkspaceVersion: Schema.Int.pipe(Schema.nonNegative()),
+  expectedEventVersion: ExpectedVersion,
   idempotencyKey: IdempotencyKey,
 });
 export type PublishAgendaInput = typeof PublishAgendaInput.Type;

@@ -116,6 +116,7 @@ const baseSnapshot = (overrides: Partial<AgendaSnapshot> = {}): AgendaSnapshot =
   timezone: "America/Los_Angeles",
   view: "day",
   workspaceVersion: 0,
+  eventVersion: 1,
   tracks: [...deterministicTracks],
   rooms: [...deterministicRooms],
   backlog: [],

@@ -44,6 +44,7 @@ const IDEMPOTENCY_TTL_MS = DAY_MS;
 const PRIVATE_AUDIENCE = [{ kind: "admins" }] as const;
 const PUBLIC_AUDIENCE = [{ kind: "public" }] as const;
 const TALK_CHANGE_EVENT = "agenda.talk_changed";
+const AGENDA_SNAPSHOT_MAX_ATTEMPTS = 3;
 const PUBLICATION_EVENT = "agenda/published";
 
 type Principal = CurrentUserValue;
@@ -67,9 +68,21 @@ export type AgendaMutationInterlock = (
   reservation: AgendaMutationReservation,
 ) => Effect.Effect<void, never>;
 
+export interface AgendaSnapshotReservation {
+  readonly eventId: string;
+  readonly workspaceVersion: number;
+  readonly attempt: number;
+}
+
+/** Feature-local deterministic snapshot seam; transport operations never provide it. */
+export type AgendaSnapshotInterlock = (
+  reservation: AgendaSnapshotReservation,
+) => Effect.Effect<void, never>;
+
 export interface AgendaPublicationReservation {
   readonly eventId: string;
   readonly expectedWorkspaceVersion: number;
+  readonly expectedEventVersion: number;
   readonly nextRevision: number;
 }
 
@@ -385,37 +398,49 @@ const nextWorkspaceVersion = (eventId: string): Effect.Effect<number, AppError, 
   currentWorkspaceVersion(eventId).pipe(Effect.map((version) => version + 1));
 export const listAgenda = (
   input: ListAgendaInput,
+  interlock?: AgendaSnapshotInterlock,
 ): Effect.Effect<AgendaSnapshot, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const event = yield* getEvent(input.eventId);
-    const [trackRows, roomRows, backlog, agendaTalks, published, workspaceVersion] = yield* Effect.all([
-      database(() => db.select().from(tracks).where(eq(tracks.eventId, input.eventId)).orderBy(asc(tracks.order), asc(tracks.name))),
-      database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name))),
-      loadBacklog(input.eventId),
-      loadTalkRows(input.eventId),
-      latestPublication(input.eventId),
-      currentWorkspaceVersion(input.eventId),
-    ]);
-    const conflicts = yield* loadConflicts(input.eventId, agendaTalks);
-    return {
-      eventId: event.id,
-      eventName: event.name,
-      eventSlug: event.slug,
-      timezone: event.timezone,
-      view: input.view,
-      workspaceVersion,
-      tracks: trackRows.map((track) => ({ id: track.id, name: track.name, color: track.color, order: track.order })),
-      rooms: roomRows.map((room) => ({ id: room.id, name: room.name, capacity: room.capacity, order: room.order })),
-      backlog,
-      talks: agendaTalks,
-      conflicts,
-      publication: {
-        revision: published?.revision ?? 0,
-        publishedAt: published?.publishedAt ?? null,
-        talkCount: published?.talks.length ?? 0,
-      },
-    };
+    for (let attempt = 1; attempt <= AGENDA_SNAPSHOT_MAX_ATTEMPTS; attempt += 1) {
+      const workspaceVersion = yield* currentWorkspaceVersion(input.eventId);
+      const event = yield* getEvent(input.eventId);
+      const [trackRows, roomRows, backlog, agendaTalks, published] = yield* Effect.all([
+        database(() => db.select().from(tracks).where(eq(tracks.eventId, input.eventId)).orderBy(asc(tracks.order), asc(tracks.name))),
+        database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name))),
+        loadBacklog(input.eventId),
+        loadTalkRows(input.eventId),
+        latestPublication(input.eventId),
+      ]);
+      const conflicts = yield* loadConflicts(input.eventId, agendaTalks);
+      if (interlock) {
+        yield* interlock({ eventId: input.eventId, workspaceVersion, attempt });
+      }
+      const confirmedWorkspaceVersion = yield* currentWorkspaceVersion(input.eventId);
+      if (confirmedWorkspaceVersion !== workspaceVersion) continue;
+      return {
+        eventId: event.id,
+        eventName: event.name,
+        eventSlug: event.slug,
+        timezone: event.timezone,
+        view: input.view,
+        workspaceVersion,
+        eventVersion: event.version,
+        tracks: trackRows.map((track) => ({ id: track.id, name: track.name, color: track.color, order: track.order })),
+        rooms: roomRows.map((room) => ({ id: room.id, name: room.name, capacity: room.capacity, order: room.order })),
+        backlog,
+        talks: agendaTalks,
+        conflicts,
+        publication: {
+          revision: published?.revision ?? 0,
+          publishedAt: published?.publishedAt ?? null,
+          talkCount: published?.talks.length ?? 0,
+        },
+      };
+    }
+    return yield* Effect.fail(new Conflict({
+      message: "Agenda changed repeatedly while loading; refresh and try again",
+    }));
   });
 
 const prepareIdempotency = <A extends { readonly idempotencyKey: string }>(
@@ -876,6 +901,11 @@ export const publishAgenda = (
         message: `Agenda workspace version is ${workspaceVersion}; expected ${input.expectedWorkspaceVersion}`,
       }));
     }
+    if (event.version !== input.expectedEventVersion) {
+      return yield* Effect.fail(new Conflict({
+        message: `Event version is ${event.version}; expected ${input.expectedEventVersion}`,
+      }));
+    }
     const [agendaTalks, trackRows, roomRows, visibleSpeakerRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
       database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(eq(tracks.eventId, input.eventId))),
@@ -930,6 +960,7 @@ export const publishAgenda = (
         eventId: input.eventId,
         expectedWorkspaceVersion: input.expectedWorkspaceVersion,
         nextRevision: published.revision,
+        expectedEventVersion: input.expectedEventVersion,
       });
     }
     const actor = actorColumns(principal);
@@ -952,6 +983,11 @@ export const publishAgenda = (
             and ${domainChanges.aggregateId} = ${input.eventId}
             and ${domainChanges.eventType} = ${TALK_CHANGE_EVENT}
         ), 0) = ${input.expectedWorkspaceVersion}
+          and (
+            select ${events.version}
+            from ${events}
+            where ${events.id} = ${input.eventId}
+          ) = ${input.expectedEventVersion}
           then ${prepared.now.getTime()}
           else null
         end`,
