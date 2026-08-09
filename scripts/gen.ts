@@ -2,7 +2,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import type { JsonObject, JsonValue, OperationId } from "../contracts/domain";
+import type { JsonObject, JsonValue } from "../contracts/domain";
 import type { AnyOperationDef, RegistryOwnershipManifest } from "../contracts/operation";
 import { HTTP_METHODS, type OpenApiDocument, type RestInputLocations } from "../contracts/routes";
 import { JSONSchema } from "effect";
@@ -14,6 +14,8 @@ const camelCase = /^[a-z][A-Za-z0-9]*$/;
 const operationId = /^[a-z][a-z0-9-]*\.[a-z][a-zA-Z0-9-]*$/;
 const mcpName = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const partyIntent = /^[a-z][a-z0-9-]*\/[a-z][a-zA-Z0-9-]*$/;
+const isJsonObject = (value: JsonValue): value is JsonObject =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const bytewise = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 const exists = async (file: string): Promise<boolean> =>
@@ -50,9 +52,9 @@ const assertCamelCaseSchema = (schema: JsonValue, owner: string): void => {
     for (const value of schema) assertCamelCaseSchema(value, owner);
     return;
   }
-  if (!schema || typeof schema !== "object") return;
+  if (!isJsonObject(schema)) return;
   const properties = schema.properties;
-  if (properties && typeof properties === "object" && !Array.isArray(properties)) {
+  if (properties && isJsonObject(properties)) {
     for (const name of Object.keys(properties)) {
       if (!camelCase.test(name)) fail(`${owner} has non-camelCase wire field '${name}'`);
     }
@@ -156,8 +158,10 @@ const ownedOperations: OwnedOperation[] = [];
 for (const file of files.filter((candidate) => candidate.operations)) {
   const source = `src/features/${file.slice}/operations.ts`;
   const module = (await import(pathToFileURL(path.join(root, source)).href)) as { operations?: unknown };
-  if (!Array.isArray(module.operations)) fail(`${source} must export an operations array`);
-  for (const [exportIndex, candidate] of module.operations.entries()) {
+  const operations = module.operations;
+  if (!Array.isArray(operations)) fail(`${source} must export an operations array`);
+  const operationList = operations as unknown[];
+  for (const [exportIndex, candidate] of operationList.entries()) {
     if (!candidate || typeof candidate !== "object") fail(`${source} operations[${exportIndex}] is invalid`);
     const operation = candidate as AnyOperationDef;
     if (typeof operation.id !== "string" || !operationId.test(operation.id)) {
@@ -176,10 +180,10 @@ for (const file of files.filter((candidate) => candidate.operations)) {
       fail(`${operation.id} has invalid concurrency metadata`);
     }
     if (!Array.isArray(operation.emits)) fail(`${operation.id} has invalid emitted events`);
-    const inputSchema = JSONSchema.make(operation.input, { target: "jsonSchema2020-12" }) as JsonObject;
-    const outputSchema = JSONSchema.make(operation.output, { target: "jsonSchema2020-12" }) as JsonObject;
-    const openApiInputSchema = JSONSchema.make(operation.input, { target: "openApi3.1" }) as JsonObject;
-    const openApiOutputSchema = JSONSchema.make(operation.output, { target: "openApi3.1" }) as JsonObject;
+    const inputSchema = JSONSchema.make(operation.input, { target: "jsonSchema2020-12" }) as unknown as JsonObject;
+    const outputSchema = JSONSchema.make(operation.output, { target: "jsonSchema2020-12" }) as unknown as JsonObject;
+    const openApiInputSchema = JSONSchema.make(operation.input, { target: "openApi3.1" }) as unknown as JsonObject;
+    const openApiOutputSchema = JSONSchema.make(operation.output, { target: "openApi3.1" }) as unknown as JsonObject;
     assertCamelCaseSchema(inputSchema, operation.id);
     assertCamelCaseSchema(outputSchema, operation.id);
     ownedOperations.push({
@@ -231,7 +235,7 @@ const restRegistrations = ownedOperations.flatMap(({ operation }) =>
         method: operation.rest.method,
         path: operation.rest.path,
         input: operation.rest.input,
-        successStatus: operation.rest.successStatus ?? (operation.kind === "command" ? 200 : 200),
+        successStatus: operation.rest.successStatus ?? 200,
       }]
     : [],
 );
@@ -280,7 +284,7 @@ for (const owned of ownedOperations.filter(({ operation }) => operation.rest)) {
       schema: propertySchema(owned.openApiInputSchema, field),
     });
   }
-  for (const [field, header] of Object.entries(rest.input.headers ?? {})) {
+  for (const [field, header] of Object.entries(rest.input.headers ?? {}).sort(([left], [right]) => bytewise(left, right))) {
     const required = Array.isArray(owned.openApiInputSchema.required) && owned.openApiInputSchema.required.includes(field);
     parameters.push({
       name: header,
@@ -329,15 +333,15 @@ const openApi: OpenApiDocument = {
 
 const imports: string[] = [];
 for (const file of files) {
-  if (file.api) imports.push(`import ${file.id}Api from "../features/${file.slice}/api";`);
-  if (file.tools) imports.push(`import { tools as ${file.id}Tools } from "../features/${file.slice}/tools";`);
-  if (file.party) imports.push(`import { handlers as ${file.id}Handlers } from "../features/${file.slice}/party";`);
+  if (file.api && !file.operations) imports.push(`import ${file.id}Api from "../features/${file.slice}/api";`);
+  if (file.tools && !file.operations) imports.push(`import { tools as ${file.id}Tools } from "../features/${file.slice}/tools";`);
+  if (file.party && !file.operations) imports.push(`import { handlers as ${file.id}Handlers } from "../features/${file.slice}/party";`);
   if (file.operations) imports.push(`import { operations as ${file.id}Operations } from "../features/${file.slice}/operations";`);
 }
 const operationEntries = ownedOperations.map(({ owner, exportIndex }) => `${identifier(owner)}Operations[${exportIndex}]`);
-const apiEntries = files.filter((file) => file.api).map((file) => `${file.id}Api`);
-const toolEntries = files.filter((file) => file.tools).map((file) => `...${file.id}Tools`);
-const partyEntries = files.filter((file) => file.party).map((file) => `...${file.id}Handlers`);
+const apiEntries = files.filter((file) => file.api && !file.operations).map((file) => `${file.id}Api`);
+const toolEntries = files.filter((file) => file.tools && !file.operations).map((file) => `...${file.id}Tools`);
+const partyEntries = files.filter((file) => file.party && !file.operations).map((file) => `...${file.id}Handlers`);
 const generated = `${imports.length ? `${imports.join("\n")}\n` : ""}import type { McpToolDescriptor, ToolDef } from "contracts/mcp";
 import type { AnyOperationDef, PartyIntentDescriptor, RegistryOwnershipManifest } from "contracts/operation";
 import type { OpenApiDocument, RestRegistrationDescriptor } from "contracts/routes";
@@ -345,23 +349,23 @@ import type { Hono } from "hono";
 import type { PartyHandler } from "./party/types";
 
 // Generated by scripts/gen.ts. Do not edit by hand.
-export const operations = [${operationEntries.join(", ")}] as const satisfies readonly AnyOperationDef[];
+export const operations: readonly AnyOperationDef[] = [${operationEntries.join(", ")}];
 
 export const operationById = Object.fromEntries(
   operations.map((operation) => [operation.id, operation]),
 ) as Readonly<Record<string, AnyOperationDef>>;
 
-export const restRegistrations = ${stableJson(restRegistrations as unknown as JsonValue, 2)} as const satisfies readonly RestRegistrationDescriptor[];
+export const restRegistrations: readonly RestRegistrationDescriptor[] = ${stableJson(restRegistrations as unknown as JsonValue, 2)};
 
-export const mcpTools = ${stableJson(mcpTools as unknown as JsonValue, 2)} as const satisfies readonly McpToolDescriptor[];
+export const mcpTools: readonly McpToolDescriptor[] = ${stableJson(mcpTools as unknown as JsonValue, 2)};
 
-export const partyIntents = ${stableJson(partyIntents as unknown as JsonValue, 2)} as const satisfies readonly PartyIntentDescriptor[];
+export const partyIntents: readonly PartyIntentDescriptor[] = ${stableJson(partyIntents as unknown as JsonValue, 2)};
 
 export const openApi = ${stableJson(openApi, 2)} as const satisfies OpenApiDocument;
 
 export const ownershipManifest = ${stableJson(ownershipManifest as unknown as JsonValue, 2)} as const satisfies RegistryOwnershipManifest;
 
-// Compatibility exports retained until the canonical events OperationDefs land.
+// Compatibility exports include only slices that have not cut over to OperationDefs.
 export const apiRouters: readonly Hono<{ Bindings: Env }>[] = [${apiEntries.join(", ")}];
 export const tools: readonly ToolDef[] = [${toolEntries.join(", ")}];
 export const partyHandlers: Readonly<Record<string, PartyHandler>> = {${partyEntries.join(", ")}};

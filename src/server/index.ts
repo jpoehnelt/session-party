@@ -17,7 +17,7 @@ import {
   restRegistrations,
   tools,
 } from "./registry.gen";
-import type { CurrentUserValue } from "./services";
+import { isExplicitLocalEnvironment, sessionSecret } from "./services";
 
 type JsonRpcId = string | number;
 type JsonRpcRequest = {
@@ -46,7 +46,6 @@ interface McpTransport {
 const isJsonRpcBatch = (
   message: JsonRpcRequest | readonly JsonRpcRequest[],
 ): message is readonly JsonRpcRequest[] => Array.isArray(message);
-
 
 type RequestHandler = (params: unknown) => Promise<unknown>;
 
@@ -167,7 +166,7 @@ const mcpTool = (tool: ToolDef) => {
 
 export class SessionPartyMcp extends McpAgent<Env> {
   private readonly protocol = new LowLevelMcpServer();
-  private currentUser: CurrentUserValue | null = null;
+  private currentUser: Principal | null = null;
   // McpAgent intentionally accepts an MCP SDK v1-compatible protocol object.
   override server = this.protocol as never;
 
@@ -196,7 +195,7 @@ export class SessionPartyMcp extends McpAgent<Env> {
         if (!operation) throw new Error(`Unregistered operation: ${descriptor.operationId}`);
         const result = await runTransportOperation(
           this.env,
-          this.currentUser as Principal,
+          this.currentUser,
           operation,
           args,
         );
@@ -243,6 +242,30 @@ for (const registration of restRegistrations) {
   );
 }
 for (const router of apiRouters) app.route(API, router);
+app.post("/__local/smoke", async (c) => {
+  if (!isExplicitLocalEnvironment(c.env)) return c.notFound();
+  if (c.req.header("x-local-smoke-secret") !== sessionSecret(c.env)) {
+    return c.json({ error: "Unauthenticated", message: "Local smoke secret required" }, 401);
+  }
+
+  const d1 = await c.env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
+  const objectKey = "local-smoke/probe.txt";
+  await c.env.FILES.put(objectKey, "local-smoke");
+  const object = await c.env.FILES.get(objectKey);
+  await c.env.FILES.delete(objectKey);
+
+  const schedulerId = c.env.SCHEDULER.idFromName("local-smoke");
+  const scheduler = await c.env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
+    method: "POST",
+    headers: { "x-session-party-internal": sessionSecret(c.env) },
+  });
+  return c.json({
+    mode: "local-fake",
+    d1: d1?.ok === 1,
+    r2: object !== null,
+    durableObject: scheduler.ok,
+  });
+});
 
 app.all("/parties/*", async (c) => {
   const response = await routePartykitRequest(c.req.raw, c.env);

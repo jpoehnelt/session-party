@@ -27,7 +27,7 @@ export const ApiScope = Schema.Literal(
 export type ApiScope = typeof ApiScope.Type;
 
 /** Runtime decoder for the JSON array stored in api_keys.scopes. */
-export const ApiScopes = Schema.Array(ApiScope);
+export const ApiScopes = Schema.NonEmptyArray(ApiScope);
 
 export interface BrowserSessionPrincipal {
   readonly kind: "browser-session";
