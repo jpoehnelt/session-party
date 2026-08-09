@@ -33,5 +33,5 @@
     "APP_URL": "https://session-party.justin-poehnelt.workers.dev",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>"
   }
-  // Secrets (wrangler secret put): SESSION_SECRET
+  // Secrets (wrangler secret put): SESSION_SECRET, ACCELEVENTS_API_TOKEN
 }

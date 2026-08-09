@@ -833,6 +833,179 @@ export const integrations = sqliteTable(
   ],
 );
 
+export const acceleventsExternalIdentities = sqliteTable(
+  "accelevents_external_identities",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    integrationId: text("integration_id").notNull(),
+    sourceEventId: text("source_event_id").notNull(),
+    entityType: text("entity_type", { enum: ["speaker", "talk"] }).notNull(),
+    externalId: text("external_id").notNull(),
+    entityId: text("entity_id").notNull(),
+    speakerId: text("speaker_id"),
+    talkId: text("talk_id"),
+    sourceHash: text("source_hash").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("accelevents_identities_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("accelevents_identities_source_unique").on(
+      t.eventId,
+      t.integrationId,
+      t.sourceEventId,
+      t.entityType,
+      t.externalId,
+    ),
+    uniqueIndex("accelevents_identities_local_unique").on(
+      t.eventId,
+      t.integrationId,
+      t.sourceEventId,
+      t.entityType,
+      t.entityId,
+    ),
+    index("accelevents_identities_integration").on(
+      t.eventId,
+      t.integrationId,
+      t.sourceEventId,
+      t.entityType,
+    ),
+    foreignKey({
+      columns: [t.eventId, t.integrationId],
+      foreignColumns: [integrations.eventId, integrations.id],
+      name: "accelevents_identities_integration_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.speakerId],
+      foreignColumns: [speakers.eventId, speakers.id],
+      name: "accelevents_identities_speaker_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    foreignKey({
+      columns: [t.eventId, t.talkId],
+      foreignColumns: [talks.eventId, talks.id],
+      name: "accelevents_identities_talk_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    check("accelevents_identities_entity_type", sql`${t.entityType} in ('speaker', 'talk')`),
+    check(
+      "accelevents_identities_entity_owner",
+      sql`(
+        ${t.entityType} = 'speaker'
+        and ${t.speakerId} = ${t.entityId}
+        and ${t.talkId} is null
+      ) or (
+        ${t.entityType} = 'talk'
+        and ${t.speakerId} is null
+        and ${t.talkId} = ${t.entityId}
+      )`,
+    ),
+    check("accelevents_identities_source_event_nonempty", sql`length(${t.sourceEventId}) > 0`),
+    check("accelevents_identities_external_nonempty", sql`length(${t.externalId}) > 0`),
+    check("accelevents_identities_hash_length", sql`length(${t.sourceHash}) = 64`),
+  ],
+);
+
+export const acceleventsImportRuns = sqliteTable(
+  "accelevents_import_runs",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    integrationId: text("integration_id").notNull(),
+    sourceEventId: text("source_event_id").notNull(),
+    eventUrl: text("event_url").notNull(),
+    mode: text("mode", { enum: ["fixture", "live"] }).notNull(),
+    status: text("status", { enum: ["running", "succeeded", "partial", "failed"] }).notNull(),
+    totalCount: integer("total_count").notNull().default(0),
+    createdCount: integer("created_count").notNull().default(0),
+    updatedCount: integer("updated_count").notNull().default(0),
+    unchangedCount: integer("unchanged_count").notNull().default(0),
+    failedCount: integer("failed_count").notNull().default(0),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+  },
+  (t) => [
+    uniqueIndex("accelevents_runs_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("accelevents_runs_parent_unique").on(t.eventId, t.integrationId, t.id),
+    index("accelevents_runs_latest").on(t.eventId, t.integrationId, t.startedAt, t.id),
+    foreignKey({
+      columns: [t.eventId, t.integrationId],
+      foreignColumns: [integrations.eventId, integrations.id],
+      name: "accelevents_runs_integration_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    check("accelevents_runs_mode", sql`${t.mode} in ('fixture', 'live')`),
+    check("accelevents_runs_status", sql`${t.status} in ('running', 'succeeded', 'partial', 'failed')`),
+    check("accelevents_runs_source_event_nonempty", sql`length(${t.sourceEventId}) > 0`),
+    check("accelevents_runs_event_url_nonempty", sql`length(${t.eventUrl}) > 0`),
+    check(
+      "accelevents_runs_counts",
+      sql`${t.totalCount} >= 0
+        and ${t.createdCount} >= 0
+        and ${t.updatedCount} >= 0
+        and ${t.unchangedCount} >= 0
+        and ${t.failedCount} >= 0
+        and ${t.totalCount} = ${t.createdCount} + ${t.updatedCount} + ${t.unchangedCount} + ${t.failedCount}`,
+    ),
+    check(
+      "accelevents_runs_completion",
+      sql`(${t.status} = 'running' and ${t.completedAt} is null)
+        or (${t.status} <> 'running' and ${t.completedAt} is not null)`,
+    ),
+    check(
+      "accelevents_runs_error_shape",
+      sql`(${t.status} = 'failed' and ${t.errorCode} is not null and ${t.errorDetail} is not null)
+        or (${t.status} <> 'failed' and ${t.errorCode} is null and ${t.errorDetail} is null)`,
+    ),
+  ],
+);
+
+export const acceleventsImportItems = sqliteTable(
+  "accelevents_import_items",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    integrationId: text("integration_id").notNull(),
+    runId: text("run_id").notNull(),
+    order: integer("item_order").notNull(),
+    entityType: text("entity_type", { enum: ["speaker", "talk"] }).notNull(),
+    externalId: text("external_id").notNull(),
+    action: text("action", { enum: ["created", "updated", "unchanged", "failed"] }).notNull(),
+    localId: text("local_id"),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("accelevents_items_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("accelevents_items_order_unique").on(t.eventId, t.runId, t.order),
+    index("accelevents_items_run").on(t.eventId, t.integrationId, t.runId, t.order),
+    foreignKey({
+      columns: [t.eventId, t.integrationId, t.runId],
+      foreignColumns: [
+        acceleventsImportRuns.eventId,
+        acceleventsImportRuns.integrationId,
+        acceleventsImportRuns.id,
+      ],
+      name: "accelevents_items_run_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    check("accelevents_items_entity_type", sql`${t.entityType} in ('speaker', 'talk')`),
+    check("accelevents_items_action", sql`${t.action} in ('created', 'updated', 'unchanged', 'failed')`),
+    check("accelevents_items_order_nonnegative", sql`${t.order} >= 0`),
+    check("accelevents_items_external_nonempty", sql`length(${t.externalId}) > 0`),
+    check(
+      "accelevents_items_result_shape",
+      sql`(${t.action} = 'failed'
+        and ${t.localId} is null
+        and ${t.errorCode} is not null
+        and ${t.errorDetail} is not null)
+        or (${t.action} <> 'failed'
+        and ${t.localId} is not null
+        and ${t.errorCode} is null
+        and ${t.errorDetail} is null)`,
+    ),
+  ],
+);
+
 export const airtableRecordLinks = sqliteTable(
   "airtable_record_links",
   {

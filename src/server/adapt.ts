@@ -7,19 +7,27 @@ import type { Context } from "hono";
 import { sessionUser } from "./auth";
 import {
   AiService,
+  AcceleventsAdapter,
+  AcceleventsImports,
   AppLayer,
   Authorizer,
   CurrentUser,
   Db,
   Files,
   Mail,
+  MailQueue,
   Rooms,
+  SecretResolver,
 } from "./services";
 
 export type AppHono = { Bindings: Env };
 export type RuntimeServices =
   | Db
+  | SecretResolver
+  | AcceleventsAdapter
+  | AcceleventsImports
   | Mail
+  | MailQueue
   | Files
   | Rooms
   | AiService
