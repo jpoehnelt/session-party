@@ -1,4 +1,7 @@
-/** Joins truthy class fragments. Internal — not part of the kit's public API. */
-export function cx(...parts: Array<string | false | null | undefined>): string {
-  return parts.filter(Boolean).join(" ");
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+/** Merge conditional classes while resolving conflicting Tailwind utilities. */
+export function cx(...parts: ClassValue[]): string {
+  return twMerge(clsx(parts));
 }

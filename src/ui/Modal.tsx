@@ -1,9 +1,8 @@
-import { useRef, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { Dialog } from "radix-ui";
+import type { ReactNode } from "react";
 import { IconButton } from "./Button";
 import { cx } from "./cx";
 import { XIcon } from "./icons";
-import { useOverlay } from "./overlay";
 
 export interface ModalProps {
   open: boolean;
@@ -18,44 +17,35 @@ export interface ModalProps {
 const SIZES = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl" } as const;
 
 export function Modal({ open, onClose, title, children, footer, size = "md" }: ModalProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  useOverlay(open, onClose, panelRef);
-  if (!open) return null;
-
-  return createPortal(
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      <div
-        className="fixed inset-0 animate-fade-in bg-ink/40"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div className="flex min-h-full items-start justify-center p-4 pt-[10vh] sm:p-8 sm:pt-[12vh]">
-        <div
-          ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={title}
-          tabIndex={-1}
-          className={cx(
-            "relative w-full animate-slide-up rounded-card border border-line bg-surface shadow-pop outline-none",
-            SIZES[size],
-          )}
-        >
-          <header className="flex items-center justify-between gap-4 px-5 pb-3 pt-4">
-            <h2 className="text-base font-semibold text-ink">{title}</h2>
-            <IconButton aria-label="Close" size="sm" onClick={onClose} className="-mr-1.5">
-              <XIcon />
-            </IconButton>
-          </header>
-          <div className="px-5 pb-5">{children}</div>
-          {footer != null && (
-            <footer className="flex items-center justify-end gap-2 rounded-b-card border-t border-line bg-surface-muted/60 px-5 py-3.5">
-              {footer}
-            </footer>
-          )}
+  return (
+    <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 animate-fade-in bg-ink/40" />
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-[10vh] sm:p-8 sm:pt-[12vh]">
+          <Dialog.Content
+            aria-describedby={undefined}
+            className={cx(
+              "pointer-events-auto relative w-full animate-slide-up rounded-card border border-line bg-surface shadow-pop outline-none",
+              SIZES[size],
+            )}
+          >
+            <header className="flex items-center justify-between gap-4 px-5 pb-3 pt-4">
+              <Dialog.Title className="text-base font-semibold text-ink">{title}</Dialog.Title>
+              <Dialog.Close asChild>
+                <IconButton aria-label="Close" size="sm" className="-mr-1.5 min-h-11 min-w-11">
+                  <XIcon />
+                </IconButton>
+              </Dialog.Close>
+            </header>
+            <div className="px-5 pb-5">{children}</div>
+            {footer != null && (
+              <footer className="flex items-center justify-end gap-2 rounded-b-card border-t border-line bg-surface-muted/60 px-5 py-3.5">
+                {footer}
+              </footer>
+            )}
+          </Dialog.Content>
         </div>
-      </div>
-    </div>,
-    document.body,
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
