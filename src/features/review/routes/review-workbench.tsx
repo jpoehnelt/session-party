@@ -79,6 +79,37 @@ const reviewStateTone = {
   complete: "success",
 } as const;
 
+export function decideQueueInteraction(
+  interaction: "focus" | "open",
+  submissionId: string,
+  authoritativeSubmissionId: string | undefined,
+  pendingSubmissionId: string | undefined,
+): {
+  readonly focusedSubmissionId: string;
+  readonly loadSubmissionId: string | undefined;
+} {
+  if (interaction === "focus") return { focusedSubmissionId: submissionId, loadSubmissionId: undefined };
+  if (submissionId === authoritativeSubmissionId || submissionId === pendingSubmissionId) {
+    return { focusedSubmissionId: submissionId, loadSubmissionId: undefined };
+  }
+  return { focusedSubmissionId: submissionId, loadSubmissionId: submissionId };
+}
+
+export function selectVisibleFallback(
+  authoritativeSubmissionId: string | undefined,
+  pendingSubmissionId: string | undefined,
+  visibleSubmissionIds: readonly string[],
+): string | undefined {
+  const fallbackSubmissionId = visibleSubmissionIds[0];
+  if (!fallbackSubmissionId || visibleSubmissionIds.includes(authoritativeSubmissionId ?? "")) return undefined;
+  return decideQueueInteraction(
+    "open",
+    fallbackSubmissionId,
+    authoritativeSubmissionId,
+    pendingSubmissionId,
+  ).loadSubmissionId;
+}
+
 function LoadingWorkbench() {
   return (
     <main className="space-y-4 p-3 sm:p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
@@ -211,7 +242,7 @@ export function ReviewWorkbenchContent({
   readonly workbench: ReviewWorkbench;
   readonly onSelectSubmission: (submissionId: string) => void;
 }) {
-  const [selectedId, setSelectedId] = useState(workbench.selected?.id ?? workbench.queue[0]?.id ?? "");
+  const [focusedId, setFocusedId] = useState(workbench.selected?.id ?? workbench.queue[0]?.id ?? "");
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
   const [status, setStatus] = useState<SubmissionStatus | "all">("all");
@@ -220,9 +251,11 @@ export function ReviewWorkbenchContent({
   const searchRef = useRef<HTMLInputElement>(null);
   const detailRef = useRef<HTMLElement>(null);
   const queueButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const pendingSelectionRef = useRef<string | undefined>(undefined);
 
   const queue = workbench.queue;
-  const selected = workbench.selected?.id === selectedId ? workbench.selected : null;
+  const authoritativeSelectedId = workbench.selected?.id;
+  const selected = workbench.selected ?? null;
   const loadedRound = selected?.round
     ?? workbench.rounds.find((round) => round.status === "active")
     ?? workbench.rounds[0]
@@ -245,21 +278,58 @@ export function ReviewWorkbenchContent({
   );
 
   useEffect(() => {
-    const serverSelection = workbench.selected?.id ?? workbench.queue[0]?.id ?? "";
-    setSelectedId(serverSelection);
-  }, [workbench]);
+    setFocusedId((currentFocusedId) => {
+      if (queue.some((submission) => submission.id === currentFocusedId)) return currentFocusedId;
+      return authoritativeSelectedId ?? queue[0]?.id ?? "";
+    });
+  }, [authoritativeSelectedId, queue]);
 
   useEffect(() => {
-    if (visibleQueue.length === 0) {
-      setSelectedId("");
-    } else if (!visibleQueue.some((submission) => submission.id === selectedId)) {
-      setSelectedId(visibleQueue[0]!.id);
-    }
-  }, [selectedId, visibleQueue]);
+    if (pendingSelectionRef.current === authoritativeSelectedId) pendingSelectionRef.current = undefined;
+  }, [authoritativeSelectedId]);
 
-  const selectSubmission = (submissionId: string) => {
-    setSelectedId(submissionId);
-    onSelectSubmission(submissionId);
+  useEffect(() => {
+    const fallbackSubmissionId = selectVisibleFallback(
+      authoritativeSelectedId,
+      pendingSelectionRef.current,
+      visibleQueue.map((submission) => submission.id),
+    );
+    if (fallbackSubmissionId) {
+      pendingSelectionRef.current = fallbackSubmissionId;
+      setFocusedId(fallbackSubmissionId);
+      onSelectSubmission(fallbackSubmissionId);
+      return;
+    }
+
+    setFocusedId((currentFocusedId) => {
+      if (visibleQueue.some((submission) => submission.id === currentFocusedId)) return currentFocusedId;
+      if (authoritativeSelectedId && visibleQueue.some((submission) => submission.id === authoritativeSelectedId)) {
+        return authoritativeSelectedId;
+      }
+      return visibleQueue[0]?.id ?? "";
+    });
+  }, [authoritativeSelectedId, onSelectSubmission, visibleQueue]);
+
+  const focusSubmission = (submissionId: string) => {
+    const decision = decideQueueInteraction(
+      "focus",
+      submissionId,
+      authoritativeSelectedId,
+      pendingSelectionRef.current,
+    );
+    setFocusedId(decision.focusedSubmissionId);
+  };
+  const openSubmission = (submissionId: string) => {
+    const decision = decideQueueInteraction(
+      "open",
+      submissionId,
+      authoritativeSelectedId,
+      pendingSelectionRef.current,
+    );
+    setFocusedId(decision.focusedSubmissionId);
+    if (!decision.loadSubmissionId) return;
+    pendingSelectionRef.current = decision.loadSubmissionId;
+    onSelectSubmission(decision.loadSubmissionId);
   };
   const focusQueueItem = (submissionId: string) => {
     requestAnimationFrame(() => queueButtonRefs.current.get(submissionId)?.focus());
@@ -268,7 +338,7 @@ export function ReviewWorkbenchContent({
     const currentIndex = visibleQueue.findIndex((submission) => submission.id === currentId);
     if (currentIndex < 0) return;
     const nextId = visibleQueue[Math.min(visibleQueue.length - 1, Math.max(0, currentIndex + direction))]!.id;
-    selectSubmission(nextId);
+    focusSubmission(nextId);
     focusQueueItem(nextId);
   };
   const clearFilters = () => {
@@ -330,8 +400,8 @@ export function ReviewWorkbenchContent({
           ) : (
             <ol className="-mx-5 -my-4 max-h-[calc(100vh-15rem)] divide-y divide-line overflow-y-auto" aria-label="Submission review queue">
               {visibleQueue.map((submission, index) => {
-                const isSelected = submission.id === selectedId;
-                return <li key={submission.id}><button ref={(element) => { if (element) queueButtonRefs.current.set(submission.id, element); else queueButtonRefs.current.delete(submission.id); }} type="button" tabIndex={isSelected ? 0 : -1} className="group grid w-full grid-cols-[2.25rem_minmax(0,1fr)_auto] gap-2 px-3 py-3 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none" aria-current={isSelected ? "true" : undefined} onFocus={() => selectSubmission(submission.id)} onClick={() => selectSubmission(submission.id)} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); moveQueueFocus(submission.id, 1); } else if (event.key === "ArrowUp") { event.preventDefault(); moveQueueFocus(submission.id, -1); } else if (event.key === "Home") { event.preventDefault(); const firstId = visibleQueue[0]!.id; selectSubmission(firstId); focusQueueItem(firstId); } else if (event.key === "End") { event.preventDefault(); const lastId = visibleQueue[visibleQueue.length - 1]!.id; selectSubmission(lastId); focusQueueItem(lastId); } else if (event.key === "Enter") { event.preventDefault(); selectSubmission(submission.id); detailRef.current?.focus(); } }}>
+                const isSelected = submission.id === focusedId;
+                return <li key={submission.id}><button ref={(element) => { if (element) queueButtonRefs.current.set(submission.id, element); else queueButtonRefs.current.delete(submission.id); }} type="button" tabIndex={isSelected ? 0 : -1} className="group grid w-full grid-cols-[2.25rem_minmax(0,1fr)_auto] gap-2 px-3 py-3 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none" aria-current={isSelected ? "true" : undefined} onFocus={() => focusSubmission(submission.id)} onClick={() => openSubmission(submission.id)} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); moveQueueFocus(submission.id, 1); } else if (event.key === "ArrowUp") { event.preventDefault(); moveQueueFocus(submission.id, -1); } else if (event.key === "Home") { event.preventDefault(); const firstId = visibleQueue[0]!.id; focusSubmission(firstId); focusQueueItem(firstId); } else if (event.key === "End") { event.preventDefault(); const lastId = visibleQueue[visibleQueue.length - 1]!.id; focusSubmission(lastId); focusQueueItem(lastId); } else if (event.key === "Enter") { event.preventDefault(); openSubmission(submission.id); detailRef.current?.focus(); } }}>
                   <span className="pt-0.5 font-mono text-xs tabular-nums text-ink-faint">{String(index + 1).padStart(2, "0")}</span><span className="min-w-0"><span className="block truncate text-sm font-medium text-ink">{submission.title}</span><span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-ink-faint"><span>{submission.category ?? "Uncategorized"}</span><span aria-hidden="true">·</span><span>{statusLabel[submission.status]}</span></span><span className="mt-1.5 block"><Badge tone={reviewStateTone[submission.reviewState]}>{reviewStateLabel[submission.reviewState]}</Badge></span></span><span className="pt-0.5 text-right font-mono text-sm font-semibold tabular-nums text-ink">{submission.averageScore === null ? "—" : submission.averageScore.toFixed(1)}<span className="block text-[10px] font-normal text-ink-faint">/ 5</span></span>
                 </button></li>;
               })}

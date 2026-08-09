@@ -114,6 +114,42 @@ describe("forms organizer route", () => {
     );
   });
 
+  it("rejects malformed successful forms responses before they reach the workspace", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith("/forms")) {
+          return new Response(JSON.stringify([{ id: formSummary.id }]), { status: 200 });
+        }
+        return new Response(JSON.stringify({ id: formDetail.id }), { status: 200 });
+      }),
+    );
+
+    await expect(fetchFormSummaries(event.id)).rejects.toThrow();
+    await expect(fetchFormDetail(event.id, formDetail.id)).rejects.toThrow();
+  });
+
+  it("treats forms-list and detail 401s after event resolution as an unauthenticated route", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/v1/events/ai-engineer-sandbox") {
+          return new Response(JSON.stringify(event), { status: 200 });
+        }
+        return new Response(JSON.stringify({ message: "You need to sign in" }), { status: 401 });
+      }),
+    );
+
+    await expect(fetchEventIdentity(event.slug)).resolves.toEqual(event);
+    await expect(fetchFormSummaries(event.id)).rejects.toEqual(expect.objectContaining({ status: 401 }));
+    await expect(fetchFormDetail(event.id, formDetail.id)).rejects.toEqual(expect.objectContaining({ status: 401 }));
+
+    const markup = renderRoute(createElement(FormsPage, { initialEvent: null, initialEventError: "unauthenticated" }));
+    expect(markup).toContain("Sign in to view this event");
+    expect(markup).toContain("Sign in");
+    expect(markup).not.toContain("Retry");
+  });
+
   it("maps a 404 event lookup to ApiError distinctly from unauthenticated", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ message: "Not found" }), { status: 404 })));
     const error = await fetchEventIdentity("missing-event").catch((caught: unknown) => caught);

@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
+import { Schema } from "effect";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, Toaster, toast } from "@/ui";
 import { FormBuilder } from "../components/FormBuilder";
 import { FormPreview } from "../components/FormPreview";
-import type { FormDetail, FormSummary } from "../schema";
+import { FormDetail, FormList, type FormSummary } from "../schema";
 
 export const path = "/e/:eventSlug/forms";
 
@@ -15,21 +16,27 @@ export interface EventIdentity {
   readonly slug: string;
 }
 
+const EventIdentitySchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  slug: Schema.String,
+});
+
 /** Resolves the event slug in the URL to its authoritative event id. */
 export function fetchEventIdentity(eventSlug: string): Promise<EventIdentity> {
-  return apiFetch<EventIdentity>(`/api/v1/events/${encodeURIComponent(eventSlug)}`);
+  return apiFetch<EventIdentity>(`/api/v1/events/${encodeURIComponent(eventSlug)}`, { schema: EventIdentitySchema });
 }
 
 /** Lists organizer-visible forms for the event, ordered as the API returns them. */
 export function fetchFormSummaries(eventId: string): Promise<readonly FormSummary[]> {
-  return apiFetch<readonly FormSummary[]>(`/api/v1/events/${encodeURIComponent(eventId)}/forms`);
+  return apiFetch<readonly FormSummary[]>(`/api/v1/events/${encodeURIComponent(eventId)}/forms`, { schema: FormList });
 }
 
 /** Loads the full draft + latest published snapshot for one form. */
 export function fetchFormDetail(eventId: string, formId: string): Promise<FormDetail> {
-  return apiFetch<FormDetail>(
-    `/api/v1/events/${encodeURIComponent(eventId)}/forms/${encodeURIComponent(formId)}`,
-  );
+  return apiFetch<FormDetail>(`/api/v1/events/${encodeURIComponent(eventId)}/forms/${encodeURIComponent(formId)}`, {
+    schema: FormDetail,
+  });
 }
 
 function LoadingRegion({ label }: { readonly label: string }) {
@@ -63,6 +70,11 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
   const [event, setEvent] = useState<EventIdentity | null | undefined>(initialEvent);
   const [eventError, setEventError] = useState<string | null>(initialEventError);
   const [eventRequest, setEventRequest] = useState(0);
+
+  const handleUnauthenticated = useCallback(() => {
+    setEventError("unauthenticated");
+    setEvent(null);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -130,7 +142,7 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
     );
   }
 
-  return <FormsWorkspace key={event.id} event={event} />;
+  return <FormsWorkspace key={event.id} event={event} onUnauthenticated={handleUnauthenticated} />;
 }
 
 export interface FormsWorkspaceProps {
@@ -139,6 +151,8 @@ export interface FormsWorkspaceProps {
   readonly initialSummaries?: readonly FormSummary[] | null;
   readonly initialSelectedId?: string | null;
   readonly initialSelectedForm?: FormDetail | null;
+  /** Lets the route promote a nested API 401 to its sign-in state. */
+  readonly onUnauthenticated?: () => void;
 }
 
 export function FormsWorkspace({
@@ -146,6 +160,7 @@ export function FormsWorkspace({
   initialSummaries,
   initialSelectedId = null,
   initialSelectedForm,
+  onUnauthenticated,
 }: FormsWorkspaceProps) {
   const [summaries, setSummaries] = useState<readonly FormSummary[] | null | undefined>(initialSummaries);
   const [listError, setListError] = useState<string | null>(null);
@@ -167,6 +182,10 @@ export function FormsWorkspace({
       })
       .catch((error) => {
         if (!active) return;
+        if (error instanceof ApiError && error.status === 401 && onUnauthenticated) {
+          onUnauthenticated();
+          return;
+        }
         const message = error instanceof Error ? error.message : "Could not load forms";
         setSummaries(null);
         setListError(message);
@@ -175,7 +194,7 @@ export function FormsWorkspace({
     return () => {
       active = false;
     };
-  }, [event.id, listRequest]);
+  }, [event.id, listRequest, onUnauthenticated]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -192,6 +211,10 @@ export function FormsWorkspace({
       })
       .catch((error) => {
         if (!active) return;
+        if (error instanceof ApiError && error.status === 401 && onUnauthenticated) {
+          onUnauthenticated();
+          return;
+        }
         const message = error instanceof Error ? error.message : "Could not load form";
         setSelectedForm(null);
         setDetailError(message);
@@ -200,7 +223,7 @@ export function FormsWorkspace({
     return () => {
       active = false;
     };
-  }, [event.id, selectedId]);
+  }, [event.id, onUnauthenticated, selectedId]);
 
   if (summaries === undefined) {
     return <LoadingRegion label="Loading forms" />;

@@ -3,10 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server.edge";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewWorkbench } from "../schema";
 import {
+  decideQueueInteraction,
   loadReviewWorkbench,
   path,
   ReviewLoadFailure,
   ReviewWorkbenchContent,
+  selectVisibleFallback,
 } from "./review-workbench";
 
 const workbench: ReviewWorkbench = {
@@ -69,6 +71,39 @@ afterEach(() => vi.unstubAllGlobals());
 describe("review workbench route", () => {
   it("exports the review navigation route", () => {
     expect(path).toBe("/e/:eventSlug/review");
+  });
+
+  it("keeps queue focus local and does not reload the current authoritative submission", () => {
+    expect(decideQueueInteraction("focus", "submission_other", "submission_authoritative", undefined)).toEqual({
+      focusedSubmissionId: "submission_other",
+      loadSubmissionId: undefined,
+    });
+    expect(decideQueueInteraction(
+      "focus",
+      "submission_authoritative",
+      "submission_authoritative",
+      undefined,
+    ).loadSubmissionId).toBeUndefined();
+    expect(decideQueueInteraction(
+      "open",
+      "submission_authoritative",
+      "submission_authoritative",
+      undefined,
+    ).loadSubmissionId).toBeUndefined();
+    expect(decideQueueInteraction(
+      "open",
+      "submission_authoritative",
+      "submission_other",
+      "submission_authoritative",
+    ).loadSubmissionId).toBeUndefined();
+  });
+
+  it("loads the first visible fallback exactly once when filters hide the authoritative selection", () => {
+    const visibleSubmissionIds = ["submission_fallback", "submission_other"];
+
+    expect(selectVisibleFallback("submission_authoritative", undefined, visibleSubmissionIds)).toBe("submission_fallback");
+    expect(selectVisibleFallback("submission_authoritative", "submission_fallback", visibleSubmissionIds)).toBeUndefined();
+    expect(selectVisibleFallback("submission_fallback", undefined, visibleSubmissionIds)).toBeUndefined();
   });
 
   it("renders a sign-in state without queue data or mutation controls", () => {
