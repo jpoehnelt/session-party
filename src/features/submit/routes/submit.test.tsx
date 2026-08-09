@@ -1,0 +1,136 @@
+import { createElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server.edge";
+import { MemoryRouter } from "react-router";
+import { describe, expect, it } from "vitest";
+import PublicSubmitPage, { layout, path as publicPath } from "./public-submit";
+import SubmissionsPage, { path as organizerPath } from "./submissions";
+import type { PublicSubmissionForm, SubmissionPage } from "../schema";
+
+const publicForm: PublicSubmissionForm = {
+  event: {
+    name: "Architecture Summit",
+    slug: "architecture-summit",
+    description: "A calm public submission experience.",
+    timezone: "UTC",
+    startsAt: null,
+    endsAt: null,
+    location: null,
+    accentColor: null,
+  },
+  form: {
+    id: "form-public",
+    versionId: "form-public-v1",
+    versionNumber: 1,
+    name: "Call for proposals",
+    description: "Share a practical session.",
+    availability: "open",
+    opensAt: null,
+    closesAt: null,
+    fields: [
+      {
+        id: "field-title",
+        order: 1,
+        type: "text",
+        label: "Proposal title",
+        helpText: null,
+        required: true,
+        options: [],
+        logic: null,
+      },
+    ],
+  },
+};
+
+const organizerPage: SubmissionPage = {
+  results: [
+    {
+      id: "submission-public",
+      formId: "form-public",
+      formName: "Call for proposals",
+      title: "Effect at the edge",
+      category: "architecture",
+      status: "in_review",
+      primarySpeakerName: "Sam Rivera",
+      submittedAt: Date.UTC(2026, 7, 8, 12),
+      version: 2,
+    },
+  ],
+  pagination: { page: 1, pageSize: 25, total: 1, pageCount: 1 },
+};
+
+function renderRoute(pathname: string, child: ReactElement): string {
+  return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [pathname] }, child));
+}
+
+describe("public submit route", () => {
+  it("uses the bare public route and renders the immutable published form", () => {
+    expect(publicPath).toBe("/submit/:eventSlug/:formId");
+    expect(layout).toBe("bare");
+    const markup = renderRoute(
+      "/submit/architecture-summit/form-public",
+      <PublicSubmitPage initialForm={publicForm} />,
+    );
+    expect(markup).toContain("Architecture Summit");
+    expect(markup).toContain("Call for proposals");
+    expect(markup).toContain("Proposal title");
+    expect(markup).toContain("Submit proposal");
+    expect(markup).not.toContain("AppShell");
+  });
+
+  it("renders closed published content without an active submit control", () => {
+    const markup = renderRoute(
+      "/submit/architecture-summit/form-public",
+      <PublicSubmitPage initialForm={{ ...publicForm, form: { ...publicForm.form, availability: "closed" } }} />,
+    );
+    expect(markup).toContain("Submissions are closed");
+    expect(markup).toContain("Proposal title");
+    expect(markup).not.toContain("Submit proposal");
+  });
+
+  it("exposes a durable success state with the real submission reference", () => {
+    const markup = renderRoute(
+      "/submit/architecture-summit/form-public",
+      <PublicSubmitPage
+        initialForm={publicForm}
+        initialSuccess={{ submissionId: "submission-created", status: "submitted", submittedAt: Date.UTC(2026, 7, 8, 12) }}
+      />,
+    );
+    expect(markup).toContain("Submission received");
+    expect(markup).toContain("submission-created");
+    expect(markup).not.toContain("Submit proposal");
+  });
+});
+
+describe("organizer submissions route", () => {
+  it("renders real queue state and live filter controls without a nested shell", () => {
+    expect(organizerPath).toBe("/e/:eventSlug/submissions");
+    const markup = renderRoute(
+      "/e/architecture-summit/submissions",
+      <SubmissionsPage
+        initialEvent={{ id: "event-public", name: "Architecture Summit", slug: "architecture-summit" }}
+        initialPage={organizerPage}
+        initialForms={[
+          {
+            id: "form-public",
+            eventId: "event-public",
+            purpose: "primary-cfp",
+            name: "Call for proposals",
+            description: null,
+            status: "open",
+            opensAt: null,
+            closesAt: null,
+            version: 1,
+            publishedVersionNumber: 1,
+            updatedAt: Date.UTC(2026, 7, 8, 12),
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain("Effect at the edge");
+    expect(markup).toContain("Sam Rivera");
+    expect(markup).toContain("in review");
+    expect(markup).toContain("Category");
+    expect(markup).toContain("Apply");
+    expect(markup).not.toContain("AppShell");
+  });
+});

@@ -1,0 +1,258 @@
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useLocation, useNavigate, useParams } from "react-router";
+import { ApiError, apiFetch } from "@/client/api";
+import { loginPathForLocation } from "@/client/return-to";
+import { fetchEventIdentity, fetchFormSummaries, type EventIdentity } from "@/features/forms/routes/forms";
+import type { FormSummary } from "@/features/forms/schema";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Input,
+  PageHeader,
+  Select,
+  Skeleton,
+  Table,
+  Toaster,
+  toast,
+  type TableColumn,
+} from "@/ui";
+import {
+  SubmissionPage,
+  type SubmissionPage as SubmissionPageValue,
+  type SubmissionStatus,
+  type SubmissionSummary,
+} from "../schema";
+
+export const path = "/e/:eventSlug/submissions";
+
+const statusTone = (status: SubmissionStatus): "neutral" | "accent" | "success" | "warning" | "danger" => {
+  switch (status) {
+    case "submitted": return "neutral";
+    case "in_review": return "accent";
+    case "accepted": return "success";
+    case "waitlist": return "warning";
+    case "rejected":
+    case "withdrawn": return "danger";
+  }
+};
+
+export function fetchSubmissionPage(
+  eventId: string,
+  filters: { readonly status?: string; readonly formId?: string; readonly category?: string; readonly page: number },
+): Promise<SubmissionPageValue> {
+  const query = new URLSearchParams({ page: String(filters.page), pageSize: "25" });
+  if (filters.status) query.set("status", filters.status);
+  if (filters.formId) query.set("formId", filters.formId);
+  if (filters.category) query.set("category", filters.category);
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/submissions?${query.toString()}`, {
+    schema: SubmissionPage,
+  });
+}
+
+const columns: TableColumn<SubmissionSummary>[] = [
+  {
+    key: "title",
+    header: "Submission",
+    render: (row) => (
+      <div>
+        <p className="font-medium text-ink">{row.title}</p>
+        <p className="mt-0.5 text-xs text-ink-faint">{row.primarySpeakerName ?? "No primary speaker"}</p>
+      </div>
+    ),
+  },
+  { key: "formName", header: "Form" },
+  { key: "category", header: "Category", render: (row) => row.category ?? "Unrouted" },
+  {
+    key: "status",
+    header: "State",
+    render: (row) => <Badge tone={statusTone(row.status)}>{row.status.replace("_", " ")}</Badge>,
+  },
+  {
+    key: "submittedAt",
+    header: "Submitted",
+    render: (row) => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(row.submittedAt),
+  },
+];
+
+export interface SubmissionsPageProps {
+  readonly initialEvent?: EventIdentity | null;
+  readonly initialPage?: SubmissionPageValue | null;
+  readonly initialForms?: readonly FormSummary[];
+}
+
+export default function SubmissionsPage({ initialEvent, initialPage, initialForms }: SubmissionsPageProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { eventSlug = "" } = useParams();
+  const [event, setEvent] = useState<EventIdentity | null | undefined>(initialEvent);
+  const [eventError, setEventError] = useState<string | null>(null);
+  const [page, setPage] = useState<SubmissionPageValue | null | undefined>(initialPage);
+  const [forms, setForms] = useState<readonly FormSummary[]>(initialForms ?? []);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [status, setStatus] = useState("");
+  const [formId, setFormId] = useState("");
+  const [categoryDraft, setCategoryDraft] = useState("");
+  const [category, setCategory] = useState("");
+  const [pageNumber, setPageNumber] = useState(1);
+  const [request, setRequest] = useState(0);
+
+  const handleUnauthenticated = useCallback(() => {
+    setEventError("unauthenticated");
+    setEvent(null);
+  }, []);
+
+  useEffect(() => {
+    if (initialEvent !== undefined) return;
+    let active = true;
+    setEvent(undefined);
+    void fetchEventIdentity(eventSlug).then(
+      (loaded) => {
+        if (active) setEvent(loaded);
+      },
+      (error) => {
+        if (!active) return;
+        if (error instanceof ApiError && error.status === 401) setEventError("unauthenticated");
+        else setEventError(error instanceof Error ? error.message : "Could not load event");
+        setEvent(null);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [eventSlug, initialEvent]);
+
+  useEffect(() => {
+    if (!event) return;
+    let active = true;
+    setPage(undefined);
+    setLoadError(null);
+    void Promise.all([
+      fetchSubmissionPage(event.id, {
+        status: status || undefined,
+        formId: formId || undefined,
+        category: category || undefined,
+        page: pageNumber,
+      }),
+      fetchFormSummaries(event.id),
+    ]).then(
+      ([loadedPage, loadedForms]) => {
+        if (!active) return;
+        setPage(loadedPage);
+        setForms(loadedForms);
+      },
+      (error) => {
+        if (!active) return;
+        if (error instanceof ApiError && error.status === 401) {
+          handleUnauthenticated();
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Could not load submissions";
+        setLoadError(message);
+        setPage(null);
+        toast(message, { tone: "danger" });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [category, event, formId, handleUnauthenticated, pageNumber, request, status]);
+
+  const applyCategory = (submitEvent: FormEvent) => {
+    submitEvent.preventDefault();
+    setPageNumber(1);
+    setCategory(categoryDraft.trim());
+  };
+
+  if (event === undefined) {
+    return <><Skeleton className="h-24" /><Skeleton className="mt-5 h-[28rem]" /><Toaster /></>;
+  }
+  if (event === null) {
+    const unauthenticated = eventError === "unauthenticated";
+    return (
+      <>
+        <EmptyState
+          title={unauthenticated ? "Sign in to view submissions" : "Event unavailable"}
+          description={unauthenticated ? "Organizer access is required for the submission queue." : eventError ?? "The event may have moved."}
+          action={unauthenticated ? <Button onClick={() => navigate(loginPathForLocation(location))}>Sign in</Button> : undefined}
+        />
+        <Toaster />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHeader title="Submissions" description={`Review the live proposal queue for ${event.name}.`} />
+      <Card className="mb-5">
+        <form className="grid gap-4 md:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1fr)_minmax(12rem,1fr)_auto] md:items-end" onSubmit={applyCategory}>
+          <Select
+            label="State"
+            value={status}
+            onChange={(changeEvent) => {
+              setStatus(changeEvent.currentTarget.value);
+              setPageNumber(1);
+            }}
+          >
+            <option value="">All states</option>
+            <option value="submitted">Submitted</option>
+            <option value="in_review">In review</option>
+            <option value="accepted">Accepted</option>
+            <option value="rejected">Rejected</option>
+            <option value="waitlist">Waitlist</option>
+            <option value="withdrawn">Withdrawn</option>
+          </Select>
+          <Select
+            label="Form"
+            value={formId}
+            onChange={(changeEvent) => {
+              setFormId(changeEvent.currentTarget.value);
+              setPageNumber(1);
+            }}
+          >
+            <option value="">All forms</option>
+            {forms.map((form) => <option key={form.id} value={form.id}>{form.name}</option>)}
+          </Select>
+          <Input
+            label="Category"
+            value={categoryDraft}
+            placeholder="Exact routed category"
+            onChange={(changeEvent) => setCategoryDraft(changeEvent.currentTarget.value)}
+          />
+          <Button type="submit">Apply</Button>
+        </form>
+      </Card>
+      {page === undefined ? (
+        <Skeleton className="h-[28rem]" />
+      ) : page === null ? (
+        <Card>
+          <EmptyState
+            title="Submissions could not be loaded"
+            description={loadError ?? "Retry after the event connection is restored."}
+            action={<Button onClick={() => setRequest((value) => value + 1)}>Retry</Button>}
+          />
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          <Table
+            columns={columns}
+            rows={[...page.results]}
+            rowKey={(row) => row.id}
+            empty="No submissions match these filters."
+          />
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm text-ink-faint">
+              {page.pagination.total} submission{page.pagination.total === 1 ? "" : "s"} · page {page.pagination.page} of {Math.max(1, page.pagination.pageCount)}
+            </p>
+            <div className="flex gap-2">
+              <Button variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((value) => Math.max(1, value - 1))}>Previous</Button>
+              <Button variant="secondary" disabled={page.pagination.pageCount === 0 || pageNumber >= page.pagination.pageCount} onClick={() => setPageNumber((value) => value + 1)}>Next</Button>
+            </div>
+          </div>
+        </div>
+      )}
+      <Toaster />
+    </>
+  );
+}
