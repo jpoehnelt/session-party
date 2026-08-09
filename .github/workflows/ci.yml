@@ -140,7 +140,14 @@ jobs:
         if: steps.policy.outputs.deploy == 'true'
         env:
           PREVIEW_URL: ${{ steps.preview.outputs.url }}
-        run: curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 2 --max-time 20 "${PREVIEW_URL}/" >/dev/null
+        run: |
+          curl --fail --silent --show-error \
+            --retry 18 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --retry-max-time 90 \
+            --max-time 20 \
+            "${PREVIEW_URL}/" >/dev/null
       - name: Publish preview link
         if: steps.policy.outputs.deploy == 'true'
         uses: actions/github-script@v7
