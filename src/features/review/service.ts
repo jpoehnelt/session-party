@@ -763,7 +763,7 @@ export const acceptSubmission = (
       return yield* Effect.fail(new Conflict({ message: "Submission is already accepted" }));
     }
     const [primarySpeaker] = yield* database(() =>
-      db.select({ speakerId: submissionSpeakers.speakerId }).from(submissionSpeakers).where(and(eq(submissionSpeakers.eventId, input.eventId), eq(submissionSpeakers.submissionId, input.submissionId), eq(submissionSpeakers.isPrimary, true))).limit(1),
+      db.select({ associationId: submissionSpeakers.id, speakerId: submissionSpeakers.speakerId }).from(submissionSpeakers).where(and(eq(submissionSpeakers.eventId, input.eventId), eq(submissionSpeakers.submissionId, input.submissionId), eq(submissionSpeakers.isPrimary, true))).limit(1),
     );
     if (!primarySpeaker) {
       return yield* Effect.fail(new Validation({ message: "Acceptance requires exactly one primary speaker" }));
@@ -791,7 +791,9 @@ export const acceptSubmission = (
           id: sql<string>`${acceptanceEventId}`,
           eventId: submissions.eventId,
           submissionId: submissions.id,
+          primarySubmissionSpeakerId: sql<string>`${primarySpeaker.associationId}`,
           primarySpeakerId: sql<string>`${primarySpeaker.speakerId}`,
+          primaryAssociationIsPrimary: sql<boolean>`1`,
           type: sql<"accepted">`'accepted'`,
           submissionVersion: submissions.version,
           actorUserId: viewer.actorUserId === null

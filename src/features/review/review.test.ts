@@ -1,6 +1,7 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import {
   acceptanceEvents,
+  apiKeys,
   auditLog,
   domainChanges,
   eventMembers,
@@ -125,151 +126,11 @@ const runEitherAs = <A, E, R>(principal: CurrentUserValue, effect: Effect.Effect
     ) as Effect.Effect<Either.Either<A, E>, never, never>,
   );
 
-/**
- * BaselineGreen has not yet replaced the prototype migration. The focused
- * fixture upgrades only its ephemeral test database to the frozen table shape.
- */
-const applyFrozenReviewFixtureSchema = async () => {
-  const statements = [
-    "alter table users add column version integer not null default 1",
-    "alter table events add column version integer not null default 1",
-    "alter table event_members add column version integer not null default 1",
-    "alter table forms add column version integer not null default 1",
-    "alter table speakers add column version integer not null default 1",
-    "alter table submissions add column form_version_id text not null default 'form_version_01'",
-    "alter table submissions add column accepted_at integer",
-    "alter table submissions add column version integer not null default 1",
-    "alter table review_rounds add column version integer not null default 1",
-    `alter table review_assignments add column event_id text not null default '${fixtureEventId}'`,
-    "alter table review_assignments add column version integer not null default 1",
-    `alter table reviews add column event_id text not null default '${fixtureEventId}'`,
-    "alter table reviews add column version integer not null default 1",
-    `alter table submission_speakers add column event_id text not null default '${fixtureEventId}'`,
-    "alter table submission_speakers add column created_at integer not null default 0",
-    "drop index submission_answers_submission",
-    "drop table submission_answers",
-    `create table form_versions (
-      id text primary key not null,
-      event_id text not null,
-      form_id text not null,
-      version_number integer not null,
-      name text not null,
-      description text,
-      published_at integer not null,
-      retired_at integer,
-      created_at integer not null
-    )`,
-    `create table form_version_fields (
-      id text primary key not null,
-      event_id text not null,
-      form_version_id text not null,
-      source_field_id text,
-      "order" integer not null,
-      type text not null,
-      label text not null,
-      help_text text,
-      required integer not null,
-      options text,
-      logic text,
-      routing text,
-      created_at integer not null
-    )`,
-    `create table submission_answers (
-      id text primary key not null,
-      event_id text not null,
-      submission_id text not null,
-      form_version_field_id text not null,
-      value text not null,
-      version integer not null default 1,
-      created_at integer not null,
-      updated_at integer not null
-    )`,
-    "create index submission_answers_submission on submission_answers(event_id, submission_id)",
-    `create table acceptance_events (
-      id text primary key not null,
-      event_id text not null,
-      submission_id text not null,
-      primary_speaker_id text not null,
-      type text not null,
-      submission_version integer not null,
-      actor_user_id text,
-      occurred_at integer not null
-    )`,
-    "create unique index acceptance_events_submission_version_unique on acceptance_events(event_id, submission_id, submission_version)",
-    `create table speaker_provisioning (
-      id text primary key not null,
-      event_id text not null,
-      acceptance_event_id text not null,
-      submission_id text not null,
-      primary_speaker_id text not null,
-      status text not null default 'pending',
-      available_at integer not null,
-      lease_owner text,
-      lease_expires_at integer,
-      attempt_count integer not null default 0,
-      last_error text,
-      provisioned_at integer,
-      version integer not null default 1,
-      created_at integer not null,
-      updated_at integer not null,
-      foreign key (acceptance_event_id) references acceptance_events(id)
-    )`,
-    "create unique index speaker_provisioning_acceptance_unique on speaker_provisioning(event_id, acceptance_event_id)",
-    `create table idempotency_records (
-      id text primary key not null,
-      event_id text not null,
-      operation_id text not null,
-      principal_id text not null,
-      key_hash text not null,
-      request_hash text not null,
-      status text not null default 'in_progress',
-      response_status integer,
-      response_body text,
-      expires_at integer not null,
-      completed_at integer,
-      created_at integer not null
-    )`,
-    "create unique index idempotency_key_unique on idempotency_records(event_id, operation_id, principal_id, key_hash)",
-    `create table domain_changes (
-      sequence integer primary key autoincrement,
-      id text not null unique,
-      event_id text not null,
-      aggregate_type text not null,
-      aggregate_id text not null,
-      aggregate_version integer not null,
-      event_type text not null,
-      audiences text not null,
-      payload text not null,
-      actor_user_id text,
-      actor_api_key_id text,
-      request_id text not null,
-      idempotency_record_id text,
-      occurred_at integer not null
-    )`,
-    "create unique index domain_changes_aggregate_version_unique on domain_changes(event_id, aggregate_type, aggregate_id, aggregate_version, event_type)",
-    `create table audit_log (
-      id text primary key not null,
-      event_id text not null,
-      request_id text not null,
-      actor_user_id text,
-      actor_api_key_id text,
-      action text not null,
-      resource_type text not null,
-      resource_id text not null,
-      before text,
-      after text,
-      metadata text,
-      occurred_at integer not null
-    )`,
-  ];
-  for (const statement of statements) await env.DB.prepare(statement).run();
-};
 
 
 beforeAll(async () => {
   if (!hasTestMigrations(env)) throw new Error("TEST_MIGRATIONS test binding is unavailable");
   await applyD1Migrations(env.DB, [...env.TEST_MIGRATIONS]);
-  await applyFrozenReviewFixtureSchema();
 
   const createdAt = new Date(fixtureClock - 30 * 86_400_000);
   await db.insert(users).values([
@@ -291,6 +152,17 @@ beforeAll(async () => {
     { id: "member_reviewer_ada", eventId: fixtureEventId, userId: fixtureReviewerId, role: "reviewer", createdAt, updatedAt: createdAt },
     { id: "member_reviewer_dev", eventId: fixtureEventId, userId: "user_reviewer_dev", role: "reviewer", createdAt, updatedAt: createdAt },
   ]);
+  await db.insert(apiKeys).values({
+    id: reviewApiKey.apiKeyId,
+    eventId: fixtureEventId,
+    name: reviewApiKey.name,
+    keyHash: "a".repeat(64),
+    scopes: reviewApiKey.scopes,
+    expiresAt: new Date(reviewApiKey.expiresAt),
+    createdBy: fixtureOwnerId,
+    createdAt,
+    updatedAt: createdAt,
+  });
   await db.insert(forms).values({
     id: "form_cfp", eventId: fixtureEventId, kind: "cfp", name: "Main CFP", status: "closed", createdAt, updatedAt: createdAt,
   });
@@ -330,6 +202,7 @@ beforeAll(async () => {
     id: `answer_${String(index + 1).padStart(2, "0")}`,
     eventId: fixtureEventId,
     submissionId: submission.id,
+    formVersionId: "form_version_01",
     formVersionFieldId: "field_abstract",
     value: `Abstract evidence for ${submission.title}.`,
     createdAt,
@@ -442,6 +315,7 @@ beforeAll(async () => {
     id: "acceptance_seeded",
     eventId: fixtureEventId,
     submissionId: "submission_01",
+    primarySubmissionSpeakerId: "submission_speaker_01",
     primarySpeakerId: fixturePrimarySpeakerId,
     type: "accepted",
     submissionVersion: 5,
