@@ -47,6 +47,7 @@ export const getAcceleventsImportStatusOperation = {
   mcp: {
     name: "get_accelevents_import_status",
     description: "Get Accelevents import capability and latest completed import for an event.",
+    scopes: ["integrations:read"],
   },
   idempotency: "none",
   concurrency: "none",
@@ -74,6 +75,7 @@ export const listIntegrationConfigurationsOperation = {
     name: "list_integration_configurations",
     description:
       "List validated, non-secret Airtable and Accelevents configuration for an event by ID or slug.",
+    scopes: ["integrations:read"],
   },
   idempotency: "none",
   concurrency: "none",
@@ -99,6 +101,7 @@ export const runAcceleventsImportOperation = {
   mcp: {
     name: "run_accelevents_import",
     description: "Run an idempotent Accelevents speaker and talk import for an event.",
+    scopes: ["integrations:write"],
   },
   idempotency: "required",
   concurrency: "none",
@@ -126,6 +129,7 @@ export const configureAcceleventsOperation = {
   mcp: {
     name: "configure_accelevents",
     description: "Configure the deterministic fixture or a live Accelevents event with optimistic concurrency.",
+    scopes: ["integrations:write"],
   },
   idempotency: "required",
   concurrency: "required",
@@ -151,6 +155,7 @@ export const getAcceleventsConfigurationOperation = {
   mcp: {
     name: "get_accelevents_configuration",
     description: "Read a versioned, non-secret Accelevents configuration for organizer edits.",
+    scopes: ["integrations:read"],
   },
   idempotency: "none",
   concurrency: "none",

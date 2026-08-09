@@ -158,7 +158,7 @@ describe("portal service", () => {
     expect(ids.every((id) => id.startsWith("portal."))).toBe(true);
     expect(operations
       .filter((operation) => "mcp" in operation)
-      .every(({ authorize }) => authorize.kind === "event" || authorize.kind === "public"))
+      .every(({ authorize }) => authorize.kind === "event" && authorize.apiKey.kind === "api-key"))
       .toBe(true);
     expect(operations.find(({ id }) => id === "portal.getSnapshot")).toMatchObject({
       authorize: { kind: "browser-session" },
@@ -173,8 +173,15 @@ describe("portal service", () => {
     expect(operations.find(({ id }) => id === "portal.getPublicSpeakers")).toMatchObject({
       authorize: { kind: "public" },
       rest: { path: "/public/events/:eventSlug/speakers" },
-      mcp: { name: "portal_get_public_speakers" },
     });
+    expect(operations.find(({ id }) => id === "portal.manageOnboarding")).toMatchObject({
+      authorize: { kind: "event", apiKey: { kind: "api-key", scopes: ["speakers:write"] } },
+      mcp: { name: "manage_speaker_onboarding" },
+    });
+    expect(operations
+      .filter(({ authorize }) => authorize.kind === "browser-session")
+      .every((operation) => !("mcp" in operation)))
+      .toBe(true);
   });
 
   it("requires organizer membership and the exact provisioned speaker browser session", async () => {

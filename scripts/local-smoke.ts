@@ -66,6 +66,50 @@ const mcp = await fetch(`${origin}/mcp`, {
   }),
 });
 if (!mcp.ok) throw new Error(`Authenticated MCP initialize failed: ${mcp.status}`);
+const mcpSessionId = mcp.headers.get("mcp-session-id");
+if (!mcpSessionId) throw new Error("Authenticated MCP initialize returned no session ID");
+await mcp.text();
+
+const mcpRequest = async (id: number, method: string, params: Record<string, unknown>) => {
+  const response = await fetch(`${origin}/mcp`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json",
+      "mcp-session-id": mcpSessionId,
+      "mcp-protocol-version": "2025-06-18",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+  });
+  if (!response.ok) throw new Error(`Authenticated MCP ${method} failed: ${response.status}`);
+  const payload = (await response.text()).split("\n")
+    .find((line) => line.startsWith("data: "))
+    ?.slice(6);
+  if (!payload) throw new Error(`Authenticated MCP ${method} returned no SSE data event`);
+  return JSON.parse(payload) as {
+    readonly result?: { readonly tools?: readonly { readonly name: string }[]; readonly content?: readonly { readonly text: string }[] };
+    readonly error?: unknown;
+  };
+};
+
+const listedTools = await mcpRequest(2, "tools/list", {});
+const toolNames = listedTools.result?.tools?.map(({ name }) => name);
+if (listedTools.error || JSON.stringify(toolNames) !== JSON.stringify(["get_event", "list_events"])) {
+  throw new Error("Authenticated MCP tools/list did not match the event:read key");
+}
+const calledTool = await mcpRequest(3, "tools/call", { name: "list_events", arguments: {} });
+const calledText = calledTool.result?.content?.[0]?.text;
+const calledEvents = typeof calledText === "string"
+  ? JSON.parse(calledText) as readonly { readonly id?: unknown }[]
+  : [];
+if (
+  calledTool.error
+  || calledEvents.length !== 1
+  || calledEvents[0]?.id !== "demo-event"
+) {
+  throw new Error("Authenticated MCP list_events returned an invalid result");
+}
 
 const bindings = await fetch(`${origin}/__local/smoke`, {
   method: "POST",
@@ -90,6 +134,6 @@ if (
 console.log(JSON.stringify({
   mode: "local-fake",
   rest: { event: eventMode, get: fetched.status },
-  mcp: mcp.status,
+  mcp: { initialize: mcp.status, tools: toolNames, call: "list_events" },
   bindings: { d1: true, r2: true, durableObject: true },
 }));

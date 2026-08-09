@@ -37,7 +37,7 @@ The aggregate onboarding dashboard and admin CMS/embed builder are best-effort p
 | Runtime | One Cloudflare Worker application |
 | Frontend | React 19 + Vite + Cloudflare Vite plugin |
 | HTTP API | Hono at `/api/v1` |
-| MCP | Streamable HTTP at `/mcp`; stateless `createMcpHandler` is the planned Cloudflare integration |
+| MCP | Streamable HTTP at `/mcp`; event-scoped API keys only; `tools/list` is filtered to the key's exact scopes and exposes curated organizer/integration workflows rather than every REST operation |
 | Wire contracts | **camelCase** across REST, MCP, OpenAPI, and realtime (user-locked) |
 | Legacy credentials | Upgrade preserves users/events/members but revokes incompatible bearer tokens and API keys; migration never fabricates HMAC hashes, roles, scopes, creators, or expiry |
 | Realtime | PartyServer/Durable Objects; one coordination room per event with role-filtered delivery |
@@ -117,7 +117,7 @@ interface OperationDef<Input, EncodedInput, Output, EncodedOutput, Requirements>
 Code generation projects this registry into:
 
 - Hono routes
-- MCP tools and JSON Schema
+- explicitly selected, API-key-compatible MCP tools and JSON Schema
 - OpenAPI 3.1
 - Party intent dispatch
 - collision/ownership manifest
@@ -141,7 +141,8 @@ Adapters only decode, authorize, invoke, encode, and map errors. They never cont
 - Pagination: `page`/`pageSize`, default 25, max 100; `{ results, pagination }`
 - Externally retryable commands require `idempotencyKey`; versioned updates/deletes require `expectedVersion`
 - Errors: safe public `{ error, message, requestId, details? }`; causes stay in redacted logs
-- API keys: event-bound, scoped, expiring/revocable; MCP uses a least-privilege key
+- API keys: event-bound, scoped, expiring/revocable; MCP uses a least-privilege key, hides tools outside that key's scopes, and rejects cross-event input
+- Speaker self-service and human-only decisions remain browser-session REST operations and are never MCP tools
 - OpenAPI/MCP output schemas derive from the same Effect schemas
 
 

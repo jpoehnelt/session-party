@@ -215,6 +215,12 @@ for (const owned of ownedOperations) {
   }
   if (operation.mcp) {
     if (!mcpName.test(operation.mcp.name)) fail(`${operation.id} has invalid MCP name '${operation.mcp.name}'`);
+    if (operation.authorize.kind === "browser-session" || operation.authorize.kind === "public") {
+      fail(`${operation.id} MCP tool must use API-key-compatible authorization`);
+    }
+    if (operation.authorize.kind === "event" && operation.authorize.apiKey.kind === "deny") {
+      fail(`${operation.id} MCP tool cannot deny API-key principals`);
+    }
     claim(mcps, operation.mcp.name, operation.id, "MCP name");
   }
   if (operation.party) {
@@ -247,6 +253,10 @@ const mcpTools = ownedOperations.flatMap(({ operation, inputSchema, outputSchema
         description: operation.mcp.description,
         inputSchema,
         outputSchema,
+        requiredScopes: operation.authorize.kind === "event"
+          && operation.authorize.apiKey.kind === "api-key"
+          ? operation.authorize.apiKey.scopes
+          : operation.mcp.scopes ?? [],
       }]
     : [],
 );

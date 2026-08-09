@@ -1,5 +1,6 @@
 import type { JsonObject, OperationId } from "./domain";
 import type { AppError } from "./errors";
+import type { ApiScope } from "./principal";
 import type { Effect, Schema } from "effect";
 
 export interface McpToolDescriptor {
@@ -8,6 +9,8 @@ export interface McpToolDescriptor {
   readonly description: string;
   readonly inputSchema: JsonObject;
   readonly outputSchema: JsonObject;
+  /** Server-owned discovery filter; this field is not included in the MCP wire descriptor. */
+  readonly requiredScopes: readonly ApiScope[];
 }
 
 export interface McpTextContent {

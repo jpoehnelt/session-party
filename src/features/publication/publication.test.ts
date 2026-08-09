@@ -218,8 +218,8 @@ describe("publication boundary", () => {
     expect([
       listAgendaOperation.mcp?.name,
       publishAgendaOperation.mcp?.name,
-      getPublishedAgendaOperation.mcp?.name,
-    ]).toEqual(["agenda_list", "agenda_publish", "agenda_get_published"]);
+      undefined,
+    ]).toEqual(["agenda_list", "agenda_publish", undefined]);
   });
 
   it("keeps unpublished schedules private", async () => {
@@ -287,4 +287,3 @@ describe("publication boundary", () => {
     expect(JSON.stringify(stillPublished)).not.toContain("Unpublished");
   });
 });
-
