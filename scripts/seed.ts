@@ -30,16 +30,18 @@ ON CONFLICT(id) DO UPDATE SET
   event_id = excluded.event_id, kind = excluded.kind, name = excluded.name,
   description = excluded.description, status = excluded.status,
   version = excluded.version, updated_at = excluded.updated_at;
-INSERT INTO form_fields (id, event_id, form_id, \`order\`, type, label, semantic_key, required, version, created_at, updated_at)
+INSERT INTO form_fields (id, event_id, form_id, \`order\`, type, label, semantic_key, required, options, routing, version, created_at, updated_at)
 VALUES
-  ('local-cfp-title', 'local-event', 'local-cfp', 1, 'text', 'Session title', 'submissionTitle', 1, 1, ${createdAt}, ${createdAt}),
-  ('local-cfp-abstract', 'local-event', 'local-cfp', 2, 'textarea', 'Session abstract', 'submissionAbstract', 1, 1, ${createdAt}, ${createdAt}),
-  ('local-cfp-speaker-name', 'local-event', 'local-cfp', 3, 'text', 'Speaker name', 'speakerName', 1, 1, ${createdAt}, ${createdAt}),
-  ('local-cfp-speaker-email', 'local-event', 'local-cfp', 4, 'email', 'Speaker email', 'speakerEmail', 1, 1, ${createdAt}, ${createdAt})
+  ('local-cfp-title', 'local-event', 'local-cfp', 1, 'text', 'Session title', 'submissionTitle', 1, NULL, NULL, 1, ${createdAt}, ${createdAt}),
+  ('local-cfp-abstract', 'local-event', 'local-cfp', 2, 'textarea', 'Session abstract', 'submissionAbstract', 1, NULL, NULL, 1, ${createdAt}, ${createdAt}),
+  ('local-cfp-speaker-name', 'local-event', 'local-cfp', 3, 'text', 'Speaker name', 'speakerName', 1, NULL, NULL, 1, ${createdAt}, ${createdAt}),
+  ('local-cfp-speaker-email', 'local-event', 'local-cfp', 4, 'email', 'Speaker email', 'speakerEmail', 1, NULL, NULL, 1, ${createdAt}, ${createdAt}),
+  ('local-cfp-track', 'local-event', 'local-cfp', 5, 'select', 'Track', NULL, 1, '["Engineering","Product"]', '{"Engineering":"engineering","Product":"product"}', 1, ${createdAt}, ${createdAt})
 ON CONFLICT(id) DO UPDATE SET
   event_id = excluded.event_id, form_id = excluded.form_id, \`order\` = excluded.\`order\`,
   type = excluded.type, label = excluded.label, semantic_key = excluded.semantic_key,
-  required = excluded.required, version = excluded.version, updated_at = excluded.updated_at;
+  required = excluded.required, options = excluded.options, routing = excluded.routing,
+  version = excluded.version, updated_at = excluded.updated_at;
 INSERT INTO form_versions (id, event_id, form_id, version_number, name, description, published_at, retired_at, created_at)
 VALUES ('local-cfp-v1', 'local-event', 'local-cfp', 1, 'Local CFP', 'Deterministic local submission form', ${createdAt}, NULL, ${createdAt})
 ON CONFLICT(id) DO UPDATE SET
@@ -47,17 +49,18 @@ ON CONFLICT(id) DO UPDATE SET
   version_number = excluded.version_number, name = excluded.name,
   description = excluded.description, published_at = excluded.published_at,
   retired_at = excluded.retired_at;
-INSERT INTO form_version_fields (id, event_id, form_version_id, source_field_id, \`order\`, type, label, semantic_key, required, created_at)
+INSERT INTO form_version_fields (id, event_id, form_version_id, source_field_id, \`order\`, type, label, semantic_key, required, options, routing, created_at)
 VALUES
-  ('local-cfp-v1-title', 'local-event', 'local-cfp-v1', 'local-cfp-title', 1, 'text', 'Session title', 'submissionTitle', 1, ${createdAt}),
-  ('local-cfp-v1-abstract', 'local-event', 'local-cfp-v1', 'local-cfp-abstract', 2, 'textarea', 'Session abstract', 'submissionAbstract', 1, ${createdAt}),
-  ('local-cfp-v1-speaker-name', 'local-event', 'local-cfp-v1', 'local-cfp-speaker-name', 3, 'text', 'Speaker name', 'speakerName', 1, ${createdAt}),
-  ('local-cfp-v1-speaker-email', 'local-event', 'local-cfp-v1', 'local-cfp-speaker-email', 4, 'email', 'Speaker email', 'speakerEmail', 1, ${createdAt})
+  ('local-cfp-v1-title', 'local-event', 'local-cfp-v1', 'local-cfp-title', 1, 'text', 'Session title', 'submissionTitle', 1, NULL, NULL, ${createdAt}),
+  ('local-cfp-v1-abstract', 'local-event', 'local-cfp-v1', 'local-cfp-abstract', 2, 'textarea', 'Session abstract', 'submissionAbstract', 1, NULL, NULL, ${createdAt}),
+  ('local-cfp-v1-speaker-name', 'local-event', 'local-cfp-v1', 'local-cfp-speaker-name', 3, 'text', 'Speaker name', 'speakerName', 1, NULL, NULL, ${createdAt}),
+  ('local-cfp-v1-speaker-email', 'local-event', 'local-cfp-v1', 'local-cfp-speaker-email', 4, 'email', 'Speaker email', 'speakerEmail', 1, NULL, NULL, ${createdAt}),
+  ('local-cfp-v1-track', 'local-event', 'local-cfp-v1', 'local-cfp-track', 5, 'select', 'Track', NULL, 1, '["Engineering","Product"]', '{"Engineering":"engineering","Product":"product"}', ${createdAt})
 ON CONFLICT(id) DO UPDATE SET
   event_id = excluded.event_id, form_version_id = excluded.form_version_id,
   source_field_id = excluded.source_field_id, \`order\` = excluded.\`order\`,
   type = excluded.type, label = excluded.label, semantic_key = excluded.semantic_key,
-  required = excluded.required;
+  required = excluded.required, options = excluded.options, routing = excluded.routing;
 INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at)
 VALUES ('local-session', '${hmac(session)}', 'local-user', 'session', ${expiresAt}, NULL, ${createdAt})
 ON CONFLICT(id) DO UPDATE SET
