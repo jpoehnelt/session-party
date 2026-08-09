@@ -13,28 +13,35 @@ const parsePort = (value: string): number => {
   return port;
 };
 
-const parseOrigin = (value: string): string => {
-  const url = new URL(value);
-  if (
-    (url.protocol !== "http:" && url.protocol !== "https:")
-    || url.username
-    || url.password
-    || url.pathname !== "/"
-    || url.search
-    || url.hash
-  ) {
-    throw new Error("PASEO_BASE_URL must be an HTTP(S) origin");
+const LOOPBACK_HOST = "127.0.0.1";
+const SUPERVISOR_HOST = "0.0.0.0";
+
+const parseOrigin = (value: string, expected: string): string => {
+  const origin = new URL(value).origin;
+  if (origin !== expected || value !== origin) {
+    throw new Error(`PASEO_BASE_URL must be exactly ${expected}`);
   }
-  return url.origin;
+  return origin;
 };
 
 export const resolveLocalRuntime = (
   env: NodeJS.ProcessEnv = process.env,
 ): LocalRuntime => {
-  const host = env.HOST?.trim() || "127.0.0.1";
-  const port = parsePort(env.PASEO_PORT?.trim() || "5173");
+  const configuredHost = env.HOST?.trim() || LOOPBACK_HOST;
+  const assignedPort = env.PASEO_PORT?.trim();
+  if (
+    configuredHost !== LOOPBACK_HOST
+    && (configuredHost !== SUPERVISOR_HOST || !assignedPort)
+  ) {
+    throw new Error(
+      `HOST must be ${LOOPBACK_HOST}, or ${SUPERVISOR_HOST} with an assigned PASEO_PORT`,
+    );
+  }
+  const host = configuredHost;
+  const port = parsePort(assignedPort || "5173");
+  const expectedOrigin = `http://${LOOPBACK_HOST}:${port}`;
   const origin = env.PASEO_BASE_URL?.trim()
-    ? parseOrigin(env.PASEO_BASE_URL.trim())
-    : `http://${host.includes(":") ? `[${host}]` : host}:${port}`;
+    ? parseOrigin(env.PASEO_BASE_URL.trim(), expectedOrigin)
+    : expectedOrigin;
   return { host, port, origin };
 };

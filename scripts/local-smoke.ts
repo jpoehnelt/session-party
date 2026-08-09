@@ -24,14 +24,25 @@ const headers = {
   "Content-Type": "application/json",
   Cookie: `sp_session=${encodeURIComponent(session)}`,
 };
-const created = await fetch(`${origin}/api/v1/events`, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ name: "Local Smoke Event", slug: "local-smoke-event" }),
-});
-if (!created.ok) throw new Error(`Authenticated event POST failed: ${created.status}`);
-const event = await created.json() as { id?: unknown };
-if (typeof event.id !== "string") throw new Error("Authenticated event POST returned no id");
+const existing = await fetch(`${origin}/api/v1/events/local-smoke-event`, { headers });
+let event: { id?: unknown };
+let eventMode: "created" | "reused";
+if (existing.ok) {
+  event = await existing.json() as { id?: unknown };
+  eventMode = "reused";
+} else if (existing.status === 404) {
+  const created = await fetch(`${origin}/api/v1/events`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: "Local Smoke Event", slug: "local-smoke-event" }),
+  });
+  if (!created.ok) throw new Error(`Authenticated event POST failed: ${created.status}`);
+  event = await created.json() as { id?: unknown };
+  eventMode = "created";
+} else {
+  throw new Error(`Authenticated event lookup failed: ${existing.status}`);
+}
+if (typeof event.id !== "string") throw new Error("Authenticated event lookup returned no id");
 
 const fetched = await fetch(`${origin}/api/v1/events/${event.id}`, { headers });
 if (!fetched.ok) throw new Error(`Authenticated event GET failed: ${fetched.status}`);
@@ -78,7 +89,7 @@ if (
 
 console.log(JSON.stringify({
   mode: "local-fake",
-  rest: { post: created.status, get: fetched.status },
+  rest: { event: eventMode, get: fetched.status },
   mcp: mcp.status,
   bindings: { d1: true, r2: true, durableObject: true },
 }));
