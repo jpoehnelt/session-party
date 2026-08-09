@@ -230,8 +230,8 @@ describe("submit operation descriptors", () => {
       "submit.list",
     ]);
     expect(operations.map((operation) => "rest" in operation ? [operation.rest.method, operation.rest.path] : null)).toEqual([
-      ["post", "/submit/:eventSlug/:formId"],
-      ["get", "/submit/:eventSlug/:formId"],
+      ["post", "/public/events/:eventSlug/forms/:formId/submissions"],
+      ["get", "/public/events/:eventSlug/forms/:formId"],
       ["get", "/events/:eventId/submissions"],
     ]);
     expect(operations.filter((operation) => "mcp" in operation).map((operation) => operation.mcp.name)).toEqual([

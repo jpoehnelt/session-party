@@ -24,7 +24,7 @@ export const createPublicSubmissionOperation = {
   invoke: createPublicSubmission,
   rest: {
     method: "post",
-    path: "/submit/:eventSlug/:formId",
+    path: "/public/events/:eventSlug/forms/:formId/submissions",
     input: {
       path: ["eventSlug", "formId"],
       headers: { idempotencyKey: "Idempotency-Key" },
@@ -47,7 +47,7 @@ export const getPublicSubmissionFormOperation = {
   invoke: getPublicSubmissionForm,
   rest: {
     method: "get",
-    path: "/submit/:eventSlug/:formId",
+    path: "/public/events/:eventSlug/forms/:formId",
     input: { path: ["eventSlug", "formId"] },
     summary: "Get the current immutable public submission form",
   },

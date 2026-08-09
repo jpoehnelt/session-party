@@ -29,20 +29,24 @@ export async function fetchPublicSubmissionForm(
   eventSlug: string,
   formId: string,
 ): Promise<PublicSubmissionFormValue> {
-  const response = await fetch(`/api/v1/submit/${encodeURIComponent(eventSlug)}/${encodeURIComponent(formId)}`);
+  const response = await fetch(
+    `/api/v1/public/events/${encodeURIComponent(eventSlug)}/forms/${encodeURIComponent(formId)}`,
+  );
   if (!response.ok) {
     throw new Error(response.status === 404 ? "Submission form not found" : "Could not load submission form");
   }
   return Schema.decodeUnknownSync(PublicSubmissionForm)(await response.json());
 }
 
-async function postPublicSubmission(
+export async function postPublicSubmission(
   eventSlug: string,
   formId: string,
   idempotencyKey: string,
   answers: Readonly<Record<string, AnswerValue>>,
 ): Promise<typeof CreatePublicSubmissionOutput.Type> {
-  const response = await fetch(`/api/v1/submit/${encodeURIComponent(eventSlug)}/${encodeURIComponent(formId)}`, {
+  const response = await fetch(
+    `/api/v1/public/events/${encodeURIComponent(eventSlug)}/forms/${encodeURIComponent(formId)}/submissions`,
+    {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -51,7 +55,8 @@ async function postPublicSubmission(
     body: JSON.stringify({
       answers: Object.entries(answers).map(([fieldId, value]) => ({ fieldId, value })),
     }),
-  });
+    },
+  );
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const message = payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"

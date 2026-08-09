@@ -1,10 +1,19 @@
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server.edge";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
-import PublicSubmitPage, { layout, path as publicPath } from "./public-submit";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import PublicSubmitPage, {
+  fetchPublicSubmissionForm,
+  layout,
+  path as publicPath,
+  postPublicSubmission,
+} from "./public-submit";
 import SubmissionsPage, { path as organizerPath } from "./submissions";
 import type { PublicSubmissionForm, SubmissionPage } from "../schema";
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 
 const publicForm: PublicSubmissionForm = {
   event: {
@@ -76,6 +85,44 @@ describe("public submit route", () => {
     expect(markup).toContain("Submit proposal");
     expect(markup).not.toContain("AppShell");
   });
+  it("uses the frozen public REST read and create endpoints", async () => {
+    const created = {
+      submissionId: "submission-created",
+      status: "submitted" as const,
+      submittedAt: Date.UTC(2026, 7, 8, 12),
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      new Response(JSON.stringify(init?.method === "POST" ? created : publicForm), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchPublicSubmissionForm("architecture-summit", "form-public");
+    await postPublicSubmission(
+      "architecture-summit",
+      "form-public",
+      "submit-route-test-001",
+      { "field-title": "Effect at the edge" },
+    );
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/public/events/architecture-summit/forms/form-public",
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/public/events/architecture-summit/forms/form-public/submissions",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "submit-route-test-001",
+        },
+        body: JSON.stringify({
+          answers: [{ fieldId: "field-title", value: "Effect at the edge" }],
+        }),
+      }),
+    );
+  });
+
 
   it("renders closed published content without an active submit control", () => {
     const markup = renderRoute(
