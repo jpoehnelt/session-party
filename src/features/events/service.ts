@@ -4,20 +4,25 @@ import {
   eventAuthorization,
   type AuthorizationPolicy,
 } from "contracts/principal";
-import { auditLog, domainChanges, eventMembers, events, idempotencyRecords, users } from "contracts/schema";
+import { apiKeys, auditLog, domainChanges, eventMembers, events, idempotencyRecords, users } from "contracts/schema";
 import { Effect, Schema } from "effect";
-import { and, asc, eq, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { Authorizer, CurrentUser, Db } from "@/server/services";
+import { ApiKeyCredentials, Authorizer, CurrentUser, Db } from "@/server/services";
 import {
   AddEventMemberOutput,
   type AddEventMemberInput,
   type AddEventMemberOutput as AddEventMemberOutputType,
   type EventMember as EventMemberType,
+  type EventApiKey as EventApiKeyType,
+  type CreateEventApiKeyInput,
+  type CreateEventApiKeyOutput,
+  type ListEventApiKeysInput,
   type ListEventMembersInput,
   RemoveEventMemberOutput,
   type RemoveEventMemberInput,
   type RemoveEventMemberOutput as RemoveEventMemberOutputType,
+  type RevokeEventApiKeyInput,
   UpdateEventMemberOutput,
   type UpdateEventMemberInput,
   type UpdateEventMemberOutput as UpdateEventMemberOutputType,
@@ -83,6 +88,16 @@ type ManagedRole = "owner" | "admin" | "reviewer";
 
 const normalizedEmail = (email: string) => email.trim().toLowerCase();
 const commandId = (prefix: string) => `${prefix}_${nanoid()}`;
+
+const apiKeyOutput = (row: typeof apiKeys.$inferSelect): EventApiKeyType => ({
+  id: row.id,
+  name: row.name,
+  scopes: row.scopes as EventApiKeyType["scopes"],
+  expiresAt: row.expiresAt,
+  revokedAt: row.revokedAt,
+  version: row.version,
+  createdAt: row.createdAt,
+});
 
 const sha256 = (value: string): Effect.Effect<string, External> =>
   Effect.tryPromise({
@@ -297,6 +312,99 @@ const requireMemberManager = (eventId: string): Effect.Effect<MemberActor, AppEr
       return yield* Effect.fail(new Forbidden({ reason: "Owner or admin role required" }));
     }
     return { userId: principal.userId, role: membership.role };
+  });
+
+export const listEventApiKeys = (
+  input: ListEventApiKeysInput,
+): Effect.Effect<readonly EventApiKeyType[], AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const event = yield* findEvent(input.eventId);
+    yield* requireMemberManager(event.id);
+    const { db } = yield* Db;
+    const rows = yield* database(() =>
+      db.select().from(apiKeys).where(eq(apiKeys.eventId, event.id)).orderBy(desc(apiKeys.createdAt), asc(apiKeys.id)),
+    );
+    return rows.map(apiKeyOutput);
+  });
+
+export const createEventApiKey = (
+  input: CreateEventApiKeyInput,
+): Effect.Effect<CreateEventApiKeyOutput, AppError, ApiKeyCredentials | Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const event = yield* findEvent(input.eventId);
+    const actor = yield* requireMemberManager(event.id);
+    const name = input.name.trim();
+    if (!name) return yield* Effect.fail(new Validation({ message: "API key name is required" }));
+    const now = new Date();
+    const expiresAt = new Date(input.expiresAt);
+    const minimumExpiry = now.getTime() + 60 * 60_000;
+    const maximumExpiry = now.getTime() + 366 * 24 * 60 * 60_000;
+    if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() < minimumExpiry || expiresAt.getTime() > maximumExpiry) {
+      return yield* Effect.fail(new Validation({ message: "API keys must expire between one hour and one year from now" }));
+    }
+    const scopes = [...new Set(input.scopes)];
+    const credentials = yield* ApiKeyCredentials;
+    const { secret, hash } = yield* credentials.generate();
+    const id = commandId("api_key");
+    const row = {
+      id,
+      eventId: event.id,
+      name,
+      keyHash: hash,
+      scopes,
+      expiresAt,
+      revokedAt: null,
+      createdBy: actor.userId,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    } as const;
+    const requestId = `event-api-key:create:${id}`;
+    const { db } = yield* Db;
+    yield* database(() => db.batch([
+      db.insert(apiKeys).values(row),
+      db.insert(auditLog).values({
+        id: commandId("audit"), eventId: event.id, requestId, actorUserId: actor.userId,
+        actorApiKeyId: null, action: "events.createApiKey", resourceType: "apiKey", resourceId: id,
+        before: null, after: { id, name, scopes, expiresAt: expiresAt.toISOString(), version: 1 },
+        metadata: { secretReturnedOnce: true }, occurredAt: now,
+      }),
+    ]));
+    return { apiKey: apiKeyOutput(row), secret };
+  });
+
+export const revokeEventApiKey = (
+  input: RevokeEventApiKeyInput,
+): Effect.Effect<EventApiKeyType, AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const event = yield* findEvent(input.eventId);
+    const actor = yield* requireMemberManager(event.id);
+    const { db } = yield* Db;
+    const [existing] = yield* database(() => db.select().from(apiKeys).where(and(
+      eq(apiKeys.eventId, event.id), eq(apiKeys.id, input.apiKeyId),
+    )).limit(1));
+    if (!existing) return yield* Effect.fail(new NotFound({ entity: "API key", id: input.apiKeyId }));
+    if (existing.revokedAt || existing.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "API key changed or was already revoked; refresh and try again" }));
+    }
+    const revokedAt = new Date();
+    const anticipated = apiKeyOutput({ ...existing, revokedAt, updatedAt: revokedAt, version: existing.version + 1 });
+    const result = yield* database(() => db.batch([db.update(apiKeys).set({
+      revokedAt, updatedAt: revokedAt, version: sql`${apiKeys.version} + 1`,
+    }).where(and(
+      eq(apiKeys.eventId, event.id), eq(apiKeys.id, input.apiKeyId),
+      eq(apiKeys.version, input.expectedVersion), isNull(apiKeys.revokedAt),
+    )).returning(), db.insert(auditLog).values({
+      id: commandId("audit"), eventId: event.id, requestId: `event-api-key:revoke:${existing.id}`,
+      actorUserId: actor.userId, actorApiKeyId: null, action: "events.revokeApiKey",
+      resourceType: "apiKey", resourceId: existing.id,
+      before: { id: existing.id, name: existing.name, scopes: existing.scopes, expiresAt: existing.expiresAt.toISOString(), version: existing.version },
+      after: { id: anticipated.id, revokedAt: anticipated.revokedAt?.toISOString(), version: anticipated.version },
+      metadata: null, occurredAt: revokedAt,
+    })]));
+    const revoked = result[0][0];
+    if (!revoked) return yield* Effect.fail(new Conflict({ message: "API key changed; refresh and try again" }));
+    return apiKeyOutput(revoked);
   });
 
 const loadMember = (eventId: string, memberId: string) =>
