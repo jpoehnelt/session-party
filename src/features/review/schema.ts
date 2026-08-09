@@ -293,3 +293,20 @@ export const AcceptSubmissionOutput = Schema.Struct({
   idempotent: Schema.Boolean,
 });
 export type AcceptSubmissionOutput = typeof AcceptSubmissionOutput.Type;
+
+export const RejectSubmissionInput = Schema.Struct({
+  eventId: EntityId,
+  submissionId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: Schema.String.pipe(Schema.minLength(8), Schema.maxLength(256)),
+  requestId: RequestId,
+});
+export type RejectSubmissionInput = typeof RejectSubmissionInput.Type;
+
+export const RejectSubmissionOutput = Schema.Struct({
+  submissionId: EntityId,
+  submissionVersion: Schema.Int.pipe(Schema.positive()),
+  status: Schema.Literal("rejected"),
+  idempotent: Schema.Boolean,
+});
+export type RejectSubmissionOutput = typeof RejectSubmissionOutput.Type;

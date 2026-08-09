@@ -7,6 +7,7 @@ const eventSlug = "ai-engineer-sandbox";
 const ownerSession = "demo-owner-session";
 const reviewerSession = "demo-reviewer-session";
 const speakerSession = "demo-speaker-session";
+const DAY_MS = 86_400_000;
 
 const fixtureSpeakerNames = [
   "Sam Speaker", "Alex Morgan", "Avery Chen", "Blair Okafor", "Cameron Singh",
@@ -614,13 +615,15 @@ for (let index = 0; index < 18; index += 1) {
         },
       });
   if (index > 0) scheduledTalks.push(talk);
+  const dayIndex = Math.floor(index / 6);
+  const slotWithinDay = index % 6;
   await request(`/events/${eventId}/agenda/talks/${encode(talk.talk.id)}/schedule`, {
     method: "PUT",
     session: ownerSession,
     body: {
       trackId: trackIds[index % trackIds.length],
-      roomId: roomIds[index % roomIds.length],
-      startsAt: 1_789_664_400_000 + Math.floor(index / roomIds.length) * 3_600_000,
+      roomId: roomIds[slotWithinDay % roomIds.length],
+      startsAt: 1_789_664_400_000 + dayIndex * DAY_MS + Math.floor(slotWithinDay / roomIds.length) * 3_600_000,
       durationMin: 45,
       expectedVersion: talk.talk.version,
       idempotencyKey: `demo-schedule-talk-${index + 1}-v1`,

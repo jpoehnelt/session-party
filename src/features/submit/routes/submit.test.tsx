@@ -7,10 +7,12 @@ import PublicSubmitPage, {
   layout,
   path as publicPath,
   postPublicSubmission,
+  draftStorageKey,
   visibleFields,
 } from "./public-submit";
+import MySubmissionsPage, { path as mySubmissionsPath } from "./my-submissions";
 import SubmissionsPage, { fetchSubmissionQueue, path as organizerPath } from "./submissions";
-import type { PublicSubmissionForm, SubmissionPage } from "../schema";
+import type { OwnSubmissions, PublicSubmissionForm, SubmissionPage } from "../schema";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -85,7 +87,23 @@ describe("public submit route", () => {
     expect(markup).toContain("Call for proposals");
     expect(markup).toContain("Proposal title");
     expect(markup).toContain("Submit proposal");
+    expect(markup).toContain("Save draft");
     expect(markup).not.toContain("AppShell");
+  });
+
+  it("names drafts by immutable form version and renders the deadline", () => {
+    expect(draftStorageKey("architecture-summit", "form-public", "form-public-v1")).toBe(
+      "session-party:cfp-draft:architecture-summit:form-public:form-public-v1",
+    );
+    const markup = renderRoute(
+      "/submit/architecture-summit/form-public",
+      <PublicSubmitPage initialForm={{
+        ...publicForm,
+        form: { ...publicForm.form, closesAt: Date.UTC(2026, 7, 31, 23, 59) },
+      }} />,
+    );
+    expect(markup).toContain("Deadline");
+    expect(markup).toContain("August 31, 2026");
   });
   it("uses the frozen public REST read and create endpoints", async () => {
     const created = {
@@ -208,6 +226,51 @@ describe("public submit route", () => {
       "field-details",
     ]);
     expect(visibleFields(fields, {}).map((field) => field.id)).toEqual(["field-consent"]);
+  });
+});
+
+describe("speaker submission dashboard route", () => {
+  const ownSubmissions: OwnSubmissions = {
+    event: { name: "Architecture Summit", slug: "architecture-summit" },
+    submissions: [
+      {
+        id: "submission-editable",
+        formId: "form-public",
+        formName: "Call for proposals",
+        title: "Effect at the edge",
+        abstract: "A practical proposal.",
+        category: "architecture",
+        status: "in_review",
+        submittedAt: Date.UTC(2026, 7, 8, 12),
+        version: 2,
+        editable: true,
+      },
+      {
+        id: "submission-rejected",
+        formId: "form-public",
+        formName: "Call for proposals",
+        title: "A second proposal",
+        abstract: "Another proposal.",
+        category: null,
+        status: "rejected",
+        submittedAt: Date.UTC(2026, 7, 7, 12),
+        version: 3,
+        editable: false,
+      },
+    ],
+  };
+
+  it("uses a dedicated speaker route with editable and decided proposal states", () => {
+    expect(mySubmissionsPath).toBe("/portal/events/:eventSlug/submissions");
+    const markup = renderRoute(
+      "/portal/events/architecture-summit/submissions",
+      <MySubmissionsPage initialData={ownSubmissions} />,
+    );
+    expect(markup).toContain("Your proposals");
+    expect(markup).toContain("In review");
+    expect(markup).toContain("Save proposal changes");
+    expect(markup).toContain("Proposal not selected");
+    expect(markup).toContain("The organizer decision is now reflected here.");
   });
 });
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject } from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import type { AnswerValue } from "contracts/types";
 import { Schema } from "effect";
 import {
@@ -24,6 +24,9 @@ import {
 
 export const path = "/submit/:eventSlug/:formId";
 export const layout = "bare" as const;
+
+export const draftStorageKey = (eventSlug: string, formId: string, versionId: string) =>
+  `session-party:cfp-draft:${eventSlug}:${formId}:${versionId}`;
 
 export async function fetchPublicSubmissionForm(
   eventSlug: string,
@@ -284,6 +287,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   const [answers, setAnswers] = useState<Record<string, AnswerValue>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [draftStatus, setDraftStatus] = useState<"restored" | "saved" | null>(null);
   const [success, setSuccess] = useState<typeof CreatePublicSubmissionOutput.Type | null>(initialSuccess);
   const idempotencyKey = useRef(crypto.randomUUID());
   const widgetId = useRef<string | null>(null);
@@ -311,6 +315,31 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
     };
   }, [eventSlug, formId, initialForm]);
 
+  useEffect(() => {
+    if (!form) return;
+    const key = draftStorageKey(eventSlug, formId, form.form.versionId);
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+      const allowedIds = new Set(form.form.fields.map((field) => field.id));
+      const restored: Record<string, AnswerValue> = {};
+      for (const [fieldId, value] of Object.entries(parsed)) {
+        const valid = typeof value === "string"
+          || (Array.isArray(value) && value.every((item) => typeof item === "string"))
+          || (value !== null && typeof value === "object" && "assetId" in value && typeof value.assetId === "string");
+        if (allowedIds.has(fieldId) && valid) restored[fieldId] = value as AnswerValue;
+      }
+      if (Object.keys(restored).length > 0) {
+        setAnswers(restored);
+        setDraftStatus("restored");
+      }
+    } catch {
+      window.localStorage.removeItem(key);
+    }
+  }, [eventSlug, form, formId]);
+
   const shownFields = useMemo(() => form ? visibleFields(form.form.fields, answers) : [], [answers, form]);
 
   const handleSubmit = async (event: FormEvent) => {
@@ -327,6 +356,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
         Object.fromEntries(Object.entries(answers).filter(([fieldId]) => activeIds.has(fieldId))),
         turnstileToken,
       );
+      window.localStorage.removeItem(draftStorageKey(eventSlug, formId, form.form.versionId));
       setSuccess(result);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Could not submit this form");
@@ -353,7 +383,15 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
         <Card>
           <EmptyState
             title="Submission received"
-            description={`Your proposal was saved successfully. Reference: ${success.submissionId}`}
+            description={`Your proposal was saved successfully. Reference: ${success.submissionId}. Sign in with the same email to track its status and edit while the CFP remains open.`}
+            action={
+              <Link
+                className="inline-flex h-10 items-center justify-center rounded-control bg-accent px-4 text-sm font-medium text-on-accent shadow-xs hover:bg-accent-hover"
+                to={`/portal/events/${form.event.slug}/submissions`}
+              >
+                Manage your proposals
+              </Link>
+            }
           />
         </Card>
       </main>
@@ -368,6 +406,15 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
         <p className="text-sm font-medium text-accent">{form.event.name}</p>
         <h1 className="text-3xl font-semibold tracking-tight text-ink">{form.form.name}</h1>
         {form.form.description && <p className="leading-relaxed text-ink-secondary">{form.form.description}</p>}
+        {form.form.closesAt !== null && (
+          <p className="text-sm font-medium text-ink-secondary">
+            Deadline {new Intl.DateTimeFormat("en-US", {
+              dateStyle: "full",
+              timeStyle: "short",
+              timeZone: form.event.timezone,
+            }).format(form.form.closesAt)} {form.event.timezone}
+          </p>
+        )}
       </header>
       {!accepting && (
         <Alert tone="warning">
@@ -405,7 +452,33 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
               <AlertDescription>{submitError}</AlertDescription>
             </Alert>
           )}
-          {accepting && <Button type="submit" disabled={submitting || !canSubmit}>{submitting ? "Submitting…" : "Submit proposal"}</Button>}
+          {draftStatus && (
+            <Alert tone="success" role="status">
+              <AlertTitle>{draftStatus === "restored" ? "Draft restored" : "Draft saved"}</AlertTitle>
+              <AlertDescription>
+                {draftStatus === "restored" ? "Your answers from this browser are ready to continue." : "Your answers are stored in this browser until you submit."}
+              </AlertDescription>
+            </Alert>
+          )}
+          {accepting && (
+            <div className="flex flex-wrap gap-3">
+              <Button type="submit" disabled={submitting || !canSubmit}>{submitting ? "Submitting…" : "Submit proposal"}</Button>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={submitting || Object.keys(answers).length === 0}
+                onClick={() => {
+                  window.localStorage.setItem(
+                    draftStorageKey(eventSlug, formId, form.form.versionId),
+                    JSON.stringify(answers),
+                  );
+                  setDraftStatus("saved");
+                }}
+              >
+                Save draft
+              </Button>
+            </div>
+          )}
         </form>
       </Card>
     </main>

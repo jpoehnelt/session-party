@@ -47,6 +47,7 @@ import {
   assignReviewer,
   createReviewRound,
   getWorkbench,
+  rejectSubmission,
   requestAiSuggestion,
   saveScore,
 } from "./service";
@@ -180,7 +181,7 @@ beforeAll(async () => {
   await db.insert(formVersionFields).values([
     {
       id: "field_abstract", eventId: fixtureEventId, formVersionId: "form_version_01", order: 1,
-      type: "textarea", label: "Abstract", required: true, createdAt,
+      type: "textarea", label: "Proposal summary", semanticKey: "submissionAbstract", required: true, createdAt,
     },
     {
       id: "field_task_notes", eventId: fixtureEventId, formVersionId: "form_version_task", order: 1,
@@ -398,6 +399,7 @@ describe("review and acceptance slice", () => {
       "review.assignReviewer",
       "review.createRound",
       "review.getWorkbench",
+      "review.rejectSubmission",
       "review.requestAiSuggestion",
       "review.saveScore",
     ]);
@@ -668,8 +670,15 @@ describe("review and acceptance slice", () => {
       idempotencyKey: "accept-task-form",
       requestId: "request_accept_task_form",
     }));
+    const rejection = await runEitherAs(owner, rejectSubmission({
+      eventId: fixtureEventId,
+      submissionId: "submission_task_form",
+      expectedVersion: 1,
+      idempotencyKey: "reject-task-form",
+      requestId: "request_reject_task_form",
+    }));
 
-    for (const result of [assignment, score, aiSuggestion, acceptance]) {
+    for (const result of [assignment, score, aiSuggestion, acceptance, rejection]) {
       expect(result._tag).toBe("Left");
       if (result._tag === "Left") expect(result.left._tag).toBe("NotFound");
     }
@@ -1034,5 +1043,52 @@ describe("review and acceptance slice", () => {
     expect(audits).toHaveLength(1);
     expect(idempotency).toHaveLength(1);
     expect(idempotency[0]?.status).toBe("completed");
+  });
+
+  it("records a versioned rejection, publishes speaker-visible evidence, and replays idempotently", async () => {
+    const input = {
+      eventId: fixtureEventId,
+      submissionId: "submission_59",
+      expectedVersion: 2,
+      idempotencyKey: "reject-submission-59",
+      requestId: "request_reject_59",
+    } as const;
+    const rejected = await runAs(owner, rejectSubmission(input));
+    const replayed = await runAs(owner, rejectSubmission(input));
+    expect(rejected).toEqual({
+      submissionId: input.submissionId,
+      submissionVersion: 3,
+      status: "rejected",
+      idempotent: false,
+    });
+    expect(replayed).toEqual({ ...rejected, idempotent: true });
+    const [submission] = await db.select().from(submissions).where(eq(submissions.id, input.submissionId));
+    expect(submission).toMatchObject({ status: "rejected", version: 3, acceptedAt: null });
+    const [change] = await db.select().from(domainChanges).where(eq(domainChanges.requestId, input.requestId));
+    const [audit] = await db.select().from(auditLog).where(eq(auditLog.requestId, input.requestId));
+    expect(change).toMatchObject({ eventType: "review.submission.rejected", aggregateVersion: 3 });
+    expect(change?.audiences).toEqual([
+      { kind: "admins" },
+      { kind: "speaker", speakerIds: [fixturePrimarySpeakerId] },
+    ]);
+    expect(audit).toMatchObject({ action: "review.rejectSubmission" });
+  });
+
+  it("collapses concurrent rejection retries into one decision", async () => {
+    const input = {
+      eventId: fixtureEventId,
+      submissionId: "submission_58",
+      expectedVersion: 2,
+      idempotencyKey: "reject-concurrent-submission-58",
+      requestId: "request_reject_concurrent_58",
+    } as const;
+    const results = await Promise.all([
+      runAs(owner, rejectSubmission(input)),
+      runAs(owner, rejectSubmission(input)),
+    ]);
+    expect(results.map((result) => result.idempotent).sort()).toEqual([false, true]);
+    expect(new Set(results.map((result) => result.submissionVersion))).toEqual(new Set([3]));
+    expect(await db.select().from(domainChanges).where(eq(domainChanges.requestId, input.requestId))).toHaveLength(1);
+    expect(await db.select().from(auditLog).where(eq(auditLog.requestId, input.requestId))).toHaveLength(1);
   });
 });

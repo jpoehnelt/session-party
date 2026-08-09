@@ -18,7 +18,7 @@ import {
   submissions,
 } from "contracts/schema";
 import type { AnswerValue } from "contracts/types";
-import { and, asc, count, desc, eq, exists, gt, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
@@ -28,10 +28,15 @@ import {
   CreatePublicSubmissionOutput,
   type CreatePublicSubmissionInput,
   type CreateTaskSubmissionInput,
+  type GetOwnSubmissionsInput,
   type ListSubmissionsInput,
+  type OwnSubmissionSummary,
+  type OwnSubmissions,
   type PublicFormField,
   type PublicSubmissionForm,
   type SubmissionPage,
+  UpdateOwnSubmissionAbstractOutput,
+  type UpdateOwnSubmissionAbstractInput,
 } from "./schema";
 
 const COMMAND_TTL_MS = 24 * 60 * 60 * 1_000;
@@ -1156,4 +1161,343 @@ export const listSubmissions = (
         pageCount: total === 0 ? 0 : Math.ceil(total / input.pageSize),
       },
     };
+  });
+
+type OwnSubmissionRow = {
+  readonly id: string;
+  readonly formId: string;
+  readonly formName: string;
+  readonly title: string;
+  readonly category: string | null;
+  readonly status: typeof submissions.$inferSelect.status;
+  readonly submittedAt: Date;
+  readonly version: number;
+  readonly formStatus: typeof forms.$inferSelect.status;
+  readonly opensAt: Date | null;
+  readonly closesAt: Date | null;
+  readonly primarySpeakerId: string | null;
+  readonly primarySpeakerUserId: string | null;
+};
+
+type OwnAnswerRow = {
+  readonly id: string;
+  readonly submissionId: string;
+  readonly semanticKey: typeof formVersionFields.$inferSelect.semanticKey;
+  readonly value: unknown;
+  readonly version: number;
+};
+
+const requireSubmissionOwner = (): Effect.Effect<{
+  readonly userId: string;
+  readonly email: string;
+}, AppError, CurrentUser> =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentUser;
+    if (principal.kind !== "browser-session") {
+      return yield* Effect.fail(new Forbidden({ reason: "Submission management requires a browser session" }));
+    }
+    const email = normalizePublicEmail(principal.email);
+    if (email.length === 0) {
+      return yield* Effect.fail(new Forbidden({ reason: "The signed-in account has no email" }));
+    }
+    return { userId: principal.userId, email };
+  });
+
+const ownSubmissionRows = (
+  eventId: string,
+  owner: { readonly userId: string; readonly email: string },
+): Effect.Effect<{
+  readonly submissions: readonly OwnSubmissionRow[];
+  readonly answers: readonly OwnAnswerRow[];
+}, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const rows = yield* database(() =>
+      db
+        .select({
+          id: submissions.id,
+          formId: submissions.formId,
+          formName: formVersions.name,
+          title: submissions.title,
+          category: submissions.category,
+          status: submissions.status,
+          submittedAt: submissions.submittedAt,
+          version: submissions.version,
+          formStatus: forms.status,
+          opensAt: forms.opensAt,
+          closesAt: forms.closesAt,
+          primarySpeakerId: speakers.id,
+          primarySpeakerUserId: speakers.userId,
+        })
+        .from(submissions)
+        .innerJoin(forms, and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)))
+        .innerJoin(
+          formVersions,
+          and(
+            eq(formVersions.eventId, submissions.eventId),
+            eq(formVersions.id, submissions.formVersionId),
+          ),
+        )
+        .leftJoin(
+          submissionSpeakers,
+          and(
+            eq(submissionSpeakers.eventId, submissions.eventId),
+            eq(submissionSpeakers.submissionId, submissions.id),
+            eq(submissionSpeakers.isPrimary, true),
+          ),
+        )
+        .leftJoin(
+          speakers,
+          and(eq(speakers.eventId, submissionSpeakers.eventId), eq(speakers.id, submissionSpeakers.speakerId)),
+        )
+        .where(and(eq(submissions.eventId, eventId), eq(forms.kind, "cfp")))
+        .orderBy(desc(submissions.submittedAt), desc(submissions.id)),
+    );
+    const submissionIds = rows.map((row) => row.id);
+    if (submissionIds.length === 0) return { submissions: [], answers: [] };
+    const answers = yield* database(() =>
+      db
+        .select({
+          id: submissionAnswers.id,
+          submissionId: submissionAnswers.submissionId,
+          semanticKey: formVersionFields.semanticKey,
+          value: submissionAnswers.value,
+          version: submissionAnswers.version,
+        })
+        .from(submissionAnswers)
+        .innerJoin(
+          formVersionFields,
+          and(
+            eq(formVersionFields.eventId, submissionAnswers.eventId),
+            eq(formVersionFields.formVersionId, submissionAnswers.formVersionId),
+            eq(formVersionFields.id, submissionAnswers.formVersionFieldId),
+          ),
+        )
+        .where(
+          and(
+            eq(submissionAnswers.eventId, eventId),
+            inArray(submissionAnswers.submissionId, submissionIds),
+            inArray(formVersionFields.semanticKey, ["speakerEmail", "submissionAbstract"]),
+          ),
+        ),
+    );
+    const answerBySubmission = new Map<string, OwnAnswerRow[]>();
+    for (const answer of answers) {
+      answerBySubmission.set(answer.submissionId, [...(answerBySubmission.get(answer.submissionId) ?? []), answer]);
+    }
+    return {
+      submissions: rows.filter((row) => {
+        if (row.primarySpeakerUserId === owner.userId) return true;
+        const email = answerBySubmission.get(row.id)?.find((answer) => answer.semanticKey === "speakerEmail")?.value;
+        return typeof email === "string" && normalizePublicEmail(email) === owner.email;
+      }),
+      answers,
+    };
+  });
+
+const ownSummary = (
+  row: OwnSubmissionRow,
+  answers: readonly OwnAnswerRow[],
+  at: number,
+): OwnSubmissionSummary => {
+  const abstract = answers.find(
+    (answer) => answer.submissionId === row.id && answer.semanticKey === "submissionAbstract" && typeof answer.value === "string",
+  )?.value;
+  return {
+    id: row.id,
+    formId: row.formId,
+    formName: row.formName,
+    title: row.title,
+    abstract: typeof abstract === "string" ? abstract : "",
+    category: row.category,
+    status: row.status,
+    submittedAt: row.submittedAt.getTime(),
+    version: row.version,
+    editable: availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
+      && row.status !== "accepted"
+      && row.status !== "rejected"
+      && row.status !== "withdrawn",
+  };
+};
+
+export const getOwnSubmissions = (
+  input: GetOwnSubmissionsInput,
+): Effect.Effect<OwnSubmissions, AppError, CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const owner = yield* requireSubmissionOwner();
+    const { db } = yield* Db;
+    const [event] = yield* database(() =>
+      db.select({ id: events.id, name: events.name, slug: events.slug }).from(events).where(eq(events.slug, input.eventSlug)).limit(1),
+    );
+    if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventSlug }));
+    const owned = yield* ownSubmissionRows(event.id, owner);
+    const at = Date.now();
+    return {
+      event: { name: event.name, slug: event.slug },
+      submissions: owned.submissions.map((row) => ownSummary(row, owned.answers, at)),
+    };
+  });
+
+const replayOwnUpdate = (value: unknown) =>
+  Schema.decodeUnknown(UpdateOwnSubmissionAbstractOutput)(value).pipe(
+    Effect.mapError((error) => new External({ service: "database", detail: `Invalid stored submit.updateOwnAbstract response: ${String(error)}` })),
+  );
+
+export const updateOwnSubmissionAbstract = (
+  input: UpdateOwnSubmissionAbstractInput,
+): Effect.Effect<typeof UpdateOwnSubmissionAbstractOutput.Type, AppError, CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const owner = yield* requireSubmissionOwner();
+    const { db } = yield* Db;
+    const [event] = yield* database(() =>
+      db.select({ id: events.id }).from(events).where(eq(events.slug, input.eventSlug)).limit(1),
+    );
+    if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventSlug }));
+    const [keyHash, requestHash] = yield* Effect.all([
+      sha256(input.idempotencyKey),
+      sha256(stableStringify({ submissionId: input.submissionId, abstract: input.abstract, expectedVersion: input.expectedVersion })),
+    ]);
+    const principalId = owner.userId;
+    const [replay] = yield* database(() =>
+      db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, event.id),
+        eq(idempotencyRecords.operationId, "submit.updateOwnAbstract"),
+        eq(idempotencyRecords.principalId, principalId),
+        eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1),
+    );
+    if (replay) {
+      if (replay.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different proposal edit" }));
+      }
+      if (replay.status === "completed") {
+        const output = yield* replayOwnUpdate(replay.responseBody);
+        return { ...output, idempotent: true };
+      }
+      return yield* Effect.fail(new Conflict({ message: "Proposal edit with this idempotency key is already in progress" }));
+    }
+
+    const owned = yield* ownSubmissionRows(event.id, owner);
+    const row = owned.submissions.find((candidate) => candidate.id === input.submissionId);
+    if (!row) return yield* Effect.fail(new Forbidden({ reason: "This submission does not belong to the signed-in account" }));
+    if (row.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before saving" }));
+    }
+    if (!ownSummary(row, owned.answers, Date.now()).editable) {
+      return yield* Effect.fail(new Conflict({ message: "This proposal can no longer be edited because the CFP is closed or a decision has been recorded" }));
+    }
+    const abstractAnswer = owned.answers.find(
+      (answer) => answer.submissionId === row.id && answer.semanticKey === "submissionAbstract",
+    );
+    if (!abstractAnswer) {
+      return yield* Effect.fail(new Validation({ message: "The immutable CFP version has no submissionAbstract field" }));
+    }
+    const abstract = input.abstract.trim();
+    if (abstract.length === 0) return yield* Effect.fail(new Validation({ message: "Abstract is required" }));
+    const savedAt = new Date();
+    const nextVersion = row.version + 1;
+    const idempotencyId = nanoid();
+    const requestId = nanoid();
+    const summary: OwnSubmissionSummary = {
+      ...ownSummary({ ...row, version: nextVersion }, [
+        ...owned.answers.filter((answer) => answer.id !== abstractAnswer.id),
+        { ...abstractAnswer, value: abstract },
+      ], savedAt.getTime()),
+      editable: true,
+    };
+    const output = { submission: summary, idempotent: false } as const;
+    const commitNowMs = sql<Date>`CAST(unixepoch('subsec') * 1000 AS INTEGER)`;
+    const updatedAt = savedAt.getTime();
+
+    const committed = yield* database(() => db.batch([
+      db.update(submissions).set({ version: nextVersion, updatedAt: savedAt }).where(and(
+        eq(submissions.eventId, event.id),
+        eq(submissions.id, input.submissionId),
+        eq(submissions.version, input.expectedVersion),
+        inArray(submissions.status, ["submitted", "in_review", "waitlist"]),
+        exists(db.select({ id: forms.id }).from(forms).where(and(
+          eq(forms.eventId, submissions.eventId),
+          eq(forms.id, submissions.formId),
+          eq(forms.kind, "cfp"),
+          eq(forms.status, "open"),
+          or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
+          or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
+        ))),
+      )),
+      db.update(submissionAnswers).set({ value: abstract, version: abstractAnswer.version + 1, updatedAt: savedAt }).where(and(
+        eq(submissionAnswers.id, abstractAnswer.id),
+        eq(submissionAnswers.eventId, event.id),
+        eq(submissionAnswers.version, abstractAnswer.version),
+        sql`changes() > 0`,
+      )),
+      db.insert(idempotencyRecords).select(db.select({
+        id: sql<string>`${idempotencyId}`.as("id"),
+        eventId: submissions.eventId,
+        operationId: sql<string>`'submit.updateOwnAbstract'`.as("operation_id"),
+        principalId: sql<string>`${principalId}`.as("principal_id"),
+        keyHash: sql<string>`${keyHash}`.as("key_hash"),
+        requestHash: sql<string>`${requestHash}`.as("request_hash"),
+        status: sql<"completed">`'completed'`.as("status"),
+        responseStatus: sql<number>`200`.as("response_status"),
+        responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+        expiresAt: sql<Date>`${updatedAt + COMMAND_TTL_MS}`.as("expires_at"),
+        completedAt: sql<Date>`${updatedAt}`.as("completed_at"),
+        createdAt: sql<Date>`${updatedAt}`.as("created_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, event.id), eq(submissions.id, input.submissionId), eq(submissions.version, nextVersion), sql`changes() > 0`,
+      ))),
+      db.insert(domainChanges).select(db.select({
+        sequence: sql<number | null>`null`.as("sequence"),
+        id: sql<string>`${nanoid()}`.as("id"), eventId: submissions.eventId,
+        aggregateType: sql<string>`'submission'`.as("aggregate_type"), aggregateId: submissions.id,
+        aggregateVersion: submissions.version, eventType: sql<string>`'submit.abstract.updated'`.as("event_type"),
+        audiences: sql<unknown>`${JSON.stringify([
+          { kind: "admins" },
+          ...(row.primarySpeakerId ? [{ kind: "speaker", speakerIds: [row.primarySpeakerId] }] : []),
+        ])}`.as("audiences"),
+        payload: sql<unknown>`${JSON.stringify({ submissionId: input.submissionId, submissionVersion: nextVersion })}`.as("payload"),
+        actorUserId: sql<string>`${owner.userId}`.as("actor_user_id"), actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+        requestId: sql<string>`${requestId}`.as("request_id"), idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+        occurredAt: sql<Date>`${updatedAt}`.as("occurred_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, event.id), eq(submissions.id, input.submissionId),
+        exists(db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId))),
+      ))),
+      db.insert(auditLog).select(db.select({
+        id: sql<string>`${nanoid()}`.as("id"), eventId: submissions.eventId,
+        requestId: sql<string>`${requestId}`.as("request_id"), actorUserId: sql<string>`${owner.userId}`.as("actor_user_id"),
+        actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"), action: sql<string>`'submit.updateOwnAbstract'`.as("action"),
+        resourceType: sql<string>`'submission'`.as("resource_type"), resourceId: submissions.id,
+        before: sql<unknown>`${JSON.stringify({ abstract: abstractAnswer.value, version: row.version })}`.as("before"),
+        after: sql<unknown>`${JSON.stringify({ abstract, version: nextVersion })}`.as("after"),
+        metadata: sql<unknown>`null`.as("metadata"), occurredAt: sql<Date>`${updatedAt}`.as("occurred_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, event.id), eq(submissions.id, input.submissionId),
+        exists(db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId))),
+      ))),
+    ] as never)).pipe(
+      Effect.as(true),
+      Effect.catchIf(
+        (error): error is External => error.detail?.includes("idempotency_key_unique") === true || error.detail?.includes("UNIQUE constraint failed: idempotency_records.event_id") === true,
+        () => Effect.succeed(false),
+      ),
+    );
+    const [ownCommit] = yield* database(() =>
+      db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId)).limit(1),
+    );
+    if (committed && ownCommit) return output;
+    const [concurrent] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, event.id), eq(idempotencyRecords.operationId, "submit.updateOwnAbstract"),
+      eq(idempotencyRecords.principalId, principalId), eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1));
+    if (concurrent) {
+      if (concurrent.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different proposal edit" }));
+      }
+      if (concurrent.status === "completed") {
+        const replayed = yield* replayOwnUpdate(concurrent.responseBody);
+        return { ...replayed, idempotent: true };
+      }
+    }
+    return yield* Effect.fail(new Conflict({ message: "Submission changed or the CFP closed; reload before saving" }));
   });

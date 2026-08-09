@@ -7,12 +7,14 @@ import {
   domainChanges,
   events,
   eventMembers,
+  formVersionFields,
   formVersions,
   forms,
   idempotencyRecords,
   rooms,
   speakerProvisioning,
   speakers,
+  submissionAnswers,
   submissionSpeakers,
   submissions,
   talkSpeakers,
@@ -195,6 +197,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
   const userId = id("owner");
   const formId = id("form");
   const formVersionId = id("form-v1");
+  const abstractFieldId = id("field-abstract");
   const submissionA = id("submission-a");
   const submissionB = id("submission-b");
   const speakerA = id("speaker-a");
@@ -252,6 +255,17 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
       publishedAt: new Date(FIXED_NOW - 86_400_000),
       createdAt: new Date(FIXED_NOW - 86_400_000),
     }),
+    db.insert(formVersionFields).values({
+      id: abstractFieldId,
+      eventId,
+      formVersionId,
+      order: 1,
+      type: "textarea",
+      label: "Proposal summary",
+      semanticKey: "submissionAbstract",
+      required: true,
+      createdAt: now,
+    }),
     db.insert(submissions).values([
       {
         id: submissionA,
@@ -278,6 +292,28 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
         submittedAt: new Date(FIXED_NOW - 3 * 86_400_000),
         acceptedAt: new Date(FIXED_NOW - 2 * 86_400_000),
         version: 2,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]),
+    db.insert(submissionAnswers).values([
+      {
+        id: id("answer-abstract-a"),
+        eventId,
+        submissionId: submissionA,
+        formVersionId,
+        formVersionFieldId: abstractFieldId,
+        value: "A practical guide to reliable Effect programs at organizational scale.",
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: id("answer-abstract-b"),
+        eventId,
+        submissionId: submissionB,
+        formVersionId,
+        formVersionFieldId: abstractFieldId,
+        value: "How durable workflows preserve progress through retries and restarts.",
         createdAt: now,
         updatedAt: now,
       },
@@ -708,6 +744,9 @@ describe("agenda service", () => {
     const created = await runAs(seeded.user, createTalk(createInput));
     const replayed = await runAs(seeded.user, createTalk(createInput));
     expect(created.talk.status).toBe("draft");
+    expect(created.talk.description).toBe(
+      "A practical guide to reliable Effect programs at organizational scale.",
+    );
     expect(replayed.replayed).toBe(true);
     expect(replayed.changeId).toBe(created.changeId);
 

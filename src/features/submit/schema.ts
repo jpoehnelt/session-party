@@ -130,3 +130,46 @@ export const SubmissionPage = Schema.Struct({
   pagination: Pagination,
 });
 export type SubmissionPage = typeof SubmissionPage.Type;
+
+export const GetOwnSubmissionsInput = Schema.Struct({
+  eventSlug: EventSlug,
+});
+export type GetOwnSubmissionsInput = typeof GetOwnSubmissionsInput.Type;
+
+export const OwnSubmissionSummary = Schema.Struct({
+  id: EntityId,
+  formId: EntityId,
+  formName: Schema.String,
+  title: Schema.String,
+  abstract: Schema.String,
+  category: NullableText,
+  status: SubmissionStatus,
+  submittedAt: UnixTimestampMs,
+  version: Schema.Int.pipe(Schema.positive()),
+  editable: Schema.Boolean,
+});
+export type OwnSubmissionSummary = typeof OwnSubmissionSummary.Type;
+
+export const OwnSubmissions = Schema.Struct({
+  event: Schema.Struct({
+    name: Schema.String,
+    slug: EventSlug,
+  }),
+  submissions: Schema.Array(OwnSubmissionSummary),
+});
+export type OwnSubmissions = typeof OwnSubmissions.Type;
+
+export const UpdateOwnSubmissionAbstractInput = Schema.Struct({
+  eventSlug: EventSlug,
+  submissionId: EntityId,
+  abstract: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(20_000)),
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+});
+export type UpdateOwnSubmissionAbstractInput = typeof UpdateOwnSubmissionAbstractInput.Type;
+
+export const UpdateOwnSubmissionAbstractOutput = Schema.Struct({
+  submission: OwnSubmissionSummary,
+  idempotent: Schema.Boolean,
+});
+export type UpdateOwnSubmissionAbstractOutput = typeof UpdateOwnSubmissionAbstractOutput.Type;

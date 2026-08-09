@@ -12,6 +12,8 @@ import {
   GetWorkbenchInput,
   RequestAiSuggestionInput,
   RequestAiSuggestionOutput,
+  RejectSubmissionInput,
+  RejectSubmissionOutput,
   ReviewWorkbench,
   SaveScoreInput,
   SaveScoreOutput,
@@ -23,6 +25,7 @@ import {
   createReviewRound,
   getWorkbench,
   requestAiSuggestion,
+  rejectSubmission,
   saveScore,
 } from "./service";
 
@@ -215,6 +218,33 @@ const requestAiSuggestionOperation = {
   emits: ["review.aiSuggestion.created"],
 } as const satisfies AnyOperationDef;
 
+const rejectSubmissionOperation = {
+  id: "review.rejectSubmission",
+  kind: "command",
+  input: RejectSubmissionInput,
+  output: RejectSubmissionOutput,
+  authorize: acceptanceWrite,
+  invoke: rejectSubmission,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/submissions/:submissionId/rejection",
+    input: {
+      path: ["eventId", "submissionId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["expectedVersion"],
+    },
+    summary: "Reject a submission at its current version",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "review_reject_submission",
+    description: "Explicitly reject one current version of a CFP submission and publish that decision to its speaker audience.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.submission.rejected"],
+} as const satisfies AnyOperationDef;
+
 const saveScoreOperation = {
   id: "review.saveScore",
   kind: "command",
@@ -250,6 +280,7 @@ export const operations = [
   assignReviewerOperation,
   createRoundOperation,
   getWorkbenchOperation,
+  rejectSubmissionOperation,
   requestAiSuggestionOperation,
   saveScoreOperation,
 ] as const satisfies readonly AnyOperationDef[];

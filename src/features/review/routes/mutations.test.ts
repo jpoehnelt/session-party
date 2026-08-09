@@ -4,6 +4,7 @@ import {
   advanceReviewRoundRequest,
   assignReviewerRequest,
   createReviewRoundRequest,
+  rejectSubmissionRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
 } from "./mutations";
@@ -83,7 +84,7 @@ describe("review mutation client", () => {
     });
   });
 
-  it("maps assignment, scoring, AI, and acceptance inputs to their exact REST locations", async () => {
+  it("maps assignment, scoring, AI, and decisions to their exact REST locations", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         assignment: {
@@ -129,6 +130,12 @@ describe("review mutation client", () => {
         status: "accepted",
         provisioningStatus: "pending",
         idempotent: false,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        submissionId: "submission_two",
+        submissionVersion: 5,
+        status: "rejected",
+        idempotent: false,
       }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -162,6 +169,13 @@ describe("review mutation client", () => {
       expectedVersion: 3,
       idempotencyKey: "acceptance-key-1",
       requestId: "request-accept",
+    });
+    await rejectSubmissionRequest({
+      eventId: "event_one",
+      submissionId: "submission_two",
+      expectedVersion: 4,
+      idempotencyKey: "rejection-key-2",
+      requestId: "request-reject",
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/events/event_one/review/assignments", {
@@ -197,6 +211,15 @@ describe("review mutation client", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ expectedVersion: 3 }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/v1/events/event_one/review/submissions/submission_two/rejection", {
+      method: "POST",
+      headers: {
+        "x-request-id": "request-reject",
+        "idempotency-key": "rejection-key-2",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ expectedVersion: 4 }),
     });
   });
 

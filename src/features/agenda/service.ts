@@ -5,10 +5,12 @@ import {
   auditLog,
   domainChanges,
   events,
+  formVersionFields,
   idempotencyRecords,
   rooms,
   speakerProvisioning,
   speakers,
+  submissionAnswers,
   submissionSpeakers,
   submissions,
   talkSpeakers,
@@ -1079,6 +1081,29 @@ export const createTalk = (
       return yield* Effect.fail(new Validation({ message: "The accepted proposal has no linked speakers" }));
     }
 
+    const [abstractAnswer] = yield* database(() =>
+      db
+        .select({ value: submissionAnswers.value })
+        .from(submissionAnswers)
+        .innerJoin(
+          formVersionFields,
+          and(
+            eq(formVersionFields.eventId, submissionAnswers.eventId),
+            eq(formVersionFields.formVersionId, submissionAnswers.formVersionId),
+            eq(formVersionFields.id, submissionAnswers.formVersionFieldId),
+          ),
+        )
+        .where(and(
+          eq(submissionAnswers.eventId, input.eventId),
+          eq(submissionAnswers.submissionId, input.submissionId),
+          eq(formVersionFields.semanticKey, "submissionAbstract"),
+        ))
+        .limit(1),
+    );
+    const description = typeof abstractAnswer?.value === "string"
+      ? abstractAnswer.value.trim() || null
+      : null;
+
     const status = input.roomId !== null && input.startsAt !== null ? "confirmed" as const : "draft" as const;
     const talkId = nanoid();
     const candidate: AgendaTalk = {
@@ -1086,7 +1111,7 @@ export const createTalk = (
       eventId: input.eventId,
       submissionId: input.submissionId,
       title: submission.title,
-      description: null,
+      description,
       trackId: input.trackId,
       roomId: input.roomId,
       startsAt: input.startsAt,
@@ -1109,6 +1134,7 @@ export const createTalk = (
       eventId: input.eventId,
       submissionId: input.submissionId,
       title: submission.title,
+      description,
       trackId: input.trackId,
       roomId: input.roomId,
       startsAt: input.startsAt === null ? null : new Date(input.startsAt),
