@@ -50,6 +50,23 @@ export function fetchSubmissionPage(
     schema: SubmissionPage,
   });
 }
+export async function fetchSubmissionQueue(
+  eventId: string,
+  filters: { readonly status?: string; readonly formId?: string; readonly category?: string; readonly page: number },
+): Promise<{
+  readonly page: SubmissionPageValue;
+  readonly forms: readonly FormSummary[];
+}> {
+  const [page, forms] = await Promise.all([
+    fetchSubmissionPage(eventId, filters),
+    fetchFormSummaries(eventId).catch((error) => {
+      if (error instanceof ApiError && error.status === 403) return [];
+      throw error;
+    }),
+  ]);
+  return { page, forms };
+}
+
 
 const columns: TableColumn<SubmissionSummary>[] = [
   {
@@ -128,16 +145,13 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
     let active = true;
     setPage(undefined);
     setLoadError(null);
-    void Promise.all([
-      fetchSubmissionPage(event.id, {
-        status: status || undefined,
-        formId: formId || undefined,
-        category: category || undefined,
-        page: pageNumber,
-      }),
-      fetchFormSummaries(event.id),
-    ]).then(
-      ([loadedPage, loadedForms]) => {
+    void fetchSubmissionQueue(event.id, {
+      status: status || undefined,
+      formId: formId || undefined,
+      category: category || undefined,
+      page: pageNumber,
+    }).then(
+      ({ page: loadedPage, forms: loadedForms }) => {
         if (!active) return;
         setPage(loadedPage);
         setForms(loadedForms);

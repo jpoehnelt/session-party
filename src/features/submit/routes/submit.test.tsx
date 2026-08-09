@@ -8,7 +8,7 @@ import PublicSubmitPage, {
   path as publicPath,
   postPublicSubmission,
 } from "./public-submit";
-import SubmissionsPage, { path as organizerPath } from "./submissions";
+import SubmissionsPage, { fetchSubmissionQueue, path as organizerPath } from "./submissions";
 import type { PublicSubmissionForm, SubmissionPage } from "../schema";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -149,6 +149,26 @@ describe("public submit route", () => {
 });
 
 describe("organizer submissions route", () => {
+  it("keeps reviewer submissions when the owner-only forms list returns 403", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/events/event-public/submissions?page=1&pageSize=25") {
+        return new Response(JSON.stringify(organizerPage), { status: 200 });
+      }
+      if (url === "/api/v1/events/event-public/forms") {
+        return new Response(JSON.stringify({ message: "Access denied" }), { status: 403 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const loaded = await fetchSubmissionQueue("event-public", { page: 1 });
+
+    expect(loaded.page).toEqual(organizerPage);
+    expect(loaded.forms).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("renders real queue state and live filter controls without a nested shell", () => {
     expect(organizerPath).toBe("/e/:eventSlug/submissions");
     const markup = renderRoute(
