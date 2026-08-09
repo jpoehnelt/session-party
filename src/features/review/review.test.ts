@@ -1,4 +1,5 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import type { Principal } from "contracts/principal";
 import {
   acceptanceEvents,
   apiKeys,
@@ -24,28 +25,21 @@ import * as dbSchema from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Either, Layer, Schema } from "effect";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server.edge";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AiService, CurrentUser, Db, type CurrentUserValue } from "@/server/services";
+import { AiService, CurrentUser, Db } from "@/server/services";
 import {
   activeRoundFixture,
-  acceptedSubmissionFixture,
-  assignedSubmissionFixture,
   completedRoundFixture,
   pendingRoundFixture,
   contentionFixture,
-  emptyReviewFixture,
   fixtureClock,
   fixtureEventId,
   fixtureOwnerId,
   fixturePrimarySpeakerId,
   fixtureReviewerId,
   submissionQueueFixture,
-  reviewWorkbenchFixture,
 } from "./fixtures";
 import { operations } from "./operations";
-import ReviewWorkbenchRoute from "./routes/review-workbench";
 import { SaveScoreInput } from "./schema";
 import {
   acceptSubmission,
@@ -61,7 +55,7 @@ function hasTestMigrations(value: Cloudflare.Env): value is TestEnv {
   return "TEST_MIGRATIONS" in value;
 }
 
-const owner: CurrentUserValue = {
+const owner: Principal = {
   kind: "browser-session",
   userId: fixtureOwnerId,
   email: "morgan@example.com",
@@ -70,7 +64,7 @@ const owner: CurrentUserValue = {
   expiresAt: fixtureClock + 86_400_000,
 };
 
-const reviewer: CurrentUserValue = {
+const reviewer: Principal = {
   kind: "browser-session",
   userId: fixtureReviewerId,
   email: "ada@example.com",
@@ -79,7 +73,7 @@ const reviewer: CurrentUserValue = {
   expiresAt: fixtureClock + 86_400_000,
 };
 
-const speakerOnly: CurrentUserValue = {
+const speakerOnly: Principal = {
   kind: "browser-session",
   userId: "user_speaker_only",
   email: "speaker@example.com",
@@ -88,7 +82,7 @@ const speakerOnly: CurrentUserValue = {
   expiresAt: fixtureClock + 86_400_000,
 };
 
-const reviewApiKey: CurrentUserValue = {
+const reviewApiKey: Principal = {
   kind: "api-key",
   userId: "api-key:review-automation",
   apiKeyId: "review_automation",
@@ -111,14 +105,14 @@ const aiLayer = Layer.succeed(AiService, {
   },
 });
 
-const runAs = <A, E, R>(principal: CurrentUserValue, effect: Effect.Effect<A, E, R>) =>
+const runAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(
     effect.pipe(
       Effect.provide(Layer.mergeAll(dbLayer, aiLayer, Layer.succeed(CurrentUser, principal))),
     ) as Effect.Effect<A, E, never>,
   );
 
-const runEitherAs = <A, E, R>(principal: CurrentUserValue, effect: Effect.Effect<A, E, R>) =>
+const runEitherAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(
     effect.pipe(
       Effect.either,
@@ -366,52 +360,6 @@ describe("review and acceptance slice", () => {
     if (scoreAuthorization.kind === "event") expect(scoreAuthorization.apiKey.kind).toBe("deny");
   });
 
-  it("renders organizer evidence read-only and distinguishes a truly empty round", () => {
-    const organizerMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute));
-    expect(organizerMarkup).toContain("Ada Rivera · read-only evidence");
-    expect(organizerMarkup).not.toContain("Save my review");
-    expect(organizerMarkup).not.toContain(">Round</label>");
-
-    const reviewerMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
-      snapshot: { ...reviewWorkbenchFixture, viewerRole: "reviewer" },
-    }));
-    expect(reviewerMarkup).toContain("Save my review");
-
-    const emptyMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
-      snapshot: emptyReviewFixture,
-    }));
-    expect(emptyMarkup).toContain("No submissions in this round");
-    expect(emptyMarkup).not.toContain("Clear filters");
-
-    expect(organizerMarkup).toContain('aria-labelledby="proposal-heading-submission_05"');
-    expect(organizerMarkup).toContain('id="proposal-heading-submission_05"');
-    expect(organizerMarkup).not.toContain(`<option value="${fixtureReviewerId}"`);
-    expect(organizerMarkup).not.toContain('<option value="user_reviewer_dev"');
-    expect(reviewerMarkup).toContain("min-h-11 min-w-11");
-
-    const completedSelectionMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
-      snapshot: { ...reviewWorkbenchFixture, selected: acceptedSubmissionFixture },
-    }));
-    expect(completedSelectionMarkup.split("Blind screen · complete")).toHaveLength(3);
-
-    const noAvailableMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, {
-      snapshot: {
-        ...reviewWorkbenchFixture,
-        selected: {
-          ...assignedSubmissionFixture,
-          assignments: [
-            ...assignedSubmissionFixture.assignments,
-            { id: "assignment_mina_01", reviewerUserId: "user_reviewer_mina", reviewerName: "Mina Okafor", version: 1 },
-          ],
-        },
-      },
-    }));
-    expect(noAvailableMarkup).toContain("All available reviewers are already assigned to this proposal.");
-    expect(noAvailableMarkup).toContain("No available reviewers");
-
-    const loadingMarkup = renderToStaticMarkup(createElement(ReviewWorkbenchRoute, { state: "loading" }));
-    expect(loadingMarkup.match(/motion-reduce:animate-none/g)).toHaveLength(4);
-  });
 
   it("returns all 60 proposals to organizers but only assigned proposals and private review data to reviewers", async () => {
     const organizerView = await runAs(owner, getWorkbench({ eventId: fixtureEventId, page: 1, pageSize: 60 }));

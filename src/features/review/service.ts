@@ -410,7 +410,7 @@ export const getWorkbench = (
         .map((assignment) => ({
           id: assignment.id,
           reviewerUserId: assignment.reviewerUserId,
-          reviewerName: assignment.reviewerName,
+          reviewerName: assignment.reviewerName ?? "Reviewer",
           version: assignment.version,
         }));
       const detailHumanReviews: HumanReview[] = visibleHumanReviews
@@ -491,7 +491,7 @@ export const assignReviewer = (
           assignment: {
             id: existing[0].id,
             reviewerUserId: existing[0].reviewerUserId,
-            reviewerName: reviewer[0].name,
+            reviewerName: reviewer[0].name ?? "Reviewer",
             version: existing[0].version,
           },
           created: false,
@@ -508,7 +508,7 @@ export const assignReviewer = (
     const assignment = {
       id: assignmentId,
       reviewerUserId: input.reviewerUserId,
-      reviewerName: reviewer[0].name,
+      reviewerName: reviewer[0].name ?? "Reviewer",
       version: 1,
     };
     yield* database(() =>
@@ -788,18 +788,18 @@ export const acceptSubmission = (
     const insertAcceptance = db.insert(acceptanceEvents).select(
       db
         .select({
-          id: sql<string>`${acceptanceEventId}`,
+          id: sql<string>`${acceptanceEventId}`.as("id"),
           eventId: submissions.eventId,
           submissionId: submissions.id,
-          primarySubmissionSpeakerId: sql<string>`${primarySpeaker.associationId}`,
-          primarySpeakerId: sql<string>`${primarySpeaker.speakerId}`,
-          primaryAssociationIsPrimary: sql<boolean>`1`,
-          type: sql<"accepted">`'accepted'`,
+          primarySubmissionSpeakerId: sql<string>`${primarySpeaker.associationId}`.as("primary_submission_speaker_id"),
+          primarySpeakerId: sql<string>`${primarySpeaker.speakerId}`.as("primary_speaker_id"),
+          primaryAssociationIsPrimary: sql<boolean>`1`.as("primary_association_is_primary"),
+          type: sql<"accepted">`'accepted'`.as("type"),
           submissionVersion: submissions.version,
           actorUserId: viewer.actorUserId === null
-            ? sql<string | null>`null`
-            : sql<string | null>`${viewer.actorUserId}`,
-          occurredAt: sql<Date>`${acceptedAt.getTime()}`,
+            ? sql<string | null>`null`.as("actor_user_id")
+            : sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+          occurredAt: sql<Date>`${acceptedAt.getTime()}`.as("occurred_at"),
         })
         .from(submissions)
         .where(

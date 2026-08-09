@@ -10,7 +10,6 @@ import {
   reviewWorkbenchFixture,
 } from "../fixtures";
 import type {
-  CriterionScore,
   ReviewWorkbench,
   SubmissionReviewDetail,
   SubmissionReviewSummary,
