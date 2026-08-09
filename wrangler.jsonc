@@ -5,7 +5,8 @@
   "compatibility_date": "2025-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/mcp", "/parties/*"]
   },
   "observability": { "enabled": true },
   "d1_databases": [
@@ -31,7 +32,9 @@
   "send_email": [{ "name": "EMAIL" }],
   "vars": {
     "APP_URL": "https://sessionparty.com",
-    "MAIL_FROM": "Session Party <welcome@sessionparty.com>"
+    "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAELTRHiRum336lV9",
+    "TURNSTILE_HOSTNAMES": "sessionparty.com"
   }
-  // Secrets (wrangler secret put): SESSION_SECRET, ACCELEVENTS_API_TOKEN
+  // Secrets (wrangler secret put): SESSION_SECRET, TURNSTILE_SECRET, ACCELEVENTS_API_TOKEN
 }

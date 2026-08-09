@@ -13,7 +13,7 @@ const hmac = (value: string): string =>
 const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 const json = (value: unknown): string => quote(JSON.stringify(value));
 
-const personas = [
+const corePersonas = [
   ["demo-owner", "owner@sessionparty.local", "Olivia Owner", "demo-owner-session", expiresAt],
   ["demo-admin", "admin@sessionparty.local", "Amari Admin", "demo-admin-session", expiresAt],
   ["demo-reviewer", "reviewer@sessionparty.local", "Riley Reviewer", "demo-reviewer-session", expiresAt],
@@ -21,6 +21,28 @@ const personas = [
   ["demo-observer", "observer@sessionparty.local", "Owen Observer", "demo-observer-session", expiresAt],
   ["demo-expired", "expired@sessionparty.local", "Emery Expired", "demo-expired-session", expiredAt],
 ] as const;
+
+const fixtureSpeakerNames = [
+  "Alex Morgan", "Avery Chen", "Blair Okafor", "Cameron Singh", "Casey Rivera",
+  "Dakota Kim", "Drew Williams", "Elliot Hassan", "Emerson Silva", "Finley Jones",
+  "Harper Brown", "Hayden Garcia", "Jamie Patel", "Jordan Lee", "Kai Thompson",
+  "Kendall Martin", "Lane Davis", "Logan Wilson", "Marley Taylor", "Morgan Clark",
+  "Nico Anderson", "Parker Lewis", "Quinn Robinson", "Reese Walker", "Remy Martinez",
+  "Robin Moore", "Rowan Hall", "Sasha Nguyen", "Taylor Jackson",
+] as const;
+
+const fixtureSpeakerPersonas = fixtureSpeakerNames.map((name, index) => {
+  const ordinal = String(index + 2).padStart(2, "0");
+  return [
+    `demo-speaker-${ordinal}`,
+    `speaker${ordinal}@sessionparty.local`,
+    name,
+    `demo-speaker-${ordinal}-session`,
+    expiresAt,
+  ] as const;
+});
+
+const personas = [...corePersonas, ...fixtureSpeakerPersonas] as const;
 
 const userValues = personas.map(([id, email, name]) =>
   `(${quote(id)}, ${quote(email)}, ${quote(name)}, NULL, 1, ${createdAt}, ${createdAt})`

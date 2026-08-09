@@ -6,6 +6,7 @@ import {
   type CreateTaskSubmissionInput,
 } from "@/features/submit/schema";
 import {
+  ClaimSpeakerOutput,
   PortalDashboard,
   PortalSnapshot,
   PortalTaskDefinitions,
@@ -14,6 +15,7 @@ import {
   PortalResources,
   type CreateResourceInput,
   type CreateTaskInput,
+  type ClaimSpeakerInput,
   type DeleteResourceInput,
   type DeleteTaskInput,
   type PortalEvent,
@@ -51,6 +53,15 @@ export async function loadOrganizerRoute<T>(
 
 export const getSpeakerPortal = (eventSlug: string) =>
   apiFetch(`${api}/events/${segment(eventSlug)}/portal`, { schema: PortalSnapshot });
+
+export function claimSpeakerAccount(eventSlug: string, input: ClaimSpeakerInput) {
+  const body = requestBody(input, "eventId");
+  return apiFetch(`${api}/events/${segment(eventSlug)}/portal/claim`, {
+    method: "POST",
+    body,
+    schema: ClaimSpeakerOutput,
+  });
+}
 
 export const getSpeakerDirectory = (eventSlug: string) =>
   loadOrganizerRoute(eventSlug, "/speakers", SpeakerDirectory);

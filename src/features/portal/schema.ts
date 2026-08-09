@@ -14,6 +14,23 @@ export type PortalProfileSyncField = typeof PortalProfileSyncField.Type;
 export const PortalEventInput = Schema.Struct({ eventId: EntityId });
 export type PortalEventInput = typeof PortalEventInput.Type;
 
+export const ClaimSpeakerInput = Schema.Struct({
+  eventId: EntityId,
+  idempotencyKey: IdempotencyKey,
+});
+export type ClaimSpeakerInput = typeof ClaimSpeakerInput.Type;
+
+export const ClaimSpeakerOutput = Schema.Struct({
+  eventId: EntityId,
+  speakerId: EntityId,
+  acceptanceEventId: EntityId,
+  provisioningId: EntityId,
+  speakerVersion: Schema.Int.pipe(Schema.positive()),
+  provisioningVersion: Schema.Int.pipe(Schema.positive()),
+  provisioningStatus: Schema.Literal("claimed", "provisioned"),
+});
+export type ClaimSpeakerOutput = typeof ClaimSpeakerOutput.Type;
+
 export const PublicSpeakersInput = Schema.Struct({ eventSlug: EntityId });
 export type PublicSpeakersInput = typeof PublicSpeakersInput.Type;
 

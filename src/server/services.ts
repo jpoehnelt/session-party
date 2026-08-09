@@ -1,4 +1,4 @@
-import { External, Forbidden, Unauthenticated } from "contracts/errors";
+import { External, Forbidden, Unauthenticated, Validation } from "contracts/errors";
 import {
   allowsApiScopes,
   allowsEventRole,
@@ -19,6 +19,13 @@ import {
   type AcceleventsImportsService,
   type SecretResolverService,
 } from "./accelevents";
+import {
+  localTestPublicSubmissionAbuse,
+  PublicSubmissionAbuse,
+  PublicSubmissionRequest,
+  TURNSTILE_TOKEN_MAX_LENGTH,
+  type PublicSubmissionAbuseAttempt,
+} from "@/features/submit/abuse";
 
 export type AppDatabase = DrizzleD1Database<typeof schema>;
 
@@ -110,6 +117,12 @@ type SecretBindings = {
   readonly LOCAL_MODE?: string;
   readonly SESSION_SECRET?: string;
   readonly ACCELEVENTS_API_TOKEN?: string;
+  readonly TURNSTILE_SECRET?: string;
+};
+
+type TurnstileBindings = SecretBindings & {
+  readonly TURNSTILE_SITE_KEY?: string;
+  readonly TURNSTILE_HOSTNAMES?: string;
 };
 
 const LOCAL_SESSION_SECRET = "explicit-local-only-session-secret-v1";
@@ -130,6 +143,149 @@ export const sessionSecret = (env: Env & SecretBindings): string => {
   const configured = optionalSecret(env, "SESSION_SECRET");
   if (configured) return configured;
   throw new Error("Missing required production secret: SESSION_SECRET");
+};
+
+const configuredValue = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+
+const hmacBearerMaterial = async (env: Env & SecretBindings, value: string): Promise<string> => {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(sessionSecret(env)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return Array.from(
+    new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+};
+
+const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
+  if (isExplicitLocalEnvironment(env)) return localTestPublicSubmissionAbuse;
+
+  const siteKey = configuredValue(env.TURNSTILE_SITE_KEY) ?? null;
+  const expectedHostnames = new Set(
+    (configuredValue(env.TURNSTILE_HOSTNAMES) ?? "")
+      .split(",")
+      .map((hostname) => hostname.trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  return {
+    turnstileSiteKey: siteKey,
+    authorize: (attempt: PublicSubmissionAbuseAttempt) =>
+      Effect.gen(function* () {
+        const secret = optionalSecret(env, "TURNSTILE_SECRET");
+        if (!siteKey || !secret || expectedHostnames.size === 0) {
+          return yield* Effect.fail(new External({
+            service: "turnstile",
+            detail: "Human verification is not configured",
+          }));
+        }
+        if (
+          !attempt.turnstileToken
+          || attempt.turnstileToken.length > TURNSTILE_TOKEN_MAX_LENGTH
+          || !attempt.normalizedEmail
+          || !attempt.remoteIp
+        ) {
+          return yield* Effect.fail(new Validation({
+            message: "Human verification could not be completed. Please try again.",
+          }));
+        }
+
+        const verification = yield* Effect.tryPromise({
+          try: async () => {
+            const body = new URLSearchParams({
+              secret,
+              response: attempt.turnstileToken as string,
+              remoteip: attempt.remoteIp as string,
+              idempotency_key: crypto.randomUUID(),
+            });
+            const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body,
+              signal: AbortSignal.timeout(5_000),
+            });
+            if (!response.ok) throw new Error(`Siteverify returned ${response.status}`);
+            const text = await response.text();
+            if (text.length > 16_384) throw new Error("Siteverify returned an oversized response");
+            const parsed: unknown = JSON.parse(text);
+            if (typeof parsed !== "object" || parsed === null) {
+              throw new Error("Siteverify returned invalid JSON");
+            }
+            return parsed as Record<string, unknown>;
+          },
+          catch: (error) => new External({
+            service: "turnstile",
+            detail: error instanceof Error ? error.message : String(error),
+          }),
+        });
+        const hostname = typeof verification.hostname === "string"
+          ? verification.hostname.toLowerCase()
+          : "";
+        if (
+          verification.success !== true
+          || verification.action !== "cfp-submit"
+          || !expectedHostnames.has(hostname)
+        ) {
+          return yield* Effect.fail(new Validation({
+            message: "Human verification could not be completed. Please try again.",
+          }));
+        }
+
+        const [sourceHash, recipientHash] = yield* Effect.tryPromise({
+          try: () => Promise.all([
+            hmacBearerMaterial(env, `cfp-source:${attempt.remoteIp!.slice(0, 128)}`),
+            hmacBearerMaterial(
+              env,
+              `cfp-recipient:${attempt.eventId}:${attempt.formId}:${attempt.normalizedEmail}`,
+            ),
+          ]),
+          catch: (error) => new External({
+            service: "cfp-rate-limit",
+            detail: error instanceof Error ? error.message : String(error),
+          }),
+        });
+        const limiterId = env.SCHEDULER.idFromName("cfp-rate-limit");
+        const response = yield* Effect.tryPromise({
+          try: () => env.SCHEDULER.get(limiterId).fetch(
+            "https://scheduler/cfp/authorize",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-session-party-internal": sessionSecret(env),
+              },
+              body: JSON.stringify({
+                sourceHash,
+                recipientHash,
+                eventId: attempt.eventId,
+                formId: attempt.formId,
+              }),
+            },
+          ),
+          catch: (error) => new External({
+            service: "cfp-rate-limit",
+            detail: error instanceof Error ? error.message : String(error),
+          }),
+        });
+        if (response.status === 429) {
+          return yield* Effect.fail(new Validation({
+            message: "Submission limit reached. Please try again later.",
+          }));
+        }
+        if (!response.ok) {
+          return yield* Effect.fail(new External({
+            service: "cfp-rate-limit",
+            detail: `Scheduler returned ${response.status}`,
+          }));
+        }
+      }),
+  } as const;
 };
 
 const sha256Hex = async (value: string): Promise<string> => {
@@ -331,12 +487,14 @@ export class Authorizer extends Context.Tag("session-party/Authorizer")<
 export const AppLayer = (env: Env) => {
   const db = drizzle(env.DB, { schema });
   const secrets = createSecretResolver(optionalSecret(env, "ACCELEVENTS_API_TOKEN"));
+  const fixtureAcceleventsAdapter = createFixtureAcceleventsAdapter();
   const acceleventsAdapter = isExplicitLocalEnvironment(env)
-    ? createFixtureAcceleventsAdapter()
+    ? fixtureAcceleventsAdapter
     : createLiveAcceleventsAdapter();
   const acceleventsImports = createAcceleventsImports({
     db,
     adapter: acceleventsAdapter,
+    fixtureAdapter: fixtureAcceleventsAdapter,
     secrets,
   });
 
@@ -345,6 +503,8 @@ export const AppLayer = (env: Env) => {
     Layer.succeed(SecretResolver, secrets),
     Layer.succeed(AcceleventsAdapter, acceleventsAdapter),
     Layer.succeed(AcceleventsImports, acceleventsImports),
+    Layer.succeed(PublicSubmissionAbuse, publicSubmissionAbuse(env)),
+    Layer.succeed(PublicSubmissionRequest, { remoteIp: null }),
     Layer.succeed(Authorizer, { authorize: authorizePrincipal }),
     Layer.succeed(Mail, {
       send: (payload) => externalEffect("cloudflare-email", () => sendMail(env, payload)),
@@ -413,10 +573,11 @@ export type AppServices =
   | SecretResolver
   | AcceleventsAdapter
   | AcceleventsImports
+  | PublicSubmissionAbuse
+  | PublicSubmissionRequest
   | Mail
   | MailQueue
   | Files
   | Rooms
   | AiService
   | Authorizer;
-

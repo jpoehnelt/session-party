@@ -28,17 +28,29 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
 import { updateEvent } from "@/features/events/service";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
-import { getPublishedAgendaOperation, operations, partyDescriptors } from "./operations";
+import {
+  createRoomOperation,
+  createTrackOperation,
+  getPublishedAgendaOperation,
+  operations,
+  partyDescriptors,
+  updateRoomOperation,
+  updateTrackOperation,
+} from "./operations";
 import type { AgendaMutationResult } from "./schema";
 import {
   cancelTalk,
+  createRoom,
   createTalk,
+  createTrack,
   getAgendaDeliveryProjection,
   getPublishedAgenda,
   listAgenda,
   moveTalk,
   publishAgenda,
   scheduleTalk,
+  updateRoom,
+  updateTrack,
   type AgendaMutationInterlock,
   type AgendaSnapshotInterlock,
   type AgendaPublicationInterlock,
@@ -72,6 +84,23 @@ const runEventAs = <A, E>(
   effect: Effect.Effect<A, E, Db | CurrentUser | Authorizer>,
 ) =>
   Effect.runPromise(effect.pipe(
+    Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+  ));
+
+const runSetupAs = <A, E>(
+  principal: CurrentUserValue,
+  effect: Effect.Effect<A, E, Authorizer | CurrentUser | Db>,
+) =>
+  Effect.runPromise(effect.pipe(
+    Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+  ));
+
+const runSetupEither = <A, E>(
+  principal: CurrentUserValue,
+  effect: Effect.Effect<A, E, Authorizer | CurrentUser | Db>,
+) =>
+  Effect.runPromise(effect.pipe(
+    Effect.either,
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
   ));
 
@@ -458,12 +487,168 @@ describe("agenda deterministic fixtures and descriptors", () => {
       },
       mcp: { name: "agenda_get_published" },
     });
+    for (const operation of [
+      createRoomOperation,
+      createTrackOperation,
+      updateRoomOperation,
+      updateTrackOperation,
+    ]) {
+      expect(operation.authorize).toEqual({
+        kind: "event",
+        eventId: "eventId",
+        browser: { kind: "event-member", roles: ["owner", "admin"] },
+        apiKey: { kind: "api-key", scopes: ["agenda:write"] },
+      });
+      expect(operation.idempotency).toBe("required");
+    }
+    expect(createTrackOperation.rest).toMatchObject({ method: "post", path: "/events/:eventId/agenda/tracks" });
+    expect(updateTrackOperation.rest).toMatchObject({ method: "patch", path: "/events/:eventId/agenda/tracks/:trackId" });
+    expect(createRoomOperation.rest).toMatchObject({ method: "post", path: "/events/:eventId/agenda/rooms" });
+    expect(updateRoomOperation.rest).toMatchObject({ method: "patch", path: "/events/:eventId/agenda/rooms/:roomId" });
+    expect(updateTrackOperation.concurrency).toBe("required");
+    expect(updateRoomOperation.concurrency).toBe("required");
   });
 
 
 });
 
 describe("agenda service", () => {
+  it("creates and updates tracks and rooms idempotently with stable ordering", async () => {
+    const seeded = await seedAgenda("setup-crud");
+    const trackInput = {
+      eventId: seeded.eventId,
+      name: "  Applied   AI ",
+      color: "#14B8A6",
+      order: 0,
+      idempotencyKey: "setup-track-create-0001",
+    } as const;
+    const createdTrack = await runSetupAs(seeded.user, createTrack(trackInput));
+    expect(createdTrack).toMatchObject({
+      replayed: false,
+      track: { name: "Applied AI", color: "#14B8A6", order: 0, version: 1 },
+    });
+    const replayedTrack = await runSetupAs(seeded.user, createTrack(trackInput));
+    expect(replayedTrack).toMatchObject({
+      replayed: true,
+      changeId: createdTrack.changeId,
+      track: { id: createdTrack.track.id },
+    });
+
+    const createdRoom = await runSetupAs(seeded.user, createRoom({
+      eventId: seeded.eventId,
+      name: "Atrium",
+      capacity: 240,
+      order: 0,
+      idempotencyKey: "setup-room-create-0001",
+    }));
+    expect(createdRoom).toMatchObject({
+      replayed: false,
+      room: { name: "Atrium", capacity: 240, order: 0, version: 1 },
+    });
+
+    const updatedTrack = await runSetupAs(seeded.user, updateTrack({
+      eventId: seeded.eventId,
+      trackId: createdTrack.track.id,
+      name: "Applied AI and Agents",
+      color: null,
+      order: 2,
+      expectedVersion: 1,
+      idempotencyKey: "setup-track-update-0001",
+    }));
+    expect(updatedTrack.track).toMatchObject({
+      id: createdTrack.track.id,
+      name: "Applied AI and Agents",
+      color: null,
+      order: 2,
+      version: 2,
+    });
+
+    const updatedRoom = await runSetupAs(seeded.user, updateRoom({
+      eventId: seeded.eventId,
+      roomId: createdRoom.room.id,
+      name: "Grand Atrium",
+      capacity: null,
+      order: 0,
+      expectedVersion: 1,
+      idempotencyKey: "setup-room-update-0001",
+    }));
+    expect(updatedRoom.room).toMatchObject({
+      id: createdRoom.room.id,
+      name: "Grand Atrium",
+      capacity: null,
+      order: 0,
+      version: 2,
+    });
+
+    const snapshot = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "room" }));
+    expect(snapshot.workspaceVersion).toBe(4);
+    expect(snapshot.tracks.map(({ name }) => name)).toEqual(["Systems", "Applied AI and Agents"]);
+    expect(snapshot.rooms.map(({ name }) => name)).toEqual(["Grand Atrium", "Harbor", "Summit"]);
+    expect(snapshot.tracks.find(({ id }) => id === createdTrack.track.id)?.version).toBe(2);
+    expect(snapshot.rooms.find(({ id }) => id === createdRoom.room.id)?.version).toBe(2);
+
+    const evidence = await seeded.db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, seeded.eventId),
+      eq(auditLog.resourceId, createdTrack.track.id),
+    ));
+    expect(evidence.map(({ action }) => action)).toEqual(["agenda.track_created", "agenda.track_updated"]);
+  });
+
+  it("rejects stale, duplicate, unauthorized, and cross-event setup mutations", async () => {
+    const seeded = await seedAgenda("setup-guards");
+    const other = await seedAgenda("setup-other");
+
+    const duplicate = await runSetupEither(seeded.user, createTrack({
+      eventId: seeded.eventId,
+      name: " systems ",
+      color: null,
+      order: 4,
+      idempotencyKey: "setup-track-duplicate-0001",
+    }));
+    expect(duplicate._tag).toBe("Left");
+    if (duplicate._tag === "Left") expect(duplicate.left).toMatchObject({ _tag: "Conflict" });
+
+    const stale = await runSetupEither(seeded.user, updateRoom({
+      eventId: seeded.eventId,
+      roomId: seeded.roomA,
+      name: "Harbor Hall",
+      capacity: 200,
+      order: 0,
+      expectedVersion: 2,
+      idempotencyKey: "setup-room-stale-0001",
+    }));
+    expect(stale._tag).toBe("Left");
+    if (stale._tag === "Left") expect(stale.left).toMatchObject({ _tag: "Conflict" });
+
+    const unauthorized = await runSetupEither(owner("agenda-setup-outsider"), createRoom({
+      eventId: seeded.eventId,
+      name: "Unauthorized room",
+      capacity: null,
+      order: 0,
+      idempotencyKey: "setup-room-unauthorized-0001",
+    }));
+    expect(unauthorized._tag).toBe("Left");
+    if (unauthorized._tag === "Left") expect(unauthorized.left).toMatchObject({ _tag: "Forbidden" });
+
+    const crossEvent = await runSetupEither(other.user, updateTrack({
+      eventId: other.eventId,
+      trackId: seeded.trackId,
+      name: "Cross tenant",
+      color: null,
+      order: 0,
+      expectedVersion: 1,
+      idempotencyKey: "setup-track-cross-event-0001",
+    }));
+    expect(crossEvent._tag).toBe("Left");
+    if (crossEvent._tag === "Left") expect(crossEvent.left).toMatchObject({ _tag: "NotFound" });
+
+    const unauthorizedRows = await seeded.db.select().from(rooms).where(and(
+      eq(rooms.eventId, seeded.eventId),
+      eq(rooms.name, "Unauthorized room"),
+    ));
+    expect(unauthorizedRows).toEqual([]);
+  });
+
   it("lists only accepted, provisioned proposals in the backlog", async () => {
     const seeded = await seedAgenda("backlog");
     const agenda = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }));

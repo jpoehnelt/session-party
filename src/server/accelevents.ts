@@ -58,6 +58,8 @@ export interface AcceleventsImportsService {
 interface ImportDependencies {
   readonly db: AppDatabase;
   readonly adapter: AcceleventsAdapterService;
+  /** Explicit demo fixture, selected only by the reserved fixture-event configuration. */
+  readonly fixtureAdapter?: AcceleventsAdapterService;
   readonly secrets: SecretResolverService;
   readonly now?: () => number;
   readonly randomId?: () => string;
@@ -524,6 +526,7 @@ const importTalk = (
 export const createAcceleventsImports = ({
   db,
   adapter,
+  fixtureAdapter,
   secrets,
   now = Date.now,
   randomId = () => crypto.randomUUID(),
@@ -539,13 +542,18 @@ export const createAcceleventsImports = ({
       } satisfies AcceleventsImportStatus;
     }
     const config = yield* decodeConfig(integration.config);
-    const ready = adapter.mode === "fixture" || secrets.canResolve(integration.secretRef);
+    const selectedAdapter = fixtureAdapter?.mode === "fixture"
+      && config.accelEventId === "fixture-event"
+      && config.eventUrl === "fixture-event"
+      ? fixtureAdapter
+      : adapter;
+    const ready = selectedAdapter.mode === "fixture" || secrets.canResolve(integration.secretRef);
     const latest = yield* database(() => latestRun(db, eventId, integration.id));
     return {
       configured: true,
       config,
       capability: {
-        mode: adapter.mode,
+        mode: selectedAdapter.mode,
         state: ready ? "ready" : "unavailable",
         reason: ready ? null : "credential_unavailable",
       },
@@ -558,6 +566,11 @@ export const createAcceleventsImports = ({
       return yield* Effect.fail(new NotFound({ entity: "integration", id: "accelevents" }));
     }
     const config = yield* decodeConfig(integration.config);
+    const selectedAdapter = fixtureAdapter?.mode === "fixture"
+      && config.accelEventId === "fixture-event"
+      && config.eventUrl === "fixture-event"
+      ? fixtureAdapter
+      : adapter;
     const keyHash = yield* sha256(input.idempotencyKey);
     const requestHash = yield* sha256(JSON.stringify({
       eventId: input.eventId,
@@ -614,7 +627,7 @@ export const createAcceleventsImports = ({
         integrationId: integration.id,
         sourceEventId: config.accelEventId,
         eventUrl: config.eventUrl,
-        mode: adapter.mode,
+        mode: selectedAdapter.mode,
         status: "running",
         totalCount: 0,
         createdCount: 0,
@@ -651,10 +664,10 @@ export const createAcceleventsImports = ({
     }
 
     const snapshotResult = yield* (
-      adapter.mode === "fixture"
-        ? adapter.fetchSnapshot(config, null)
+      selectedAdapter.mode === "fixture"
+        ? selectedAdapter.fetchSnapshot(config, null)
         : secrets.resolve(integration.secretRef).pipe(
-          Effect.flatMap((credential) => adapter.fetchSnapshot(config, credential)),
+          Effect.flatMap((credential) => selectedAdapter.fetchSnapshot(config, credential)),
         )
     ).pipe(Effect.either);
 
@@ -702,7 +715,7 @@ export const createAcceleventsImports = ({
           aggregateVersion: 1,
           eventType: "accelevents.import.completed",
           audiences: [{ kind: "admins" }],
-          payload: { runId, mode: adapter.mode, status: run.status, counts: run.counts },
+          payload: { runId, mode: selectedAdapter.mode, status: run.status, counts: run.counts },
           ...actor,
           requestId: runId,
           idempotencyRecordId: idempotencyId,
@@ -717,7 +730,7 @@ export const createAcceleventsImports = ({
           resourceType: "integration",
           resourceId: integration.id,
           before: null,
-          after: { runId, mode: adapter.mode, status: run.status, counts: run.counts },
+          after: { runId, mode: selectedAdapter.mode, status: run.status, counts: run.counts },
           metadata: { sourceEventId: config.accelEventId, eventUrl: config.eventUrl },
           occurredAt: completedAt,
         }),
@@ -729,7 +742,7 @@ export const createAcceleventsImports = ({
       const error = snapshotResult.left as External;
       const run: AcceleventsImportRun = {
         runId,
-        mode: adapter.mode,
+        mode: selectedAdapter.mode,
         eventId: input.eventId,
         integrationId: integration.id,
         providerEventId: config.accelEventId,
@@ -751,7 +764,7 @@ export const createAcceleventsImports = ({
       const completedAt = now();
       const run: AcceleventsImportRun = {
         runId,
-        mode: adapter.mode,
+        mode: selectedAdapter.mode,
         eventId: input.eventId,
         integrationId: integration.id,
         providerEventId: config.accelEventId,
@@ -800,7 +813,7 @@ export const createAcceleventsImports = ({
       const completedAt = now();
       const run: AcceleventsImportRun = {
         runId,
-        mode: adapter.mode,
+        mode: selectedAdapter.mode,
         eventId: input.eventId,
         integrationId: integration.id,
         providerEventId: config.accelEventId,
@@ -821,7 +834,7 @@ export const createAcceleventsImports = ({
     const completedAt = now();
     const run: AcceleventsImportRun = {
       runId,
-      mode: adapter.mode,
+      mode: selectedAdapter.mode,
       eventId: input.eventId,
       integrationId: integration.id,
       providerEventId: config.accelEventId,

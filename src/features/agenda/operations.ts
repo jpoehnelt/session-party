@@ -3,24 +3,34 @@ import { eventAuthorization, publicAuthorization } from "contracts/principal";
 import type { JsonObject } from "contracts/domain";
 import {
   cancelTalk,
+  createRoom,
   createTalk,
+  createTrack,
   getPublishedAgenda,
   listAgenda,
   moveTalk,
   publishAgenda,
   scheduleTalk,
+  updateRoom,
+  updateTrack,
 } from "./service";
 import {
   AgendaMutationResult,
   AgendaSnapshot,
   CancelTalkInput,
+  CreateRoomInput,
   CreateTalkInput,
+  CreateTrackInput,
   GetPublishedAgendaInput,
   ListAgendaInput,
   MoveTalkInput,
   PublishedAgenda,
   PublishAgendaInput,
+  RoomMutationResult,
   ScheduleTalkInput,
+  TrackMutationResult,
+  UpdateRoomInput,
+  UpdateTrackInput,
 } from "./schema";
 
 const readAuthorization = eventAuthorization(
@@ -32,6 +42,29 @@ const writeAuthorization = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
   { kind: "api-key", scopes: ["agenda:write"] },
 );
+
+export const createRoomOperation = {
+  id: "agenda.createRoom",
+  kind: "command",
+  input: CreateRoomInput,
+  output: RoomMutationResult,
+  authorize: writeAuthorization,
+  invoke: createRoom,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/agenda/rooms",
+    input: { path: ["eventId"], body: ["name", "capacity", "order", "idempotencyKey"] },
+    summary: "Create an agenda room",
+    successStatus: 201,
+  },
+  mcp: {
+    name: "agenda_create_room",
+    description: "Create an ordered room for a fresh event agenda.",
+  },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["agenda.talk_changed"],
+} as const satisfies AnyOperationDef;
 
 export const cancelTalkOperation = {
   id: "agenda.cancelTalk",
@@ -76,6 +109,29 @@ export const createTalkOperation = {
   mcp: {
     name: "agenda_create_talk",
     description: "Create a draft or scheduled talk from an accepted, provisioned proposal.",
+  },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["agenda.talk_changed"],
+} as const satisfies AnyOperationDef;
+
+export const createTrackOperation = {
+  id: "agenda.createTrack",
+  kind: "command",
+  input: CreateTrackInput,
+  output: TrackMutationResult,
+  authorize: writeAuthorization,
+  invoke: createTrack,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/agenda/tracks",
+    input: { path: ["eventId"], body: ["name", "color", "order", "idempotencyKey"] },
+    summary: "Create an agenda track",
+    successStatus: 201,
+  },
+  mcp: {
+    name: "agenda_create_track",
+    description: "Create an ordered, color-coded track for a fresh event agenda.",
   },
   idempotency: "required",
   concurrency: "none",
@@ -206,15 +262,71 @@ export const scheduleTalkOperation = {
   emits: ["agenda.talk_changed"],
 } as const satisfies AnyOperationDef;
 
+export const updateRoomOperation = {
+  id: "agenda.updateRoom",
+  kind: "command",
+  input: UpdateRoomInput,
+  output: RoomMutationResult,
+  authorize: writeAuthorization,
+  invoke: updateRoom,
+  rest: {
+    method: "patch",
+    path: "/events/:eventId/agenda/rooms/:roomId",
+    input: {
+      path: ["eventId", "roomId"],
+      body: ["name", "capacity", "order", "expectedVersion", "idempotencyKey"],
+    },
+    summary: "Update an agenda room",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "agenda_update_room",
+    description: "Update an agenda room with optimistic concurrency.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["agenda.talk_changed"],
+} as const satisfies AnyOperationDef;
+
+export const updateTrackOperation = {
+  id: "agenda.updateTrack",
+  kind: "command",
+  input: UpdateTrackInput,
+  output: TrackMutationResult,
+  authorize: writeAuthorization,
+  invoke: updateTrack,
+  rest: {
+    method: "patch",
+    path: "/events/:eventId/agenda/tracks/:trackId",
+    input: {
+      path: ["eventId", "trackId"],
+      body: ["name", "color", "order", "expectedVersion", "idempotencyKey"],
+    },
+    summary: "Update an agenda track",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "agenda_update_track",
+    description: "Update an agenda track with optimistic concurrency.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["agenda.talk_changed"],
+} as const satisfies AnyOperationDef;
+
 /** Bytewise order is deliberate and matches the registry generator comparator. */
 export const operations = [
   cancelTalkOperation,
+  createRoomOperation,
   createTalkOperation,
+  createTrackOperation,
   getPublishedAgendaOperation,
   listAgendaOperation,
   moveTalkOperation,
   publishAgendaOperation,
   scheduleTalkOperation,
+  updateRoomOperation,
+  updateTrackOperation,
 ] as const satisfies readonly AnyOperationDef[];
 
 const moveInputSchema = {

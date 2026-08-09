@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acceptSubmissionRequest,
+  advanceReviewRoundRequest,
   assignReviewerRequest,
+  createReviewRoundRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
 } from "./mutations";
@@ -13,6 +15,74 @@ const jsonResponse = (payload: unknown, status = 200) => new Response(JSON.strin
 afterEach(() => vi.unstubAllGlobals());
 
 describe("review mutation client", () => {
+  it("maps round creation and advancement to idempotent versioned REST requests", async () => {
+    const round = {
+      id: "round_one",
+      name: "Program fit",
+      order: 1,
+      status: "active" as const,
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 as const }] as const },
+      version: 1,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ round, idempotent: false }, 201))
+      .mockResolvedValueOnce(jsonResponse({
+        rounds: [
+          { ...round, status: "complete", version: 2 },
+          { ...round, id: "round_two", name: "Final", order: 2, status: "active", version: 2 },
+        ],
+        idempotent: false,
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createReviewRoundRequest({
+      eventId: "event_one",
+      name: round.name,
+      initialStatus: "active",
+      rubric: round.rubric,
+      expectedRoundCount: 0,
+      idempotencyKey: "round-create-key-1",
+      requestId: "request-round-create",
+    });
+    await advanceReviewRoundRequest({
+      eventId: "event_one",
+      roundId: round.id,
+      expectedVersion: 1,
+      nextRoundId: "round_two",
+      expectedNextVersion: 1,
+      idempotencyKey: "round-advance-key-1",
+      requestId: "request-round-advance",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/events/event_one/review/rounds", {
+      method: "POST",
+      headers: {
+        "x-request-id": "request-round-create",
+        "idempotency-key": "round-create-key-1",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "Program fit",
+        initialStatus: "active",
+        rubric: round.rubric,
+        expectedRoundCount: 0,
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/events/event_one/review/rounds/round_one/advance", {
+      method: "POST",
+      headers: {
+        "x-request-id": "request-round-advance",
+        "idempotency-key": "round-advance-key-1",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        nextRoundId: "round_two",
+        expectedNextVersion: 1,
+      }),
+    });
+  });
+
   it("maps assignment, scoring, AI, and acceptance inputs to their exact REST locations", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({

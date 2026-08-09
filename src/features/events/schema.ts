@@ -1,3 +1,5 @@
+import { EntityId } from "contracts/domain";
+import { EventRole } from "contracts/types";
 import { Schema } from "effect";
 
 const OptionalText = Schema.optional(Schema.Union(Schema.String, Schema.Null));
@@ -37,3 +39,71 @@ export const EventOutput = Schema.Struct({
   updatedAt: Schema.DateFromString,
 });
 export type EventOutput = typeof EventOutput.Type;
+
+const Email = Schema.String.pipe(Schema.minLength(3), Schema.maxLength(320));
+const IdempotencyKey = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200));
+
+/** An existing authenticated account assigned to this event. This is not an email invitation. */
+export const EventMember = Schema.Struct({
+  id: EntityId,
+  userId: EntityId,
+  email: Email,
+  name: Schema.NullOr(Schema.String),
+  role: EventRole,
+  version: Schema.Int.pipe(Schema.positive()),
+  createdAt: Schema.DateFromString,
+  updatedAt: Schema.DateFromString,
+});
+export type EventMember = typeof EventMember.Type;
+
+export const ListEventMembersInput = Schema.Struct({
+  idOrSlug: EntityId,
+});
+export type ListEventMembersInput = typeof ListEventMembersInput.Type;
+
+export const AddEventMemberInput = Schema.Struct({
+  idOrSlug: EntityId,
+  /** Normalized server-side before looking up an already authenticated account. */
+  email: Email,
+  role: EventRole,
+  idempotencyKey: IdempotencyKey,
+});
+export type AddEventMemberInput = typeof AddEventMemberInput.Type;
+
+export const AddEventMemberOutput = Schema.Struct({
+  member: EventMember,
+  created: Schema.Boolean,
+  idempotent: Schema.Boolean,
+});
+export type AddEventMemberOutput = typeof AddEventMemberOutput.Type;
+
+export const UpdateEventMemberInput = Schema.Struct({
+  idOrSlug: EntityId,
+  memberId: EntityId,
+  role: EventRole,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+});
+export type UpdateEventMemberInput = typeof UpdateEventMemberInput.Type;
+
+export const UpdateEventMemberOutput = Schema.Struct({
+  member: EventMember,
+  idempotent: Schema.Boolean,
+});
+export type UpdateEventMemberOutput = typeof UpdateEventMemberOutput.Type;
+
+export const RemoveEventMemberInput = Schema.Struct({
+  idOrSlug: EntityId,
+  memberId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+});
+export type RemoveEventMemberInput = typeof RemoveEventMemberInput.Type;
+
+/** Repeating a completed delete reports deleted=false instead of leaking another event's member. */
+export const RemoveEventMemberOutput = Schema.Struct({
+  memberId: EntityId,
+  deleted: Schema.Boolean,
+  idempotent: Schema.Boolean,
+});
+export type RemoveEventMemberOutput = typeof RemoveEventMemberOutput.Type;

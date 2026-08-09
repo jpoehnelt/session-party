@@ -3,8 +3,18 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import { Schema } from "effect";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
-import { Button, Card, EmptyState, Input, PageHeader, Skeleton, Textarea, Toaster, toast } from "@/ui";
-import { EventOutput, UpdateEventInput, type EventOutput as EventMetadata, type UpdateEventInput as EventPatch } from "../schema";
+import { Badge, Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Table, Textarea, Toaster, toast } from "@/ui";
+import {
+  AddEventMemberOutput,
+  EventMember,
+  EventOutput,
+  RemoveEventMemberOutput,
+  UpdateEventInput,
+  UpdateEventMemberOutput,
+  type EventMember as EventMemberRecord,
+  type EventOutput as EventMetadata,
+  type UpdateEventInput as EventPatch,
+} from "../schema";
 
 export const path = "/e/:eventSlug/settings";
 
@@ -33,6 +43,30 @@ export function updateEventMetadata(eventId: string, patch: EventPatch): Promise
     method: "PATCH",
     body: patch,
     schema: EventOutput,
+  });
+}
+
+const idempotencyKey = () => crypto.randomUUID();
+
+export function fetchEventMembers(eventId: string): Promise<readonly EventMemberRecord[]> {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/members`, { schema: Schema.Array(EventMember) });
+}
+
+async function addExistingMember(eventId: string, email: string, role: EventMemberRecord["role"]) {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/members`, {
+    method: "POST", body: { email, role, idempotencyKey: idempotencyKey() }, schema: AddEventMemberOutput,
+  });
+}
+
+async function changeMemberRole(eventId: string, member: EventMemberRecord, role: EventMemberRecord["role"]) {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/members/${encodeURIComponent(member.id)}`, {
+    method: "PATCH", body: { role, expectedVersion: member.version, idempotencyKey: idempotencyKey() }, schema: UpdateEventMemberOutput,
+  });
+}
+
+async function removeMember(eventId: string, member: EventMemberRecord) {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/members/${encodeURIComponent(member.id)}`, {
+    method: "DELETE", body: { expectedVersion: member.version, idempotencyKey: idempotencyKey() }, schema: RemoveEventMemberOutput,
   });
 }
 
@@ -322,6 +356,22 @@ export function EventSettingsForm({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(initialSaveError);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const [members, setMembers] = useState<readonly EventMemberRecord[] | null>(null);
+  const [memberEmail, setMemberEmail] = useState("");
+  const [memberRole, setMemberRole] = useState<EventMemberRecord["role"]>("reviewer");
+  const [memberError, setMemberError] = useState<string | null>(null);
+  const [memberSaving, setMemberSaving] = useState(false);
+
+  const refreshMembers = () => {
+    setMembers(null);
+    void fetchEventMembers(event.id).then(setMembers).catch((error) => {
+      const message = error instanceof Error ? error.message : "Could not load event members";
+      setMemberError(message);
+      setMembers([]);
+    });
+  };
+
+  useEffect(() => { refreshMembers(); }, [event.id]);
 
   const setValue = (field: keyof EventFormValues, value: string) => {
     setValues((current) => ({ ...current, [field]: value }));
@@ -360,7 +410,54 @@ export function EventSettingsForm({
     }
   };
 
+  const handleMemberSubmit = async (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    setMemberError(null);
+    setMemberSaving(true);
+    try {
+      const result = await addExistingMember(event.id, memberEmail, memberRole);
+      setMemberEmail("");
+      setMembers((current) => current ? [...current.filter((member) => member.id !== result.member.id), result.member] : [result.member]);
+      toast(result.created ? "Event member added." : "That account is already a member.", { tone: "success" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not add event member";
+      setMemberError(message);
+      toast(message, { tone: "danger" });
+    } finally {
+      setMemberSaving(false);
+    }
+  };
+
+  const handleRoleChange = async (member: EventMemberRecord, role: EventMemberRecord["role"]) => {
+    setMemberError(null);
+    try {
+      const result = await changeMemberRole(event.id, member, role);
+      setMembers((current) => current?.map((item) => item.id === result.member.id ? result.member : item) ?? [result.member]);
+      toast("Member role updated.", { tone: "success" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not change member role";
+      setMemberError(message);
+      toast(message, { tone: "danger" });
+      refreshMembers();
+    }
+  };
+
+  const handleRemove = async (member: EventMemberRecord) => {
+    setMemberError(null);
+    try {
+      await removeMember(event.id, member);
+      setMembers((current) => current?.filter((item) => item.id !== member.id) ?? []);
+      toast("Event member removed.", { tone: "success" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not remove event member";
+      setMemberError(message);
+      toast(message, { tone: "danger" });
+      refreshMembers();
+    }
+  };
+
   return (
+    <div className="space-y-6">
     <Card title="Event metadata">
       <form className="space-y-6" onSubmit={handleSubmit} aria-describedby={saveError ? "event-settings-error" : undefined}>
         {saveError ? (
@@ -411,5 +508,50 @@ export function EventSettingsForm({
         </div>
       </form>
     </Card>
+    <Card title="Event members">
+      <p className="mb-4 text-sm text-ink-secondary">Add people who have already signed in. This does not send an invitation email.</p>
+      <form className="grid gap-4 md:grid-cols-[minmax(0,1fr)_12rem_auto] md:items-end" onSubmit={handleMemberSubmit}>
+        <Input
+          label="Existing account email"
+          type="email"
+          required
+          value={memberEmail}
+          placeholder="reviewer@example.com"
+          hint="The person must have authenticated with SessionParty first."
+          onChange={(change) => setMemberEmail(change.target.value)}
+        />
+        <Select label="Role" value={memberRole} onChange={(change) => setMemberRole(change.target.value as EventMemberRecord["role"])}>
+          <option value="reviewer">Reviewer</option>
+          <option value="admin">Admin</option>
+          <option value="owner">Owner</option>
+        </Select>
+        <Button type="submit" loading={memberSaving} className="min-h-11">Add member</Button>
+      </form>
+      {memberError ? <p role="alert" className="mt-4 text-sm text-danger">{memberError}</p> : null}
+      {members === null ? (
+        <div className="mt-5"><Skeleton className="h-36" /></div>
+      ) : (
+        <div className="mt-5">
+          <Table
+            columns={[
+              { key: "person", header: "Person", render: (member: EventMemberRecord) => <span>{member.name ?? member.email}<span className="block text-xs text-ink-faint">{member.email}</span></span> },
+              { key: "role", header: "Role", render: (member: EventMemberRecord) => <Badge>{member.role}</Badge> },
+              { key: "actions", header: "Manage", render: (member: EventMemberRecord) => (
+                <div className="flex min-w-56 items-end gap-2">
+                  <Select aria-label={`Role for ${member.email}`} value={member.role} onChange={(change) => void handleRoleChange(member, change.target.value as EventMemberRecord["role"])}>
+                    <option value="reviewer">Reviewer</option><option value="admin">Admin</option><option value="owner">Owner</option>
+                  </Select>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => void handleRemove(member)}>Remove</Button>
+                </div>
+              ) },
+            ]}
+            rows={[...members]}
+            rowKey={(member) => member.id}
+            empty="No additional members yet."
+          />
+        </div>
+      )}
+    </Card>
+    </div>
   );
 }

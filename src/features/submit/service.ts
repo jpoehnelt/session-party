@@ -23,6 +23,7 @@ import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
 import { ConditionalLogic, FormFieldType, Routing } from "@/features/forms/schema";
+import { PublicSubmissionAbuse, PublicSubmissionRequest, normalizePublicEmail } from "./abuse";
 import {
   CreatePublicSubmissionOutput,
   type CreatePublicSubmissionInput,
@@ -217,16 +218,19 @@ const loadPublishedForm = (
           closesAt: record.form.closesAt?.getTime() ?? null,
           fields: fields.map(({ semanticKey: _semanticKey, routing: _routing, ...field }) => field),
         },
+        turnstileSiteKey: null,
       },
     };
   });
 
 export const getPublicSubmissionForm = (
   input: { readonly eventSlug: string; readonly formId: string },
-): Effect.Effect<PublicSubmissionForm, AppError, Db> =>
-  loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId).pipe(
-    Effect.map(({ publicForm }) => publicForm),
-  );
+): Effect.Effect<PublicSubmissionForm, AppError, Db | PublicSubmissionAbuse> =>
+  Effect.gen(function* () {
+    const { publicForm } = yield* loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId);
+    const abuse = yield* PublicSubmissionAbuse;
+    return { ...publicForm, turnstileSiteKey: abuse.turnstileSiteKey };
+  });
 
 const conditionMatches = (
   condition: typeof ConditionalLogic.Type["conditions"][number],
@@ -316,6 +320,7 @@ type ValidatedSubmission = {
   readonly answers: readonly { readonly field: InternalField; readonly value: AnswerValue }[];
   readonly title: string;
   readonly speakerName: string;
+  readonly speakerEmail: string | null;
   readonly category: string | null;
 };
 
@@ -367,11 +372,13 @@ const validateAnswers = (
     const title = semantic("submissionTitle");
     const abstract = semantic("submissionAbstract");
     const speakerName = semantic("speakerName");
+    const speakerEmail = semantic("speakerEmail");
     if (loaded.formKind === "task") {
       return {
         answers: validated,
         title: title ?? loaded.publicForm.form.name,
         speakerName: speakerName ?? "",
+        speakerEmail: null,
         category: null,
       };
     }
@@ -403,6 +410,7 @@ const validateAnswers = (
       answers: validated,
       title,
       speakerName,
+      speakerEmail,
       category: routedCategories.values().next().value ?? null,
     };
   });
@@ -454,7 +462,7 @@ export interface SubmitCommandTestHooks {
 export const createPublicSubmission = (
   input: CreatePublicSubmissionInput,
   testHooks?: SubmitCommandTestHooks,
-): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, Db | Rooms> =>
+): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, Db | Rooms | PublicSubmissionAbuse | PublicSubmissionRequest> =>
   Effect.gen(function* () {
     const loaded = yield* loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId);
     if (loaded.formKind !== "cfp") {
@@ -475,6 +483,15 @@ export const createPublicSubmission = (
     );
     if (replay) return replay;
     const validated = yield* validateAnswers(loaded, input);
+    const abuse = yield* PublicSubmissionAbuse;
+    const request = yield* PublicSubmissionRequest;
+    yield* abuse.authorize({
+      eventId: loaded.eventId,
+      formId: input.formId,
+      normalizedEmail: validated.speakerEmail === null ? null : normalizePublicEmail(validated.speakerEmail),
+      turnstileToken: input.turnstileToken,
+      remoteIp: request.remoteIp,
+    });
     const { db } = yield* Db;
     const now = new Date();
     const submissionId = nanoid();

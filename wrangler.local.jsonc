@@ -5,7 +5,8 @@
   "compatibility_date": "2025-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/mcp", "/parties/*"]
   },
   "observability": { "enabled": false },
   "d1_databases": [
@@ -30,6 +31,7 @@
   "vars": {
     "LOCAL_MODE": "1",
     "APP_URL": "http://127.0.0.1:5173",
-    "MAIL_FROM": "Session Party <welcome@sessionparty.com>"
+    "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
+    "TURNSTILE_HOSTNAMES": "localhost,127.0.0.1"
   }
 }

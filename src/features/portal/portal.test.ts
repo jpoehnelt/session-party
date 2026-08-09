@@ -5,6 +5,7 @@ import {
   airtableOutbox,
   airtablePendingEdits,
   assets,
+  auditLog,
   domainChanges,
   idempotencyRecords,
   integrations,
@@ -30,6 +31,7 @@ import {
 } from "@/server/services";
 import { operations } from "./operations";
 import {
+  claimSpeaker,
   createPortalResource,
   createPortalTask,
   deletePortalResource,
@@ -104,7 +106,13 @@ const base64Payload = (size: number): string => {
 };
 
 
-const fixture = async () => {
+const fixture = async ({
+  linkedUserId = speakerUser.userId as string | null,
+  speakerEmail = speakerUser.email,
+}: {
+  readonly linkedUserId?: string | null;
+  readonly speakerEmail?: string;
+} = {}) => {
   sequence += 1;
   const suffix = String(sequence);
   const eventId = `portal-event-id-${suffix}`;
@@ -115,6 +123,7 @@ const fixture = async () => {
   const provisioningId = `portal-provisioning-${suffix}`;
   const formId = `portal-form-${suffix}`;
   const formVersionId = `portal-form-version-${suffix}`;
+  const speakerEmailFieldId = `portal-speaker-email-field-${suffix}`;
   const now = Date.now();
   await env.DB.batch([
     env.DB.prepare("insert or ignore into users (id, email, name, created_at, updated_at) values (?, ?, ?, ?, ?)").bind(owner.userId, owner.email, owner.name, now, now),
@@ -126,13 +135,15 @@ const fixture = async () => {
     env.DB.prepare("insert into event_members (id, event_id, user_id, role, version, created_at, updated_at) values (?, ?, ?, 'reviewer', 1, ?, ?)").bind(`reviewer-member-${suffix}`, eventId, reviewer.userId, now, now),
     env.DB.prepare("insert into forms (id, event_id, kind, name, status, version, created_at, updated_at) values (?, ?, 'cfp', 'CFP', 'closed', 1, ?, ?)").bind(formId, eventId, now, now),
     env.DB.prepare("insert into form_versions (id, event_id, form_id, version_number, name, published_at, created_at) values (?, ?, ?, 1, 'CFP', ?, ?)").bind(formVersionId, eventId, formId, now, now),
+    env.DB.prepare("insert into form_version_fields (id, event_id, form_version_id, source_field_id, \"order\", type, label, semantic_key, required, created_at) values (?, ?, ?, null, 1, 'email', 'Speaker email', 'speakerEmail', 1, ?)").bind(speakerEmailFieldId, eventId, formVersionId, now),
     env.DB.prepare("insert into submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, accepted_at, version, created_at, updated_at) values (?, ?, ?, ?, 'Accepted talk', 'accepted', ?, ?, 1, ?, ?)").bind(submissionId, eventId, formId, formVersionId, now, now, now, now),
-    env.DB.prepare("insert into speakers (id, event_id, user_id, display_name, links, visible, version, created_at, updated_at) values (?, ?, ?, 'Exact speaker', '[]', 1, 1, ?, ?)").bind(speakerId, eventId, speakerUser.userId, now, now),
+    env.DB.prepare("insert into submission_answers (id, event_id, submission_id, form_version_id, form_version_field_id, value, version, created_at, updated_at) values (?, ?, ?, ?, ?, ?, 1, ?, ?)").bind(`portal-speaker-email-answer-${suffix}`, eventId, submissionId, formVersionId, speakerEmailFieldId, JSON.stringify(speakerEmail), now, now),
+    env.DB.prepare("insert into speakers (id, event_id, user_id, display_name, links, visible, version, created_at, updated_at) values (?, ?, ?, 'Exact speaker', '[]', 1, 1, ?, ?)").bind(speakerId, eventId, linkedUserId, now, now),
     env.DB.prepare("insert into submission_speakers (id, event_id, submission_id, speaker_id, is_primary, created_at) values (?, ?, ?, ?, 1, ?)").bind(`submission-speaker-${suffix}`, eventId, submissionId, speakerId, now),
     env.DB.prepare("insert into acceptance_events (id, event_id, submission_id, primary_submission_speaker_id, primary_speaker_id, primary_association_is_primary, type, submission_version, occurred_at) values (?, ?, ?, ?, ?, 1, 'accepted', 1, ?)").bind(acceptanceId, eventId, submissionId, `submission-speaker-${suffix}`, speakerId, now),
     env.DB.prepare("insert into speaker_provisioning (id, event_id, acceptance_event_id, submission_id, primary_speaker_id, status, available_at, attempt_count, version, created_at, updated_at) values (?, ?, ?, ?, ?, 'pending', ?, 0, 1, ?, ?)").bind(provisioningId, eventId, acceptanceId, submissionId, speakerId, now, now, now),
   ]);
-  return { eventId, eventSlug, formId, formVersionId, submissionId, speakerId, provisioningId };
+  return { eventId, eventSlug, formId, formVersionId, submissionId, speakerId, acceptanceId, provisioningId };
 };
 
 beforeAll(async () => {
@@ -153,6 +164,12 @@ describe("portal service", () => {
       authorize: { kind: "browser-session" },
       rest: { path: "/events/:eventId/portal" },
     });
+    expect(operations.find(({ id }) => id === "portal.claimSpeaker")).toMatchObject({
+      authorize: { kind: "browser-session" },
+      rest: { method: "post", path: "/events/:eventId/portal/claim" },
+      idempotency: "required",
+      concurrency: "required",
+    });
     expect(operations.find(({ id }) => id === "portal.getPublicSpeakers")).toMatchObject({
       authorize: { kind: "public" },
       rest: { path: "/public/events/:eventSlug/speakers" },
@@ -172,6 +189,156 @@ describe("portal service", () => {
       event: { id: setup.eventId, slug: setup.eventSlug },
       speaker: { id: setup.speakerId },
     });
+  });
+
+  it("claims the current accepted primary speaker by normalized immutable email and enables provisioning", async () => {
+    const setup = await fixture({
+      linkedUserId: null,
+      speakerEmail: `  ${speakerUser.email.toUpperCase()}  `,
+    });
+    const input = {
+      eventId: setup.eventSlug,
+      idempotencyKey: `claim-${setup.eventId}`,
+    } as const;
+
+    await expectFailure(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug }), "Forbidden");
+    const claimed = await runAs(speakerUser, claimSpeaker(input));
+    expect(claimed).toEqual({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      acceptanceEventId: setup.acceptanceId,
+      provisioningId: setup.provisioningId,
+      speakerVersion: 2,
+      provisioningVersion: 2,
+      provisioningStatus: "claimed",
+    });
+    await expect(runAs(speakerUser, claimSpeaker(input))).resolves.toEqual(claimed);
+
+    const db = drizzle(env.DB);
+    const [linked] = await db.select().from(speakers).where(eq(speakers.id, setup.speakerId));
+    expect(linked).toMatchObject({ userId: speakerUser.userId, version: 2 });
+    expect(await db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, setup.eventId),
+      eq(idempotencyRecords.operationId, "portal.claimSpeaker"),
+    ))).toHaveLength(1);
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, setup.eventId),
+      eq(domainChanges.eventType, "portal.speaker.claimed"),
+    ))).toHaveLength(1);
+    expect(await db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, setup.eventId),
+      eq(auditLog.action, "portal.speaker.claimed"),
+    ))).toHaveLength(1);
+
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: claimed.provisioningVersion,
+    }));
+    await expect(runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug }))).resolves.toMatchObject({
+      provisioningStatus: "provisioned",
+      speaker: { id: setup.speakerId },
+    });
+  });
+
+  it("rejects mismatched, revoked, and other-user-linked speaker claims without evidence", async () => {
+    const mismatched = await fixture({ linkedUserId: null, speakerEmail: "someone-else@example.com" });
+    await expectFailure(speakerUser, claimSpeaker({
+      eventId: mismatched.eventId,
+      idempotencyKey: `claim-mismatch-${mismatched.eventId}`,
+    }), "Forbidden");
+
+    const linkedElsewhere = await fixture({ linkedUserId: otherUser.userId, speakerEmail: speakerUser.email });
+    await expectFailure(speakerUser, claimSpeaker({
+      eventId: linkedElsewhere.eventId,
+      idempotencyKey: `claim-linked-${linkedElsewhere.eventId}`,
+    }), "Conflict");
+
+    const revoked = await fixture({ linkedUserId: null });
+    const revokedAt = Date.now() + 1_000;
+    await env.DB.prepare("insert into acceptance_events (id, event_id, submission_id, primary_submission_speaker_id, primary_speaker_id, primary_association_is_primary, type, submission_version, occurred_at) values (?, ?, ?, ?, ?, 1, 'revoked', 2, ?)")
+      .bind(`revoked-${revoked.acceptanceId}`, revoked.eventId, revoked.submissionId, `submission-speaker-${sequence}`, revoked.speakerId, revokedAt)
+      .run();
+    await expectFailure(speakerUser, claimSpeaker({
+      eventId: revoked.eventId,
+      idempotencyKey: `claim-revoked-${revoked.eventId}`,
+    }), "Forbidden");
+
+    const db = drizzle(env.DB);
+    for (const setup of [mismatched, revoked]) {
+      const [unchanged] = await db.select().from(speakers).where(eq(speakers.id, setup.speakerId));
+      expect(unchanged).toMatchObject({ userId: null, version: 1 });
+      expect(await db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, setup.eventId),
+        eq(idempotencyRecords.operationId, "portal.claimSpeaker"),
+      ))).toHaveLength(0);
+      expect(await db.select().from(domainChanges).where(and(
+        eq(domainChanges.eventId, setup.eventId),
+        eq(domainChanges.eventType, "portal.speaker.claimed"),
+      ))).toHaveLength(0);
+    }
+  });
+
+  it("rechecks current acceptance inside the guarded claim commit", async () => {
+    const setup = await fixture({ linkedUserId: null });
+    const revokedAt = Date.now() + 1_000;
+    await expectFailure(speakerUser, claimSpeaker({
+      eventId: setup.eventId,
+      idempotencyKey: `claim-race-${setup.eventId}`,
+    }, {
+      beforeCommit: async () => {
+        await env.DB.prepare("insert into acceptance_events (id, event_id, submission_id, primary_submission_speaker_id, primary_speaker_id, primary_association_is_primary, type, submission_version, occurred_at) values (?, ?, ?, ?, ?, 1, 'revoked', 2, ?)")
+          .bind(`race-revoked-${setup.acceptanceId}`, setup.eventId, setup.submissionId, `submission-speaker-${sequence}`, setup.speakerId, revokedAt)
+          .run();
+      },
+    }), "Conflict");
+
+    const db = drizzle(env.DB);
+    const [speaker] = await db.select().from(speakers).where(eq(speakers.id, setup.speakerId));
+    expect(speaker).toMatchObject({ userId: null, version: 1 });
+    expect(await db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, setup.eventId),
+      eq(idempotencyRecords.operationId, "portal.claimSpeaker"),
+    ))).toHaveLength(0);
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, setup.eventId),
+      eq(domainChanges.eventType, "portal.speaker.claimed"),
+    ))).toHaveLength(0);
+    expect(await db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, setup.eventId),
+      eq(auditLog.action, "portal.speaker.claimed"),
+    ))).toHaveLength(0);
+  });
+
+  it("converges concurrent same-user claims without duplicate claim evidence", async () => {
+    const setup = await fixture({ linkedUserId: null });
+    const [first, second] = await Promise.all([
+      runEither(speakerUser, claimSpeaker({
+        eventId: setup.eventId,
+        idempotencyKey: `claim-concurrent-a-${setup.eventId}`,
+      })),
+      runEither(speakerUser, claimSpeaker({
+        eventId: setup.eventId,
+        idempotencyKey: `claim-concurrent-b-${setup.eventId}`,
+      })),
+    ]);
+    expect(first._tag).toBe("Right");
+    expect(second._tag).toBe("Right");
+    if (first._tag === "Right") expect(first.right.provisioningStatus).toBe("claimed");
+    if (second._tag === "Right") expect(second.right.provisioningStatus).toBe("claimed");
+
+    const db = drizzle(env.DB);
+    const [speaker] = await db.select().from(speakers).where(eq(speakers.id, setup.speakerId));
+    expect(speaker).toMatchObject({ userId: speakerUser.userId, version: 2 });
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, setup.eventId),
+      eq(domainChanges.eventType, "portal.speaker.claimed"),
+    ))).toHaveLength(1);
+    expect(await db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, setup.eventId),
+      eq(auditLog.action, "portal.speaker.claimed"),
+    ))).toHaveLength(1);
   });
 
   it("keeps an active provisioned submission when a different submission is revoked", async () => {

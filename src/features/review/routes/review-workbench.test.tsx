@@ -160,6 +160,9 @@ describe("review workbench route", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/events/event_summit/review", expect.any(Object));
     expect(markup).toContain("Authoritative proposal");
     expect(markup).toContain("Returned by the review API.");
+    expect(markup).toContain("Review rounds");
+    expect(markup).toContain("Create round");
+    expect(markup).toContain("version 1");
     expect(markup).not.toContain("Fixture snapshot");
     expect(markup).not.toContain("reviewWorkbenchFixture");
     expect(markup).toContain("Assign reviewer");
@@ -197,6 +200,7 @@ describe("review workbench route", () => {
     expect(markup).toContain("Request AI suggestion");
     expect(markup).not.toContain("Assign reviewer");
     expect(markup).not.toContain("Accept &amp; provision primary speaker");
+    expect(markup).not.toContain("Create round");
   });
 
   it("treats a malformed event response as a recoverable load error without fetching review", async () => {

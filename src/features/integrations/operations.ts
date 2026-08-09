@@ -7,6 +7,13 @@ import {
 } from "contracts/types";
 import { Schema } from "effect";
 import {
+  ConfigureAcceleventsInput,
+  ConfigureAcceleventsResult,
+  AcceleventsConfiguration,
+} from "./schema";
+import {
+  configureAccelevents,
+  getAcceleventsConfiguration,
   getAcceleventsImportStatus,
   listIntegrationConfigurations,
   runAcceleventsImport,
@@ -98,8 +105,62 @@ export const runAcceleventsImportOperation = {
   emits: [],
 } as const;
 
+export const configureAcceleventsOperation = {
+  id: "integrations.configureAccelevents",
+  kind: "command",
+  input: ConfigureAcceleventsInput,
+  output: ConfigureAcceleventsResult,
+  authorize: authenticatedAuthorization,
+  invoke: configureAccelevents,
+  rest: {
+    method: "put",
+    path: "/events/:idOrSlug/integrations/accelevents/configuration",
+    input: {
+      path: ["idOrSlug"],
+      body: ["source", "accelEventId", "eventUrl", "expectedVersion", "idempotencyKey"],
+    },
+    summary: "Configure Accelevents import",
+    description: "Creates or replaces a versioned Accelevents mapping without accepting provider secrets.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "configure_accelevents",
+    description: "Configure the deterministic fixture or a live Accelevents event with optimistic concurrency.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["integrations.accelevents_configured"],
+} as const;
+
+export const getAcceleventsConfigurationOperation = {
+  id: "integrations.getAcceleventsConfiguration",
+  kind: "query",
+  input: ListIntegrationConfigurationsInput,
+  output: Schema.NullOr(AcceleventsConfiguration),
+  authorize: authenticatedAuthorization,
+  invoke: ({ idOrSlug }: typeof ListIntegrationConfigurationsInput.Type) =>
+    getAcceleventsConfiguration(idOrSlug),
+  rest: {
+    method: "get",
+    path: "/events/:idOrSlug/integrations/accelevents/configuration",
+    input: { path: ["idOrSlug"] },
+    summary: "Get Accelevents configuration",
+    description: "Returns versioned, non-secret Accelevents configuration for organizer edits.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "get_accelevents_configuration",
+    description: "Read a versioned, non-secret Accelevents configuration for organizer edits.",
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} as const;
+
 export const operations = [
   getAcceleventsImportStatusOperation,
   listIntegrationConfigurationsOperation,
   runAcceleventsImportOperation,
+  configureAcceleventsOperation,
+  getAcceleventsConfigurationOperation,
 ] as const;

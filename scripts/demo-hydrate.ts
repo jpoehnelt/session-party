@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { resolveLocalRuntime } from "./local-runtime";
 
 const { origin } = resolveLocalRuntime();
@@ -8,6 +7,24 @@ const eventSlug = "ai-engineer-sandbox";
 const ownerSession = "demo-owner-session";
 const reviewerSession = "demo-reviewer-session";
 const speakerSession = "demo-speaker-session";
+
+const fixtureSpeakerNames = [
+  "Sam Speaker", "Alex Morgan", "Avery Chen", "Blair Okafor", "Cameron Singh",
+  "Casey Rivera", "Dakota Kim", "Drew Williams", "Elliot Hassan", "Emerson Silva",
+  "Finley Jones", "Harper Brown", "Hayden Garcia", "Jamie Patel", "Jordan Lee",
+  "Kai Thompson", "Kendall Martin", "Lane Davis", "Logan Wilson", "Marley Taylor",
+  "Morgan Clark", "Nico Anderson", "Parker Lewis", "Quinn Robinson", "Reese Walker",
+  "Remy Martinez", "Robin Moore", "Rowan Hall", "Sasha Nguyen", "Taylor Jackson",
+] as const;
+
+const fixtureSpeakers = fixtureSpeakerNames.map((name, index) => {
+  const ordinal = String(index + 1).padStart(2, "0");
+  return {
+    name,
+    email: index === 0 ? "speaker@sessionparty.local" : `speaker${ordinal}@sessionparty.local`,
+    session: index === 0 ? speakerSession : `demo-speaker-${ordinal}-session`,
+  };
+});
 
 interface FormField {
   readonly id: string;
@@ -40,6 +57,15 @@ interface AcceptanceOutput {
   readonly provisioningId: string;
   readonly primarySpeakerId: string;
   readonly submissionVersion: number;
+}
+
+interface ClaimOutput {
+  readonly speakerId: string;
+  readonly acceptanceEventId: string;
+  readonly provisioningId: string;
+  readonly speakerVersion: number;
+  readonly provisioningVersion: number;
+  readonly provisioningStatus: "claimed" | "provisioned";
 }
 
 interface PortalTask {
@@ -112,25 +138,6 @@ async function request<T>(
     throw new Error(`${options.method ?? "GET"} ${path} returned ${response.status}, expected ${expected}: ${JSON.stringify(payload)}`);
   }
   return payload as T;
-}
-
-function localSql(sql: string): void {
-  const result = spawnSync(
-    "pnpm",
-    [
-      "wrangler",
-      "d1",
-      "execute",
-      "session-party",
-      "--local",
-      "--config",
-      "wrangler.local.jsonc",
-      "--command",
-      sql,
-    ],
-    { stdio: "inherit" },
-  );
-  if (result.status !== 0) throw new Error("Local D1 bridge failed");
 }
 
 function primary(fields: readonly FormField[], label: string): string {
@@ -294,36 +301,68 @@ const publishedTaskForm = await request<FormDetail>(`/events/${eventId}/forms/${
 });
 if (!publishedTaskForm.publishedVersion) throw new Error("Task form did not publish");
 
-const submission = await request<SubmissionOutput>(
-  `/public/events/${eventSlug}/forms/${encode(publishedCfp.id)}/submissions`,
-  {
-    method: "POST",
-    expectedStatus: 201,
-    headers: { "Idempotency-Key": "demo-primary-proposal-v1" },
-    body: {
-      answers: [
-        { fieldId: primary(cfpFields, "Session title"), value: "Reliable agents: from prototype to production" },
-        { fieldId: primary(cfpFields, "Session abstract"), value: "A hands-on guide to durable state, observable tool use, and failure-safe agent workflows." },
-        { fieldId: primary(cfpFields, "Speaker name"), value: "Sam Speaker" },
-        { fieldId: primary(cfpFields, "Speaker email"), value: "speaker@sessionparty.local" },
-        { fieldId: primary(cfpFields, "Best-fit track"), value: "Developer tools" },
-        { fieldId: primary(cfpFields, "Workshop exercise plan"), value: "Attendees repair a deliberately fragile multi-step agent and inspect its recovery trace." },
-      ],
-    },
-  },
-);
+const cfpFieldIds = {
+  title: primary(cfpFields, "Session title"),
+  abstract: primary(cfpFields, "Session abstract"),
+  speakerName: primary(cfpFields, "Speaker name"),
+  speakerEmail: primary(cfpFields, "Speaker email"),
+  track: primary(cfpFields, "Best-fit track"),
+  details: primary(cfpFields, "Workshop exercise plan"),
+};
+const trackOptions = ["AI systems", "Developer tools", "Applied research"] as const;
+const acceptedSubmissions: SubmissionOutput[] = [];
+const submittedBacklog: SubmissionOutput[] = [];
+
+for (const [speakerIndex, speaker] of fixtureSpeakers.entries()) {
+  for (let proposalIndex = 0; proposalIndex < 2; proposalIndex += 1) {
+    const track = trackOptions[(speakerIndex + proposalIndex) % trackOptions.length]!;
+    const isWalkthrough = speakerIndex === 0 && proposalIndex === 0;
+    const answers: Array<{ readonly fieldId: string; readonly value: string }> = [
+      {
+        fieldId: cfpFieldIds.title,
+        value: isWalkthrough
+          ? "Reliable agents: from prototype to production"
+          : `${speaker.name}: ${proposalIndex === 0 ? "production patterns" : "field notes"} for ${track.toLowerCase()}`,
+      },
+      {
+        fieldId: cfpFieldIds.abstract,
+        value: isWalkthrough
+          ? "A hands-on guide to durable state, observable tool use, and failure-safe agent workflows."
+          : `A practical, evidence-backed session from ${speaker.name} covering repeatable ${track.toLowerCase()} techniques, tradeoffs, and failure recovery.`,
+      },
+      { fieldId: cfpFieldIds.speakerName, value: speaker.name },
+      { fieldId: cfpFieldIds.speakerEmail, value: speaker.email },
+      { fieldId: cfpFieldIds.track, value: track },
+    ];
+    if (track === "Developer tools") {
+      answers.push({
+        fieldId: cfpFieldIds.details,
+        value: isWalkthrough
+          ? "Attendees repair a deliberately fragile multi-step agent and inspect its recovery trace."
+          : "Attendees diagnose a broken workflow, apply one focused repair, and compare the resulting trace.",
+      });
+    }
+    const created = await request<SubmissionOutput>(
+      `/public/events/${eventSlug}/forms/${encode(publishedCfp.id)}/submissions`,
+      {
+        method: "POST",
+        expectedStatus: 201,
+        headers: { "Idempotency-Key": `demo-proposal-${speakerIndex + 1}-${proposalIndex + 1}-v1` },
+        body: { answers },
+      },
+    );
+    (proposalIndex === 0 ? acceptedSubmissions : submittedBacklog).push(created);
+  }
+}
+
+const submission = acceptedSubmissions[0];
+if (!submission || acceptedSubmissions.length !== 30 || submittedBacklog.length !== 30) {
+  throw new Error("Deterministic CFP scale did not create 30 accepted candidates and 30 backlog submissions");
+}
 
 let workbench = await request<Workbench>(
   `/events/${eventId}/review?selectedSubmissionId=${encode(submission.submissionId)}`,
   { session: ownerSession },
-);
-const primarySpeaker = workbench.selected?.speakers.find(({ isPrimary }) => isPrimary);
-if (!primarySpeaker || !/^[A-Za-z0-9_-]+$/.test(primarySpeaker.id)) {
-  throw new Error("Could not resolve the primary speaker created by the public CFP");
-}
-localSql(
-  `UPDATE speakers SET user_id = 'demo-speaker', updated_at = ${Date.now()} `
-  + `WHERE id = '${primarySpeaker.id}' AND event_id = 'demo-event' AND user_id IS NULL;`,
 );
 
 await request(`/events/${eventId}/review/assignments`, {
@@ -372,11 +411,53 @@ const accepted = await request<AcceptanceOutput>(
   },
 );
 
+const claimed = await request<ClaimOutput>(`/events/${eventId}/portal/claim`, {
+  method: "POST",
+  session: speakerSession,
+  body: { idempotencyKey: "demo-claim-primary-speaker-v1" },
+});
+if (claimed.speakerId !== accepted.primarySpeakerId || claimed.provisioningId !== accepted.provisioningId) {
+  throw new Error("Speaker claim did not resolve the accepted primary speaker");
+}
 await request(`/events/${eventId}/portal/speakers/${encode(accepted.primarySpeakerId)}/provision`, {
   method: "POST",
   session: ownerSession,
-  body: { provisioningId: accepted.provisioningId, expectedVersion: 1 },
+  body: { provisioningId: claimed.provisioningId, expectedVersion: claimed.provisioningVersion },
 });
+
+const acceptedPeople: Array<{ readonly submission: SubmissionOutput; readonly acceptance: AcceptanceOutput }> = [
+  { submission, acceptance: accepted },
+];
+for (let index = 1; index < acceptedSubmissions.length; index += 1) {
+  const candidate = acceptedSubmissions[index]!;
+  const speaker = fixtureSpeakers[index]!;
+  const acceptance = await request<AcceptanceOutput>(
+    `/events/${eventId}/review/submissions/${encode(candidate.submissionId)}/acceptance`,
+    {
+      method: "POST",
+      session: ownerSession,
+      headers: {
+        "idempotency-key": `demo-accept-proposal-${index + 1}-v1`,
+        "x-request-id": `demo-accept-request-${index + 1}-v1`,
+      },
+      body: { expectedVersion: 1 },
+    },
+  );
+  const claim = await request<ClaimOutput>(`/events/${eventId}/portal/claim`, {
+    method: "POST",
+    session: speaker.session,
+    body: { idempotencyKey: `demo-claim-speaker-${index + 1}-v1` },
+  });
+  if (claim.speakerId !== acceptance.primarySpeakerId) {
+    throw new Error(`Speaker ${index + 1} claimed the wrong accepted profile`);
+  }
+  await request(`/events/${eventId}/portal/speakers/${encode(acceptance.primarySpeakerId)}/provision`, {
+    method: "POST",
+    session: ownerSession,
+    body: { provisioningId: claim.provisioningId, expectedVersion: claim.provisioningVersion },
+  });
+  acceptedPeople.push({ submission: candidate, acceptance });
+}
 
 const tasks = await Promise.all([
   ["Complete your speaker profile", "Add a biography and public link.", "profile", null, 1],
@@ -411,7 +492,7 @@ const profile = await request<SpeakerProfile>(`/events/${eventId}/portal/profile
   method: "PUT",
   session: speakerSession,
   body: {
-    expectedVersion: 1,
+    expectedVersion: claimed.speakerVersion,
     idempotencyKey: "demo-speaker-profile-v1",
     displayName: "Sam Speaker",
     title: "Principal AI Engineer",
@@ -503,18 +584,49 @@ const createdTalk = await request<AgendaMutation>(`/events/${eventId}/agenda/tal
     idempotencyKey: "demo-create-talk-v1",
   },
 });
-await request(`/events/${eventId}/agenda/talks/${encode(createdTalk.talk.id)}/schedule`, {
-  method: "PUT",
-  session: ownerSession,
-  body: {
-    trackId: "demo-track-tools",
-    roomId: "demo-room-harbor",
-    startsAt: 1_789_668_000_000,
-    durationMin: 45,
-    expectedVersion: createdTalk.talk.version,
-    idempotencyKey: "demo-schedule-talk-v1",
-  },
-});
+const scheduledTalks = [createdTalk];
+const trackIds = [
+  "demo-track-systems",
+  "demo-track-tools",
+  "demo-track-research",
+  "demo-track-leadership",
+] as const;
+const roomIds = [
+  "demo-room-harbor",
+  "demo-room-summit",
+  "demo-room-studio",
+  "demo-room-lab",
+] as const;
+for (let index = 0; index < 18; index += 1) {
+  const talk = index === 0
+    ? createdTalk
+    : await request<AgendaMutation>(`/events/${eventId}/agenda/talks`, {
+        method: "POST",
+        session: ownerSession,
+        expectedStatus: 201,
+        body: {
+          submissionId: acceptedPeople[index]!.submission.submissionId,
+          trackId: null,
+          roomId: null,
+          startsAt: null,
+          durationMin: 45,
+          idempotencyKey: `demo-create-talk-${index + 1}-v1`,
+        },
+      });
+  if (index > 0) scheduledTalks.push(talk);
+  await request(`/events/${eventId}/agenda/talks/${encode(talk.talk.id)}/schedule`, {
+    method: "PUT",
+    session: ownerSession,
+    body: {
+      trackId: trackIds[index % trackIds.length],
+      roomId: roomIds[index % roomIds.length],
+      startsAt: 1_789_664_400_000 + Math.floor(index / roomIds.length) * 3_600_000,
+      durationMin: 45,
+      expectedVersion: talk.talk.version,
+      idempotencyKey: `demo-schedule-talk-${index + 1}-v1`,
+    },
+  });
+}
 const agenda = await request<AgendaSnapshot>(`/events/${eventId}/agenda?view=day`, { session: ownerSession });
 await request(`/events/${eventId}/agenda/publications`, {
   method: "POST",
@@ -582,8 +694,10 @@ const [publicSpeakers, publicAgenda] = await Promise.all([
   request<{ readonly speakers: readonly unknown[] }>(`/public/events/${eventSlug}/speakers`),
   request<{ readonly revision: number; readonly talks: readonly unknown[] }>(`/public/events/${eventSlug}/agenda/published`),
 ]);
-if (publicSpeakers.speakers.length === 0 || publicAgenda.talks.length === 0) {
-  throw new Error("Public speaker or schedule projection is empty");
+if (publicSpeakers.speakers.length !== 30 || publicAgenda.talks.length !== 18) {
+  throw new Error(
+    `Public demo scale mismatch: expected 30 speakers and 18 talks, received ${publicSpeakers.speakers.length} speakers and ${publicAgenda.talks.length} talks`,
+  );
 }
 
 console.log(JSON.stringify({
@@ -596,6 +710,14 @@ console.log(JSON.stringify({
   speaker: accepted.primarySpeakerId,
   provisioning: accepted.provisioningId,
   tasks: tasks.map(({ id }) => id),
+  scale: {
+    speakers: publicSpeakers.speakers.length,
+    submissions: acceptedSubmissions.length + submittedBacklog.length,
+    accepted: acceptedPeople.length,
+    talks: scheduledTalks.length,
+    tracks: trackIds.length,
+    rooms: roomIds.length,
+  },
   talk: createdTalk.talk.id,
   publicationRevision: publicAgenda.revision,
   deliveries: deliveryHistory.deliveries.length,

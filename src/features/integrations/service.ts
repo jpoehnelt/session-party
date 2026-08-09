@@ -1,15 +1,19 @@
-import { External, NotFound, type AppError } from "contracts/errors";
+import { Conflict, External, NotFound, Validation, type AppError } from "contracts/errors";
 import { eventAuthorization, type AuthorizationPolicy, type Principal } from "contracts/principal";
-import { events, integrations } from "contracts/schema";
+import { auditLog, domainChanges, events, idempotencyRecords, integrations } from "contracts/schema";
+import type { JsonValue } from "contracts/domain";
 import {
   IntegrationConfig,
   type AcceleventsImportRun,
   type AcceleventsImportStatus,
   type IntegrationConfig as IntegrationConfigType,
 } from "contracts/types";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { Effect, Schema } from "effect";
+import { nanoid } from "nanoid";
 import { AcceleventsImports, Authorizer, CurrentUser, Db } from "@/server/services";
+import type { ConfigureAcceleventsInput, ConfigureAcceleventsResult } from "./schema";
+import type { AcceleventsConfiguration } from "./schema";
 
 export const integrationsReadAuthorization = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
@@ -58,6 +62,40 @@ const resolveEventId = (idOrSlug: string) =>
 const importActor = (principal: Principal) => principal.kind === "api-key"
   ? { kind: "api-key" as const, id: principal.apiKeyId }
   : { kind: "user" as const, id: principal.userId };
+
+const actorColumns = (principal: Principal) => principal.kind === "api-key"
+  ? { actorUserId: null, actorApiKeyId: principal.apiKeyId }
+  : { actorUserId: principal.userId, actorApiKeyId: null };
+
+const sha256 = (value: string): Effect.Effect<string, External> =>
+  Effect.tryPromise({
+    try: async () => {
+      const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+      return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    },
+    catch: (error) => new External({
+      service: "integrations-configuration",
+      detail: error instanceof Error ? error.message : String(error),
+    }),
+  });
+
+const fixtureConfig = (accelEventId: string, eventUrl: string) =>
+  accelEventId === "fixture-event" && eventUrl === "fixture-event";
+
+const validateAcceleventsSource = (input: ConfigureAcceleventsInput) => {
+  const isFixture = fixtureConfig(input.accelEventId, input.eventUrl);
+  if (input.source === "fixture" && !isFixture) {
+    return Effect.fail(new Validation({
+      message: "Fixture configuration must use the deterministic fixture-event mapping",
+    }));
+  }
+  if (input.source === "live" && isFixture) {
+    return Effect.fail(new Validation({
+      message: "Live configuration cannot use the reserved fixture-event mapping",
+    }));
+  }
+  return Effect.void;
+};
 
 const decodeConfiguration = (
   kind: "airtable" | "accelevents",
@@ -122,6 +160,37 @@ export const getAcceleventsImportStatus = (
     return yield* imports.status(eventId);
   });
 
+/** Version is safe organizer metadata needed for an optimistic configuration edit. */
+export const getAcceleventsConfiguration = (
+  idOrSlug: string,
+): Effect.Effect<
+  AcceleventsConfiguration | null,
+  AppError,
+  Authorizer | CurrentUser | Db
+> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const eventId = yield* resolveEventId(idOrSlug);
+    yield* authorizeCurrent(integrationsReadAuthorization, eventId);
+    const [stored] = yield* database(() => db.select().from(integrations).where(and(
+      eq(integrations.eventId, eventId),
+      eq(integrations.kind, "accelevents"),
+    )).limit(1));
+    if (!stored) return null;
+    const config = yield* decodeConfiguration("accelevents", stored.config);
+    if (config.kind !== "accelevents") {
+      return yield* Effect.fail(new External({
+        service: "integrations-configuration",
+        detail: "Stored Accelevents configuration has a mismatched discriminator",
+      }));
+    }
+    return {
+      config,
+      source: fixtureConfig(config.accelEventId, config.eventUrl) ? "fixture" : "live",
+      version: stored.version,
+    };
+  });
+
 export const runAcceleventsImport = (
   idOrSlug: string,
   idempotencyKey: string,
@@ -140,3 +209,138 @@ export const runAcceleventsImport = (
       actor: importActor(principal),
     });
   });
+
+/**
+ * Creates/replaces a non-secret Accelevents mapping. Secret material is never
+ * accepted or returned: live execution resolves the Worker-held reference.
+ */
+export const configureAccelevents = (
+  input: ConfigureAcceleventsInput,
+): Effect.Effect<
+  ConfigureAcceleventsResult,
+  AppError,
+  Authorizer | CurrentUser | Db
+> =>
+  Effect.gen(function* () {
+    yield* validateAcceleventsSource(input);
+    const { db } = yield* Db;
+    const eventId = yield* resolveEventId(input.idOrSlug);
+    const principal = yield* authorizeCurrent(integrationsWriteAuthorization, eventId);
+    const [keyHash, requestHash] = yield* Effect.all([
+      sha256(input.idempotencyKey),
+      sha256(JSON.stringify({
+        eventId,
+        source: input.source,
+        accelEventId: input.accelEventId,
+        eventUrl: input.eventUrl,
+        expectedVersion: input.expectedVersion,
+      })),
+    ]);
+    const principalId = principal.kind === "api-key" ? `api-key:${principal.apiKeyId}` : `user:${principal.userId}`;
+    const existingReplay = yield* database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, eventId),
+      eq(idempotencyRecords.operationId, "integrations.configureAccelevents"),
+      eq(idempotencyRecords.principalId, principalId),
+      eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1));
+    if (existingReplay[0]) {
+      const record = existingReplay[0];
+      if (record.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different request" }));
+      }
+      if (record.status !== "completed" || record.responseBody === null) {
+        return yield* Effect.fail(new Conflict({ message: "An equivalent configuration change is in progress" }));
+      }
+      return { ...(record.responseBody as ConfigureAcceleventsResult), replayed: true };
+    }
+    const [stored] = yield* database(() => db.select().from(integrations).where(and(
+      eq(integrations.eventId, eventId),
+      eq(integrations.kind, "accelevents"),
+    )).limit(1));
+    const actualVersion = stored?.version ?? 0;
+    if (actualVersion !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({
+        message: `Accelevents configuration version is ${actualVersion}; expected ${input.expectedVersion}`,
+      }));
+    }
+    const now = new Date();
+    const nextVersion = actualVersion + 1;
+    const config = { kind: "accelevents" as const, accelEventId: input.accelEventId, eventUrl: input.eventUrl };
+    const configuration = { config, source: input.source, version: nextVersion };
+    const integrationId = stored?.id ?? `integration_${nanoid()}`;
+    const idempotencyId = `idempotency_${nanoid()}`;
+    const changeId = `change_${nanoid()}`;
+    const auditId = `audit_${nanoid()}`;
+    const result: ConfigureAcceleventsResult = { configuration, changeId, auditId, replayed: false };
+    const actor = actorColumns(principal);
+    const before = stored ? { config: yield* decodeConfiguration("accelevents", stored.config), version: stored.version } : null;
+    const operations = [
+      stored
+        ? db.update(integrations).set({
+          config,
+          version: nextVersion,
+          lastError: null,
+          updatedAt: now,
+        }).where(and(eq(integrations.eventId, eventId), eq(integrations.id, stored.id), eq(integrations.version, input.expectedVersion)))
+        : db.insert(integrations).values({
+          id: integrationId,
+          eventId,
+          kind: "accelevents",
+          // Live import code resolves this named Worker secret. The fixture mapping
+          // is recognized by the central adapter seam and never resolves it.
+          secretRef: "ACCELEVENTS_API_TOKEN",
+          config,
+          version: nextVersion,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId,
+        eventId,
+        operationId: "integrations.configureAccelevents",
+        principalId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: stored ? 200 : 201,
+        responseBody: result as unknown as JsonValue,
+        expiresAt: new Date(now.getTime() + 86_400_000),
+        completedAt: now,
+        createdAt: now,
+      }),
+      db.insert(domainChanges).values({
+        id: changeId,
+        eventId,
+        aggregateType: "integration",
+        aggregateId: integrationId,
+        aggregateVersion: nextVersion,
+        eventType: "integrations.accelevents_configured",
+        audiences: [{ kind: "admins" }],
+        payload: configuration,
+        ...actor,
+        requestId: `integrations-${idempotencyId}`,
+        idempotencyRecordId: idempotencyId,
+        occurredAt: now,
+      }),
+      db.insert(auditLog).values({
+        id: auditId,
+        eventId,
+        requestId: `integrations-${idempotencyId}`,
+        ...actor,
+        action: "integrations.configureAccelevents",
+        resourceType: "integration",
+        resourceId: integrationId,
+        before,
+        after: configuration,
+        metadata: { source: input.source, idempotencyKeyHash: keyHash },
+        occurredAt: now,
+      }),
+    ] as const;
+    yield* database(() => db.batch(operations));
+    return result;
+  }).pipe(
+    Effect.catchIf(
+      (error): error is External => error._tag === "External" && (error.detail?.includes("UNIQUE constraint failed") ?? false),
+      () => Effect.fail(new Conflict({ message: "Accelevents configuration changed; reload and try again" })),
+    ),
+  );

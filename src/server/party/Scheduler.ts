@@ -16,6 +16,9 @@ const AUTH_RATE_GLOBAL_LIMIT = 100;
 const AUTH_RATE_SOURCE_LIMIT = 10;
 const AUTH_RATE_RECIPIENT_LIMIT = 5;
 const AUTH_RATE_PREFIX = "auth-rate:";
+const CFP_RATE_PREFIX = "cfp-rate:";
+const CFP_RATE_SOURCE_LIMIT = 10;
+const CFP_RATE_RECIPIENT_LIMIT = 3;
 const MAIL_SCHEDULER_ENABLED_KEY = "mail-scheduler-enabled";
 
 export const ACCOUNT_DAILY_EMAIL_LIMIT = 1_000;
@@ -91,6 +94,11 @@ type AuthRateCounter = {
   readonly count: number;
 };
 
+type CfpRateCounter = {
+  readonly expiresAt: number;
+  readonly count: number;
+};
+
 const redactAuthSnapshot = async (
   db: DrizzleD1Database,
   snapshotId: string,
@@ -162,7 +170,69 @@ export class Scheduler extends DurableObject<Env> {
       const allowed = await this.authorizeAuthRequest(input.sourceHash, input.recipientHash);
       return Response.json({ ok: allowed }, { status: allowed ? 200 : 429 });
     }
+    if (url.pathname === "/cfp/authorize") {
+      const input = await request.json<unknown>().catch(() => null);
+      if (
+        typeof input !== "object"
+        || input === null
+        || !("sourceHash" in input)
+        || !("recipientHash" in input)
+        || !("eventId" in input)
+        || !("formId" in input)
+        || typeof input.sourceHash !== "string"
+        || typeof input.recipientHash !== "string"
+        || typeof input.eventId !== "string"
+        || typeof input.formId !== "string"
+        || !/^[a-f0-9]{64}$/.test(input.sourceHash)
+        || !/^[a-f0-9]{64}$/.test(input.recipientHash)
+        || !/^[A-Za-z0-9_-]{1,128}$/.test(input.eventId)
+        || !/^[A-Za-z0-9_-]{1,128}$/.test(input.formId)
+      ) {
+        return new Response("Invalid request", { status: 400 });
+      }
+      const allowed = await this.authorizeCfpSubmission(input.sourceHash, input.recipientHash);
+      return Response.json({ ok: allowed }, { status: allowed ? 200 : 429 });
+    }
     return new Response("Not found", { status: 404 });
+  }
+
+  private async authorizeCfpSubmission(
+    sourceHash: string,
+    recipientHash: string,
+  ): Promise<boolean> {
+    const now = Date.now();
+    const hourStartedAt = Math.floor(now / (60 * 60_000)) * 60 * 60_000;
+    const hourExpiresAt = hourStartedAt + 60 * 60_000;
+    const dayExpiresAt = nextUtcDay(now).getTime();
+    const rules = [
+      {
+        key: `${CFP_RATE_PREFIX}source:${hourStartedAt}:${sourceHash}`,
+        limit: CFP_RATE_SOURCE_LIMIT,
+        expiresAt: hourExpiresAt,
+      },
+      {
+        key: `${CFP_RATE_PREFIX}recipient:${utcDay(now)}:${recipientHash}`,
+        limit: CFP_RATE_RECIPIENT_LIMIT,
+        expiresAt: dayExpiresAt,
+      },
+    ] as const;
+    const allowed = await this.ctx.storage.transaction(async (transaction) => {
+      const next: Array<readonly [string, CfpRateCounter]> = [];
+      for (const { key, limit, expiresAt } of rules) {
+        const current = await transaction.get<CfpRateCounter>(key);
+        const count = current && current.expiresAt > now ? current.count + 1 : 1;
+        if (count > limit) return false;
+        next.push([key, { count, expiresAt }]);
+      }
+      for (const [key, counter] of next) await transaction.put(key, counter);
+      return true;
+    });
+    const cleanupAt = Math.min(hourExpiresAt, dayExpiresAt);
+    const existingAlarm = await this.ctx.storage.getAlarm();
+    if (existingAlarm === null || existingAlarm > cleanupAt) {
+      await this.ctx.storage.setAlarm(cleanupAt);
+    }
+    return allowed;
   }
 
   private async authorizeAuthRequest(
@@ -203,12 +273,21 @@ export class Scheduler extends DurableObject<Env> {
     if (stale.length > 0) await this.ctx.storage.delete(stale);
   }
 
+  private async purgeCfpRateCounters(now: number): Promise<void> {
+    const counters = await this.ctx.storage.list<CfpRateCounter>({ prefix: CFP_RATE_PREFIX });
+    const stale = [...counters]
+      .filter(([, counter]) => counter.expiresAt <= now)
+      .map(([key]) => key);
+    if (stale.length > 0) await this.ctx.storage.delete(stale);
+  }
+
   override async alarm(): Promise<void> {
     let mailSchedulerEnabled = false;
     try {
       const now = new Date();
       const nowMs = now.getTime();
       await this.purgeAuthRateCounters(nowMs);
+      await this.purgeCfpRateCounters(nowMs);
       mailSchedulerEnabled = this.isCanonicalMailScheduler()
         && await this.ctx.storage.get<boolean>(MAIL_SCHEDULER_ENABLED_KEY) === true;
       if (!mailSchedulerEnabled) return;

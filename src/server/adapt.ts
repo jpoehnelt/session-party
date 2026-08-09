@@ -4,6 +4,7 @@ import type { Principal } from "contracts/principal";
 import type { RestInputLocations } from "contracts/routes";
 import { Cause, Effect, Exit, Layer, Schema } from "effect";
 import type { Context } from "hono";
+import { PublicSubmissionAbuse, PublicSubmissionRequest } from "@/features/submit/abuse";
 import { sessionUser } from "./auth";
 import {
   AiService,
@@ -32,7 +33,9 @@ export type RuntimeServices =
   | Rooms
   | AiService
   | CurrentUser
-  | Authorizer;
+  | Authorizer
+  | PublicSubmissionAbuse
+  | PublicSubmissionRequest;
 
 export const decode = <A, I>(schema: Schema.Schema<A, I, never>, input: unknown) =>
   Schema.decodeUnknown(schema)(input).pipe(
@@ -158,10 +161,15 @@ export const runRestOperation = async (
   const requestId = requestIdFor(c.req.raw);
   try {
     const rawInput = await restInput(c, locations);
+    const trustedRequest = {
+      remoteIp: c.req.header("CF-Connecting-IP")?.trim() || null,
+    };
     const exit = await runOperationEffect(
       c.env,
       principal,
-      operationEffect(operation, rawInput, principal),
+      operationEffect(operation, rawInput, principal).pipe(
+        Effect.provideService(PublicSubmissionRequest, trustedRequest),
+      ),
     );
     if (Exit.isSuccess(exit)) {
       const status = operation.rest?.successStatus ?? 200;

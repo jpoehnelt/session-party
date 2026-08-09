@@ -25,9 +25,13 @@ import { AiService, CurrentUser, Db } from "@/server/services";
 import {
   AcceptSubmissionOutput,
   type AcceptSubmissionInput,
+  AdvanceReviewRoundOutput,
+  type AdvanceReviewRoundInput,
   type AssignReviewerInput,
   type AssignReviewerOutput,
   type CriterionScore,
+  CreateReviewRoundOutput,
+  type CreateReviewRoundInput,
   type GetWorkbenchInput,
   type HumanReview,
   type RequestAiSuggestionInput,
@@ -143,6 +147,43 @@ const loadRound = (eventId: string, roundId: string) =>
     } satisfies ReviewRound;
   });
 
+const roundFromRow = (
+  row: typeof reviewRounds.$inferSelect,
+  rubric: ReviewRubricType,
+): ReviewRound => ({
+  id: row.id,
+  name: row.name,
+  order: row.order,
+  status: row.status,
+  rubric,
+  version: row.version,
+});
+
+const normalizeRoundRubric = (
+  rubric: ReviewRubricType,
+): Effect.Effect<ReviewRubricType, Validation> => {
+  const keys = new Set<string>();
+  const criteria: ReviewRubricType["criteria"][number][] = [];
+  for (const criterion of rubric.criteria) {
+    const key = criterion.key.trim();
+    const label = criterion.label.trim();
+    if (!key || !label) {
+      return Effect.fail(new Validation({ message: "Rubric criterion keys and labels cannot be blank" }));
+    }
+    if (keys.has(key)) {
+      return Effect.fail(new Validation({ message: `Rubric criterion '${key}' is duplicated` }));
+    }
+    keys.add(key);
+    criteria.push({
+      key,
+      label,
+      ...(criterion.description?.trim() ? { description: criterion.description.trim() } : {}),
+      max: 5,
+    });
+  }
+  return Effect.succeed({ criteria: [criteria[0]!, ...criteria.slice(1)] });
+};
+
 const validateScores = (
   rubric: ReviewRubricType,
   scores: readonly CriterionScore[],
@@ -246,6 +287,328 @@ const loadAcceptance = (eventId: string, submissionId: string) =>
       provisioningId: provisioning.id,
       provisioningStatus: provisioning.status,
     } as const;
+  });
+
+const roundCommandPrincipalId = (viewer: Viewer) =>
+  viewer.actorApiKeyId ? `api-key:${viewer.actorApiKeyId}` : viewer.userId;
+
+export const createReviewRound = (
+  input: CreateReviewRoundInput,
+): Effect.Effect<CreateReviewRoundOutput, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    yield* requireOrganizer(viewer);
+    const name = input.name.trim();
+    if (!name) return yield* Effect.fail(new Validation({ message: "Review round name cannot be blank" }));
+    const rubric = yield* normalizeRoundRubric(input.rubric);
+    const { db } = yield* Db;
+    const principalId = roundCommandPrincipalId(viewer);
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      name,
+      initialStatus: input.initialStatus,
+      rubric,
+      expectedRoundCount: input.expectedRoundCount,
+    }));
+    const readReplay = (): Effect.Effect<CreateReviewRoundOutput | null, AppError> =>
+      Effect.gen(function* () {
+        const [record] = yield* database(() =>
+          db.select().from(idempotencyRecords).where(and(
+            eq(idempotencyRecords.eventId, input.eventId),
+            eq(idempotencyRecords.operationId, "review.createRound"),
+            eq(idempotencyRecords.principalId, principalId),
+            eq(idempotencyRecords.keyHash, keyHash),
+          )).limit(1),
+        );
+        if (!record) return null;
+        if (record.requestHash !== requestHash) {
+          return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different review-round request" }));
+        }
+        if (record.status !== "completed") {
+          return yield* Effect.fail(new Conflict({ message: "Review-round creation with this idempotency key is still in progress" }));
+        }
+        return yield* Schema.decodeUnknown(CreateReviewRoundOutput)(record.responseBody).pipe(
+          Effect.map((output) => ({ ...output, idempotent: true })),
+          Effect.mapError((error) => new External({ service: "database", detail: `Invalid review-round replay: ${String(error)}` })),
+        );
+      });
+    const replay = yield* readReplay();
+    if (replay) return replay;
+
+    const [event, existingRows] = yield* Effect.all([
+      database(() => db.select({ id: events.id }).from(events).where(eq(events.id, input.eventId)).limit(1)),
+      database(() => db.select().from(reviewRounds).where(eq(reviewRounds.eventId, input.eventId)).orderBy(asc(reviewRounds.order))),
+    ]);
+    if (!event[0]) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
+    if (existingRows.length !== input.expectedRoundCount) {
+      return yield* Effect.fail(new Conflict({ message: "Review rounds changed; reload before creating another round" }));
+    }
+    if (
+      input.initialStatus === "active"
+      && existingRows.some((round) => round.status !== "complete")
+    ) {
+      return yield* Effect.fail(new Conflict({ message: "An active round can start only after every earlier round is complete" }));
+    }
+
+    const createdAt = now();
+    const roundId = id("review_round");
+    const round: ReviewRound = {
+      id: roundId,
+      name,
+      order: existingRows.length + 1,
+      status: input.initialStatus,
+      rubric,
+      version: 1,
+    };
+    const output: CreateReviewRoundOutput = { round, idempotent: false };
+    const idempotencyId = id("idempotency");
+    const commit = database(() => db.batch([
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId,
+        eventId: input.eventId,
+        operationId: "review.createRound",
+        principalId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 201,
+        responseBody: output,
+        expiresAt: new Date(createdAt.getTime() + 86_400_000),
+        completedAt: createdAt,
+        createdAt,
+      }),
+      db.insert(reviewRounds).values({
+        id: roundId,
+        eventId: input.eventId,
+        name,
+        order: round.order,
+        status: round.status,
+        rubric,
+        version: 1,
+        createdAt,
+        updatedAt: createdAt,
+      }),
+      db.insert(domainChanges).values({
+        id: id("change"),
+        eventId: input.eventId,
+        aggregateType: "reviewRound",
+        aggregateId: roundId,
+        aggregateVersion: 1,
+        eventType: "review.round.created",
+        audiences: [{ kind: "admins" }],
+        payload: round,
+        actorUserId: viewer.actorUserId,
+        actorApiKeyId: viewer.actorApiKeyId,
+        requestId: input.requestId,
+        idempotencyRecordId: idempotencyId,
+        occurredAt: createdAt,
+      }),
+      db.insert(auditLog).values({
+        id: id("audit"),
+        eventId: input.eventId,
+        requestId: input.requestId,
+        actorUserId: viewer.actorUserId,
+        actorApiKeyId: viewer.actorApiKeyId,
+        action: "review.createRound",
+        resourceType: "reviewRound",
+        resourceId: roundId,
+        before: null,
+        after: round,
+        metadata: { idempotencyRecordId: idempotencyId },
+        occurredAt: createdAt,
+      }),
+    ]));
+    return yield* commit.pipe(
+      Effect.as(output),
+      Effect.catchAll((failure) => Effect.gen(function* () {
+        const committed = yield* readReplay();
+        if (committed) return committed;
+        const current = yield* database(() =>
+          db.select({ id: reviewRounds.id }).from(reviewRounds).where(eq(reviewRounds.eventId, input.eventId)),
+        );
+        if (current.length !== input.expectedRoundCount) {
+          return yield* Effect.fail(new Conflict({ message: "Review rounds changed; reload before creating another round" }));
+        }
+        return yield* Effect.fail(failure);
+      })),
+    );
+  });
+
+export const advanceReviewRound = (
+  input: AdvanceReviewRoundInput,
+): Effect.Effect<AdvanceReviewRoundOutput, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    yield* requireOrganizer(viewer);
+    const { db } = yield* Db;
+    const principalId = roundCommandPrincipalId(viewer);
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      roundId: input.roundId,
+      expectedVersion: input.expectedVersion,
+      nextRoundId: input.nextRoundId,
+      expectedNextVersion: input.expectedNextVersion,
+    }));
+    const readReplay = (): Effect.Effect<AdvanceReviewRoundOutput | null, AppError> =>
+      Effect.gen(function* () {
+        const [record] = yield* database(() =>
+          db.select().from(idempotencyRecords).where(and(
+            eq(idempotencyRecords.eventId, input.eventId),
+            eq(idempotencyRecords.operationId, "review.advanceRound"),
+            eq(idempotencyRecords.principalId, principalId),
+            eq(idempotencyRecords.keyHash, keyHash),
+          )).limit(1),
+        );
+        if (!record) return null;
+        if (record.requestHash !== requestHash) {
+          return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different round transition" }));
+        }
+        if (record.status !== "completed") {
+          return yield* Effect.fail(new Conflict({ message: "A round transition with this idempotency key is still in progress" }));
+        }
+        return yield* Schema.decodeUnknown(AdvanceReviewRoundOutput)(record.responseBody).pipe(
+          Effect.map((output) => ({ ...output, idempotent: true })),
+          Effect.mapError((error) => new External({ service: "database", detail: `Invalid round-transition replay: ${String(error)}` })),
+        );
+      });
+    const replay = yield* readReplay();
+    if (replay) return replay;
+
+    const rows = yield* database(() =>
+      db.select().from(reviewRounds).where(eq(reviewRounds.eventId, input.eventId)).orderBy(asc(reviewRounds.order)),
+    );
+    if (rows.length === 0) return yield* Effect.fail(new NotFound({ entity: "reviewRound", id: input.roundId }));
+    const decoded: ReviewRound[] = [];
+    for (const row of rows) decoded.push(roundFromRow(row, yield* decodeRubric(row.rubric)));
+    const current = decoded.find((round) => round.id === input.roundId);
+    if (!current) return yield* Effect.fail(new NotFound({ entity: "reviewRound", id: input.roundId }));
+    if (current.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Review round changed; reload before advancing" }));
+    }
+    if (current.status === "complete") {
+      return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot be advanced again" }));
+    }
+
+    const active = decoded.find((round) => round.status === "active");
+    const pendingInOrder = decoded.filter((round) => round.status === "pending");
+    const next = input.nextRoundId
+      ? decoded.find((round) => round.id === input.nextRoundId)
+      : undefined;
+    if (input.nextRoundId && !next) {
+      return yield* Effect.fail(new NotFound({ entity: "reviewRound", id: input.nextRoundId }));
+    }
+
+    if (current.status === "pending") {
+      if (input.nextRoundId !== null || input.expectedNextVersion !== 0) {
+        return yield* Effect.fail(new Validation({ message: "Activating a pending round does not accept a next round" }));
+      }
+      if (active) {
+        return yield* Effect.fail(new Conflict({ message: "Complete the active review round before activating another" }));
+      }
+      if (pendingInOrder[0]?.id !== current.id || decoded.some((round) => round.order < current.order && round.status !== "complete")) {
+        return yield* Effect.fail(new Conflict({ message: "Review rounds must be activated in order" }));
+      }
+    } else if (next) {
+      if (next.status !== "pending") {
+        return yield* Effect.fail(new Conflict({ message: "The next review round is no longer pending" }));
+      }
+      if (next.version !== input.expectedNextVersion) {
+        return yield* Effect.fail(new Conflict({ message: "The next review round changed; reload before advancing" }));
+      }
+      const firstLaterPending = pendingInOrder.find((round) => round.order > current.order);
+      if (firstLaterPending?.id !== next.id || decoded.some((round) => round.order < next.order && round.id !== current.id && round.status !== "complete")) {
+        return yield* Effect.fail(new Conflict({ message: "Review rounds must advance to the next pending round in order" }));
+      }
+    } else if (input.expectedNextVersion !== 0) {
+      return yield* Effect.fail(new Validation({ message: "expectedNextVersion must be zero when no next round is selected" }));
+    }
+
+    const transitionedAt = now();
+    const currentAfter: ReviewRound = {
+      ...current,
+      status: current.status === "pending" ? "active" : "complete",
+      version: current.version + 1,
+    };
+    const nextAfter: ReviewRound | null = current.status === "active" && next
+      ? { ...next, status: "active", version: next.version + 1 }
+      : null;
+    const afterRounds = decoded.map((round) =>
+      round.id === current.id ? currentAfter : round.id === nextAfter?.id ? nextAfter : round,
+    ) as [ReviewRound, ...ReviewRound[]];
+    const output: AdvanceReviewRoundOutput = { rounds: afterRounds, idempotent: false };
+    const idempotencyId = id("idempotency");
+    const currentEventType = currentAfter.status === "active" ? "review.round.activated" : "review.round.completed";
+    const commit = database(() => db.batch([
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId,
+        eventId: input.eventId,
+        operationId: "review.advanceRound",
+        principalId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 200,
+        responseBody: output,
+        expiresAt: new Date(transitionedAt.getTime() + 86_400_000),
+        completedAt: transitionedAt,
+        createdAt: transitionedAt,
+      }),
+      db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewRoundClaim", aggregateId: current.id,
+        aggregateVersion: currentAfter.version, eventType: "review.round.versionClaim", audiences: [{ kind: "admins" }],
+        payload: { expectedVersion: current.version }, actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        requestId: input.requestId, idempotencyRecordId: idempotencyId, occurredAt: transitionedAt,
+      }),
+      ...(nextAfter ? [db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewRoundClaim", aggregateId: nextAfter.id,
+        aggregateVersion: nextAfter.version, eventType: "review.round.versionClaim", audiences: [{ kind: "admins" }],
+        payload: { expectedVersion: next!.version }, actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        requestId: input.requestId, idempotencyRecordId: idempotencyId, occurredAt: transitionedAt,
+      })] : []),
+      db.update(reviewRounds).set({ status: currentAfter.status, version: currentAfter.version, updatedAt: transitionedAt }).where(and(
+        eq(reviewRounds.eventId, input.eventId), eq(reviewRounds.id, current.id), eq(reviewRounds.version, current.version), eq(reviewRounds.status, current.status),
+      )),
+      ...(nextAfter ? [db.update(reviewRounds).set({ status: "active", version: nextAfter.version, updatedAt: transitionedAt }).where(and(
+        eq(reviewRounds.eventId, input.eventId), eq(reviewRounds.id, nextAfter.id), eq(reviewRounds.version, next!.version), eq(reviewRounds.status, "pending"),
+      ))] : []),
+      db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewRound", aggregateId: current.id,
+        aggregateVersion: currentAfter.version, eventType: currentEventType, audiences: [{ kind: "admins" }], payload: currentAfter,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId, requestId: input.requestId,
+        idempotencyRecordId: idempotencyId, occurredAt: transitionedAt,
+      }),
+      ...(nextAfter ? [db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewRound", aggregateId: nextAfter.id,
+        aggregateVersion: nextAfter.version, eventType: "review.round.activated", audiences: [{ kind: "admins" }], payload: nextAfter,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId, requestId: input.requestId,
+        idempotencyRecordId: idempotencyId, occurredAt: transitionedAt,
+      })] : []),
+      db.insert(auditLog).values({
+        id: id("audit"), eventId: input.eventId, requestId: input.requestId,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        action: "review.advanceRound", resourceType: "reviewRound", resourceId: current.id,
+        before: { round: current, nextRound: next ?? null }, after: { round: currentAfter, nextRound: nextAfter },
+        metadata: { idempotencyRecordId: idempotencyId }, occurredAt: transitionedAt,
+      }),
+    ]));
+    return yield* commit.pipe(
+      Effect.as(output),
+      Effect.catchAll((failure) => Effect.gen(function* () {
+        const committed = yield* readReplay();
+        if (committed) return committed;
+        const [latest] = yield* database(() =>
+          db.select({ version: reviewRounds.version }).from(reviewRounds).where(and(
+            eq(reviewRounds.eventId, input.eventId), eq(reviewRounds.id, input.roundId),
+          )).limit(1),
+        );
+        if (!latest || latest.version !== input.expectedVersion) {
+          return yield* Effect.fail(new Conflict({ message: "Review round changed; reload before advancing" }));
+        }
+        return yield* Effect.fail(failure);
+      })),
+    );
   });
 
 export const getWorkbench = (

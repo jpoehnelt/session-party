@@ -4,7 +4,7 @@ import { Button, Card, EmptyState, Skeleton } from "@/ui";
 export type RouteLoad<T> =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly data: T }
-  | { readonly status: "error"; readonly message: string };
+  | { readonly status: "error"; readonly message: string; readonly error: unknown };
 
 export function useRouteLoad<T>(load: () => Promise<T>, key: string): readonly [RouteLoad<T>, () => void] {
   const [request, setRequest] = useState(0);
@@ -22,6 +22,7 @@ export function useRouteLoad<T>(load: () => Promise<T>, key: string): readonly [
           setState({
             status: "error",
             message: error instanceof Error ? error.message : "The portal could not be loaded",
+            error,
           });
         }
       },

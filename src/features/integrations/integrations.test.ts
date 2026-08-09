@@ -5,9 +5,10 @@ import type {
   BrowserSessionPrincipal,
   EventApiKeyPrincipal,
 } from "contracts/principal";
-import { apiKeys, eventMembers, events, integrations, users } from "contracts/schema";
+import { apiKeys, auditLog, domainChanges, eventMembers, events, integrations, users } from "contracts/schema";
 import type { AcceleventsImportRun, AirtableConfig } from "contracts/types";
 import { drizzle } from "drizzle-orm/d1";
+import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
@@ -19,6 +20,8 @@ import {
   type Db,
 } from "@/server/services";
 import {
+  configureAcceleventsOperation,
+  getAcceleventsConfigurationOperation,
   getAcceleventsImportStatusOperation,
   runAcceleventsImportOperation,
 } from "./operations";
@@ -27,6 +30,8 @@ import {
   configurationTruth,
 } from "./presentation";
 import {
+  configureAccelevents,
+  getAcceleventsConfiguration,
   getAcceleventsImportStatus,
   listIntegrationConfigurations,
   runAcceleventsImport,
@@ -315,6 +320,49 @@ describe("Accelevents import service", () => {
   });
 });
 
+describe("Accelevents configuration service", () => {
+  const fixtureInput = {
+    idOrSlug: otherEventId,
+    source: "fixture" as const,
+    accelEventId: "fixture-event",
+    eventUrl: "fixture-event",
+    expectedVersion: 0,
+    idempotencyKey: "configure-fixture-idempotency",
+  };
+
+  it("creates a truthfully labeled fixture mapping with replay, OCC, and durable evidence", async () => {
+    const first = await runAs(owner, configureAccelevents(fixtureInput));
+    expect(first).toMatchObject({
+      configuration: {
+        source: "fixture",
+        config: { kind: "accelevents", accelEventId: "fixture-event", eventUrl: "fixture-event" },
+        version: 1,
+      },
+      replayed: false,
+    });
+    const replay = await runAs(owner, configureAccelevents(fixtureInput));
+    expect(replay).toEqual({ ...first, replayed: true });
+    await expectFailure(owner, configureAccelevents({
+      ...fixtureInput,
+      idempotencyKey: "configure-wrong-version",
+      expectedVersion: 0,
+    }), "Conflict");
+    await expectFailure(owner, configureAccelevents({
+      ...fixtureInput,
+      idempotencyKey: "configure-fixture-live-mismatch",
+      source: "live",
+    }), "Validation");
+
+    await expect(runAs(owner, getAcceleventsConfiguration(otherEventId))).resolves.toEqual(first.configuration);
+    const [changes, audits] = await Promise.all([
+      drizzle(env.DB).select().from(domainChanges).where(eq(domainChanges.id, first.changeId)),
+      drizzle(env.DB).select().from(auditLog).where(eq(auditLog.id, first.auditId)),
+    ]);
+    expect(changes[0]).toMatchObject({ eventType: "integrations.accelevents_configured", aggregateVersion: 1 });
+    expect(audits[0]).toMatchObject({ action: "integrations.configureAccelevents", resourceType: "integration" });
+  });
+});
+
 describe("Accelevents transport and route contracts", () => {
   it("exposes status and idempotent import through REST and MCP metadata", () => {
     expect(getAcceleventsImportStatusOperation.rest).toMatchObject({
@@ -330,6 +378,14 @@ describe("Accelevents transport and route contracts", () => {
     });
     expect(runAcceleventsImportOperation.mcp.name).toBe("run_accelevents_import");
     expect(runAcceleventsImportOperation.idempotency).toBe("required");
+    expect(configureAcceleventsOperation.rest).toMatchObject({
+      method: "put",
+      path: "/events/:idOrSlug/integrations/accelevents/configuration",
+      input: { path: ["idOrSlug"] },
+    });
+    expect(configureAcceleventsOperation.mcp.name).toBe("configure_accelevents");
+    expect(configureAcceleventsOperation.concurrency).toBe("required");
+    expect(getAcceleventsConfigurationOperation.mcp.name).toBe("get_accelevents_configuration");
   });
 
   it("labels only server-reported ready modes as live or fixture", () => {

@@ -313,4 +313,45 @@ describe("Scheduler durable delivery recovery", () => {
       "SELECT status, attempt_count FROM mail_deliveries WHERE id = 'auth-limiter-guard-delivery'",
     ).first()).toEqual({ status: "pending", attempt_count: 0 });
   });
+  it("atomically enforces CFP hourly source and daily recipient budgets", async () => {
+    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("cfp-rate-limit-proof"));
+    const authorize = (source: number, recipient: number) => stub.fetch(
+      "https://scheduler/cfp/authorize",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-session-party-internal": sessionSecret(env),
+        },
+        body: JSON.stringify({
+          sourceHash: source.toString(16).padStart(64, "0"),
+          recipientHash: recipient.toString(16).padStart(64, "0"),
+          eventId: "demo-event",
+          formId: "demo-form",
+        }),
+      },
+    );
+
+    const sourceStatuses = await Promise.all(
+      Array.from({ length: 11 }, (_, index) => authorize(1, 1_000 + index)),
+    );
+    expect(sourceStatuses.filter((response) => response.status === 200)).toHaveLength(10);
+    expect(sourceStatuses.filter((response) => response.status === 429)).toHaveLength(1);
+
+    const recipientStatuses = await Promise.all(
+      Array.from({ length: 4 }, (_, index) => authorize(100 + index, 2_000)),
+    );
+    expect(recipientStatuses.filter((response) => response.status === 200)).toHaveLength(3);
+    expect(recipientStatuses.filter((response) => response.status === 429)).toHaveLength(1);
+
+    const malformed = await stub.fetch("https://scheduler/cfp/authorize", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-session-party-internal": sessionSecret(env),
+      },
+      body: JSON.stringify({ sourceHash: "untrusted" }),
+    });
+    expect(malformed.status).toBe(400);
+  });
 });

@@ -68,13 +68,13 @@ export const acceptedProposalFixtures = [
 ] as const;
 
 export const deterministicTracks = [
-  { id: deterministicAgendaIds.trackSystems, name: "Systems", color: "#2563EB", order: 0 },
-  { id: deterministicAgendaIds.trackPractice, name: "Practice", color: "#7C3AED", order: 1 },
+  { id: deterministicAgendaIds.trackSystems, name: "Systems", color: "#2563EB", order: 0, version: 1 },
+  { id: deterministicAgendaIds.trackPractice, name: "Practice", color: "#7C3AED", order: 1, version: 1 },
 ] as const;
 
 export const deterministicRooms = [
-  { id: deterministicAgendaIds.roomHarbor, name: "Harbor", capacity: 180, order: 0 },
-  { id: deterministicAgendaIds.roomSummit, name: "Summit", capacity: 90, order: 1 },
+  { id: deterministicAgendaIds.roomHarbor, name: "Harbor", capacity: 180, order: 0, version: 1 },
+  { id: deterministicAgendaIds.roomSummit, name: "Summit", capacity: 90, order: 1, version: 1 },
 ] as const;
 
 const talkA: AgendaTalk = {

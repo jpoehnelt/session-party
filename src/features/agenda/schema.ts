@@ -12,6 +12,7 @@ export const Track = Schema.Struct({
   name: Schema.String,
   color: Schema.Union(Schema.String, Schema.Null),
   order: Schema.Int,
+  version: Schema.Int.pipe(Schema.positive()),
 });
 export type Track = typeof Track.Type;
 
@@ -20,6 +21,7 @@ export const Room = Schema.Struct({
   name: Schema.String,
   capacity: Schema.Union(Schema.Int.pipe(Schema.positive()), Schema.Null),
   order: Schema.Int,
+  version: Schema.Int.pipe(Schema.positive()),
 });
 export type Room = typeof Room.Type;
 
@@ -98,6 +100,72 @@ const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(
 const DurationMinutes = Schema.Int.pipe(Schema.between(5, 480));
 const NullableEntityId = Schema.Union(EntityId, Schema.Null);
 const NullableTimestamp = Schema.Union(UnixTimestampMs, Schema.Null);
+const SetupName = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(120));
+const SetupOrder = Schema.Int.pipe(Schema.between(0, 10_000));
+const TrackColor = Schema.Union(
+  Schema.String.pipe(Schema.pattern(/^#[0-9A-Fa-f]{6}$/)),
+  Schema.Null,
+);
+const RoomCapacity = Schema.Union(
+  Schema.Int.pipe(Schema.between(1, 1_000_000)),
+  Schema.Null,
+);
+
+export const CreateTrackInput = Schema.Struct({
+  eventId: EntityId,
+  name: SetupName,
+  color: TrackColor,
+  order: SetupOrder,
+  idempotencyKey: IdempotencyKey,
+});
+export type CreateTrackInput = typeof CreateTrackInput.Type;
+
+export const UpdateTrackInput = Schema.Struct({
+  eventId: EntityId,
+  trackId: EntityId,
+  name: SetupName,
+  color: TrackColor,
+  order: SetupOrder,
+  expectedVersion: ExpectedVersion,
+  idempotencyKey: IdempotencyKey,
+});
+export type UpdateTrackInput = typeof UpdateTrackInput.Type;
+
+export const CreateRoomInput = Schema.Struct({
+  eventId: EntityId,
+  name: SetupName,
+  capacity: RoomCapacity,
+  order: SetupOrder,
+  idempotencyKey: IdempotencyKey,
+});
+export type CreateRoomInput = typeof CreateRoomInput.Type;
+
+export const UpdateRoomInput = Schema.Struct({
+  eventId: EntityId,
+  roomId: EntityId,
+  name: SetupName,
+  capacity: RoomCapacity,
+  order: SetupOrder,
+  expectedVersion: ExpectedVersion,
+  idempotencyKey: IdempotencyKey,
+});
+export type UpdateRoomInput = typeof UpdateRoomInput.Type;
+
+export const TrackMutationResult = Schema.Struct({
+  track: Track,
+  changeId: EntityId,
+  auditId: EntityId,
+  replayed: Schema.Boolean,
+});
+export type TrackMutationResult = typeof TrackMutationResult.Type;
+
+export const RoomMutationResult = Schema.Struct({
+  room: Room,
+  changeId: EntityId,
+  auditId: EntityId,
+  replayed: Schema.Boolean,
+});
+export type RoomMutationResult = typeof RoomMutationResult.Type;
 
 export const CreateTalkInput = Schema.Struct({
   eventId: EntityId,

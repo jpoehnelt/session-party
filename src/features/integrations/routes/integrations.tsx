@@ -14,6 +14,12 @@ import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { acceleventsCapabilityLabel, configurationTruth } from "../presentation";
 import {
+  AcceleventsConfiguration,
+  ConfigureAcceleventsResult,
+  type AcceleventsConfiguration as AcceleventsConfigurationType,
+  type ConfigureAcceleventsResult as ConfigureAcceleventsResultType,
+} from "../schema";
+import {
   Alert,
   AlertDescription,
   AlertTitle,
@@ -21,6 +27,7 @@ import {
   Button,
   Card,
   EmptyState,
+  Input,
   PageHeader,
   Separator,
   Skeleton,
@@ -110,22 +117,111 @@ function MappingTable({ configuration }: { readonly configuration: AirtableConfi
   );
 }
 
+function AcceleventsConfigEditor({
+  eventSlug,
+  configuration,
+  onConfigured,
+}: {
+  readonly eventSlug: string;
+  readonly configuration: AcceleventsConfigurationType | null;
+  readonly onConfigured: (result: ConfigureAcceleventsResultType) => void;
+}) {
+  const [source, setSource] = useState<"fixture" | "live">(configuration?.source ?? "fixture");
+  const [accelEventId, setAccelEventId] = useState(configuration?.config.accelEventId ?? "fixture-event");
+  const [eventUrl, setEventUrl] = useState(configuration?.config.eventUrl ?? "fixture-event");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectSource = (next: "fixture" | "live") => {
+    setSource(next);
+    if (next === "fixture") {
+      setAccelEventId("fixture-event");
+      setEventUrl("fixture-event");
+    }
+  };
+
+  const save = () => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    void apiFetch<ConfigureAcceleventsResultType>(
+      `/api/v1/events/${encodeURIComponent(eventSlug)}/integrations/accelevents/configuration`,
+      {
+        method: "PUT",
+        body: {
+          source,
+          accelEventId,
+          eventUrl,
+          expectedVersion: configuration?.version ?? 0,
+          idempotencyKey: crypto.randomUUID(),
+        },
+        schema: ConfigureAcceleventsResult,
+      },
+    ).then((result) => {
+      onConfigured(result);
+      toast(source === "fixture" ? "Fixture import configured" : "Live Accelevents mapping saved", { tone: "success" });
+    }).catch((cause) => {
+      const message = cause instanceof Error ? cause.message : "Could not save Accelevents configuration";
+      setError(message);
+      toast(message, { tone: "danger" });
+    }).finally(() => setSaving(false));
+  };
+
+  return (
+    <section className="space-y-3" aria-labelledby="accelevents-configuration">
+      <h4 id="accelevents-configuration" className="text-sm font-semibold text-ink">Configuration</h4>
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Accelevents source">
+        <Button variant={source === "fixture" ? "primary" : "secondary"} onClick={() => selectSource("fixture")} disabled={saving}>
+          Demo fixture
+        </Button>
+        <Button variant={source === "live" ? "primary" : "secondary"} onClick={() => selectSource("live")} disabled={saving}>
+          Live event
+        </Button>
+      </div>
+      {source === "fixture" ? (
+        <Alert tone="warning">
+          <AlertTitle>Deterministic demo data</AlertTitle>
+          <AlertDescription>This imports labeled fixture speakers and talks. It does not call Accelevents.</AlertDescription>
+        </Alert>
+      ) : (
+        <p className="text-xs leading-relaxed text-ink-secondary">
+          The live adapter uses the server-held <code>ACCELEVENTS_API_TOKEN</code>; this form never accepts or exposes credentials.
+        </p>
+      )}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Input label="Accelevents event ID" value={accelEventId} onChange={(event) => setAccelEventId(event.target.value)} disabled={source === "fixture" || saving} />
+        <Input label="Event URL key" value={eventUrl} onChange={(event) => setEventUrl(event.target.value)} disabled={source === "fixture" || saving} />
+      </div>
+      {error && <p className="text-xs text-danger" role="alert">{error}</p>}
+      <Button onClick={save} loading={saving}>
+        {configuration ? "Save configuration" : "Configure Accelevents"}
+      </Button>
+    </section>
+  );
+}
+
 function IntegrationsWorkspace({
+  eventSlug,
   configurations,
   status,
   running,
   runResult,
   runError,
+  configuration,
   onReload,
   onRun,
+  onConfigured,
 }: {
+  readonly eventSlug: string;
   readonly configurations: readonly IntegrationConfigType[];
   readonly status: AcceleventsImportStatusType;
   readonly running: boolean;
   readonly runResult: AcceleventsImportRunType | null;
   readonly runError: string | null;
+  readonly configuration: AcceleventsConfigurationType | null;
   readonly onReload: () => void;
   readonly onRun: () => void;
+  readonly onConfigured: (result: ConfigureAcceleventsResultType) => void;
 }) {
   const truth = useMemo(() => configurationTruth(configurations), [configurations]);
   const airtable = configurations.find(
@@ -234,11 +330,20 @@ function IntegrationsWorkspace({
                   </div>
                 </>
               )}
+              <Separator />
+              <AcceleventsConfigEditor
+                key={`${configuration?.version ?? 0}:${configuration?.source ?? "none"}`}
+                eventSlug={eventSlug}
+                configuration={configuration}
+                onConfigured={onConfigured}
+              />
             </div>
           ) : (
-            <EmptyState
-              title="Accelevents is not configured"
-              description="No validated Accelevents event mapping exists for this event."
+            <AcceleventsConfigEditor
+              key="new"
+              eventSlug={eventSlug}
+              configuration={configuration}
+              onConfigured={onConfigured}
             />
           )}
         </Card>
@@ -254,6 +359,7 @@ export default function IntegrationsPage() {
   const { eventSlug = "" } = useParams();
   const [configurations, setConfigurations] = useState<readonly IntegrationConfigType[] | null | undefined>(undefined);
   const [status, setStatus] = useState<AcceleventsImportStatusType | null | undefined>(undefined);
+  const [configuration, setConfiguration] = useState<AcceleventsConfigurationType | null | undefined>(undefined);
   const [runResult, setRunResult] = useState<AcceleventsImportRunType | null>(null);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -265,6 +371,7 @@ export default function IntegrationsPage() {
     let active = true;
     setConfigurations(undefined);
     setStatus(undefined);
+    setConfiguration(undefined);
     setRunResult(null);
     setRunError(null);
     setError(null);
@@ -278,11 +385,16 @@ export default function IntegrationsPage() {
         `${eventPath}/accelevents/status`,
         { schema: AcceleventsImportStatus },
       ),
+      apiFetch<AcceleventsConfigurationType | null>(
+        `${eventPath}/accelevents/configuration`,
+        { schema: Schema.NullOr(AcceleventsConfiguration) },
+      ),
     ])
-      .then(([loadedConfigurations, loadedStatus]) => {
+      .then(([loadedConfigurations, loadedStatus, loadedConfiguration]) => {
         if (!active) return;
         setConfigurations(loadedConfigurations);
         setStatus(loadedStatus);
+        setConfiguration(loadedConfiguration);
       })
       .catch((cause) => {
         if (!active) return;
@@ -292,6 +404,7 @@ export default function IntegrationsPage() {
         setError(unauthenticated ? "unauthenticated" : notFound ? null : message);
         setConfigurations(null);
         setStatus(null);
+        setConfiguration(null);
         if (!unauthenticated && !notFound) toast(message, { tone: "danger" });
       });
     return () => {
@@ -329,7 +442,7 @@ export default function IntegrationsPage() {
       .finally(() => setRunning(false));
   }, [eventSlug, running, status]);
 
-  if (configurations === undefined || status === undefined) {
+  if (configurations === undefined || status === undefined || configuration === undefined) {
     return <LoadingRegion label="Loading integration configuration" />;
   }
 
@@ -360,13 +473,19 @@ export default function IntegrationsPage() {
 
   return (
     <IntegrationsWorkspace
+      eventSlug={eventSlug}
       configurations={configurations}
       status={status}
+      configuration={configuration}
       running={running}
       runResult={runResult}
       runError={runError}
       onReload={reload}
       onRun={runImport}
+      onConfigured={(result) => {
+        setConfiguration(result.configuration);
+        reload();
+      }}
     />
   );
 }

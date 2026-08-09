@@ -3,8 +3,12 @@ import { eventAuthorization } from "contracts/principal";
 import {
   AcceptSubmissionInput,
   AcceptSubmissionOutput,
+  AdvanceReviewRoundInput,
+  AdvanceReviewRoundOutput,
   AssignReviewerInput,
   AssignReviewerOutput,
+  CreateReviewRoundInput,
+  CreateReviewRoundOutput,
   GetWorkbenchInput,
   RequestAiSuggestionInput,
   RequestAiSuggestionOutput,
@@ -14,7 +18,9 @@ import {
 } from "./schema";
 import {
   acceptSubmission,
+  advanceReviewRound,
   assignReviewer,
+  createReviewRound,
   getWorkbench,
   requestAiSuggestion,
   saveScore,
@@ -72,6 +78,34 @@ const acceptSubmissionOperation = {
   emits: ["review.submission.accepted", "speaker.provisioning.requested"],
 } as const satisfies AnyOperationDef;
 
+const advanceRoundOperation = {
+  id: "review.advanceRound",
+  kind: "command",
+  input: AdvanceReviewRoundInput,
+  output: AdvanceReviewRoundOutput,
+  authorize: organizerWrite,
+  invoke: advanceReviewRound,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/rounds/:roundId/advance",
+    input: {
+      path: ["eventId", "roundId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["expectedVersion", "nextRoundId", "expectedNextVersion"],
+    },
+    summary: "Activate or safely advance an ordered review round",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "review_advance_round",
+    description: "Activate the first pending round, or atomically complete the active round and optionally activate its next pending round.",
+  },
+  party: { intentType: "review/advanceRound" },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.round.completed", "review.round.activated"],
+} as const satisfies AnyOperationDef;
+
 const assignReviewerOperation = {
   id: "review.assignReviewer",
   kind: "command",
@@ -98,6 +132,33 @@ const assignReviewerOperation = {
   idempotency: "none",
   concurrency: "required",
   emits: ["review.assignment.created"],
+} as const satisfies AnyOperationDef;
+
+const createRoundOperation = {
+  id: "review.createRound",
+  kind: "command",
+  input: CreateReviewRoundInput,
+  output: CreateReviewRoundOutput,
+  authorize: organizerWrite,
+  invoke: createReviewRound,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/rounds",
+    input: {
+      path: ["eventId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["name", "initialStatus", "rubric", "expectedRoundCount"],
+    },
+    summary: "Create an ordered pending or active review round",
+    successStatus: 201,
+  },
+  mcp: {
+    name: "review_create_round",
+    description: "Create a validated review round against the authoritative round count, optionally starting it when no earlier round remains open.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.round.created"],
 } as const satisfies AnyOperationDef;
 
 const getWorkbenchOperation = {
@@ -185,7 +246,9 @@ const saveScoreOperation = {
 /** Bytewise operation-id order; registry generation must preserve this sequence. */
 export const operations = [
   acceptSubmissionOperation,
+  advanceRoundOperation,
   assignReviewerOperation,
+  createRoundOperation,
   getWorkbenchOperation,
   requestAiSuggestionOperation,
   saveScoreOperation,

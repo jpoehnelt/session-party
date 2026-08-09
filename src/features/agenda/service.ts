@@ -1,5 +1,5 @@
 import { Conflict, External, NotFound, Validation, type AppError } from "contracts/errors";
-import type { Principal as CurrentUserValue } from "contracts/principal";
+import { eventAuthorization, type Principal as CurrentUserValue } from "contracts/principal";
 import {
   acceptanceEvents,
   auditLog,
@@ -20,7 +20,7 @@ import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 // BaselineGreen may rename these invocation seams; keep the shared import isolated here.
-import { CurrentUser, Db, Rooms } from "@/server/services";
+import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
 import {
   AgendaDeliveryProjection as AgendaDeliveryProjectionSchema,
   PublishedAgenda as PublishedAgendaSchema,
@@ -33,7 +33,9 @@ import type {
   AgendaTalk,
   BacklogProposal,
   CancelTalkInput,
+  CreateRoomInput,
   CreateTalkInput,
+  CreateTrackInput,
   GetAgendaDeliveryProjectionInput,
   GetPublishedAgendaInput,
   ListAgendaInput,
@@ -41,7 +43,13 @@ import type {
   PublishedAgenda,
   PublishAgendaInput,
   PublicAgendaTalk,
+  Room,
+  RoomMutationResult,
   ScheduleTalkInput,
+  Track,
+  TrackMutationResult,
+  UpdateRoomInput,
+  UpdateTrackInput,
 } from "./schema";
 
 const DAY_MS = 86_400_000;
@@ -52,8 +60,17 @@ const TALK_CHANGE_EVENT = "agenda.talk_changed";
 const AGENDA_SNAPSHOT_MAX_ATTEMPTS = 3;
 const PUBLICATION_EVENT = "agenda/published";
 const DELIVERY_PROJECTION_EVENT = "agenda/delivery-published";
+const SETUP_WRITE_AUTHORIZATION = eventAuthorization(
+  { kind: "event-member", roles: ["owner", "admin"] },
+  { kind: "api-key", scopes: ["agenda:write"] },
+);
 
 type Principal = CurrentUserValue;
+type AgendaCommandResult =
+  | AgendaMutationResult
+  | PublishedAgenda
+  | RoomMutationResult
+  | TrackMutationResult;
 type IdempotencyContext = {
   readonly id: string;
   readonly requestId: string;
@@ -120,6 +137,41 @@ const actorColumns = (principal: Principal) =>
   principal.kind === "api-key"
     ? { actorUserId: null, actorApiKeyId: principal.apiKeyId }
     : { actorUserId: principal.userId, actorApiKeyId: null };
+
+const authorizeSetupWrite = (eventId: string) =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentUser;
+    const { authorize } = yield* Authorizer;
+    yield* authorize({ principal, eventId, policy: SETUP_WRITE_AUTHORIZATION });
+    return principal;
+  });
+
+const setupName = (name: string): Effect.Effect<string, Validation> => {
+  const normalized = name.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0) {
+    return Effect.fail(new Validation({ message: "Name must contain visible characters" }));
+  }
+  if (normalized.length > 120) {
+    return Effect.fail(new Validation({ message: "Name must be 120 characters or fewer" }));
+  }
+  return Effect.succeed(normalized);
+};
+
+const trackView = (track: typeof tracks.$inferSelect): Track => ({
+  id: track.id,
+  name: track.name,
+  color: track.color,
+  order: track.order,
+  version: track.version,
+});
+
+const roomView = (room: typeof rooms.$inferSelect): Room => ({
+  id: room.id,
+  name: room.name,
+  capacity: room.capacity,
+  order: room.order,
+  version: room.version,
+});
 
 const canonicalJson = (value: unknown): string => {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -465,8 +517,8 @@ export const listAgenda = (
       const workspaceVersion = yield* currentWorkspaceVersion(input.eventId);
       const event = yield* getEvent(input.eventId);
       const [trackRows, roomRows, backlog, agendaTalks, published] = yield* Effect.all([
-        database(() => db.select().from(tracks).where(eq(tracks.eventId, input.eventId)).orderBy(asc(tracks.order), asc(tracks.name))),
-        database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name))),
+        database(() => db.select().from(tracks).where(eq(tracks.eventId, input.eventId)).orderBy(asc(tracks.order), asc(tracks.name), asc(tracks.id))),
+        database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name), asc(rooms.id))),
         loadBacklog(input.eventId),
         loadTalkRows(input.eventId),
         latestPublication(input.eventId),
@@ -485,8 +537,8 @@ export const listAgenda = (
         view: input.view,
         workspaceVersion,
         eventVersion: event.version,
-        tracks: trackRows.map((track) => ({ id: track.id, name: track.name, color: track.color, order: track.order })),
-        rooms: roomRows.map((room) => ({ id: room.id, name: room.name, capacity: room.capacity, order: room.order })),
+        tracks: trackRows.map(trackView),
+        rooms: roomRows.map(roomView),
         backlog,
         talks: agendaTalks,
         conflicts,
@@ -505,7 +557,7 @@ export const listAgenda = (
 const prepareIdempotency = <A extends { readonly idempotencyKey: string }>(
   operationId: string,
   input: A,
-): Effect.Effect<IdempotencyContext | AgendaMutationResult | PublishedAgenda, AppError, Db | CurrentUser> =>
+): Effect.Effect<IdempotencyContext | AgendaCommandResult, AppError, Db | CurrentUser> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     const principal = yield* CurrentUser;
@@ -533,8 +585,8 @@ const prepareIdempotency = <A extends { readonly idempotencyKey: string }>(
       if (existing.status !== "completed" || existing.responseBody === null) {
         return yield* Effect.fail(new Conflict({ message: "An equivalent agenda change is still in progress" }));
       }
-      const replay = existing.responseBody as AgendaMutationResult | PublishedAgenda;
-      return "talk" in replay ? { ...replay, replayed: true } : replay;
+      const replay = existing.responseBody as AgendaCommandResult;
+      return "replayed" in replay ? { ...replay, replayed: true } : replay;
     }
     return {
       id: nanoid(),
@@ -622,6 +674,338 @@ const mutationContention = <A, R>(effect: Effect.Effect<A, AppError, R>) =>
       () => Effect.fail(new Conflict({ message: "Agenda changed while this request was being applied; refresh and try again" })),
     ),
   );
+
+const ensureUniqueTrackName = (eventId: string, name: string, exceptId?: string) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const conditions = [
+      eq(tracks.eventId, eventId),
+      sql`lower(trim(${tracks.name})) = lower(${name})`,
+    ];
+    if (exceptId) conditions.push(ne(tracks.id, exceptId));
+    const [duplicate] = yield* database(() =>
+      db.select({ id: tracks.id }).from(tracks).where(and(...conditions)).limit(1),
+    );
+    if (duplicate) {
+      return yield* Effect.fail(new Conflict({ message: `A track named '${name}' already exists` }));
+    }
+  });
+
+const ensureUniqueRoomName = (eventId: string, name: string, exceptId?: string) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const conditions = [
+      eq(rooms.eventId, eventId),
+      sql`lower(trim(${rooms.name})) = lower(${name})`,
+    ];
+    if (exceptId) conditions.push(ne(rooms.id, exceptId));
+    const [duplicate] = yield* database(() =>
+      db.select({ id: rooms.id }).from(rooms).where(and(...conditions)).limit(1),
+    );
+    if (duplicate) {
+      return yield* Effect.fail(new Conflict({ message: `A room named '${name}' already exists` }));
+    }
+  });
+
+export const createTrack = (
+  input: CreateTrackInput,
+): Effect.Effect<TrackMutationResult, AppError, Authorizer | CurrentUser | Db> =>
+  mutationContention(Effect.gen(function* () {
+    const { db } = yield* Db;
+    const principal = yield* authorizeSetupWrite(input.eventId);
+    const prepared = yield* prepareIdempotency("agenda.createTrack", input);
+    if (!("requestId" in prepared)) return prepared as TrackMutationResult;
+    yield* getEvent(input.eventId);
+    const name = yield* setupName(input.name);
+    yield* ensureUniqueTrackName(input.eventId, name);
+    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
+    const track: Track = {
+      id: nanoid(),
+      name,
+      color: input.color,
+      order: input.order,
+      version: 1,
+    };
+    const changeId = nanoid();
+    const auditId = nanoid();
+    const result: TrackMutationResult = { track, changeId, auditId, replayed: false };
+    const actor = actorColumns(principal);
+    yield* database(() => db.batch([
+      db.insert(tracks).values({
+        ...track,
+        eventId: input.eventId,
+        createdAt: prepared.now,
+        updatedAt: prepared.now,
+      }),
+      db.insert(idempotencyRecords).values(idempotencyInsert(
+        prepared,
+        input.eventId,
+        "agenda.createTrack",
+        result as unknown as JsonValue,
+      )),
+      db.insert(domainChanges).values({
+        id: changeId,
+        eventId: input.eventId,
+        aggregateType: "agenda-workspace",
+        aggregateId: input.eventId,
+        aggregateVersion: workspaceVersion,
+        eventType: TALK_CHANGE_EVENT,
+        audiences: PRIVATE_AUDIENCE,
+        payload: { action: "track_created", track },
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
+      db.insert(auditLog).values({
+        id: auditId,
+        eventId: input.eventId,
+        requestId: prepared.requestId,
+        ...actor,
+        action: "agenda.track_created",
+        resourceType: "track",
+        resourceId: track.id,
+        before: null,
+        after: track,
+        metadata: { idempotencyKeyHash: prepared.keyHash },
+        occurredAt: prepared.now,
+      }),
+    ]));
+    return result;
+  }));
+
+export const updateTrack = (
+  input: UpdateTrackInput,
+): Effect.Effect<TrackMutationResult, AppError, Authorizer | CurrentUser | Db> =>
+  mutationContention(Effect.gen(function* () {
+    const { db } = yield* Db;
+    const principal = yield* authorizeSetupWrite(input.eventId);
+    const prepared = yield* prepareIdempotency("agenda.updateTrack", input);
+    if (!("requestId" in prepared)) return prepared as TrackMutationResult;
+    const [stored] = yield* database(() => db.select().from(tracks).where(and(
+      eq(tracks.eventId, input.eventId),
+      eq(tracks.id, input.trackId),
+    )).limit(1));
+    if (!stored) return yield* Effect.fail(new NotFound({ entity: "track", id: input.trackId }));
+    if (stored.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({
+        message: `Track version is ${stored.version}; expected ${input.expectedVersion}`,
+      }));
+    }
+    const name = yield* setupName(input.name);
+    yield* ensureUniqueTrackName(input.eventId, name, input.trackId);
+    const before = trackView(stored);
+    const track: Track = {
+      id: stored.id,
+      name,
+      color: input.color,
+      order: input.order,
+      version: stored.version + 1,
+    };
+    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
+    const changeId = nanoid();
+    const auditId = nanoid();
+    const result: TrackMutationResult = { track, changeId, auditId, replayed: false };
+    const actor = actorColumns(principal);
+    yield* database(() => db.batch([
+      db.update(tracks).set({
+        name,
+        color: input.color,
+        order: input.order,
+        version: track.version,
+        updatedAt: prepared.now,
+      }).where(and(
+        eq(tracks.eventId, input.eventId),
+        eq(tracks.id, input.trackId),
+        eq(tracks.version, input.expectedVersion),
+      )),
+      db.insert(idempotencyRecords).values(idempotencyInsert(
+        prepared,
+        input.eventId,
+        "agenda.updateTrack",
+        result as unknown as JsonValue,
+        true,
+      )),
+      db.insert(domainChanges).values({
+        id: changeId,
+        eventId: input.eventId,
+        aggregateType: "agenda-workspace",
+        aggregateId: input.eventId,
+        aggregateVersion: workspaceVersion,
+        eventType: TALK_CHANGE_EVENT,
+        audiences: PRIVATE_AUDIENCE,
+        payload: { action: "track_updated", track },
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
+      db.insert(auditLog).values({
+        id: auditId,
+        eventId: input.eventId,
+        requestId: prepared.requestId,
+        ...actor,
+        action: "agenda.track_updated",
+        resourceType: "track",
+        resourceId: track.id,
+        before,
+        after: track,
+        metadata: { idempotencyKeyHash: prepared.keyHash },
+        occurredAt: prepared.now,
+      }),
+    ]));
+    return result;
+  }));
+
+export const createRoom = (
+  input: CreateRoomInput,
+): Effect.Effect<RoomMutationResult, AppError, Authorizer | CurrentUser | Db> =>
+  mutationContention(Effect.gen(function* () {
+    const { db } = yield* Db;
+    const principal = yield* authorizeSetupWrite(input.eventId);
+    const prepared = yield* prepareIdempotency("agenda.createRoom", input);
+    if (!("requestId" in prepared)) return prepared as RoomMutationResult;
+    yield* getEvent(input.eventId);
+    const name = yield* setupName(input.name);
+    yield* ensureUniqueRoomName(input.eventId, name);
+    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
+    const room: Room = {
+      id: nanoid(),
+      name,
+      capacity: input.capacity,
+      order: input.order,
+      version: 1,
+    };
+    const changeId = nanoid();
+    const auditId = nanoid();
+    const result: RoomMutationResult = { room, changeId, auditId, replayed: false };
+    const actor = actorColumns(principal);
+    yield* database(() => db.batch([
+      db.insert(rooms).values({
+        ...room,
+        eventId: input.eventId,
+        createdAt: prepared.now,
+        updatedAt: prepared.now,
+      }),
+      db.insert(idempotencyRecords).values(idempotencyInsert(
+        prepared,
+        input.eventId,
+        "agenda.createRoom",
+        result as unknown as JsonValue,
+      )),
+      db.insert(domainChanges).values({
+        id: changeId,
+        eventId: input.eventId,
+        aggregateType: "agenda-workspace",
+        aggregateId: input.eventId,
+        aggregateVersion: workspaceVersion,
+        eventType: TALK_CHANGE_EVENT,
+        audiences: PRIVATE_AUDIENCE,
+        payload: { action: "room_created", room },
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
+      db.insert(auditLog).values({
+        id: auditId,
+        eventId: input.eventId,
+        requestId: prepared.requestId,
+        ...actor,
+        action: "agenda.room_created",
+        resourceType: "room",
+        resourceId: room.id,
+        before: null,
+        after: room,
+        metadata: { idempotencyKeyHash: prepared.keyHash },
+        occurredAt: prepared.now,
+      }),
+    ]));
+    return result;
+  }));
+
+export const updateRoom = (
+  input: UpdateRoomInput,
+): Effect.Effect<RoomMutationResult, AppError, Authorizer | CurrentUser | Db> =>
+  mutationContention(Effect.gen(function* () {
+    const { db } = yield* Db;
+    const principal = yield* authorizeSetupWrite(input.eventId);
+    const prepared = yield* prepareIdempotency("agenda.updateRoom", input);
+    if (!("requestId" in prepared)) return prepared as RoomMutationResult;
+    const [stored] = yield* database(() => db.select().from(rooms).where(and(
+      eq(rooms.eventId, input.eventId),
+      eq(rooms.id, input.roomId),
+    )).limit(1));
+    if (!stored) return yield* Effect.fail(new NotFound({ entity: "room", id: input.roomId }));
+    if (stored.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({
+        message: `Room version is ${stored.version}; expected ${input.expectedVersion}`,
+      }));
+    }
+    const name = yield* setupName(input.name);
+    yield* ensureUniqueRoomName(input.eventId, name, input.roomId);
+    const before = roomView(stored);
+    const room: Room = {
+      id: stored.id,
+      name,
+      capacity: input.capacity,
+      order: input.order,
+      version: stored.version + 1,
+    };
+    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
+    const changeId = nanoid();
+    const auditId = nanoid();
+    const result: RoomMutationResult = { room, changeId, auditId, replayed: false };
+    const actor = actorColumns(principal);
+    yield* database(() => db.batch([
+      db.update(rooms).set({
+        name,
+        capacity: input.capacity,
+        order: input.order,
+        version: room.version,
+        updatedAt: prepared.now,
+      }).where(and(
+        eq(rooms.eventId, input.eventId),
+        eq(rooms.id, input.roomId),
+        eq(rooms.version, input.expectedVersion),
+      )),
+      db.insert(idempotencyRecords).values(idempotencyInsert(
+        prepared,
+        input.eventId,
+        "agenda.updateRoom",
+        result as unknown as JsonValue,
+        true,
+      )),
+      db.insert(domainChanges).values({
+        id: changeId,
+        eventId: input.eventId,
+        aggregateType: "agenda-workspace",
+        aggregateId: input.eventId,
+        aggregateVersion: workspaceVersion,
+        eventType: TALK_CHANGE_EVENT,
+        audiences: PRIVATE_AUDIENCE,
+        payload: { action: "room_updated", room },
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
+      db.insert(auditLog).values({
+        id: auditId,
+        eventId: input.eventId,
+        requestId: prepared.requestId,
+        ...actor,
+        action: "agenda.room_updated",
+        resourceType: "room",
+        resourceId: room.id,
+        before,
+        after: room,
+        metadata: { idempotencyKeyHash: prepared.keyHash },
+        occurredAt: prepared.now,
+      }),
+    ]));
+    return result;
+  }));
 
 export const createTalk = (
   input: CreateTalkInput,

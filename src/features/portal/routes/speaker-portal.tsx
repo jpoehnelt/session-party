@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useParams } from "react-router";
 import type { AnswerValue } from "contracts/types";
+import { ApiError } from "@/client/api";
 import {
   Alert,
   AlertDescription,
@@ -26,6 +27,7 @@ import {
 } from "@/features/submit/schema";
 import { PublicField, visibleFields } from "@/features/submit/routes/public-submit";
 import type {
+  ClaimSpeakerOutput,
   PortalResource,
   PortalSnapshot,
   PortalTask,
@@ -34,6 +36,7 @@ import type {
   UploadPortalAssetInput,
 } from "../schema";
 import {
+  claimSpeakerAccount,
   getSpeakerTaskForm,
   getSpeakerPortal,
   setSpeakerTaskCompletion,
@@ -120,11 +123,50 @@ export default function SpeakerPortalRoute() {
   const [state, retry] = useRouteLoad(() => getSpeakerPortal(eventSlug), eventSlug);
   const [mutation, setMutation] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [claim, setClaim] = useState<ClaimSpeakerOutput | null>(null);
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState<string | null>(null);
+  const claimKeyRef = useRef<string | null>(null);
+
+  async function claimAccess() {
+    setClaiming(true);
+    setClaimError(null);
+    try {
+      const idempotencyKey = claimKeyRef.current ?? crypto.randomUUID();
+      claimKeyRef.current = idempotencyKey;
+      const result = await claimSpeakerAccount(eventSlug, {
+        eventId: eventSlug,
+        idempotencyKey,
+      });
+      setClaim(result);
+      toast("Speaker account linked", { tone: "success" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Speaker account could not be linked";
+      setClaimError(message);
+      toast(message, { tone: "danger" });
+    } finally {
+      setClaiming(false);
+    }
+  }
 
   if (state.status === "loading") {
     return <SpeakerPortalFrame><RouteLoading label="Loading speaker portal" /></SpeakerPortalFrame>;
   }
   if (state.status === "error") {
+    if (state.error instanceof ApiError && state.error.status === 403) {
+      return (
+        <SpeakerPortalFrame>
+          <SpeakerClaimPrompt
+            claim={claim}
+            busy={claiming}
+            error={claimError}
+            onClaim={() => void claimAccess()}
+            onRetry={retry}
+          />
+          <Toaster />
+        </SpeakerPortalFrame>
+      );
+    }
     return <SpeakerPortalFrame><RouteFailure message={state.message} onRetry={retry} /></SpeakerPortalFrame>;
   }
   const snapshot = state.data;
@@ -195,6 +237,46 @@ export default function SpeakerPortalRoute() {
       />
       <Toaster />
     </SpeakerPortalFrame>
+  );
+}
+
+export function SpeakerClaimPrompt({
+  claim,
+  busy,
+  error,
+  onClaim,
+  onRetry,
+}: {
+  readonly claim: ClaimSpeakerOutput | null;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly onClaim: () => void;
+  readonly onRetry: () => void;
+}) {
+  return (
+    <div className="mx-auto max-w-xl space-y-4">
+      {error && (
+        <Alert tone="danger">
+          <AlertTitle>Account could not be linked</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      <Card>
+        <EmptyState
+          title={claim ? "Speaker account linked" : "Claim your speaker access"}
+          description={claim
+            ? "Your accepted speaker record is linked. The event team can now finish provisioning; check again after they do."
+            : "If this account email matches the accepted submission’s speaker email, link it securely to continue onboarding."}
+          action={claim
+            ? <Button type="button" onClick={onRetry}>Check portal access</Button>
+            : (
+              <Button type="button" loading={busy} disabled={busy} onClick={onClaim}>
+                Claim speaker access
+              </Button>
+            )}
+        />
+      </Card>
+    </div>
   );
 }
 

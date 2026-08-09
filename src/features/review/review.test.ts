@@ -43,7 +43,9 @@ import { operations } from "./operations";
 import { SaveScoreInput } from "./schema";
 import {
   acceptSubmission,
+  advanceReviewRound,
   assignReviewer,
+  createReviewRound,
   getWorkbench,
   requestAiSuggestion,
   saveScore,
@@ -392,7 +394,9 @@ describe("review and acceptance slice", () => {
     expect(ids).toEqual([...ids].sort());
     expect(ids).toEqual([
       "review.acceptSubmission",
+      "review.advanceRound",
       "review.assignReviewer",
+      "review.createRound",
       "review.getWorkbench",
       "review.requestAiSuggestion",
       "review.saveScore",
@@ -406,14 +410,184 @@ describe("review and acceptance slice", () => {
     const acceptanceAuthorization = operations[0].authorize;
     expect(acceptanceAuthorization.kind).toBe("event");
     if (acceptanceAuthorization.kind === "event") expect(acceptanceAuthorization.apiKey.kind).toBe("deny");
-    const aiAuthorization = operations[3].authorize;
+    const aiAuthorization = operations.find((operation) => operation.id === "review.requestAiSuggestion")!.authorize;
     expect(aiAuthorization.kind).toBe("event");
     if (aiAuthorization.kind === "event") {
       expect(aiAuthorization.apiKey).toEqual({ kind: "api-key", scopes: ["reviews:write"] });
     }
-    const scoreAuthorization = operations[4].authorize;
+    const scoreAuthorization = operations.find((operation) => operation.id === "review.saveScore")!.authorize;
     expect(scoreAuthorization.kind).toBe("event");
     if (scoreAuthorization.kind === "event") expect(scoreAuthorization.apiKey.kind).toBe("deny");
+  });
+
+  it("creates pending or active rounds with validated rubrics, authoritative counts, and replay", async () => {
+    const eventId = "event_round_create";
+    const createdAt = new Date(fixtureClock);
+    await db.insert(events).values({
+      id: eventId,
+      slug: "round-create",
+      name: "Round creation",
+      timezone: "UTC",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values({
+      id: "member_round_create_owner",
+      eventId,
+      userId: fixtureOwnerId,
+      role: "owner",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const rubric = {
+      criteria: [{ key: "clarity", label: "Clarity", max: 5 as const }] as const,
+    };
+    const activeInput = {
+      eventId,
+      name: "  Program fit  ",
+      initialStatus: "active" as const,
+      rubric,
+      expectedRoundCount: 0,
+      idempotencyKey: "round-create-active-01",
+      requestId: "request_round_create_active",
+    };
+    const created = await runAs(owner, createReviewRound(activeInput));
+    const replayed = await runAs(owner, createReviewRound(activeInput));
+    expect(created).toMatchObject({
+      idempotent: false,
+      round: { name: "Program fit", order: 1, status: "active", version: 1 },
+    });
+    expect(replayed).toEqual({ ...created, idempotent: true });
+
+    const pending = await runAs(owner, createReviewRound({
+      eventId,
+      name: "Final selection",
+      initialStatus: "pending",
+      rubric,
+      expectedRoundCount: 1,
+      idempotencyKey: "round-create-pending-02",
+      requestId: "request_round_create_pending",
+    }));
+    expect(pending.round).toMatchObject({ order: 2, status: "pending", version: 1 });
+
+    const staleCount = await runEitherAs(owner, createReviewRound({
+      eventId,
+      name: "Stale round",
+      initialStatus: "pending",
+      rubric,
+      expectedRoundCount: 1,
+      idempotencyKey: "round-create-stale-03",
+      requestId: "request_round_create_stale",
+    }));
+    expect(staleCount._tag).toBe("Left");
+    if (staleCount._tag === "Left") expect(staleCount.left._tag).toBe("Conflict");
+
+    const duplicateRubric = await runEitherAs(owner, createReviewRound({
+      eventId,
+      name: "Bad rubric",
+      initialStatus: "pending",
+      rubric: { criteria: [
+        { key: "clarity", label: "Clarity", max: 5 },
+        { key: "clarity", label: "Clarity again", max: 5 },
+      ] },
+      expectedRoundCount: 2,
+      idempotencyKey: "round-create-invalid-04",
+      requestId: "request_round_create_invalid",
+    }));
+    expect(duplicateRubric._tag).toBe("Left");
+    if (duplicateRubric._tag === "Left") expect(duplicateRubric.left._tag).toBe("Validation");
+
+    const persisted = await db.select().from(reviewRounds).where(eq(reviewRounds.eventId, eventId));
+    expect(persisted).toHaveLength(2);
+    expect(persisted.filter((round) => round.status === "active")).toHaveLength(1);
+    expect(await db.select().from(auditLog).where(and(eq(auditLog.eventId, eventId), eq(auditLog.action, "review.createRound")))).toHaveLength(2);
+  });
+
+  it("atomically completes the active round and advances only to the next authoritative version", async () => {
+    const eventId = "event_round_advance";
+    const createdAt = new Date(fixtureClock);
+    await db.insert(events).values({
+      id: eventId,
+      slug: "round-advance",
+      name: "Round advancement",
+      timezone: "UTC",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values({
+      id: "member_round_advance_owner",
+      eventId,
+      userId: fixtureOwnerId,
+      role: "owner",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const rubric = { criteria: [{ key: "clarity", label: "Clarity", max: 5 as const }] };
+    await db.insert(reviewRounds).values([
+      { id: "round_advance_complete", eventId, name: "Screen", order: 1, status: "complete", rubric, version: 2, createdAt, updatedAt: createdAt },
+      { id: "round_advance_active", eventId, name: "Fit", order: 2, status: "active", rubric, version: 4, createdAt, updatedAt: createdAt },
+      { id: "round_advance_next", eventId, name: "Final", order: 3, status: "pending", rubric, version: 1, createdAt, updatedAt: createdAt },
+      { id: "round_advance_later", eventId, name: "Reserve", order: 4, status: "pending", rubric, version: 1, createdAt, updatedAt: createdAt },
+    ]);
+    const input = {
+      eventId,
+      roundId: "round_advance_active",
+      expectedVersion: 4,
+      nextRoundId: "round_advance_next",
+      expectedNextVersion: 1,
+      idempotencyKey: "round-advance-atomic-01",
+      requestId: "request_round_advance",
+    } as const;
+    const advanced = await runAs(owner, advanceReviewRound(input));
+    const replayed = await runAs(owner, advanceReviewRound(input));
+    expect(advanced.idempotent).toBe(false);
+    expect(replayed).toEqual({ ...advanced, idempotent: true });
+    expect(advanced.rounds.map(({ id, status, version }) => ({ id, status, version }))).toEqual([
+      { id: "round_advance_complete", status: "complete", version: 2 },
+      { id: "round_advance_active", status: "complete", version: 5 },
+      { id: "round_advance_next", status: "active", version: 2 },
+      { id: "round_advance_later", status: "pending", version: 1 },
+    ]);
+
+    const stale = await runEitherAs(owner, advanceReviewRound({
+      ...input,
+      idempotencyKey: "round-advance-stale-02",
+      requestId: "request_round_advance_stale",
+    }));
+    expect(stale._tag).toBe("Left");
+    if (stale._tag === "Left") expect(stale.left._tag).toBe("Conflict");
+
+    const [skipEvent] = await db.insert(events).values({
+      id: "event_round_skip",
+      slug: "round-skip",
+      name: "Round skip",
+      timezone: "UTC",
+      createdAt,
+      updatedAt: createdAt,
+    }).returning();
+    await db.insert(eventMembers).values({
+      id: "member_round_skip_owner", eventId: skipEvent!.id, userId: fixtureOwnerId, role: "owner", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviewRounds).values([
+      { id: "round_skip_active", eventId: skipEvent!.id, name: "First", order: 1, status: "active", rubric, version: 1, createdAt, updatedAt: createdAt },
+      { id: "round_skip_next", eventId: skipEvent!.id, name: "Second", order: 2, status: "pending", rubric, version: 1, createdAt, updatedAt: createdAt },
+      { id: "round_skip_target", eventId: skipEvent!.id, name: "Third", order: 3, status: "pending", rubric, version: 1, createdAt, updatedAt: createdAt },
+    ]);
+    const skipped = await runEitherAs(owner, advanceReviewRound({
+      eventId: skipEvent!.id,
+      roundId: "round_skip_active",
+      expectedVersion: 1,
+      nextRoundId: "round_skip_target",
+      expectedNextVersion: 1,
+      idempotencyKey: "round-advance-skip-03",
+      requestId: "request_round_advance_skip",
+    }));
+    expect(skipped._tag).toBe("Left");
+    if (skipped._tag === "Left") expect(skipped.left._tag).toBe("Conflict");
+
+    const persisted = await db.select().from(reviewRounds).where(eq(reviewRounds.eventId, eventId));
+    expect(persisted.filter((round) => round.status === "active").map((round) => round.id)).toEqual(["round_advance_next"]);
+    expect(await db.select().from(auditLog).where(and(eq(auditLog.eventId, eventId), eq(auditLog.action, "review.advanceRound")))).toHaveLength(1);
   });
 
 

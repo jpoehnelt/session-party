@@ -49,6 +49,7 @@ const publicForm: PublicSubmissionForm = {
       },
     ],
   },
+  turnstileSiteKey: "1x00000000000000000000AA",
 };
 
 const organizerPage: SubmissionPage = {
@@ -102,6 +103,7 @@ describe("public submit route", () => {
       "form-public",
       "submit-route-test-001",
       { "field-title": "Effect at the edge" },
+      "test-turnstile-token",
     );
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -119,6 +121,7 @@ describe("public submit route", () => {
         },
         body: JSON.stringify({
           answers: [{ fieldId: "field-title", value: "Effect at the edge" }],
+          turnstileToken: "test-turnstile-token",
         }),
       }),
     );
@@ -139,6 +142,7 @@ describe("public submit route", () => {
       "form-task",
       "submit-route-task-001",
       { "field-task": "Portal follow-up details" },
+      "test-turnstile-token",
     )).rejects.toThrow(message);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/public/events/architecture-summit/forms/form-task/submissions",

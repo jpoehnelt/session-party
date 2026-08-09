@@ -3,6 +3,8 @@ import { browserSessionAuthorization, eventAuthorization, publicAuthorization } 
 import {
   CreateResourceInput,
   CreateTaskInput,
+  ClaimSpeakerInput,
+  ClaimSpeakerOutput,
   DeletePortalEntityOutput,
   DeleteResourceInput,
   DeleteTaskInput,
@@ -31,6 +33,7 @@ import {
 import {
   createPortalResource,
   createPortalTask,
+  claimSpeaker,
   deletePortalResource,
   deletePortalTask,
   getPortalDashboard,
@@ -47,6 +50,19 @@ import {
   updateSpeakerPublication,
   uploadPortalAsset,
 } from "./service";
+
+const claimSpeakerOperation = {
+  id: "portal.claimSpeaker",
+  kind: "command",
+  input: ClaimSpeakerInput,
+  output: ClaimSpeakerOutput,
+  authorize: browserSessionAuthorization,
+  invoke: claimSpeaker,
+  rest: { method: "post", path: "/events/:eventId/portal/claim", input: { path: ["eventId"], body: ["idempotencyKey"] }, summary: "Claim an accepted primary speaker account by immutable submission email", successStatus: 200 },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["portal.speaker.claimed"],
+} as const satisfies AnyOperationDef;
 
 const organizerSpeakerRead = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
@@ -301,6 +317,7 @@ const uploadAssetOperation = {
 
 /** Bytewise operation-id order; registry generation must preserve this sequence. */
 export const operations = [
+  claimSpeakerOperation,
   createResourceOperation,
   createTaskOperation,
   deleteResourceOperation,

@@ -29,7 +29,7 @@ export const createPublicSubmissionOperation = {
     input: {
       path: ["eventSlug", "formId"],
       headers: { idempotencyKey: "Idempotency-Key" },
-      body: ["answers"],
+      body: ["answers", "turnstileToken"],
     },
     summary: "Create a public submission from an immutable published form",
     successStatus: 201,

@@ -136,6 +136,50 @@ describe("Accelevents shared import seam", () => {
     expect(integration?.lastError).toBeNull();
   });
 
+  it("selects the reserved fixture configuration in production-shaped live mode only", async () => {
+    const fixtureSeed = await seed({ accelEventId: "fixture-event", eventUrl: "fixture-event" });
+    const liveSeed = await seed();
+    let liveCalls = 0;
+    const liveAdapter: AcceleventsAdapterService = {
+      mode: "live",
+      fetchSnapshot: () => {
+        liveCalls += 1;
+        return Effect.fail(new External({ service: "accelevents", detail: "live unavailable" }));
+      },
+    };
+    const imports = createAcceleventsImports({
+      db,
+      adapter: liveAdapter,
+      fixtureAdapter: createFixtureAcceleventsAdapter(),
+      secrets: createSecretResolver(undefined),
+    });
+
+    expect((await Effect.runPromise(imports.status(fixtureSeed.eventId))).capability).toEqual({
+      mode: "fixture",
+      state: "ready",
+      reason: null,
+    });
+    const fixtureRun = await Effect.runPromise(imports.run({
+      eventId: fixtureSeed.eventId,
+      idempotencyKey: "production-shaped-fixture-key",
+      actor: actor(fixtureSeed.userId),
+    }));
+    expect(fixtureRun).toMatchObject({ mode: "fixture", status: "succeeded" });
+
+    expect((await Effect.runPromise(imports.status(liveSeed.eventId))).capability).toEqual({
+      mode: "live",
+      state: "unavailable",
+      reason: "credential_unavailable",
+    });
+    const liveRun = await Effect.runPromise(imports.run({
+      eventId: liveSeed.eventId,
+      idempotencyKey: "production-shaped-live-key",
+      actor: actor(liveSeed.userId),
+    }));
+    expect(liveRun).toMatchObject({ mode: "live", status: "failed" });
+    expect(liveCalls).toBe(0);
+  });
+
   it("turns a concurrent same-key claim collision into replay or conflict, never an external failure", async () => {
     const seeded = await seed();
     const imports = createAcceleventsImports({

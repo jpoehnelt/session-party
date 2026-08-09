@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server.edge";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  ClaimSpeakerOutput,
   PortalDashboard,
   PortalEvent,
   PortalResource,
@@ -13,6 +14,7 @@ import type {
 } from "../schema";
 import type { PublicSubmissionForm } from "@/features/submit/schema";
 import {
+  claimSpeakerAccount,
   createResource,
   createTask,
   deleteResource,
@@ -42,6 +44,7 @@ import {
   layout as portalLayout,
   path as portalPath,
   PORTAL_UPLOAD_MAX_BYTES,
+  SpeakerClaimPrompt,
   SpeakerPortalContent,
   SpeakerTaskFormPanel,
 } from "./speaker-portal";
@@ -228,6 +231,32 @@ describe("portal API loading", () => {
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/events/${event.slug}/portal`, expect.objectContaining({ method: "GET", credentials: "include" }));
   });
 
+  it("claims speaker access through the browser-session slug endpoint", async () => {
+    const claimed: ClaimSpeakerOutput = {
+      eventId: event.id,
+      speakerId: profile.id,
+      acceptanceEventId: "acceptance-1",
+      provisioningId: "provisioning-1",
+      speakerVersion: 6,
+      provisioningVersion: 3,
+      provisioningStatus: "claimed",
+    };
+    const fetchMock = vi.fn(async () => ok(claimed));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(claimSpeakerAccount(event.slug, {
+      eventId: event.id,
+      idempotencyKey: "claim-browser-session",
+    })).resolves.toEqual(claimed);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/events/${event.slug}/portal/claim`,
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({ idempotencyKey: "claim-browser-session" }),
+      }),
+    );
+  });
+
   it("resolves organizer event slug before loading authoritative directory and task DTOs", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -297,6 +326,37 @@ describe("portal API loading", () => {
 });
 
 describe("speaker portal content", () => {
+  it("offers secure claim and post-claim retry states", () => {
+    const unlinked = renderToStaticMarkup(createElement(SpeakerClaimPrompt, {
+      claim: null,
+      busy: false,
+      error: null,
+      onClaim: noop,
+      onRetry: noop,
+    }));
+    expect(unlinked).toContain("Claim your speaker access");
+    expect(unlinked).toContain("Claim speaker access");
+
+    const linked = renderToStaticMarkup(createElement(SpeakerClaimPrompt, {
+      claim: {
+        eventId: event.id,
+        speakerId: profile.id,
+        acceptanceEventId: "acceptance-1",
+        provisioningId: "provisioning-1",
+        speakerVersion: 6,
+        provisioningVersion: 3,
+        provisioningStatus: "claimed",
+      },
+      busy: false,
+      error: null,
+      onClaim: noop,
+      onRetry: noop,
+    }));
+    expect(linked).toContain("Speaker account linked");
+    expect(linked).toContain("Check portal access");
+    expect(linked).not.toContain("speaker@example.com");
+  });
+
   it("renders profile editing, accepted submission, readiness, persisted tasks, files, and resources", () => {
     const markup = renderToStaticMarkup(createElement(SpeakerPortalContent, {
       snapshot,

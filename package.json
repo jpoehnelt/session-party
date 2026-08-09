@@ -13,6 +13,7 @@
     "dev:reset": "tsx scripts/dev-reset.ts",
     "dev:seed": "tsx scripts/seed.ts",
     "demo:hydrate": "tsx scripts/demo-hydrate.ts",
+    "demo:promote": "tsx scripts/demo-promote.ts",
     "dev:local": "tsx scripts/local-dev.ts",
     "dev:service": "pnpm dev:reset && pnpm dev:local",
     "build": "vite build",

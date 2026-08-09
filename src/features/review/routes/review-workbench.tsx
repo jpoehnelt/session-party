@@ -8,6 +8,7 @@ import { Badge, Button, Card, EmptyState, Input, Select, Skeleton } from "@/ui";
 import type { ReviewWorkbench, SubmissionReviewSummary, SubmissionStatus } from "../schema";
 import { ReviewWorkbench as ReviewWorkbenchSchema } from "../schema";
 import { SubmissionReviewPane } from "../components/SubmissionReviewPane";
+import { ReviewRoundSetup } from "../components/ReviewRoundSetup";
 
 export const path = "/e/:eventSlug/review";
 
@@ -428,6 +429,16 @@ export function ReviewWorkbenchContent({
           <p>Last updated {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: workbench.timezone }).format(workbench.lastUpdatedAt)} {workbench.timezone}</p>
         </div>
       </header>
+
+      {(workbench.viewerRole === "owner" || workbench.viewerRole === "admin") && (
+        <section className="mb-4" aria-label="Review round setup">
+          <ReviewRoundSetup
+            eventId={workbench.eventId}
+            rounds={workbench.rounds}
+            onMutationCommitted={onMutationCommitted}
+          />
+        </section>
+      )}
 
       {queue.length > 0 && (
         <section className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1.5fr)_repeat(3,minmax(9rem,0.7fr))]" aria-label="Queue filters">

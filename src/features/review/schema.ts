@@ -52,6 +52,42 @@ export const ReviewRound = Schema.Struct({
 });
 export type ReviewRound = typeof ReviewRound.Type;
 
+const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(256));
+
+export const CreateReviewRoundInput = Schema.Struct({
+  eventId: EntityId,
+  name: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(120)),
+  initialStatus: Schema.Literal("pending", "active"),
+  rubric: ReviewRubric,
+  expectedRoundCount: Schema.Int.pipe(Schema.nonNegative()),
+  idempotencyKey: IdempotencyKey,
+  requestId: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+});
+export type CreateReviewRoundInput = typeof CreateReviewRoundInput.Type;
+
+export const CreateReviewRoundOutput = Schema.Struct({
+  round: ReviewRound,
+  idempotent: Schema.Boolean,
+});
+export type CreateReviewRoundOutput = typeof CreateReviewRoundOutput.Type;
+
+export const AdvanceReviewRoundInput = Schema.Struct({
+  eventId: EntityId,
+  roundId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  nextRoundId: Schema.NullOr(EntityId),
+  expectedNextVersion: Schema.Int.pipe(Schema.nonNegative()),
+  idempotencyKey: IdempotencyKey,
+  requestId: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+});
+export type AdvanceReviewRoundInput = typeof AdvanceReviewRoundInput.Type;
+
+export const AdvanceReviewRoundOutput = Schema.Struct({
+  rounds: Schema.NonEmptyArray(ReviewRound),
+  idempotent: Schema.Boolean,
+});
+export type AdvanceReviewRoundOutput = typeof AdvanceReviewRoundOutput.Type;
+
 export const ReviewerAssignment = Schema.Struct({
   id: EntityId,
   reviewerUserId: EntityId,

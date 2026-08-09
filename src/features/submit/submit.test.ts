@@ -1,4 +1,5 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import { External, Validation } from "contracts/errors";
 import type { Principal } from "contracts/principal";
 import {
   acceptanceEvents,
@@ -27,6 +28,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { runRestOperation, type AppHono } from "@/server/adapt";
 import { AppLayer, CurrentUser } from "@/server/services";
 import { createPublicSubmissionOperation, createTaskSubmissionOperation, operations } from "./operations";
+import { localTestPublicSubmissionAbuse, PublicSubmissionAbuse, PublicSubmissionRequest, type PublicSubmissionAbuseAttempt } from "./abuse";
 import type { CreatePublicSubmissionInput, CreateTaskSubmissionInput } from "./schema";
 import { createPublicSubmission, createTaskSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
 
@@ -110,6 +112,7 @@ const submissionInput = (
     eventSlug: EVENT_SLUG,
     formId,
     idempotencyKey,
+    turnstileToken: "local-test-turnstile-token",
     answers: [
       { fieldId: `${versionId}-${fieldIds.title}`, value: title },
       { fieldId: `${versionId}-${fieldIds.abstract}`, value: "A proposal grounded in real immutable answers." },
@@ -159,8 +162,23 @@ const taskSpeakerInput = (
   answers: [{ fieldId: `${TASK_VERSION_ID}-${TASK_FIELD_ID}`, value }],
 });
 
+const publicAbuseTestLayer = Layer.mergeAll(
+  AppLayer(env),
+  Layer.succeed(PublicSubmissionAbuse, localTestPublicSubmissionAbuse),
+  Layer.succeed(PublicSubmissionRequest, { remoteIp: "198.51.100.7" }),
+);
+
 const runPublic = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(AppLayer(env))) as Effect.Effect<A, E, never>);
+  Effect.runPromise(effect.pipe(Effect.provide(publicAbuseTestLayer)) as Effect.Effect<A, E, never>);
+
+const runPublicWithAbuse = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  authorize: (attempt: PublicSubmissionAbuseAttempt) => Effect.Effect<void, Validation | External>,
+) => Effect.runPromise(effect.pipe(Effect.provide(Layer.mergeAll(
+  AppLayer(env),
+  Layer.succeed(PublicSubmissionAbuse, { ...localTestPublicSubmissionAbuse, authorize }),
+  Layer.succeed(PublicSubmissionRequest, { remoteIp: "198.51.100.7" }),
+))) as Effect.Effect<A, E, never>);
 
 const runAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(
@@ -492,6 +510,28 @@ describe("public submission creation", () => {
     expect(speaker?.name).toBe("Sam Rivera");
     expect(change).toMatchObject({ eventType: "submit.created", idempotencyRecordId: expect.any(String) });
     expect(audit).toMatchObject({ action: "submit.create", actorUserId: null, actorApiKeyId: null });
+  });
+
+  it("passes only a bounded Turnstile token and trusted request metadata to the abuse boundary", async () => {
+    const input = { ...submissionInput("submit-abuse-boundary-001"), turnstileToken: undefined };
+    let observed: PublicSubmissionAbuseAttempt | null = null;
+    const result = await runPublicWithAbuse(
+      createPublicSubmission(input).pipe(Effect.either),
+      (attempt) => {
+        observed = attempt;
+        return attempt.turnstileToken
+          ? Effect.void
+          : Effect.fail(new Validation({ message: "Complete the human verification challenge and try again." }));
+      },
+    );
+    expect(result._tag).toBe("Left");
+    expect(observed).toEqual({
+      eventId: EVENT_ID,
+      formId: OPEN_FORM_ID,
+      normalizedEmail: "sam@example.com",
+      turnstileToken: undefined,
+      remoteIp: "198.51.100.7",
+    });
   });
 
   it("renders the immutable closed snapshot but rejects creation without writes", async () => {

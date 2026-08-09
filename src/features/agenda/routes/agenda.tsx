@@ -22,10 +22,14 @@ import {
   AgendaMutationResult,
   AgendaSnapshot,
   PublishedAgenda,
+  RoomMutationResult,
+  TrackMutationResult,
   type AgendaTalk,
   type AgendaView,
   type BacklogProposal,
   type RealtimeIntentState,
+  type Room,
+  type Track,
 } from "../schema";
 
 export const path = "/e/:eventSlug/agenda";
@@ -55,6 +59,25 @@ const idleIntent = (): RealtimeIntentState => ({
 
 const clientIntentId = () => `intent-${crypto.randomUUID()}`;
 const idempotencyKey = (action: string) => `${action}-${crypto.randomUUID()}`;
+
+interface TrackDraft {
+  readonly id: string | null;
+  readonly name: string;
+  readonly color: string;
+  readonly order: string;
+  readonly version: number;
+}
+
+interface RoomDraft {
+  readonly id: string | null;
+  readonly name: string;
+  readonly capacity: string;
+  readonly order: string;
+  readonly version: number;
+}
+
+const emptyTrackDraft = (): TrackDraft => ({ id: null, name: "", color: "", order: "0", version: 0 });
+const emptyRoomDraft = (): RoomDraft => ({ id: null, name: "", capacity: "", order: "0", version: 0 });
 
 const localInputValue = (timestamp: number | null, timezone: string) => {
   if (timestamp === null) return "";
@@ -213,6 +236,9 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [intent, setIntent] = useState<RealtimeIntentState>(idleIntent);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ trackId: "", roomId: "", startsAt: "", durationMin: "30" });
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [trackDraft, setTrackDraft] = useState<TrackDraft>(emptyTrackDraft);
+  const [roomDraft, setRoomDraft] = useState<RoomDraft>(emptyRoomDraft);
   const agendaRequest = useRef(0);
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -473,6 +499,104 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     }
   };
 
+  const editTrack = (track: Track) => {
+    setTrackDraft({
+      id: track.id,
+      name: track.name,
+      color: track.color ?? "",
+      order: String(track.order),
+      version: track.version,
+    });
+  };
+
+  const editRoom = (room: Room) => {
+    setRoomDraft({
+      id: room.id,
+      name: room.name,
+      capacity: room.capacity === null ? "" : String(room.capacity),
+      order: String(room.order),
+      version: room.version,
+    });
+  };
+
+  const saveTrack = async (submitEvent: FormEvent) => {
+    submitEvent.preventDefault();
+    const name = trackDraft.name.trim();
+    const color = trackDraft.color.trim() || null;
+    const order = Number(trackDraft.order);
+    if (!name || !Number.isInteger(order) || order < 0 || order > 10_000) {
+      toast("Enter a track name and an order from 0 to 10,000", { tone: "danger" });
+      return;
+    }
+    if (color !== null && !/^#[0-9A-Fa-f]{6}$/.test(color)) {
+      toast("Track color must be a six-digit hex value such as #2563EB", { tone: "danger" });
+      return;
+    }
+    const updating = trackDraft.id !== null;
+    const path = updating
+      ? `/api/v1/events/${encodeURIComponent(event.id)}/agenda/tracks/${encodeURIComponent(trackDraft.id!)}`
+      : `/api/v1/events/${encodeURIComponent(event.id)}/agenda/tracks`;
+    const clientId = clientIntentId();
+    try {
+      await runMutation(clientId, () => apiFetch<TrackMutationResult>(path, {
+        method: updating ? "PATCH" : "POST",
+        body: {
+          name,
+          color,
+          order,
+          ...(updating ? { expectedVersion: trackDraft.version } : {}),
+          idempotencyKey: idempotencyKey(updating ? "update-track" : "create-track"),
+        },
+        schema: TrackMutationResult,
+      }));
+      setTrackDraft(emptyTrackDraft());
+      toast(updating ? "Track updated" : "Track created", { tone: "success" });
+      await refreshAfterCommit();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not save track", { tone: "danger" });
+      await refreshAfterStaleFailure(error);
+    }
+  };
+
+  const saveRoom = async (submitEvent: FormEvent) => {
+    submitEvent.preventDefault();
+    const name = roomDraft.name.trim();
+    const capacity = roomDraft.capacity.trim() === "" ? null : Number(roomDraft.capacity);
+    const order = Number(roomDraft.order);
+    if (!name || !Number.isInteger(order) || order < 0 || order > 10_000) {
+      toast("Enter a room name and an order from 0 to 10,000", { tone: "danger" });
+      return;
+    }
+    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 1_000_000)) {
+      toast("Room capacity must be a whole number from 1 to 1,000,000", { tone: "danger" });
+      return;
+    }
+    const updating = roomDraft.id !== null;
+    const path = updating
+      ? `/api/v1/events/${encodeURIComponent(event.id)}/agenda/rooms/${encodeURIComponent(roomDraft.id!)}`
+      : `/api/v1/events/${encodeURIComponent(event.id)}/agenda/rooms`;
+    const clientId = clientIntentId();
+    try {
+      await runMutation(clientId, () => apiFetch<RoomMutationResult>(path, {
+        method: updating ? "PATCH" : "POST",
+        body: {
+          name,
+          capacity,
+          order,
+          ...(updating ? { expectedVersion: roomDraft.version } : {}),
+          idempotencyKey: idempotencyKey(updating ? "update-room" : "create-room"),
+        },
+        schema: RoomMutationResult,
+      }));
+      setRoomDraft(emptyRoomDraft());
+      toast(updating ? "Room updated" : "Room created", { tone: "success" });
+      await refreshAfterCommit();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not save room", { tone: "danger" });
+      await refreshAfterStaleFailure(error);
+    }
+  };
+
   const publish = async () => {
     if (!agenda) return;
     const clientId = clientIntentId();
@@ -542,13 +666,22 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           </span>
         }
         actions={
-          <Button
-            disabled={busy || refresh.status !== "idle" || agenda.conflicts.length > 0}
-            loading={busy && intent.acknowledgement === "pending"}
-            onClick={() => void publish()}
-          >
-            Publish revision
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              disabled={busy || refresh.status !== "idle"}
+              onClick={() => setSetupOpen(true)}
+            >
+              Tracks & rooms
+            </Button>
+            <Button
+              disabled={busy || refresh.status !== "idle" || agenda.conflicts.length > 0}
+              loading={busy && intent.acknowledgement === "pending"}
+              onClick={() => void publish()}
+            >
+              Publish revision
+            </Button>
+          </div>
         }
       />
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -589,6 +722,118 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           onMoveTalk={(talk, target) => void moveTalk(talk, target)}
         />
       </section>
+
+      <Sheet
+        open={setupOpen}
+        onClose={() => setSetupOpen(false)}
+        title="Tracks and rooms"
+        size="lg"
+      >
+        <div className="space-y-8">
+          <section aria-labelledby="agenda-track-setup-heading" className="space-y-4">
+            <div>
+              <h2 id="agenda-track-setup-heading" className="text-base font-semibold text-ink">Tracks</h2>
+              <p className="mt-1 text-sm text-ink-secondary">Create program lanes and control their stable display order.</p>
+            </div>
+            {agenda.tracks.length > 0 && (
+              <ul className="divide-y divide-line rounded-control border border-line bg-surface">
+                {agenda.tracks.map((track) => (
+                  <li key={track.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-ink">{track.name}</p>
+                      <p className="text-xs text-ink-secondary">Order {track.order} · Version {track.version}{track.color ? ` · ${track.color}` : ""}</p>
+                    </div>
+                    <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => editTrack(track)}>Edit</Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form className="space-y-3 rounded-control border border-line bg-surface-muted p-4" onSubmit={(event) => void saveTrack(event)}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Input
+                  required
+                  label={trackDraft.id ? "Track name" : "New track name"}
+                  maxLength={120}
+                  value={trackDraft.name}
+                  onChange={(event) => setTrackDraft((current) => ({ ...current, name: event.target.value }))}
+                />
+                <Input
+                  label="Color (hex)"
+                  placeholder="#2563EB"
+                  value={trackDraft.color}
+                  onChange={(event) => setTrackDraft((current) => ({ ...current, color: event.target.value }))}
+                />
+                <Input
+                  required
+                  type="number"
+                  min={0}
+                  max={10_000}
+                  label="Display order"
+                  value={trackDraft.order}
+                  onChange={(event) => setTrackDraft((current) => ({ ...current, order: event.target.value }))}
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                {trackDraft.id && <Button type="button" variant="secondary" disabled={busy} onClick={() => setTrackDraft(emptyTrackDraft())}>Cancel edit</Button>}
+                <Button type="submit" loading={busy}>{trackDraft.id ? "Update track" : "Create track"}</Button>
+              </div>
+            </form>
+          </section>
+
+          <section aria-labelledby="agenda-room-setup-heading" className="space-y-4">
+            <div>
+              <h2 id="agenda-room-setup-heading" className="text-base font-semibold text-ink">Rooms</h2>
+              <p className="mt-1 text-sm text-ink-secondary">Add physical or virtual spaces before scheduling talks.</p>
+            </div>
+            {agenda.rooms.length > 0 && (
+              <ul className="divide-y divide-line rounded-control border border-line bg-surface">
+                {agenda.rooms.map((room) => (
+                  <li key={room.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-ink">{room.name}</p>
+                      <p className="text-xs text-ink-secondary">Order {room.order} · Version {room.version}{room.capacity === null ? "" : ` · ${room.capacity} seats`}</p>
+                    </div>
+                    <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => editRoom(room)}>Edit</Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form className="space-y-3 rounded-control border border-line bg-surface-muted p-4" onSubmit={(event) => void saveRoom(event)}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Input
+                  required
+                  label={roomDraft.id ? "Room name" : "New room name"}
+                  maxLength={120}
+                  value={roomDraft.name}
+                  onChange={(event) => setRoomDraft((current) => ({ ...current, name: event.target.value }))}
+                />
+                <Input
+                  type="number"
+                  min={1}
+                  max={1_000_000}
+                  label="Capacity"
+                  hint="Optional"
+                  value={roomDraft.capacity}
+                  onChange={(event) => setRoomDraft((current) => ({ ...current, capacity: event.target.value }))}
+                />
+                <Input
+                  required
+                  type="number"
+                  min={0}
+                  max={10_000}
+                  label="Display order"
+                  value={roomDraft.order}
+                  onChange={(event) => setRoomDraft((current) => ({ ...current, order: event.target.value }))}
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                {roomDraft.id && <Button type="button" variant="secondary" disabled={busy} onClick={() => setRoomDraft(emptyRoomDraft())}>Cancel edit</Button>}
+                <Button type="submit" loading={busy}>{roomDraft.id ? "Update room" : "Create room"}</Button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </Sheet>
 
       <Sheet
         open={selectedTalk !== null}

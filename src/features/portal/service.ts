@@ -9,17 +9,19 @@ import {
   auditLog,
   domainChanges,
   events,
+  formVersionFields,
   idempotencyRecords,
   integrations,
   pages,
   speakerProvisioning,
   speakers,
+  submissionAnswers,
   submissionSpeakers,
   submissions,
   taskCompletions,
   tasks,
 } from "contracts/schema";
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import type { BatchItem } from "drizzle-orm/batch";
 import { nanoid } from "nanoid";
@@ -30,6 +32,9 @@ import {
   UploadPortalAssetOutput as UploadPortalAssetOutputSchema,
   type CreateResourceInput,
   type CreateTaskInput,
+  ClaimSpeakerOutput as ClaimSpeakerOutputSchema,
+  type ClaimSpeakerInput,
+  type ClaimSpeakerOutput,
   type DeletePortalEntityOutput,
   type DeleteResourceInput,
   type DeleteTaskInput,
@@ -683,6 +688,447 @@ export const getPortalDashboard = (input: { readonly eventId: string }): Effect.
     tasksTotal: total.tasksTotal + item.readiness.tasksTotal,
   }), { speakers: 0, ready: 0, tasksDone: 0, tasksTotal: 0 });
   return { event: directory.event, speakers: directory.speakers, totals };
+});
+
+const normalizedEmail = (value: string): string => value.trim().toLowerCase();
+
+export interface ClaimSpeakerTestHooks {
+  readonly beforeCommit?: () => Promise<void>;
+}
+
+export const claimSpeaker = (
+  input: ClaimSpeakerInput,
+  testHooks?: ClaimSpeakerTestHooks,
+): Effect.Effect<ClaimSpeakerOutput, AppError, Db | CurrentUser> => Effect.gen(function* () {
+  const event = yield* resolveEvent(input.eventId);
+  const principal = yield* CurrentUser;
+  if (principal.kind !== "browser-session") {
+    return yield* Effect.fail(
+      new Forbidden({ reason: "Speaker account claims require a browser session" }),
+    );
+  }
+  const email = normalizedEmail(principal.email);
+  if (email.length === 0) {
+    return yield* Effect.fail(new Forbidden({ reason: "The signed-in account has no email" }));
+  }
+  const actor: PrincipalActor = {
+    userId: principal.userId,
+    actorUserId: principal.userId,
+    actorApiKeyId: null,
+  };
+  const { db } = yield* Db;
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const replay = yield* findReplay(
+    event.id,
+    "portal.claimSpeaker",
+    actor.userId,
+    keyHash,
+    requestHash,
+  );
+  if (replay !== null) return yield* decodeReplay(ClaimSpeakerOutputSchema, replay);
+
+  const acceptedRows = yield* database(() => db
+    .select({
+      acceptance: acceptanceEvents,
+      provisioning: speakerProvisioning,
+      speaker: speakers,
+      answer: submissionAnswers,
+    })
+    .from(acceptanceEvents)
+    .innerJoin(speakerProvisioning, and(
+      eq(speakerProvisioning.eventId, acceptanceEvents.eventId),
+      eq(speakerProvisioning.acceptanceEventId, acceptanceEvents.id),
+    ))
+    .innerJoin(speakers, and(
+      eq(speakers.eventId, acceptanceEvents.eventId),
+      eq(speakers.id, acceptanceEvents.primarySpeakerId),
+    ))
+    .innerJoin(submissions, and(
+      eq(submissions.eventId, acceptanceEvents.eventId),
+      eq(submissions.id, acceptanceEvents.submissionId),
+      eq(submissions.status, "accepted"),
+    ))
+    .innerJoin(submissionAnswers, and(
+      eq(submissionAnswers.eventId, submissions.eventId),
+      eq(submissionAnswers.submissionId, submissions.id),
+      eq(submissionAnswers.formVersionId, submissions.formVersionId),
+    ))
+    .innerJoin(formVersionFields, and(
+      eq(formVersionFields.eventId, submissionAnswers.eventId),
+      eq(formVersionFields.formVersionId, submissionAnswers.formVersionId),
+      eq(formVersionFields.id, submissionAnswers.formVersionFieldId),
+      eq(formVersionFields.semanticKey, "speakerEmail"),
+    ))
+    .where(and(
+      eq(acceptanceEvents.eventId, event.id),
+      eq(acceptanceEvents.type, "accepted"),
+      sql`not exists (
+        select 1
+        from acceptance_events as newer_acceptance
+        where newer_acceptance.event_id = ${acceptanceEvents.eventId}
+          and newer_acceptance.submission_id = ${acceptanceEvents.submissionId}
+          and (
+            newer_acceptance.occurred_at > ${acceptanceEvents.occurredAt}
+            or (
+              newer_acceptance.occurred_at = ${acceptanceEvents.occurredAt}
+              and newer_acceptance.id > ${acceptanceEvents.id}
+            )
+          )
+      )`,
+    ))
+    .orderBy(desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id)));
+
+  const latestBySpeaker = new Map<string, (typeof acceptedRows)[number]>();
+  for (const candidate of acceptedRows) {
+    if (!latestBySpeaker.has(candidate.speaker.id)) {
+      latestBySpeaker.set(candidate.speaker.id, candidate);
+    }
+  }
+  const matches = [...latestBySpeaker.values()].filter(({ answer }) =>
+    typeof answer.value === "string" && normalizedEmail(answer.value) === email
+  );
+  if (matches.length === 0) {
+    return yield* Effect.fail(
+      new Forbidden({ reason: "No current accepted primary speaker matches this account email" }),
+    );
+  }
+  if (matches.length > 1) {
+    return yield* Effect.fail(
+      new Conflict({ message: "More than one accepted speaker matches this account; contact the event organizer" }),
+    );
+  }
+  const row = matches[0]!;
+  if (row.speaker.userId !== null && row.speaker.userId !== actor.userId) {
+    return yield* Effect.fail(
+      new Conflict({ message: "This accepted speaker is already linked to another account" }),
+    );
+  }
+  if (
+    row.speaker.userId === actor.userId &&
+    (row.provisioning.status === "claimed" || row.provisioning.status === "provisioned")
+  ) {
+    return {
+      eventId: event.id,
+      speakerId: row.speaker.id,
+      acceptanceEventId: row.acceptance.id,
+      provisioningId: row.provisioning.id,
+      speakerVersion: row.speaker.version,
+      provisioningVersion: row.provisioning.version,
+      provisioningStatus: row.provisioning.status,
+    };
+  }
+  if (row.provisioning.status !== "pending" && row.provisioning.status !== "retry") {
+    return yield* Effect.fail(
+      new Conflict({ message: "This accepted speaker claim is not available" }),
+    );
+  }
+
+  const claimedAt = now();
+  const nextSpeakerVersion = row.speaker.userId === null
+    ? row.speaker.version + 1
+    : row.speaker.version;
+  const nextProvisioningVersion = row.provisioning.version + 1;
+  const result: ClaimSpeakerOutput = {
+    eventId: event.id,
+    speakerId: row.speaker.id,
+    acceptanceEventId: row.acceptance.id,
+    provisioningId: row.provisioning.id,
+    speakerVersion: nextSpeakerVersion,
+    provisioningVersion: nextProvisioningVersion,
+    provisioningStatus: "claimed",
+  };
+  const idempotency = idempotencyInsert(
+    event.id,
+    "portal.claimSpeaker",
+    actor.userId,
+    keyHash,
+    requestHash,
+    claimedAt,
+  );
+  const requestId = id("portal_request");
+  const change = writeChange(
+    event.id,
+    "speakerProvisioning",
+    row.provisioning.id,
+    nextProvisioningVersion,
+    "portal.speaker.claimed",
+    {
+      acceptanceEventId: row.acceptance.id,
+      provisioningId: row.provisioning.id,
+      speakerId: row.speaker.id,
+      userId: actor.userId,
+    },
+    actor,
+    claimedAt,
+    requestId,
+    idempotency.id,
+  );
+  const currentAcceptanceGuard = sql`exists (
+    select 1
+    from acceptance_events as claim_acceptance
+    inner join submissions as claim_submission
+      on claim_submission.event_id = claim_acceptance.event_id
+      and claim_submission.id = claim_acceptance.submission_id
+    inner join submission_answers as claim_answer
+      on claim_answer.event_id = claim_submission.event_id
+      and claim_answer.submission_id = claim_submission.id
+      and claim_answer.form_version_id = claim_submission.form_version_id
+    inner join form_version_fields as claim_field
+      on claim_field.event_id = claim_answer.event_id
+      and claim_field.form_version_id = claim_answer.form_version_id
+      and claim_field.id = claim_answer.form_version_field_id
+    where claim_acceptance.event_id = ${event.id}
+      and claim_acceptance.id = ${row.acceptance.id}
+      and claim_acceptance.submission_id = ${row.acceptance.submissionId}
+      and claim_acceptance.primary_speaker_id = ${row.speaker.id}
+      and claim_acceptance.type = 'accepted'
+      and claim_submission.status = 'accepted'
+      and claim_answer.id = ${row.answer.id}
+      and claim_answer.version = ${row.answer.version}
+      and claim_field.semantic_key = 'speakerEmail'
+      and json_type(claim_answer.value) = 'text'
+      and lower(trim(json_extract(claim_answer.value, '$'))) = ${email}
+      and not exists (
+        select 1
+        from acceptance_events as newer_acceptance
+        where newer_acceptance.event_id = claim_acceptance.event_id
+          and newer_acceptance.submission_id = claim_acceptance.submission_id
+          and (
+            newer_acceptance.occurred_at > claim_acceptance.occurred_at
+            or (
+              newer_acceptance.occurred_at = claim_acceptance.occurred_at
+              and newer_acceptance.id > claim_acceptance.id
+            )
+          )
+      )
+      and not exists (
+        select 1
+        from acceptance_events as later_current_acceptance
+        inner join submissions as later_current_submission
+          on later_current_submission.event_id = later_current_acceptance.event_id
+          and later_current_submission.id = later_current_acceptance.submission_id
+          and later_current_submission.status = 'accepted'
+        where later_current_acceptance.event_id = claim_acceptance.event_id
+          and later_current_acceptance.primary_speaker_id = claim_acceptance.primary_speaker_id
+          and later_current_acceptance.type = 'accepted'
+          and (
+            later_current_acceptance.occurred_at > claim_acceptance.occurred_at
+            or (
+              later_current_acceptance.occurred_at = claim_acceptance.occurred_at
+              and later_current_acceptance.id > claim_acceptance.id
+            )
+          )
+          and not exists (
+            select 1
+            from acceptance_events as superseding_later_acceptance
+            where superseding_later_acceptance.event_id = later_current_acceptance.event_id
+              and superseding_later_acceptance.submission_id = later_current_acceptance.submission_id
+              and (
+                superseding_later_acceptance.occurred_at > later_current_acceptance.occurred_at
+                or (
+                  superseding_later_acceptance.occurred_at = later_current_acceptance.occurred_at
+                  and superseding_later_acceptance.id > later_current_acceptance.id
+                )
+              )
+          )
+      )
+  )`;
+  const provisioningGuard = and(
+    eq(speakerProvisioning.eventId, event.id),
+    eq(speakerProvisioning.id, row.provisioning.id),
+    eq(speakerProvisioning.acceptanceEventId, row.acceptance.id),
+    eq(speakerProvisioning.primarySpeakerId, row.speaker.id),
+    eq(speakerProvisioning.version, row.provisioning.version),
+    inArray(speakerProvisioning.status, ["pending", "retry"]),
+    currentAcceptanceGuard,
+    sql`exists (
+      select 1 from speakers as claimed_speaker
+      where claimed_speaker.event_id = ${event.id}
+        and claimed_speaker.id = ${row.speaker.id}
+        and claimed_speaker.user_id = ${actor.userId}
+        and claimed_speaker.version = ${nextSpeakerVersion}
+    )`,
+  );
+  const committedGuard = and(
+    eq(speakerProvisioning.eventId, event.id),
+    eq(speakerProvisioning.id, row.provisioning.id),
+    eq(speakerProvisioning.acceptanceEventId, row.acceptance.id),
+    eq(speakerProvisioning.primarySpeakerId, row.speaker.id),
+    eq(speakerProvisioning.version, nextProvisioningVersion),
+    eq(speakerProvisioning.status, "claimed"),
+    eq(speakers.eventId, event.id),
+    eq(speakers.id, row.speaker.id),
+    eq(speakers.userId, actor.userId),
+    eq(speakers.version, nextSpeakerVersion),
+    currentAcceptanceGuard,
+  );
+  const completedIdempotency = db.insert(idempotencyRecords).select(
+    db.select({
+      id: sql<string>`${idempotency.id}`.as("id"),
+      eventId: sql<string>`${idempotency.eventId}`.as("event_id"),
+      operationId: sql<string>`${idempotency.operationId}`.as("operation_id"),
+      principalId: sql<string>`${idempotency.principalId}`.as("principal_id"),
+      keyHash: sql<string>`${idempotency.keyHash}`.as("key_hash"),
+      requestHash: sql<string>`${idempotency.requestHash}`.as("request_hash"),
+      status: sql<"completed">`'completed'`.as("status"),
+      responseStatus: sql<number>`200`.as("response_status"),
+      responseBody: sql<ClaimSpeakerOutput>`${JSON.stringify(result)}`.as("response_body"),
+      expiresAt: sql<Date>`${idempotency.expiresAt.getTime()}`.as("expires_at"),
+      completedAt: sql<Date>`${claimedAt.getTime()}`.as("completed_at"),
+      createdAt: sql<Date>`${claimedAt.getTime()}`.as("created_at"),
+    })
+      .from(speakerProvisioning)
+      .innerJoin(speakers, and(
+        eq(speakers.eventId, speakerProvisioning.eventId),
+        eq(speakers.id, speakerProvisioning.primarySpeakerId),
+      ))
+      .where(committedGuard),
+  );
+  const claimChange = db.insert(domainChanges).select(
+    db.select(changeSelection(change))
+      .from(speakerProvisioning)
+      .innerJoin(speakers, and(
+        eq(speakers.eventId, speakerProvisioning.eventId),
+        eq(speakers.id, speakerProvisioning.primarySpeakerId),
+      ))
+      .where(committedGuard),
+  );
+  const claimAudit = db.insert(auditLog).select(
+    db.select({
+      id: sql<string>`${id("audit")}`.as("id"),
+      eventId: sql<string>`${event.id}`.as("event_id"),
+      requestId: sql<string>`${requestId}`.as("request_id"),
+      actorUserId: sql<string | null>`${actor.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+      action: sql<string>`'portal.speaker.claimed'`.as("action"),
+      resourceType: sql<string>`'speaker'`.as("resource_type"),
+      resourceId: sql<string>`${row.speaker.id}`.as("resource_id"),
+      before: sql<Record<string, unknown>>`${JSON.stringify({
+        userId: row.speaker.userId,
+        speakerVersion: row.speaker.version,
+        provisioningStatus: row.provisioning.status,
+        provisioningVersion: row.provisioning.version,
+      })}`.as("before"),
+      after: sql<Record<string, unknown>>`${JSON.stringify({
+        userId: actor.userId,
+        speakerVersion: nextSpeakerVersion,
+        provisioningStatus: "claimed",
+        provisioningVersion: nextProvisioningVersion,
+      })}`.as("after"),
+      metadata: sql<null>`null`.as("metadata"),
+      occurredAt: sql<Date>`${claimedAt.getTime()}`.as("occurred_at"),
+    })
+      .from(speakerProvisioning)
+      .innerJoin(speakers, and(
+        eq(speakers.eventId, speakerProvisioning.eventId),
+        eq(speakers.id, speakerProvisioning.primarySpeakerId),
+      ))
+      .where(committedGuard),
+  );
+  const transitionProvisioning = db.update(speakerProvisioning)
+    .set({
+      status: "claimed",
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastError: null,
+      version: nextProvisioningVersion,
+      updatedAt: claimedAt,
+    })
+    .where(provisioningGuard)
+    .returning({ id: speakerProvisioning.id });
+
+  if (testHooks?.beforeCommit) yield* Effect.promise(testHooks.beforeCommit);
+  const commit = row.speaker.userId === null
+    ? yield* database(() => db.batch([
+      db.update(speakers)
+        .set({
+          userId: actor.userId,
+          version: nextSpeakerVersion,
+          updatedAt: claimedAt,
+        })
+        .where(and(
+          eq(speakers.eventId, event.id),
+          eq(speakers.id, row.speaker.id),
+          eq(speakers.version, row.speaker.version),
+          isNull(speakers.userId),
+          sql`exists (
+            select 1 from speaker_provisioning as claim_provisioning
+            where claim_provisioning.event_id = ${event.id}
+              and claim_provisioning.id = ${row.provisioning.id}
+              and claim_provisioning.acceptance_event_id = ${row.acceptance.id}
+              and claim_provisioning.primary_speaker_id = ${row.speaker.id}
+              and claim_provisioning.version = ${row.provisioning.version}
+              and claim_provisioning.status in ('pending', 'retry')
+          )`,
+          currentAcceptanceGuard,
+        ))
+        .returning({ id: speakers.id }),
+      transitionProvisioning,
+      completedIdempotency,
+      claimChange,
+      claimAudit,
+    ])).pipe(Effect.either)
+    : yield* database(() => db.batch([
+      transitionProvisioning,
+      completedIdempotency,
+      claimChange,
+      claimAudit,
+    ])).pipe(Effect.either);
+
+  if (commit._tag === "Left") {
+    if (
+      commit.left.detail?.includes("idempotency_key_unique") === true ||
+      commit.left.detail?.includes("UNIQUE constraint failed: idempotency_records") === true
+    ) {
+      const racedReplay = yield* findReplay(
+        event.id,
+        "portal.claimSpeaker",
+        actor.userId,
+        keyHash,
+        requestHash,
+      );
+      if (racedReplay !== null) {
+        return yield* decodeReplay(ClaimSpeakerOutputSchema, racedReplay);
+      }
+    }
+  }
+
+  const [current] = yield* database(() => db
+    .select({ speaker: speakers, provisioning: speakerProvisioning })
+    .from(speakers)
+    .innerJoin(speakerProvisioning, and(
+      eq(speakerProvisioning.eventId, speakers.eventId),
+      eq(speakerProvisioning.primarySpeakerId, speakers.id),
+      eq(speakerProvisioning.id, row.provisioning.id),
+    ))
+    .where(and(
+      eq(speakers.eventId, event.id),
+      eq(speakers.id, row.speaker.id),
+    ))
+    .limit(1));
+  if (current?.speaker.userId !== null && current?.speaker.userId !== actor.userId) {
+    return yield* Effect.fail(
+      new Conflict({ message: "This accepted speaker is already linked to another account" }),
+    );
+  }
+  if (
+    current?.speaker.userId === actor.userId &&
+    (current.provisioning.status === "claimed" || current.provisioning.status === "provisioned")
+  ) {
+    return {
+      eventId: event.id,
+      speakerId: current.speaker.id,
+      acceptanceEventId: current.provisioning.acceptanceEventId,
+      provisioningId: current.provisioning.id,
+      speakerVersion: current.speaker.version,
+      provisioningVersion: current.provisioning.version,
+      provisioningStatus: current.provisioning.status,
+    };
+  }
+  if (commit._tag === "Left") return yield* Effect.fail(commit.left);
+  return yield* Effect.fail(
+    new Conflict({ message: "The accepted speaker claim changed; retry from the latest event state" }),
+  );
 });
 
 export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.Effect<PortalSnapshot, AppError, Db | CurrentUser | Files> => Effect.gen(function* () {

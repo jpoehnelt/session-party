@@ -9,6 +9,7 @@ const EventSlug = Schema.String.pipe(
   Schema.pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
 );
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(200));
+const TurnstileToken = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(2_048));
 const NullableText = Schema.NullOr(Schema.String);
 
 export const SubmissionStatus = Schema.Literal(
@@ -58,6 +59,8 @@ export const PublicSubmissionForm = Schema.Struct({
     closesAt: Schema.NullOr(UnixTimestampMs),
     fields: Schema.Array(PublicFormField),
   }),
+  /** Public site keys are safe to render; the secret stays only in AppLayer. */
+  turnstileSiteKey: Schema.optional(Schema.NullOr(Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200)))),
 });
 export type PublicSubmissionForm = typeof PublicSubmissionForm.Type;
 
@@ -77,6 +80,8 @@ export const CreatePublicSubmissionInput = Schema.Struct({
   eventSlug: EventSlug,
   formId: EntityId,
   idempotencyKey: IdempotencyKey,
+  /** Omitted only for a known idempotent replay; fresh production writes fail closed. */
+  turnstileToken: Schema.optional(TurnstileToken),
   answers: Schema.Array(SubmissionAnswer),
 });
 export type CreatePublicSubmissionInput = typeof CreatePublicSubmissionInput.Type;

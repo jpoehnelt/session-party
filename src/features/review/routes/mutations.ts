@@ -2,11 +2,15 @@ import { ApiError } from "@/client/api";
 import { Schema } from "effect";
 import {
   AcceptSubmissionOutput,
+  AdvanceReviewRoundOutput,
   AssignReviewerOutput,
+  CreateReviewRoundOutput,
   RequestAiSuggestionOutput,
   SaveScoreOutput,
   type AcceptSubmissionInput,
+  type AdvanceReviewRoundInput,
   type AssignReviewerInput,
+  type CreateReviewRoundInput,
   type RequestAiSuggestionInput,
   type SaveScoreInput,
 } from "../schema";
@@ -74,6 +78,37 @@ export function assignReviewerRequest(input: AssignReviewerInput) {
       expectedVersion: input.expectedVersion,
     },
     schema: AssignReviewerOutput,
+  });
+}
+
+export function createReviewRoundRequest(input: CreateReviewRoundInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/rounds`,
+    method: "POST",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: {
+      name: input.name,
+      initialStatus: input.initialStatus,
+      rubric: input.rubric,
+      expectedRoundCount: input.expectedRoundCount,
+    },
+    schema: CreateReviewRoundOutput,
+  });
+}
+
+export function advanceReviewRoundRequest(input: AdvanceReviewRoundInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/rounds/${segment(input.roundId)}/advance`,
+    method: "POST",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: {
+      expectedVersion: input.expectedVersion,
+      nextRoundId: input.nextRoundId,
+      expectedNextVersion: input.expectedNextVersion,
+    },
+    schema: AdvanceReviewRoundOutput,
   });
 }
 

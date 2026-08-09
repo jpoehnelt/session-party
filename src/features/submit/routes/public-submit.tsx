@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject } from "react";
 import { useParams } from "react-router";
 import type { AnswerValue } from "contracts/types";
 import { Schema } from "effect";
@@ -43,6 +43,7 @@ export async function postPublicSubmission(
   formId: string,
   idempotencyKey: string,
   answers: Readonly<Record<string, AnswerValue>>,
+  turnstileToken: string,
 ): Promise<typeof CreatePublicSubmissionOutput.Type> {
   const response = await fetch(
     `/api/v1/public/events/${encodeURIComponent(eventSlug)}/forms/${encodeURIComponent(formId)}/submissions`,
@@ -54,6 +55,7 @@ export async function postPublicSubmission(
     },
     body: JSON.stringify({
       answers: Object.entries(answers).map(([fieldId, value]) => ({ fieldId, value })),
+      turnstileToken,
     }),
     },
   );
@@ -211,6 +213,70 @@ export interface PublicSubmitPageProps {
   readonly initialSuccess?: typeof CreatePublicSubmissionOutput.Type | null;
 }
 
+type TurnstileApi = {
+  render: (container: HTMLElement, options: {
+    readonly sitekey: string;
+    readonly action: string;
+    readonly callback: (token: string) => void;
+    readonly "expired-callback": () => void;
+    readonly "error-callback": () => void;
+  }) => string;
+  reset: (widgetId?: string) => void;
+  remove: (widgetId: string) => void;
+};
+
+declare global {
+  interface Window { turnstile?: TurnstileApi }
+}
+
+function TurnstileChallenge({
+  siteKey,
+  disabled,
+  onToken,
+  onUnavailable,
+  widgetIdRef,
+}: {
+  readonly siteKey: string | null;
+  readonly disabled: boolean;
+  readonly onToken: (token: string | null) => void;
+  readonly onUnavailable: () => void;
+  readonly widgetIdRef: MutableRefObject<string | null>;
+}) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!siteKey || !mountRef.current) return;
+    let mounted = true;
+    const render = () => {
+      if (!mounted || !mountRef.current || !window.turnstile) return;
+      widgetIdRef.current = window.turnstile.render(mountRef.current, {
+        sitekey: siteKey,
+        action: "cfp-submit",
+        callback: (token) => onToken(token),
+        "expired-callback": () => onToken(null),
+        "error-callback": () => { onToken(null); onUnavailable(); },
+      });
+    };
+    if (window.turnstile) render();
+    else {
+      const script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+      script.onload = render;
+      script.onerror = onUnavailable;
+      document.head.append(script);
+    }
+    return () => {
+      mounted = false;
+      if (widgetIdRef.current) window.turnstile?.remove(widgetIdRef.current);
+      widgetIdRef.current = null;
+    };
+  }, [onToken, onUnavailable, siteKey, widgetIdRef]);
+  if (!siteKey) {
+    return <Alert tone="danger"><AlertTitle>Human verification unavailable</AlertTitle><AlertDescription>Please try again later.</AlertDescription></Alert>;
+  }
+  return <div aria-label="Human verification" aria-disabled={disabled} ref={mountRef} />;
+}
+
 export default function PublicSubmitPage({ initialForm, initialSuccess = null }: PublicSubmitPageProps) {
   const { eventSlug = "", formId = "" } = useParams();
   const [form, setForm] = useState<PublicSubmissionFormValue | null | undefined>(initialForm);
@@ -220,6 +286,10 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [success, setSuccess] = useState<typeof CreatePublicSubmissionOutput.Type | null>(initialSuccess);
   const idempotencyKey = useRef(crypto.randomUUID());
+  const widgetId = useRef<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileUnavailable, setTurnstileUnavailable] = useState(false);
+  const markTurnstileUnavailable = useCallback(() => setTurnstileUnavailable(true), []);
 
   useEffect(() => {
     if (initialForm !== undefined) return;
@@ -245,7 +315,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!form || form.form.availability !== "open" || submitting) return;
+    if (!form || form.form.availability !== "open" || submitting || !turnstileToken) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -255,10 +325,13 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
         formId,
         idempotencyKey.current,
         Object.fromEntries(Object.entries(answers).filter(([fieldId]) => activeIds.has(fieldId))),
+        turnstileToken,
       );
       setSuccess(result);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Could not submit this form");
+      setTurnstileToken(null);
+      if (widgetId.current) window.turnstile?.reset(widgetId.current);
     } finally {
       setSubmitting(false);
     }
@@ -288,6 +361,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   }
 
   const accepting = form.form.availability === "open";
+  const canSubmit = accepting && !!form.turnstileSiteKey && !!turnstileToken && !turnstileUnavailable;
   return (
     <main className="mx-auto max-w-2xl space-y-6 px-4 py-10">
       <header className="space-y-2">
@@ -316,13 +390,22 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
               onChange={(value) => setAnswers((current) => ({ ...current, [field.id]: value }))}
             />
           ))}
+          {accepting && (
+            <TurnstileChallenge
+              siteKey={form.turnstileSiteKey ?? null}
+              disabled={submitting}
+              onToken={setTurnstileToken}
+              onUnavailable={markTurnstileUnavailable}
+              widgetIdRef={widgetId}
+            />
+          )}
           {submitError && (
             <Alert tone="danger">
               <AlertTitle>Submission not saved</AlertTitle>
               <AlertDescription>{submitError}</AlertDescription>
             </Alert>
           )}
-          {accepting && <Button type="submit" disabled={submitting}>{submitting ? "Submitting…" : "Submit proposal"}</Button>}
+          {accepting && <Button type="submit" disabled={submitting || !canSubmit}>{submitting ? "Submitting…" : "Submit proposal"}</Button>}
         </form>
       </Card>
     </main>
