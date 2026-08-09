@@ -829,9 +829,9 @@ Logical topology, field authority, and connector metadata are resolved. Physical
 
 ## Current repository state
 
-Current `main` is `35eb43657bd00a3b08de1b60d5711ad4c8cac121`, containing the forms/seed repair, event settings route, and Cloudflare Email cutover through migration `0002_empty_hulk.sql`. Exact-main CI is green. No post-cutover production deployment or remote migration has been authorized or observed.
+Current `main` is `05771933fc0e856353c317aa103dee1e15d32e74`, containing the forms/seed repair, event settings route, Cloudflare Email cutover through migration `0002_empty_hulk.sql`, and audited tab/mobile publication/forms landmark repairs. Exact-main CI is green. No post-cutover production deployment or remote migration has been authorized or observed.
 
-The active dependency train is PRs #16–#19: Accelevents import, public speaker/schedule outputs, public submission producer, and communications. Each must rebase onto current main, regenerate shared artifacts through Main, pass current-head CI, and prove its brief workflow rather than only route/configuration presence.
+The active dependency train is PRs #16–#19 and #22: Accelevents import, schedule publication, public submission producer, communications, and the speaker portal/public speaker projection. Each must rebase onto current main, regenerate shared artifacts through Main only when promoted, pass current-head CI, and prove its brief workflow rather than only route/configuration presence.
 
 Production still serves the previously deployed green revision. External deployment, remote migration, live email, credentials, routes, and DNS remain separately authorization-gated.
 
@@ -849,4 +849,4 @@ Heartbeat `11747f36` sends a status report every 30 minutes through August 13. E
 
 ## Immediate integration path
 
-Keep four implementation lanes parallel—communications/outbox/ICS, coherent portal/tasks/resources, public speaker/schedule outputs, and Accelevents one-way import—while Main integrates one exact green head at a time. Then integrate the public submission producer, regenerate centrally, run one full deterministic walkthrough (`CFP → review/accept → portal onboarding → agenda/conflict → reminder+ICS → public outputs → Accelevents import`), and request separate deployment authorization. Dashboard aggregation, admin CMS/embed authoring, and Airtable synchronization follow only after that path is green.
+Keep feature-local repairs parallel, but integrate operation-bearing candidates serially from one exact green base: first PR #18, the anonymous public submission producer; then PR #16, whose Accelevents import must reuse the canonical submission/speaker/talk invariants; then schedule-only PR #17 and the truthfully bounded PR #22 portal/public-speaker projection in the order they become green; and finally PR #19 communications after confirmed agenda and portal producer contracts exist. Main alone regenerates shared artifacts on each promoted integration head. Then run one full deterministic walkthrough (`CFP → submit → review/accept → portal onboarding → agenda/conflict → reminder+ICS → public outputs → Accelevents import`) and request separate deployment authorization. Dashboard aggregation, admin CMS/embed authoring, and Airtable synchronization follow only after that path is green.
