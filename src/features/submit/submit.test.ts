@@ -462,28 +462,35 @@ describe("public submission creation", () => {
     await db.update(forms).set({ status: "open" }).where(eq(forms.id, RACE_FORM_ID));
   });
 
-  it("aborts every write when the close time passes between validation and commit", async () => {
+  it("aborts every write when an unchanged close time passes before commit", async () => {
     const db = drizzle(env.DB);
+    const closesAt = new Date(Date.now() + 500);
+    await db.update(forms).set({ closesAt }).where(eq(forms.id, RACE_FORM_ID));
+    let hookRan = false;
     const input = submissionInput("submit-race-closes-001", RACE_FORM_ID, "Expired before commit");
     const result = await runPublic(createPublicSubmission(input, {
       beforeCommit: async () => {
-        await db
-          .update(forms)
-          .set({ closesAt: new Date(Date.now() - 1_000) })
-          .where(eq(forms.id, RACE_FORM_ID));
+        hookRan = true;
+        // This integration check must advance D1's SQLite clock; fake JS timers do not affect SQL `now`.
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, Math.max(0, closesAt.getTime() - Date.now() + 100));
+        await promise;
       },
     }).pipe(Effect.either));
 
+    expect(hookRan).toBe(true);
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
       expect(result.left).toMatchObject({ _tag: "Validation", message: "This form is not accepting submissions." });
     }
-    const [created, evidence] = await Promise.all([
+    const [created, evidence, form] = await Promise.all([
       db.select().from(submissions).where(eq(submissions.formId, RACE_FORM_ID)),
       db.select().from(idempotencyRecords).where(eq(idempotencyRecords.principalId, `public-form:${RACE_FORM_ID}`)),
+      db.select({ closesAt: forms.closesAt }).from(forms).where(eq(forms.id, RACE_FORM_ID)).get(),
     ]);
     expect(created).toEqual([]);
     expect(evidence).toEqual([]);
+    expect(form?.closesAt?.getTime()).toBe(closesAt.getTime());
 
     await db.update(forms).set({ closesAt: null }).where(eq(forms.id, RACE_FORM_ID));
     const recovered = await runPublic(createPublicSubmission(

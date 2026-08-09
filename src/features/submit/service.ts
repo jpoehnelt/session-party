@@ -461,6 +461,7 @@ export const createPublicSubmission = (
     };
     const versionId = loaded.publicForm.form.versionId;
     const nowMs = now.getTime();
+    const commitNowMs = sql<Date>`CAST(unixepoch('subsec') * 1000 AS INTEGER)`;
     /**
      * The reservation re-evaluates published availability inside the commit, so a
      * concurrent close or retirement between the read and the write yields zero rows.
@@ -497,8 +498,8 @@ export const createPublicSubmission = (
           eq(forms.eventId, loaded.eventId),
           eq(forms.id, input.formId),
           eq(forms.status, "open"),
-          or(isNull(forms.opensAt), lte(forms.opensAt, now)),
-          or(isNull(forms.closesAt), gt(forms.closesAt, now)),
+          or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
+          or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
         )),
     );
     /** Every dependent write selects the reserved row, so an unavailable form writes nothing. */
