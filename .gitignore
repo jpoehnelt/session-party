@@ -1,6 +1,14 @@
 node_modules/
 dist/
 storybook-static/
+screenshots/
+screenshots-pages/
+.reg/
+.reg-pages/
+.regconfig.storybook.json
+.regconfig.pages.json
+playwright-report/
+test-results/
 .wrangler/
 .dev.vars
 *.tsbuildinfo
