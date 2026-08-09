@@ -13,6 +13,12 @@ Open-source Sessionboard replacement (Cloudflare Workers + Effect + PartyServer 
 - FROZEN, integrator-only: `contracts/`, `migrations/`, `src/ui/`, `src/server/`, `src/client/`, root configs. Never edit these; if a schema/contract gap blocks you, report it and continue with what's buildable.
 - Never hand-edit `src/server/registry.gen.ts` — run `pnpm gen`.
 
+### Delivery
+
+- Once an implementation branch has one coherent, focused commit, its agent pushes the branch and opens a ready pull request against `main`.
+- The coordinator owns root-config integration, review, sequencing, and merges.
+- Merge green pull requests one at a time; update the next branch from `main` before its final validation.
+
 ### Conventions
 
 - Server code is **Effect v3**: validate all external input with `effect/Schema` (`contracts/types.ts`), fail with tagged errors from `contracts/errors.ts` only, obtain capabilities via services from `src/server/services.ts`. Copy patterns from the canonical slice `src/features/events/` — do not invent Effect idioms.
