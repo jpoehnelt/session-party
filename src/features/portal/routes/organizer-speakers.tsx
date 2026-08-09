@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useParams } from "react-router";
-import { Avatar, Badge, Button, Checkbox, ReadinessThread, Table, Toaster, toast } from "@/ui";
+import { useMemo, useState } from "react";
+import { Link, useParams } from "react-router";
+import { Avatar, Badge, Button, Checkbox, Input, ReadinessThread, Select, Table, Toaster, toast } from "@/ui";
 import type { SpeakerDirectory, SpeakerDirectoryItem } from "../schema";
 import { getSpeakerDirectory, provisionSpeaker, updateSpeakerPublication } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
@@ -13,6 +13,34 @@ import {
 } from "../components/production-ui";
 
 export const path = "/e/:eventSlug/speakers";
+
+const SPEAKERS_PER_PAGE = 25;
+
+type SpeakerDirectoryFilter = "all" | "needs_attention" | "ready" | "unprovisioned" | "hidden";
+
+export function filterSpeakerDirectory(
+  speakers: readonly SpeakerDirectoryItem[],
+  query: string,
+  filter: SpeakerDirectoryFilter,
+): readonly SpeakerDirectoryItem[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  return speakers.filter((item) => {
+    const matchesFilter = filter === "all"
+      || (filter === "needs_attention" && item.readiness.state !== "ready")
+      || (filter === "ready" && item.readiness.state === "ready")
+      || (filter === "unprovisioned" && item.provisioningStatus !== "provisioned")
+      || (filter === "hidden" && !item.speaker.visible);
+    if (!matchesFilter) return false;
+    if (!normalizedQuery) return true;
+    return [
+      item.speaker.displayName,
+      item.speaker.title,
+      item.speaker.company,
+      item.submission?.title,
+      item.submission?.category,
+    ].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
+  });
+}
 
 export default function OrganizerSpeakersRoute() {
   const { eventSlug = "" } = useParams();
@@ -81,9 +109,20 @@ export function OrganizerSpeakersContent({
   readonly onProvision: (speaker: SpeakerDirectoryItem) => void;
   readonly onVisibility: (speaker: SpeakerDirectoryItem, visible: boolean) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<SpeakerDirectoryFilter>("all");
+  const [page, setPage] = useState(1);
   const readyCount = directory.speakers.filter((item) => item.readiness.state === "ready").length;
   const provisionedCount = directory.speakers.filter((item) => item.provisioningStatus === "provisioned").length;
   const visibleCount = directory.speakers.filter((item) => item.speaker.visible).length;
+  const filteredSpeakers = useMemo(
+    () => filterSpeakerDirectory(directory.speakers, query, filter),
+    [directory.speakers, filter, query],
+  );
+  const pageCount = Math.max(1, Math.ceil(filteredSpeakers.length / SPEAKERS_PER_PAGE));
+  const currentPage = Math.min(page, pageCount);
+  const pageStart = (currentPage - 1) * SPEAKERS_PER_PAGE;
+  const visibleSpeakers = filteredSpeakers.slice(pageStart, pageStart + SPEAKERS_PER_PAGE);
   return (
     <div className="space-y-8">
       <ProductionHeader
@@ -107,9 +146,55 @@ export function OrganizerSpeakersContent({
       />
       <section aria-label="Speaker production directory">
         <ProductionSectionLabel>Speaker production directory</ProductionSectionLabel>
+        <div className="mb-4 grid gap-3 border-2 border-[#171714] bg-[#fffdf7] p-4 shadow-[4px_4px_0_#171714] sm:grid-cols-[minmax(0,1fr)_16rem]">
+          <Input
+            type="search"
+            label="Search speakers"
+            placeholder="Name, company, session, or category"
+            value={query}
+            onChange={(event) => {
+              setQuery(event.currentTarget.value);
+              setPage(1);
+            }}
+          />
+          <Select
+            label="Show"
+            value={filter}
+            onChange={(event) => {
+              setFilter(event.currentTarget.value as SpeakerDirectoryFilter);
+              setPage(1);
+            }}
+          >
+            <option value="all">All speakers</option>
+            <option value="needs_attention">Needs attention</option>
+            <option value="ready">Ready</option>
+            <option value="unprovisioned">Not provisioned</option>
+            <option value="hidden">Hidden from gallery</option>
+          </Select>
+        </div>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs font-bold text-[#4f4a40]">
+          <p role="status">
+            {filteredSpeakers.length === 0
+              ? "No matching speakers"
+              : `${pageStart + 1}–${Math.min(pageStart + SPEAKERS_PER_PAGE, filteredSpeakers.length)} of ${filteredSpeakers.length} matching speakers`}
+          </p>
+          {filteredSpeakers.length !== directory.speakers.length ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setQuery("");
+                setFilter("all");
+                setPage(1);
+              }}
+            >
+              Clear filters
+            </Button>
+          ) : null}
+        </div>
         <div className={productionTableClass}>
           <Table
-            rows={[...directory.speakers]}
+            rows={[...visibleSpeakers]}
             rowKey={(item) => item.speaker.id}
             empty="Accepted speakers will appear after provisioning begins."
             columns={[
@@ -133,7 +218,12 @@ export function OrganizerSpeakersContent({
             header: "Accepted session",
             render: (item) => item.submission ? (
               <div className="max-w-64">
-                <p className="font-medium text-ink">{item.submission.title}</p>
+                <Link
+                  className="font-black text-ink underline decoration-2 underline-offset-4 hover:text-accent-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  to={`/e/${encodeURIComponent(directory.event.slug)}/review?selectedSubmissionId=${encodeURIComponent(item.submission.id)}`}
+                >
+                  {item.submission.title}
+                </Link>
                 {item.submission.category && <p className="text-xs text-ink-faint">{item.submission.category}</p>}
               </div>
             ) : <span className="text-ink-faint">Not linked</span>,
@@ -196,6 +286,29 @@ export function OrganizerSpeakersContent({
             ]}
           />
         </div>
+        {pageCount > 1 ? (
+          <nav className="mt-5 flex items-center justify-between gap-4" aria-label="Speaker directory pages">
+            <Button
+              variant="secondary"
+              className={productionButtonClass}
+              disabled={currentPage === 1}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+            >
+              Previous
+            </Button>
+            <p className="text-xs font-black uppercase tracking-[0.12em] text-[#171714]">
+              Page {currentPage} of {pageCount}
+            </p>
+            <Button
+              variant="secondary"
+              className={productionButtonClass}
+              disabled={currentPage === pageCount}
+              onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+            >
+              Next
+            </Button>
+          </nav>
+        ) : null}
       </section>
     </div>
   );

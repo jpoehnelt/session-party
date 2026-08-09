@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server.edge";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ClaimSpeakerOutput,
@@ -36,7 +37,7 @@ import {
 } from "./api";
 import { path as dashboardPath, OrganizerDashboardContent } from "./organizer-dashboard";
 import { path as resourcesPath, OrganizerResourcesContent } from "./organizer-resources";
-import { path as speakersPath, OrganizerSpeakersContent } from "./organizer-speakers";
+import { filterSpeakerDirectory, path as speakersPath, OrganizerSpeakersContent } from "./organizer-speakers";
 import { path as tasksPath, OrganizerTasksContent } from "./organizer-tasks";
 import { layout as embedLayout, path as embedPath, PublicSpeakerEmbedContent } from "./public-speakers";
 import {
@@ -554,11 +555,13 @@ describe("speaker portal content", () => {
 
 describe("organizer content and workflows", () => {
   it("renders a dense speaker directory and readiness matrix from returned state", () => {
-    const speakersMarkup = renderToStaticMarkup(createElement(OrganizerSpeakersContent, {
-      directory,
-      onProvision: noop,
-      onVisibility: noop,
-    }));
+    const speakersMarkup = renderToStaticMarkup(createElement(MemoryRouter, null,
+      createElement(OrganizerSpeakersContent, {
+        directory,
+        onProvision: noop,
+        onVisibility: noop,
+      }),
+    ));
     expect(speakersMarkup).toContain("River Okafor");
     expect(speakersMarkup).toContain("The calm show call");
     expect(speakersMarkup).toContain("Public gallery");
@@ -566,6 +569,8 @@ describe("organizer content and workflows", () => {
     expect(speakersMarkup).toContain('aria-label="Speaker readiness"');
     expect(speakersMarkup).toContain("Outstanding task 1");
     expect(speakersMarkup).toContain("Provision");
+    expect(speakersMarkup).toContain("Search speakers");
+    expect(speakersMarkup).toContain(`/e/${event.slug}/review?selectedSubmissionId=${snapshot.submission!.id}`);
 
     const dashboardMarkup = renderToStaticMarkup(createElement(OrganizerDashboardContent, { dashboard }));
     expect(dashboardMarkup).toContain("Speaker readiness");
@@ -575,6 +580,44 @@ describe("organizer content and workflows", () => {
     expect(dashboardMarkup).toContain("Complete the speaker profile");
     expect(dashboardMarkup).toContain("Last contact");
     expect(dashboardMarkup).toContain("Log contact");
+  });
+
+  it("filters a large speaker directory by search text and operational state", () => {
+    const readySpeaker = {
+      ...directory.speakers[0]!,
+      speaker: { ...directory.speakers[0]!.speaker, id: "speaker-ready", displayName: "Ada Ready", visible: false },
+      provisioningStatus: "provisioned" as const,
+      readiness: { ...directory.speakers[0]!.readiness, state: "ready" as const },
+    };
+    const speakers = [directory.speakers[0]!, readySpeaker];
+    expect(filterSpeakerDirectory(speakers, "calm show", "all")).toHaveLength(2);
+    expect(filterSpeakerDirectory(speakers, "ada", "all")).toEqual([readySpeaker]);
+    expect(filterSpeakerDirectory(speakers, "", "needs_attention")).toEqual([directory.speakers[0]]);
+    expect(filterSpeakerDirectory(speakers, "", "ready")).toEqual([readySpeaker]);
+    expect(filterSpeakerDirectory(speakers, "", "unprovisioned")).toEqual([directory.speakers[0]]);
+    expect(filterSpeakerDirectory(speakers, "", "hidden")).toEqual([readySpeaker]);
+  });
+
+  it("caps the rendered speaker table at 25 rows and exposes pagination", () => {
+    const manySpeakers = Array.from({ length: 26 }, (_, index) => ({
+      ...directory.speakers[0]!,
+      speaker: {
+        ...directory.speakers[0]!.speaker,
+        id: `speaker-${index + 1}`,
+        displayName: `Speaker ${index + 1}`,
+      },
+    }));
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null,
+      createElement(OrganizerSpeakersContent, {
+        directory: { ...directory, speakers: manySpeakers },
+        onProvision: noop,
+        onVisibility: noop,
+      }),
+    ));
+    expect(markup).toContain("Speaker 25");
+    expect(markup).not.toContain("Speaker 26");
+    expect(markup).toContain("1–25 of 26 matching speakers");
+    expect(markup).toContain("Page 1 of 2");
   });
 
   it("uses provisioning concurrency separately from speaker publication concurrency", async () => {
