@@ -250,7 +250,16 @@ const sendServerMessage = (
     console.error(JSON.stringify({ message: "invalid outbound room message" }));
     return;
   }
-  connection.send(JSON.stringify(message));
+  if (connection.readyState !== WebSocket.OPEN) return;
+  try {
+    connection.send(JSON.stringify(message));
+  } catch (error) {
+    if (
+      connection.readyState === WebSocket.CLOSING
+      || connection.readyState === WebSocket.CLOSED
+    ) return;
+    throw error;
+  }
 };
 
 export class EventRoom extends Server<Env> {
