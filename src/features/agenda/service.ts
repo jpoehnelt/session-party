@@ -77,7 +77,6 @@ export interface AgendaPublicationReservation {
 export type AgendaPublicationInterlock = (
   reservation: AgendaPublicationReservation,
 ) => Effect.Effect<void, never>;
-
 const waitAfterWorkspaceSample = (
   interlock: AgendaMutationInterlock | undefined,
   reservation: AgendaMutationReservation,
@@ -384,7 +383,6 @@ const currentWorkspaceVersion = (eventId: string): Effect.Effect<number, AppErro
 
 const nextWorkspaceVersion = (eventId: string): Effect.Effect<number, AppError, Db> =>
   currentWorkspaceVersion(eventId).pipe(Effect.map((version) => version + 1));
-
 export const listAgenda = (
   input: ListAgendaInput,
 ): Effect.Effect<AgendaSnapshot, AppError, Db> =>

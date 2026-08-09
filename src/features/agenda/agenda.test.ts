@@ -122,7 +122,6 @@ const publicationBarrier = () => {
     });
   return { interlock, release, sampled };
 };
-
 interface SeedOptions {
   readonly scheduled?: boolean;
   readonly secondTalk?: boolean;
@@ -412,6 +411,7 @@ describe("agenda deterministic fixtures and descriptors", () => {
     expect(partyDescriptors[0].inputSchema.required).toContain("requestId");
     expect(partyDescriptors[0].inputSchema.required).not.toContain("eventId");
   });
+
 
 });
 
