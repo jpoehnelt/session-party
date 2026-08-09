@@ -50,7 +50,7 @@ const requestNonLocalLink = (
   email: string,
   source = `192.0.2.${++sourceSequence}`,
 ): Promise<Response> =>
-  worker.fetch(
+  Promise.resolve(worker.fetch(
     new Request("https://example.test/api/v1/auth/request-link", {
       method: "POST",
       headers: {
@@ -61,7 +61,7 @@ const requestNonLocalLink = (
     }),
     nonLocalAuthEnv,
     createExecutionContext(),
-  );
+  ));
 
 const requestLinkBody = (
   body: string,
