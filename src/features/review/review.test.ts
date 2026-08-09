@@ -52,6 +52,7 @@ import {
   createReviewRound,
   getWorkbench,
   rejectSubmission,
+  revokeAcceptance,
   requestAiSuggestion,
   saveScore,
 } from "./service";
@@ -406,6 +407,7 @@ describe("review and acceptance slice", () => {
       "review.getWorkbench",
       "review.rejectSubmission",
       "review.requestAiSuggestion",
+      "review.revokeAcceptance",
       "review.saveScore",
     ]);
     for (const operation of operations) {
@@ -1318,6 +1320,51 @@ describe("review and acceptance slice", () => {
     expect(audits).toHaveLength(1);
     expect(idempotency).toHaveLength(1);
     expect(idempotency[0]?.status).toBe("completed");
+  });
+
+  it("undoes acceptance with append-only revocation evidence and revokes provisioning", async () => {
+    const input = {
+      eventId: fixtureEventId,
+      submissionId: "submission_04",
+      expectedVersion: 3,
+      idempotencyKey: "revoke-submission-04",
+      requestId: "request_revoke_04",
+    } as const;
+    const revoked = await runAs(owner, revokeAcceptance(input));
+    const replayed = await runAs(owner, revokeAcceptance(input));
+
+    expect(revoked).toMatchObject({
+      submissionId: input.submissionId,
+      submissionVersion: 4,
+      status: "in_review",
+      provisioningStatus: "revoked",
+      idempotent: false,
+    });
+    expect(replayed).toEqual({ ...revoked, idempotent: true });
+
+    const [submission] = await db.select().from(submissions).where(eq(submissions.id, input.submissionId));
+    expect(submission).toMatchObject({ status: "in_review", version: 4, acceptedAt: null });
+    const history = await db.select().from(acceptanceEvents).where(and(
+      eq(acceptanceEvents.eventId, fixtureEventId),
+      eq(acceptanceEvents.submissionId, input.submissionId),
+    ));
+    expect(history.map((event) => event.type).sort()).toEqual(["accepted", "revoked"]);
+    expect(history.find((event) => event.type === "revoked")).toMatchObject({
+      id: revoked.revocationEventId,
+      submissionVersion: 4,
+    });
+    const [provisioning] = await db.select().from(speakerProvisioning).where(and(
+      eq(speakerProvisioning.eventId, fixtureEventId),
+      eq(speakerProvisioning.submissionId, input.submissionId),
+    ));
+    expect(provisioning).toMatchObject({ status: "revoked", version: 2 });
+    const changes = await db.select().from(domainChanges).where(eq(domainChanges.requestId, input.requestId));
+    expect(changes.map((change) => change.eventType).sort()).toEqual([
+      "review.submission.acceptanceRevoked",
+      "speaker.provisioning.revoked",
+    ]);
+    const [audit] = await db.select().from(auditLog).where(eq(auditLog.requestId, input.requestId));
+    expect(audit).toMatchObject({ action: "review.revokeAcceptance" });
   });
 
   it("records a versioned rejection, publishes speaker-visible evidence, and replays idempotently", async () => {

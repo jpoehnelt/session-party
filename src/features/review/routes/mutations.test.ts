@@ -6,6 +6,7 @@ import {
   assignReviewerRequest,
   createReviewRoundRequest,
   rejectSubmissionRequest,
+  revokeAcceptanceRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
 } from "./mutations";
@@ -173,6 +174,14 @@ describe("review mutation client", () => {
         submissionVersion: 5,
         status: "rejected",
         idempotent: false,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        revocationEventId: "acceptance_revoked_1",
+        submissionId: "submission_one",
+        submissionVersion: 5,
+        status: "in_review",
+        provisioningStatus: "revoked",
+        idempotent: false,
       }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -214,6 +223,13 @@ describe("review mutation client", () => {
       idempotencyKey: "rejection-key-2",
       requestId: "request-reject",
     });
+    await revokeAcceptanceRequest({
+      eventId: "event_one",
+      submissionId: "submission_one",
+      expectedVersion: 4,
+      idempotencyKey: "revocation-key-1",
+      requestId: "request-revoke",
+    });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/events/event_one/review/assignments", {
       method: "POST",
@@ -254,6 +270,15 @@ describe("review mutation client", () => {
       headers: {
         "x-request-id": "request-reject",
         "idempotency-key": "rejection-key-2",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ expectedVersion: 4 }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(6, "/api/v1/events/event_one/review/submissions/submission_one/acceptance", {
+      method: "DELETE",
+      headers: {
+        "x-request-id": "request-revoke",
+        "idempotency-key": "revocation-key-1",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ expectedVersion: 4 }),

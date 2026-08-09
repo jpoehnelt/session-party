@@ -41,6 +41,8 @@ import {
   type RequestAiSuggestionOutput,
   RejectSubmissionOutput,
   type RejectSubmissionInput,
+  RevokeAcceptanceOutput,
+  type RevokeAcceptanceInput,
   ReviewRubric,
   type ReviewRubric as ReviewRubricType,
   type ReviewRound,
@@ -1495,6 +1497,174 @@ const readIdempotentRejection = (value: unknown) =>
     Effect.map((output) => ({ ...output, idempotent: true })),
     Effect.mapError((error) => new External({ service: "database", detail: `Invalid stored rejection output: ${String(error)}` })),
   );
+
+const readIdempotentRevocation = (value: unknown) =>
+  Schema.decodeUnknown(RevokeAcceptanceOutput)(value).pipe(
+    Effect.map((output) => ({ ...output, idempotent: true })),
+    Effect.mapError((error) => new External({ service: "database", detail: `Invalid stored revocation output: ${String(error)}` })),
+  );
+
+export const revokeAcceptance = (
+  input: RevokeAcceptanceInput,
+): Effect.Effect<typeof RevokeAcceptanceOutput.Type, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write", "submissions:write", "speakers:write"]);
+    if (viewer.actorApiKeyId) {
+      return yield* Effect.fail(new Forbidden({ reason: "API keys cannot revoke submission acceptances" }));
+    }
+    yield* requireOrganizer(viewer);
+    const { db } = yield* Db;
+    const [submission] = yield* database(() =>
+      db
+        .select({ id: submissions.id, status: submissions.status, acceptedAt: submissions.acceptedAt, version: submissions.version })
+        .from(submissions)
+        .innerJoin(forms, and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)))
+        .where(and(
+          eq(submissions.eventId, input.eventId),
+          eq(submissions.id, input.submissionId),
+          eq(forms.kind, "cfp"),
+        ))
+        .limit(1),
+    );
+    if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
+
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      submissionId: input.submissionId,
+      expectedVersion: input.expectedVersion,
+    }));
+    const principalId = viewer.userId;
+    const [replay] = yield* database(() =>
+      db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, input.eventId),
+        eq(idempotencyRecords.operationId, "review.revokeAcceptance"),
+        eq(idempotencyRecords.principalId, principalId),
+        eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1),
+    );
+    if (replay) {
+      if (replay.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different revocation request" }));
+      }
+      if (replay.status === "completed") return yield* readIdempotentRevocation(replay.responseBody);
+      return yield* Effect.fail(new Conflict({ message: "Revocation request with this idempotency key is already in progress" }));
+    }
+    if (submission.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before undoing acceptance" }));
+    }
+    if (submission.status !== "accepted") {
+      return yield* Effect.fail(new Conflict({ message: "Submission is not currently accepted" }));
+    }
+
+    const [accepted] = yield* database(() =>
+      db.select().from(acceptanceEvents).where(and(
+        eq(acceptanceEvents.eventId, input.eventId),
+        eq(acceptanceEvents.submissionId, input.submissionId),
+        eq(acceptanceEvents.type, "accepted"),
+      )).orderBy(desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id)).limit(1),
+    );
+    if (!accepted) {
+      return yield* Effect.fail(new External({ service: "database", detail: "Accepted submission has no durable acceptance fact" }));
+    }
+    const [provisioning] = yield* database(() =>
+      db.select().from(speakerProvisioning).where(and(
+        eq(speakerProvisioning.eventId, input.eventId),
+        eq(speakerProvisioning.acceptanceEventId, accepted.id),
+      )).limit(1),
+    );
+    if (!provisioning) {
+      return yield* Effect.fail(new External({ service: "database", detail: "Accepted submission has no provisioning fact" }));
+    }
+
+    const revokedAt = now();
+    const revokedAtMs = revokedAt.getTime();
+    const nextVersion = submission.version + 1;
+    const revocationEventId = id("acceptance");
+    const idempotencyId = id("idempotency");
+    const output = {
+      revocationEventId,
+      submissionId: submission.id,
+      submissionVersion: nextVersion,
+      status: "in_review" as const,
+      provisioningStatus: "revoked" as const,
+      idempotent: false,
+    };
+
+    yield* database(() => db.batch([
+      db.update(submissions).set({ status: "in_review", acceptedAt: null, version: nextVersion, updatedAt: revokedAt }).where(and(
+        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId),
+        eq(submissions.version, input.expectedVersion), eq(submissions.status, "accepted"),
+      )),
+      db.insert(idempotencyRecords).select(db.select({
+        id: sql<string>`${idempotencyId}`.as("id"), eventId: submissions.eventId,
+        operationId: sql<string>`'review.revokeAcceptance'`.as("operation_id"),
+        principalId: sql<string>`${principalId}`.as("principal_id"), keyHash: sql<string>`${keyHash}`.as("key_hash"),
+        requestHash: sql<string>`${requestHash}`.as("request_hash"), status: sql<"completed">`'completed'`.as("status"),
+        responseStatus: sql<number>`200`.as("response_status"), responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+        expiresAt: sql<Date>`${revokedAtMs + 86_400_000}`.as("expires_at"), completedAt: sql<Date>`${revokedAtMs}`.as("completed_at"),
+        createdAt: sql<Date>`${revokedAtMs}`.as("created_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId),
+        eq(submissions.version, nextVersion), eq(submissions.status, "in_review"), sql`changes() > 0`,
+      ))),
+      db.insert(acceptanceEvents).select(db.select({
+        id: sql<string>`${revocationEventId}`.as("id"), eventId: submissions.eventId, submissionId: submissions.id,
+        primarySubmissionSpeakerId: sql<string>`${accepted.primarySubmissionSpeakerId}`.as("primary_submission_speaker_id"),
+        primarySpeakerId: sql<string>`${accepted.primarySpeakerId}`.as("primary_speaker_id"),
+        primaryAssociationIsPrimary: sql<boolean>`1`.as("primary_association_is_primary"),
+        type: sql<"revoked">`'revoked'`.as("type"), submissionVersion: submissions.version,
+        actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"), occurredAt: sql<Date>`${revokedAtMs}`.as("occurred_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId),
+        sql`exists (select 1 from idempotency_records where id = ${idempotencyId})`,
+      ))),
+      db.update(speakerProvisioning).set({ status: "revoked", leaseOwner: null, leaseExpiresAt: null, version: provisioning.version + 1, updatedAt: revokedAt }).where(and(
+        eq(speakerProvisioning.eventId, input.eventId), eq(speakerProvisioning.id, provisioning.id),
+        eq(speakerProvisioning.version, provisioning.version),
+        sql`exists (select 1 from acceptance_events where id = ${revocationEventId})`,
+      )),
+      db.insert(domainChanges).values([
+        {
+          id: id("change"), eventId: input.eventId, aggregateType: "submission", aggregateId: input.submissionId,
+          aggregateVersion: nextVersion, eventType: "review.submission.acceptanceRevoked",
+          audiences: [{ kind: "admins" }, { kind: "speaker", speakerIds: [accepted.primarySpeakerId] }],
+          payload: { acceptanceEventId: accepted.id, revocationEventId, submissionId: input.submissionId, submissionVersion: nextVersion },
+          actorUserId: viewer.actorUserId, actorApiKeyId: null, requestId: input.requestId, idempotencyRecordId: idempotencyId, occurredAt: revokedAt,
+        },
+        {
+          id: id("change"), eventId: input.eventId, aggregateType: "speakerProvisioning", aggregateId: provisioning.id,
+          aggregateVersion: provisioning.version + 1, eventType: "speaker.provisioning.revoked",
+          audiences: [{ kind: "admins" }, { kind: "speaker", speakerIds: [accepted.primarySpeakerId] }],
+          payload: { acceptanceEventId: accepted.id, provisioningId: provisioning.id, submissionId: input.submissionId, status: "revoked" },
+          actorUserId: viewer.actorUserId, actorApiKeyId: null, requestId: input.requestId, idempotencyRecordId: idempotencyId, occurredAt: revokedAt,
+        },
+      ]),
+      db.insert(auditLog).values({
+        id: id("audit"), eventId: input.eventId, requestId: input.requestId, actorUserId: viewer.actorUserId, actorApiKeyId: null,
+        action: "review.revokeAcceptance", resourceType: "submission", resourceId: input.submissionId,
+        before: { status: "accepted", version: submission.version, acceptedAt: submission.acceptedAt?.getTime() ?? null, acceptanceEventId: accepted.id, provisioningStatus: provisioning.status },
+        after: { status: "in_review", version: nextVersion, acceptedAt: null, revocationEventId, provisioningStatus: "revoked" },
+        metadata: { idempotencyRecordId: idempotencyId }, occurredAt: revokedAt,
+      }),
+    ])).pipe(
+      Effect.catchAll((failure) =>
+        Effect.gen(function* () {
+          const [committed] = yield* database(() => db.select().from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId)).limit(1));
+          if (committed?.status === "completed") return;
+          const [current] = yield* database(() => db.select({ version: submissions.version }).from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1));
+          if (!current || current.version !== input.expectedVersion) {
+            return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before undoing acceptance" }));
+          }
+          return yield* Effect.fail(failure);
+        }),
+      ),
+    );
+
+    const [committed] = yield* database(() => db.select().from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId)).limit(1));
+    if (!committed) return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before undoing acceptance" }));
+    return output;
+  });
 
 export const rejectSubmission = (
   input: RejectSubmissionInput,

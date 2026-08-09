@@ -8,6 +8,7 @@ import {
   CreateReviewRoundOutput,
   RequestAiSuggestionOutput,
   RejectSubmissionOutput,
+  RevokeAcceptanceOutput,
   SaveScoreOutput,
   type AcceptSubmissionInput,
   type AdvanceReviewRoundInput,
@@ -16,12 +17,13 @@ import {
   type CreateReviewRoundInput,
   type RequestAiSuggestionInput,
   type RejectSubmissionInput,
+  type RevokeAcceptanceInput,
   type SaveScoreInput,
 } from "../schema";
 
 interface MutationRequest<T> {
   readonly path: string;
-  readonly method: "POST" | "PUT";
+  readonly method: "DELETE" | "POST" | "PUT";
   readonly requestId: string;
   readonly idempotencyKey?: string;
   readonly body?: unknown;
@@ -161,6 +163,17 @@ export function acceptSubmissionRequest(input: AcceptSubmissionInput) {
     idempotencyKey: input.idempotencyKey,
     body: { expectedVersion: input.expectedVersion },
     schema: AcceptSubmissionOutput,
+  });
+}
+
+export function revokeAcceptanceRequest(input: RevokeAcceptanceInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/submissions/${segment(input.submissionId)}/acceptance`,
+    method: "DELETE",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: { expectedVersion: input.expectedVersion },
+    schema: RevokeAcceptanceOutput,
   });
 }
 

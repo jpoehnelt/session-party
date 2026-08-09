@@ -5,6 +5,7 @@ import {
   appendReviewCommentRequest,
   assignReviewerRequest,
   rejectSubmissionRequest,
+  revokeAcceptanceRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
 } from "../routes/mutations";
@@ -123,10 +124,11 @@ export function SubmissionReviewPane({
   const [comment, setComment] = useState(currentReview?.comment ?? "");
   const [threadBody, setThreadBody] = useState("");
   const [confirmedAiSuggestionId, setConfirmedAiSuggestionId] = useState<string>();
-  const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "comment" | "ai" | "accept" | "reject">();
+  const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject">();
   const [mutationError, setMutationError] = useState<string>();
   const acceptanceKey = useRef(`review-accept-${crypto.randomUUID()}`);
   const rejectionKey = useRef(`review-reject-${crypto.randomUUID()}`);
+  const revocationKey = useRef(`review-revoke-${crypto.randomUUID()}`);
   const commentKey = useRef(`review-comment-${crypto.randomUUID()}`);
 
   useEffect(() => {
@@ -235,6 +237,18 @@ export function SubmissionReviewPane({
       expectedVersion: submission.version,
       idempotencyKey: rejectionKey.current,
       requestId: operationRequestId("review-reject"),
+    }));
+  };
+
+  const revokeAcceptance = () => {
+    if (!organizer || !submission.acceptance) return;
+    if (!window.confirm("Undo this acceptance? The proposal will return to review and speaker provisioning will be revoked. No email will be sent.")) return;
+    void runMutation("revoke", () => revokeAcceptanceRequest({
+      eventId,
+      submissionId: submission.id,
+      expectedVersion: submission.version,
+      idempotencyKey: revocationKey.current,
+      requestId: operationRequestId("review-revoke"),
     }));
   };
 
@@ -438,7 +452,19 @@ export function SubmissionReviewPane({
       {submission.acceptance ? (
         <Card className="[&>header]:bg-production-lime [&>header_h3]:text-ink" title="Acceptance decision">
           <Badge tone="success">Accepted · provisioning {submission.acceptance.provisioningStatus}</Badge>
-          <p className="mt-2 text-sm text-ink-secondary">Durable acceptance {submission.acceptance.acceptanceEventId} at submission version {submission.acceptance.submissionVersion}.</p>
+          <p className="mt-2 text-sm text-ink-secondary">Acceptance is recorded in the audit history. No email was sent.</p>
+          {organizer && (
+            <div className="mt-4">
+              <Button
+                variant="danger"
+                disabled={pendingOperation !== undefined}
+                loading={pendingOperation === "revoke"}
+                onClick={revokeAcceptance}
+              >
+                Undo acceptance
+              </Button>
+            </div>
+          )}
         </Card>
       ) : submission.status === "rejected" ? (
         <Card title="Proposal decision">
