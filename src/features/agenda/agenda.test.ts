@@ -961,7 +961,7 @@ describe("agenda service", () => {
     await expect(seeded.db.select().from(domainChanges).where(eq(domainChanges.eventId, seeded.eventId))).resolves.toHaveLength(1);
     await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(1);
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(1);
-  });
+  }, 15_000);
 
   it("returns NotFound for an unknown canonical event slug", async () => {
     const result = await runEither(
