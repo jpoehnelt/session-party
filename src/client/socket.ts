@@ -1,5 +1,5 @@
 import { usePartySocket } from "partysocket/react";
-import type { ClientMessage, ServerMessage } from "contracts/protocol";
+import { decodeServerMessage, type ClientMessage, type ServerMessage } from "contracts/protocol";
 
 export function useEventRoom(eventId: string, onMessage: (message: ServerMessage) => void) {
   const surface = location.pathname.split("/").filter(Boolean).at(-1) ?? "overview";
@@ -13,7 +13,8 @@ export function useEventRoom(eventId: string, onMessage: (message: ServerMessage
     },
     onMessage(event) {
       try {
-        onMessage(JSON.parse(event.data) as ServerMessage);
+        const message = decodeServerMessage(JSON.parse(event.data));
+        if (message) onMessage(message);
       } catch {
         // Ignore malformed room messages.
       }
