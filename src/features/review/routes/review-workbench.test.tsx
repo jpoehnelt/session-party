@@ -178,6 +178,34 @@ describe("review workbench route", () => {
     expect(markup).toContain("Save my review");
   });
 
+  it("offers organizers a plain-language undo action without exposing acceptance IDs", () => {
+    const acceptedWorkbench: ReviewWorkbench = {
+      ...workbench,
+      queue: workbench.queue.map((submission) => ({ ...submission, status: "accepted" })),
+      selected: workbench.selected && {
+        ...workbench.selected,
+        status: "accepted",
+        version: 4,
+        acceptance: {
+          acceptanceEventId: "acceptance_internal_1",
+          submissionVersion: 4,
+          acceptedAt: 1_700_000_100_000,
+          provisioningId: "provisioning_internal_1",
+          provisioningStatus: "pending",
+        },
+      },
+    };
+    const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
+      workbench: acceptedWorkbench,
+      onSelectSubmission: () => undefined,
+    }));
+
+    expect(markup).toContain("Undo acceptance");
+    expect(markup).toContain("Acceptance is recorded in the audit history");
+    expect(markup).not.toContain("acceptance_internal_1");
+    expect(markup).not.toContain("Durable acceptance");
+  });
+
   it("renders scoring and the private committee conversation for an unassigned event reviewer", () => {
     const reviewerWorkbench: ReviewWorkbench = {
       ...workbench,

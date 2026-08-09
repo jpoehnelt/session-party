@@ -325,6 +325,25 @@ export const AcceptSubmissionOutput = Schema.Struct({
 });
 export type AcceptSubmissionOutput = typeof AcceptSubmissionOutput.Type;
 
+export const RevokeAcceptanceInput = Schema.Struct({
+  eventId: EntityId,
+  submissionId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: Schema.String.pipe(Schema.minLength(8), Schema.maxLength(256)),
+  requestId: RequestId,
+});
+export type RevokeAcceptanceInput = typeof RevokeAcceptanceInput.Type;
+
+export const RevokeAcceptanceOutput = Schema.Struct({
+  revocationEventId: EntityId,
+  submissionId: EntityId,
+  submissionVersion: Schema.Int.pipe(Schema.positive()),
+  status: Schema.Literal("in_review"),
+  provisioningStatus: Schema.Literal("revoked"),
+  idempotent: Schema.Boolean,
+});
+export type RevokeAcceptanceOutput = typeof RevokeAcceptanceOutput.Type;
+
 export const RejectSubmissionInput = Schema.Struct({
   eventId: EntityId,
   submissionId: EntityId,

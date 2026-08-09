@@ -16,6 +16,8 @@ import {
   RequestAiSuggestionOutput,
   RejectSubmissionInput,
   RejectSubmissionOutput,
+  RevokeAcceptanceInput,
+  RevokeAcceptanceOutput,
   ReviewWorkbench,
   SaveScoreInput,
   SaveScoreOutput,
@@ -29,6 +31,7 @@ import {
   getWorkbench,
   requestAiSuggestion,
   rejectSubmission,
+  revokeAcceptance,
   saveScore,
 } from "./service";
 
@@ -269,6 +272,29 @@ const rejectSubmissionOperation = {
   emits: ["review.submission.rejected"],
 } as const satisfies AnyOperationDef;
 
+const revokeAcceptanceOperation = {
+  id: "review.revokeAcceptance",
+  kind: "command",
+  input: RevokeAcceptanceInput,
+  output: RevokeAcceptanceOutput,
+  authorize: acceptanceWrite,
+  invoke: revokeAcceptance,
+  rest: {
+    method: "delete",
+    path: "/events/:eventId/review/submissions/:submissionId/acceptance",
+    input: {
+      path: ["eventId", "submissionId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["expectedVersion"],
+    },
+    summary: "Revoke a submission acceptance and cancel its provisioning state",
+    successStatus: 200,
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.submission.acceptanceRevoked", "speaker.provisioning.revoked"],
+} as const satisfies AnyOperationDef;
+
 const saveScoreOperation = {
   id: "review.saveScore",
   kind: "command",
@@ -303,5 +329,6 @@ export const operations = [
   getWorkbenchOperation,
   rejectSubmissionOperation,
   requestAiSuggestionOperation,
+  revokeAcceptanceOperation,
   saveScoreOperation,
 ] as const satisfies readonly AnyOperationDef[];
