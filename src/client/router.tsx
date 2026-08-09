@@ -172,12 +172,13 @@ function Topbar({
   );
 }
 
-function Layout({ children }: { children: ReactNode }) {
+function Layout({ children, contentWidth }: { children: ReactNode; contentWidth?: RouteModule["contentWidth"] }) {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
 
   return (
     <>
       <AppShell
+        contentWidth={contentWidth}
         sidebar={<Sidebar />}
         sidebarClassName="hidden lg:block"
         topbar={(
@@ -264,9 +265,9 @@ function RouteCoordinator({ children }: { children: ReactNode }) {
   </>;
 }
 
-function routeElement(Component: ComponentType, layout?: RouteModule["layout"]) {
+function routeElement(Component: ComponentType, layout?: RouteModule["layout"], contentWidth?: RouteModule["contentWidth"]) {
   const page = <Component />;
-  return <RouteCoordinator>{layout === "bare" ? page : <Layout>{page}</Layout>}</RouteCoordinator>;
+  return <RouteCoordinator>{layout === "bare" ? page : <Layout contentWidth={contentWidth}>{page}</Layout>}</RouteCoordinator>;
 }
 
 export const router = createBrowserRouter([
@@ -274,9 +275,9 @@ export const router = createBrowserRouter([
     path: "/login",
     element: <RouteCoordinator><LoginPage /></RouteCoordinator>,
   },
-  ...discoveredClientRouteModules.map(({ path, layout, default: Component }) => ({
+  ...discoveredClientRouteModules.map(({ path, layout, contentWidth, default: Component }) => ({
     path,
-    element: routeElement(Component, layout),
+    element: routeElement(Component, layout, contentWidth),
   })),
   {
     path: "*",

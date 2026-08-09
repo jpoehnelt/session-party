@@ -13,6 +13,7 @@ import {
 } from "../components/production-ui";
 
 export const path = "/e/:eventSlug/dashboard";
+export const contentWidth = "canvas" as const;
 
 export default function OrganizerDashboardRoute() {
   const { eventSlug = "" } = useParams();

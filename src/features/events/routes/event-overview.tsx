@@ -24,6 +24,7 @@ interface EventOverview {
 }
 
 export const path = "/e/:eventSlug";
+export const contentWidth = "compact" as const;
 
 type EventLoadError =
   | { readonly kind: "unauthenticated" }

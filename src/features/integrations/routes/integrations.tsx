@@ -44,6 +44,7 @@ import {
 } from "@/ui";
 
 export const path = "/e/:eventSlug/integrations";
+export const contentWidth = "wide" as const;
 
 
 function LoadingRegion({ label }: { readonly label: string }) {

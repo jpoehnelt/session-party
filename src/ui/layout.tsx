@@ -5,10 +5,20 @@ export interface AppShellProps {
   sidebar: ReactNode;
   sidebarClassName?: string;
   topbar?: ReactNode;
+  contentWidth?: ContentWidth;
   children: ReactNode;
 }
 
-export function AppShell({ sidebar, sidebarClassName, topbar, children }: AppShellProps) {
+export type ContentWidth = "compact" | "standard" | "wide" | "canvas";
+
+const contentWidthClass: Record<ContentWidth, string> = {
+  compact: "max-w-6xl",
+  standard: "max-w-[90rem]",
+  wide: "max-w-[100rem]",
+  canvas: "max-w-[110rem]",
+};
+
+export function AppShell({ sidebar, sidebarClassName, topbar, contentWidth = "standard", children }: AppShellProps) {
   return (
     <div className="min-h-dvh bg-canvas text-ink lg:grid lg:h-dvh lg:grid-cols-[16.5rem_minmax(0,1fr)] lg:overflow-hidden">
       <aside
@@ -26,7 +36,7 @@ export function AppShell({ sidebar, sidebarClassName, topbar, children }: AppShe
           </header>
         )}
         <main id="main-content" tabIndex={-1} className="production-grid min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
+          <div className={cx("mx-auto w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10", contentWidthClass[contentWidth])}>
             {children}
           </div>
         </main>

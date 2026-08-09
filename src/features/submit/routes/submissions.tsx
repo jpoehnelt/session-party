@@ -25,6 +25,7 @@ import {
 } from "../schema";
 
 export const path = "/e/:eventSlug/submissions";
+export const contentWidth = "wide" as const;
 
 const statusTone = (status: SubmissionStatus): "neutral" | "accent" | "success" | "warning" | "danger" => {
   switch (status) {

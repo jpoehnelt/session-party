@@ -1,5 +1,5 @@
 export { AppShell, PageHeader } from "./layout";
-export type { AppShellProps, PageHeaderProps } from "./layout";
+export type { AppShellProps, ContentWidth, PageHeaderProps } from "./layout";
 
 export { Button, IconButton } from "./Button";
 export type {

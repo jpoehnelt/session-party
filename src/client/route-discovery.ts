@@ -1,8 +1,10 @@
 import type { ComponentType } from "react";
+import type { ContentWidth } from "@/ui";
 
 export type RouteModule = {
   path: string;
   layout?: "app" | "bare";
+  contentWidth?: ContentWidth;
   default: ComponentType;
 };
 

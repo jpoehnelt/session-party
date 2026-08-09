@@ -34,6 +34,7 @@ import {
 } from "../schema";
 
 export const path = "/e/:eventSlug/forms";
+export const contentWidth = "canvas" as const;
 
 export interface EventIdentity {
   readonly id: string;

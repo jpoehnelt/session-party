@@ -19,6 +19,7 @@ import { EventOutput } from "../schema";
 export type EventSummary = typeof EventOutput.Type;
 
 export const path = "/events";
+export const contentWidth = "standard" as const;
 
 type EventPhase = "live" | "planning" | "needs-dates" | "complete";
 
