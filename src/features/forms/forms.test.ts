@@ -1,15 +1,23 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import type { Principal } from "contracts/principal";
 import { auditLog, domainChanges, eventMembers, events, formVersionFields, forms, idempotencyRecords, users } from "contracts/schema";
 import { and, asc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer, Schema } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppLayer, type Db, CurrentUser, type CurrentUserValue } from "@/server/services";
+import { AppLayer, type Db, CurrentUser } from "@/server/services";
 import { FORMS_FIXTURE_EVENT_ID, FORMS_FIXTURE_NOW, formsFixtures, routedFormsFixture } from "./fixtures";
-import { normalizeOptionDraft, updateConditionAt, validatePublishIntent } from "./components/FormBuilder";
-import { getFormAvailability, projectActiveAnswers } from "./components/FormPreview";
 import { operations, publishFormOperation, setFormStatusOperation, updateFormOperation } from "./operations";
-import type { ConditionalLogic, FormField, FormFieldDraft } from "./schema";
+import {
+  getFormAvailability,
+  normalizeOptionDraft,
+  projectActiveAnswers,
+  updateConditionAt,
+  validatePublishIntent,
+  type ConditionalLogic,
+  type CreateFormInput,
+  type FormField,
+} from "./schema";
 import { createForm, getForm, listForms, publishForm, setFormStatus, updateForm } from "./service";
 
 type TestEnv = Cloudflare.Env & {
@@ -20,7 +28,7 @@ function hasTestMigrations(value: Cloudflare.Env): value is TestEnv {
   return "TEST_MIGRATIONS" in value;
 }
 
-const owner: CurrentUserValue = {
+const owner: Principal = {
   kind: "browser-session",
   userId: "user-forms-owner",
   email: "forms-owner@example.com",
@@ -29,12 +37,12 @@ const owner: CurrentUserValue = {
   expiresAt: FORMS_FIXTURE_NOW + 86_400_000,
 };
 
-const runAs = <A, E>(principal: CurrentUserValue, effect: Effect.Effect<A, E, Db | CurrentUser>) =>
+const runAs = <A, E>(principal: Principal, effect: Effect.Effect<A, E, Db | CurrentUser>) =>
   Effect.runPromise(
     effect.pipe(Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal)))),
   );
 
-const fixtureDraftFields: readonly FormFieldDraft[] = routedFormsFixture.forms[0]!.fields.map((field) => ({
+const fixtureDraftFields = routedFormsFixture.forms[0]!.fields.map((field) => ({
   id: field.id,
   type: field.type,
   label: field.label,
@@ -43,9 +51,9 @@ const fixtureDraftFields: readonly FormFieldDraft[] = routedFormsFixture.forms[0
   options: field.options,
   logic: field.logic,
   routing: field.routing,
-}));
+})) as unknown as CreateFormInput["fields"];
 
-const prefixDraftFields = (prefix: string): readonly FormFieldDraft[] =>
+const prefixDraftFields = (prefix: string): CreateFormInput["fields"] =>
   fixtureDraftFields.map((field) => ({
     ...field,
     id: `${prefix}-${field.id}`,
@@ -55,112 +63,14 @@ const prefixDraftFields = (prefix: string): readonly FormFieldDraft[] =>
           conditions: field.logic.conditions.map((condition) => ({
             ...condition,
             fieldId: `${prefix}-${condition.fieldId}`,
-          })) as ConditionalLogic["conditions"],
+          })) as unknown as ConditionalLogic["conditions"],
         }
       : null,
-  }));
+  })) as unknown as CreateFormInput["fields"];
 
 beforeAll(async () => {
   if (!hasTestMigrations(env)) throw new Error("TEST_MIGRATIONS test binding is unavailable");
   await applyD1Migrations(env.DB, [...env.TEST_MIGRATIONS]);
-  // BaselineGreen owns the migration that makes the frozen schema real. The
-  // focused slice fixture mirrors only the frozen columns this service uses.
-  await env.DB.batch([
-    env.DB.prepare("ALTER TABLE users ADD COLUMN version integer NOT NULL DEFAULT 1"),
-    env.DB.prepare("ALTER TABLE events ADD COLUMN version integer NOT NULL DEFAULT 1"),
-    env.DB.prepare("ALTER TABLE event_members ADD COLUMN version integer NOT NULL DEFAULT 1"),
-    env.DB.prepare("ALTER TABLE forms ADD COLUMN version integer NOT NULL DEFAULT 1"),
-    env.DB.prepare("ALTER TABLE form_fields ADD COLUMN event_id text"),
-    env.DB.prepare("ALTER TABLE form_fields ADD COLUMN version integer NOT NULL DEFAULT 1"),
-    env.DB.prepare(`
-      CREATE TABLE form_versions (
-        id text PRIMARY KEY NOT NULL,
-        event_id text NOT NULL,
-        form_id text NOT NULL,
-        version_number integer NOT NULL,
-        name text NOT NULL,
-        description text,
-        published_at integer NOT NULL,
-        retired_at integer,
-        created_at integer NOT NULL
-      )
-    `),
-    env.DB.prepare(`
-      CREATE TABLE form_version_fields (
-        id text PRIMARY KEY NOT NULL,
-        event_id text NOT NULL,
-        form_version_id text NOT NULL,
-        source_field_id text,
-        "order" integer NOT NULL,
-        type text NOT NULL,
-        label text NOT NULL,
-        help_text text,
-        required integer NOT NULL,
-        options text,
-        logic text,
-        routing text,
-        created_at integer NOT NULL
-      )
-    `),
-    env.DB.prepare(`
-      CREATE TABLE idempotency_records (
-        id text PRIMARY KEY NOT NULL,
-        event_id text NOT NULL,
-        operation_id text NOT NULL,
-        principal_id text NOT NULL,
-        key_hash text NOT NULL,
-        request_hash text NOT NULL,
-        status text NOT NULL,
-        response_status integer,
-        response_body text,
-        expires_at integer NOT NULL,
-        completed_at integer,
-        created_at integer NOT NULL
-      )
-    `),
-    env.DB.prepare(`
-      CREATE UNIQUE INDEX idempotency_key_unique
-        ON idempotency_records (event_id, operation_id, principal_id, key_hash)
-    `),
-    env.DB.prepare(`
-      CREATE TABLE domain_changes (
-        sequence integer PRIMARY KEY AUTOINCREMENT,
-        id text NOT NULL,
-        event_id text NOT NULL,
-        aggregate_type text NOT NULL,
-        aggregate_id text NOT NULL,
-        aggregate_version integer NOT NULL,
-        event_type text NOT NULL,
-        audiences text NOT NULL,
-        payload text NOT NULL,
-        actor_user_id text,
-        actor_api_key_id text,
-        request_id text NOT NULL,
-        idempotency_record_id text,
-        occurred_at integer NOT NULL
-      )
-    `),
-    env.DB.prepare(`
-      CREATE UNIQUE INDEX domain_changes_aggregate_version_unique
-        ON domain_changes (event_id, aggregate_type, aggregate_id, aggregate_version, event_type)
-    `),
-    env.DB.prepare(`
-      CREATE TABLE audit_log (
-        id text PRIMARY KEY NOT NULL,
-        event_id text NOT NULL,
-        request_id text NOT NULL,
-        actor_user_id text,
-        actor_api_key_id text,
-        action text NOT NULL,
-        resource_type text NOT NULL,
-        resource_id text NOT NULL,
-        before text,
-        after text,
-        metadata text,
-        occurred_at integer NOT NULL
-      )
-    `),
-  ]);
   const db = drizzle(env.DB);
   const now = new Date(FORMS_FIXTURE_NOW);
   await db.batch([
@@ -494,7 +404,7 @@ describe("forms service", () => {
       options: field.options,
       logic: field.logic,
       routing: field.routing,
-    }));
+    })) as unknown as CreateFormInput["fields"];
     const updated = await runAs(owner, updateForm({
       eventId: FORMS_FIXTURE_EVENT_ID,
       formId: published.id,
@@ -773,7 +683,7 @@ describe("forms service", () => {
     expect(duplicate._tag).toBe("Left");
     if (duplicate._tag === "Left") expect(duplicate.left._tag).toBe("Conflict");
 
-    const wrongEventKey: CurrentUserValue = {
+    const wrongEventKey: Principal = {
       kind: "api-key",
       userId: "api-key:wrong-event",
       apiKeyId: "wrong-event",

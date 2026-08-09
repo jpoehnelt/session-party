@@ -19,6 +19,21 @@ export const FORM_FIELD_TYPES = [
 export const FormFieldType = Schema.Literal(...FORM_FIELD_TYPES);
 export type FormFieldType = typeof FormFieldType.Type;
 
+export const FORM_FIELD_OPTION_TYPES: Readonly<Record<FormFieldType, boolean>> = {
+  text: false,
+  textarea: false,
+  select: true,
+  multiselect: true,
+  radio: true,
+  checkbox: false,
+  email: false,
+  url: false,
+  file: false,
+  date: false,
+  heading: false,
+  html: false,
+};
+
 export const FormStatus = Schema.Literal("draft", "open", "closed");
 export type FormStatus = typeof FormStatus.Type;
 
@@ -48,7 +63,20 @@ const Label = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(240));
 const Option = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(160));
 const NullableText = Schema.NullOr(Schema.String);
 const NullableTimestamp = Schema.NullOr(UnixTimestampMs);
-const Routing = Schema.Record({ key: Schema.String, value: Schema.String });
+export const Routing = Schema.Record({ key: Schema.String, value: Schema.String });
+
+export const PreviewAnswer = Schema.Union(
+  Schema.String,
+  Schema.Array(Schema.String),
+  Schema.Boolean,
+);
+export type PreviewAnswer = typeof PreviewAnswer.Type;
+
+export const PreviewAnswers = Schema.Record({
+  key: EntityId,
+  value: PreviewAnswer,
+});
+export type PreviewAnswers = typeof PreviewAnswers.Type;
 
 export const FormFieldDraft = Schema.Struct({
   id: Schema.optional(EntityId),
@@ -132,6 +160,146 @@ export const FormDetail = Schema.Struct({
   publishedVersion: Schema.NullOr(PublishedFormVersion),
 });
 export type FormDetail = typeof FormDetail.Type;
+
+export interface PublishValidationIssue {
+  readonly controlId: string;
+  readonly message: string;
+}
+
+export type PreviewField = FormField | FormVersionField;
+export type FormAvailability = "draft" | "scheduled" | "open" | "expired" | "closed";
+
+const conditionMatches = (condition: LogicCondition, answer: PreviewAnswer | undefined): boolean => {
+  if (condition.op === "not_empty") {
+    return Array.isArray(answer) ? answer.length > 0 : answer !== undefined && answer !== "" && answer !== false;
+  }
+  if (condition.op === "in") {
+    const accepted = Array.isArray(condition.value) ? condition.value : [condition.value ?? ""];
+    return Array.isArray(answer)
+      ? answer.some((value) => accepted.includes(value))
+      : typeof answer === "string" && accepted.includes(answer);
+  }
+  const expected = Array.isArray(condition.value) ? condition.value[0] : condition.value;
+  const equal = Array.isArray(answer) ? answer.includes(expected ?? "") : answer === expected;
+  return condition.op === "eq" ? equal : !equal;
+};
+
+
+export const getFormAvailability = (form: FormDetail, now: number): FormAvailability => {
+  if (form.status === "closed") return "closed";
+  if (form.status === "draft" || form.publishedVersion === null) return "draft";
+  if (form.opensAt !== null && now < form.opensAt) return "scheduled";
+  if (form.closesAt !== null && now >= form.closesAt) return "expired";
+  return "open";
+};
+
+export const projectActiveAnswers = (
+  fields: readonly PreviewField[],
+  answers: Readonly<Record<string, PreviewAnswer>>,
+): { readonly visibleFields: readonly PreviewField[]; readonly activeAnswers: Readonly<Record<string, PreviewAnswer>> } => {
+  const visibleFields: PreviewField[] = [];
+  const activeAnswers: Record<string, PreviewAnswer> = {};
+  for (const field of fields) {
+    const visible = field.logic === null || (() => {
+      const matches = field.logic.conditions.map((condition) =>
+        conditionMatches(condition, activeAnswers[condition.fieldId]));
+      const conditionsPass = field.logic.mode === "all" ? matches.every(Boolean) : matches.some(Boolean);
+      return field.logic.action === "hide" ? !conditionsPass : conditionsPass;
+    })();
+    if (!visible) continue;
+    visibleFields.push(field);
+    const fieldId = "sourceFieldId" in field ? field.sourceFieldId ?? field.id : field.id;
+    if (answers[fieldId] !== undefined) activeAnswers[fieldId] = answers[fieldId];
+  }
+  return { visibleFields, activeAnswers };
+};
+
+export const validatePublishIntent = (form: FormDetail): readonly PublishValidationIssue[] => {
+  const issues: PublishValidationIssue[] = [];
+  if (form.name.trim().length === 0) {
+    issues.push({ controlId: "builder-form-name", message: "Enter a form name." });
+  }
+  if (form.opensAt !== null && form.closesAt !== null && form.closesAt < form.opensAt) {
+    issues.push({ controlId: "builder-closes-at", message: "Close time must be at or after open time." });
+  }
+  for (const [fieldIndex, field] of form.fields.entries()) {
+    if (field.label.trim().length === 0) {
+      issues.push({
+        controlId: `builder-field-${field.id}-label`,
+        message: `Field ${field.order} needs a label.`,
+      });
+    }
+    if (FORM_FIELD_OPTION_TYPES[field.type]) {
+      if (field.options.length === 0) {
+        issues.push({
+          controlId: `builder-field-${field.id}-options`,
+          message: `${field.label || `Field ${field.order}`} needs at least one option.`,
+        });
+      }
+      const normalized = field.options.map((option) => option.trim());
+      if (normalized.some((option) => option.length === 0) || new Set(normalized).size !== normalized.length) {
+        issues.push({
+          controlId: `builder-field-${field.id}-options`,
+          message: `${field.label || `Field ${field.order}`} has blank or duplicate options.`,
+        });
+      }
+    }
+    field.logic?.conditions.forEach((condition, conditionIndex) => {
+      const sourceIndex = form.fields.findIndex((candidate) => candidate.id === condition.fieldId);
+      if (sourceIndex < 0 || sourceIndex >= fieldIndex) {
+        issues.push({
+          controlId: `builder-field-${field.id}-condition-${conditionIndex}-source`,
+          message: `${field.label || `Field ${field.order}`} must depend on an earlier field.`,
+        });
+      }
+    });
+  }
+  if (form.purpose === "primary-cfp") {
+    const completeRouter = form.fields.find((field) =>
+      (field.type === "select" || field.type === "radio") &&
+      field.options.length > 0 &&
+      field.options.every((option) => field.routing[option]?.trim()));
+    if (!completeRouter) {
+      const candidate = form.fields.find((field) => field.type === "select" || field.type === "radio");
+      const missingOptionIndex = candidate?.options.findIndex((option) =>
+        !candidate.routing[option]?.trim()) ?? -1;
+      issues.push({
+        controlId: candidate
+          ? candidate.options.length > 0
+            ? `builder-field-${candidate.id}-routing-${Math.max(0, missingOptionIndex)}`
+            : `builder-field-${candidate.id}-options`
+          : form.fields[0]
+            ? `builder-field-${form.fields[0].id}-type`
+            : "builder-add-field",
+        message: "Route every option in one select or radio field to a review category.",
+      });
+    }
+  }
+  return issues;
+};
+
+export const updateConditionAt = (
+  logic: ConditionalLogic,
+  conditionIndex: number,
+  patch: Partial<LogicCondition>,
+): ConditionalLogic => ({
+  ...logic,
+  conditions: logic.conditions.map((condition, index) =>
+    index === conditionIndex ? { ...condition, ...patch } : condition) as unknown as ConditionalLogic["conditions"],
+});
+
+export const normalizeOptionDraft = (
+  raw: string,
+  routing: Readonly<Record<string, string>>,
+): { readonly options: readonly string[]; readonly routing: Readonly<Record<string, string>> } => {
+  const options = raw.split(/\r?\n/).map((option) => option.trim()).filter(Boolean);
+  return {
+    options,
+    routing: Object.fromEntries(
+      Object.entries(routing).filter(([option]) => options.includes(option)),
+    ),
+  };
+};
 
 export const ListFormsInput = Schema.Struct({ eventId: EntityId });
 export type ListFormsInput = typeof ListFormsInput.Type;

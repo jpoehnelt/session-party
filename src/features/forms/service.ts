@@ -19,6 +19,7 @@ import { CurrentUser } from "@/server/services";
 import {
   ConditionalLogic,
   FormDetail,
+  Routing,
   type CreateFormInput,
   type FormField,
   type FormFieldDraft,
@@ -90,10 +91,9 @@ const sha256 = (value: string): Effect.Effect<string, External> =>
       }),
   });
 
-const parseJson = <A>(value: string | null, fallback: A): A => {
-  if (value === null) return fallback;
-  return JSON.parse(value) as A;
-};
+const decodeJsonColumn = (value: unknown): unknown =>
+  typeof value === "string" ? JSON.parse(value) as unknown : value;
+
 
 const fieldType = (value: string): FormFieldType =>
   Schema.decodeUnknownSync(Schema.Literal(
@@ -119,8 +119,10 @@ const toField = (row: DraftFieldRow): FormField => ({
   helpText: row.helpText,
   required: row.required,
   options: row.options ?? [],
-  logic: row.logic === null ? null : Schema.decodeUnknownSync(ConditionalLogic)(parseJson(row.logic, null)),
-  routing: parseJson<Record<string, string>>(row.routing, {}),
+  logic: row.logic === null
+    ? null
+    : Schema.decodeUnknownSync(ConditionalLogic)(decodeJsonColumn(row.logic)),
+  routing: Schema.decodeUnknownSync(Routing)(decodeJsonColumn(row.routing ?? {})),
   version: row.version,
 });
 
@@ -133,8 +135,10 @@ const toVersionField = (row: VersionFieldRow) => ({
   helpText: row.helpText,
   required: row.required,
   options: row.options ?? [],
-  logic: row.logic === null ? null : Schema.decodeUnknownSync(ConditionalLogic)(parseJson(row.logic, null)),
-  routing: parseJson<Record<string, string>>(row.routing, {}),
+  logic: row.logic === null
+    ? null
+    : Schema.decodeUnknownSync(ConditionalLogic)(decodeJsonColumn(row.logic)),
+  routing: Schema.decodeUnknownSync(Routing)(decodeJsonColumn(row.routing ?? {})),
 });
 
 const purpose = (row: FormRow): FormDetail["purpose"] =>

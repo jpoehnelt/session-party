@@ -1,68 +1,36 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo } from "react";
+import { effectTsResolver } from "@hookform/resolvers/effect-ts";
+import { useForm, useWatch } from "react-hook-form";
 import { Badge, Button, Card, Checkbox, Input, Select, Textarea } from "@/ui";
-import type { FormDetail, FormField, FormVersionField, LogicCondition } from "../schema";
-
-export type PreviewAnswer = string | readonly string[] | boolean;
-export type PreviewField = FormField | FormVersionField;
-export type FormAvailability = "draft" | "scheduled" | "open" | "expired" | "closed";
+import {
+  PreviewAnswers,
+  getFormAvailability,
+  projectActiveAnswers,
+  type FormAvailability,
+  type FormDetail,
+  type PreviewField,
+} from "../schema";
 
 export interface FormPreviewProps {
   form: FormDetail;
   now: number;
 }
 
-const conditionMatches = (condition: LogicCondition, answer: PreviewAnswer | undefined): boolean => {
-  if (condition.op === "not_empty") {
-    return Array.isArray(answer) ? answer.length > 0 : answer !== undefined && answer !== "" && answer !== false;
-  }
-  if (condition.op === "in") {
-    const accepted = Array.isArray(condition.value) ? condition.value : [condition.value ?? ""];
-    return Array.isArray(answer)
-      ? answer.some((value) => accepted.includes(value))
-      : typeof answer === "string" && accepted.includes(answer);
-  }
-  const expected = Array.isArray(condition.value) ? condition.value[0] : condition.value;
-  const equal = Array.isArray(answer) ? answer.includes(expected ?? "") : answer === expected;
-  return condition.op === "eq" ? equal : !equal;
-};
-
-const semanticFieldId = (field: PreviewField): string =>
-  "sourceFieldId" in field ? field.sourceFieldId ?? field.id : field.id;
-
-export const getFormAvailability = (form: FormDetail, now: number): FormAvailability => {
-  if (form.status === "closed") return "closed";
-  if (form.status === "draft" || form.publishedVersion === null) return "draft";
-  if (form.opensAt !== null && now < form.opensAt) return "scheduled";
-  if (form.closesAt !== null && now >= form.closesAt) return "expired";
-  return "open";
-};
-
-export const projectActiveAnswers = (
-  fields: readonly PreviewField[],
-  answers: Readonly<Record<string, PreviewAnswer>>,
-): { readonly visibleFields: readonly PreviewField[]; readonly activeAnswers: Readonly<Record<string, PreviewAnswer>> } => {
-  const visibleFields: PreviewField[] = [];
-  const activeAnswers: Record<string, PreviewAnswer> = {};
-  for (const field of fields) {
-    const visible = field.logic === null || (() => {
-      const matches = field.logic.conditions.map((condition) =>
-        conditionMatches(condition, activeAnswers[condition.fieldId]));
-      const conditionsPass = field.logic.mode === "all" ? matches.every(Boolean) : matches.some(Boolean);
-      return field.logic.action === "hide" ? !conditionsPass : conditionsPass;
-    })();
-    if (!visible) continue;
-    visibleFields.push(field);
-    const fieldId = semanticFieldId(field);
-    if (answers[fieldId] !== undefined) activeAnswers[fieldId] = answers[fieldId];
-  }
-  return { visibleFields, activeAnswers };
-};
 
 
 export function FormPreview({ form, now }: FormPreviewProps) {
-  const [answers, setAnswers] = useState<Record<string, PreviewAnswer>>({});
-  const [submitted, setSubmitted] = useState(false);
   const fields: readonly PreviewField[] = form.publishedVersion?.fields ?? form.fields;
+  const {
+    control,
+    formState: { isSubmitSuccessful },
+    handleSubmit,
+    register,
+    setValue,
+  } = useForm<PreviewAnswers>({
+    defaultValues: {},
+    resolver: effectTsResolver(PreviewAnswers),
+  });
+  const answers = useWatch({ control }) as PreviewAnswers;
   const projection = useMemo(() => projectActiveAnswers(fields, answers), [answers, fields]);
   const availability = getFormAvailability(form, now);
   const available = availability === "open";
@@ -80,15 +48,7 @@ export function FormPreview({ form, now }: FormPreviewProps) {
     closed: "An organizer manually closed this form.",
   };
 
-  const setAnswer = (fieldId: string, answer: PreviewAnswer) => {
-    setSubmitted(false);
-    setAnswers((current) => ({ ...current, [fieldId]: answer }));
-  };
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (available) setSubmitted(true);
-  };
+  const submit = handleSubmit(() => undefined);
 
   return (
     <div className="mx-auto w-full max-w-sm" aria-label="Mobile form preview">
@@ -128,9 +88,9 @@ export function FormPreview({ form, now }: FormPreviewProps) {
               </div>
             )}
 
-            <form className="space-y-5" onSubmit={handleSubmit}>
+            <form className="space-y-5" onSubmit={submit}>
               {projection.visibleFields.map((field) => {
-                const fieldId = semanticFieldId(field);
+                const fieldId = "sourceFieldId" in field ? field.sourceFieldId ?? field.id : field.id;
                 const inputId = `preview-${form.id}-${fieldId}`;
                 const answer = projection.activeAnswers[fieldId];
                 const routedCategory = typeof answer === "string" ? field.routing[answer] : undefined;
@@ -154,8 +114,7 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                       label={label}
                       hint={field.helpText ?? undefined}
                       required={field.required}
-                      value={typeof answer === "string" ? answer : ""}
-                      onChange={(event) => setAnswer(fieldId, event.currentTarget.value)}
+                      {...register(fieldId, { required: field.required })}
                     />
                   );
                 }
@@ -167,8 +126,7 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                         label={label}
                         hint={field.helpText ?? undefined}
                         required={field.required}
-                        value={typeof answer === "string" ? answer : ""}
-                        onChange={(event) => setAnswer(fieldId, event.currentTarget.value)}
+                        {...register(fieldId, { required: field.required })}
                       >
                         <option value="">Choose an option</option>
                         {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
@@ -186,11 +144,7 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                       hint={field.helpText ?? "Select one or more options."}
                       required={field.required}
                       multiple
-                      value={Array.isArray(answer) ? [...answer] : []}
-                      onChange={(event) => setAnswer(
-                        fieldId,
-                        [...event.currentTarget.selectedOptions].map((option) => option.value),
-                      )}
+                      {...register(fieldId, { required: field.required })}
                     >
                       {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
                     </Select>
@@ -208,11 +162,9 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                           <input
                             className="mt-0.5 size-4 accent-accent"
                             type="radio"
-                            name={inputId}
                             value={option}
                             required={field.required}
-                            checked={answer === option}
-                            onChange={() => setAnswer(fieldId, option)}
+                            {...register(fieldId, { required: field.required })}
                           />
                           <span>{option}</span>
                         </label>
@@ -229,8 +181,7 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                       label={label}
                       description={field.helpText ?? undefined}
                       required={field.required}
-                      checked={answer === true}
-                      onChange={(event) => setAnswer(fieldId, event.currentTarget.checked)}
+                      {...register(fieldId, { required: field.required })}
                     />
                   );
                 }
@@ -243,14 +194,14 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                     hint={field.helpText ?? undefined}
                     required={field.required}
                     {...(field.type === "file"
-                      ? {}
-                      : { value: typeof answer === "string" ? answer : "" })}
-                    onChange={(event) => setAnswer(
-                      fieldId,
-                      field.type === "file"
-                        ? event.currentTarget.files !== null && event.currentTarget.files.length > 0
-                        : event.currentTarget.value,
-                    )}
+                      ? {
+                          onChange: (event) => setValue(
+                            fieldId,
+                            event.currentTarget.files !== null && event.currentTarget.files.length > 0,
+                            { shouldDirty: true, shouldValidate: true },
+                          ),
+                        }
+                      : register(fieldId, { required: field.required }))}
                   />
                 );
               })}
@@ -261,7 +212,7 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                 Required fields are marked with an asterisk.
               </p>
               <div className="min-h-5 text-center text-sm font-medium text-success" aria-live="polite">
-                {submitted ? "Preview submission accepted." : ""}
+                {isSubmitSuccessful ? "Preview submission accepted." : ""}
               </div>
             </form>
           </Card>
