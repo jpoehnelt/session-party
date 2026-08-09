@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { Schema } from "effect";
+import type { PresenceUser } from "contracts/protocol";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
+import { useEventRoom } from "@/client/socket";
 import {
   Alert,
   AlertDescription,
@@ -294,6 +296,46 @@ const toSummary = (form: FormDetail): FormSummary => ({
   updatedAt: form.updatedAt,
 });
 
+const formSurface = (formId: string): string => `forms:${formId}`;
+
+export function FormPresenceNotice({
+  formId,
+  users,
+}: {
+  readonly formId: string;
+  readonly users: readonly PresenceUser[];
+}) {
+  const viewers = users.filter((user) => user.surface === formSurface(formId));
+  if (viewers.length === 0) return null;
+
+  return (
+    <Alert
+      tone="neutral"
+      role="status"
+      aria-live="polite"
+      className="mb-4 rounded-none border-2 border-[#171714] bg-[#caff4a] text-[#171714] shadow-[4px_4px_0_#171714]"
+    >
+      <AlertTitle>{viewers.length === 1 ? "1 person viewing this form" : `${viewers.length} people viewing this form`}</AlertTitle>
+      <AlertDescription>
+        {viewers.map((user) => user.name).join(", ")} {viewers.length === 1 ? "is" : "are"} here now. Saves use version checks, but changes are not merged live.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function RealtimeFormPresence({ eventId, formId }: { readonly eventId: string; readonly formId: string }) {
+  const [users, setUsers] = useState<readonly PresenceUser[]>([]);
+  const room = useEventRoom(eventId, (message) => {
+    if (message.t === "room/presence") setUsers(message.users);
+  });
+
+  useEffect(() => {
+    room.setSurface(formSurface(formId));
+  }, [formId, room]);
+
+  return <FormPresenceNotice formId={formId} users={users} />;
+}
+
 type MutationState = Readonly<{
   action: "create" | "delete" | "save" | "publish" | "status" | null;
   tone: "neutral" | "success" | "danger";
@@ -441,6 +483,11 @@ export function FormsWorkspace({
   const [createAdditionalOpen, setCreateAdditionalOpen] = useState(false);
   const [additionalName, setAdditionalName] = useState("");
   const [additionalDescription, setAdditionalDescription] = useState("");
+  const [realtimeReady, setRealtimeReady] = useState(false);
+
+  useEffect(() => {
+    setRealtimeReady(true);
+  }, []);
 
   const applyDetail = useCallback((form: FormDetail) => {
     setSelectedId(form.id);
@@ -746,6 +793,7 @@ export function FormsWorkspace({
           </aside>
 
           <section className="min-w-0" aria-label="Form editor">
+            {realtimeReady && selectedId && <RealtimeFormPresence eventId={event.id} formId={selectedId} />}
             {selectedForm === undefined ? (
               <Skeleton className="h-[36rem] rounded-none border-2 border-[#171714] motion-reduce:animate-none" />
             ) : selectedForm === null ? (
