@@ -16,6 +16,76 @@ const AUTH_RATE_GLOBAL_LIMIT = 100;
 const AUTH_RATE_SOURCE_LIMIT = 10;
 const AUTH_RATE_RECIPIENT_LIMIT = 5;
 const AUTH_RATE_PREFIX = "auth-rate:";
+const MAIL_SCHEDULER_ENABLED_KEY = "mail-scheduler-enabled";
+
+export const ACCOUNT_DAILY_EMAIL_LIMIT = 1_000;
+export const ACCOUNT_DAILY_CAMPAIGN_LIMIT = 900;
+export const EVENT_DAILY_EMAIL_LIMIT = 500;
+
+export interface DispatchBudgetLimits {
+  readonly total: number;
+  readonly campaign: number;
+  readonly event: number;
+}
+
+export type DispatchBudgetResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: "account-limit" | "campaign-limit" | "event-limit" };
+
+const utcDay = (now: number): string => new Date(now).toISOString().slice(0, 10);
+const nextUtcDay = (now: number): Date => {
+  const next = new Date(now);
+  next.setUTCHours(24, 0, 0, 0);
+  return next;
+};
+
+export const reserveDispatchBudget = async (
+  storage: DurableObjectStorage,
+  input: {
+    readonly eventId: string | null;
+    readonly now: number;
+    readonly limits?: DispatchBudgetLimits;
+  },
+): Promise<DispatchBudgetResult> => {
+  const limits = input.limits ?? {
+    total: ACCOUNT_DAILY_EMAIL_LIMIT,
+    campaign: ACCOUNT_DAILY_CAMPAIGN_LIMIT,
+    event: EVENT_DAILY_EMAIL_LIMIT,
+  };
+  const day = utcDay(input.now);
+  const prefix = `dispatch-budget:${day}:`;
+  return storage.transaction(async (transaction) => {
+    const totalKey = `${prefix}total`;
+    const campaignKey = `${prefix}campaign`;
+    const eventKey = input.eventId === null ? null : `${prefix}event:${input.eventId}`;
+    const total = await transaction.get<number>(totalKey) ?? 0;
+    if (total >= limits.total) return { ok: false, reason: "account-limit" };
+    const campaign = input.eventId === null
+      ? 0
+      : await transaction.get<number>(campaignKey) ?? 0;
+    if (input.eventId !== null && campaign >= limits.campaign) {
+      return { ok: false, reason: "campaign-limit" };
+    }
+    const event = eventKey === null ? 0 : await transaction.get<number>(eventKey) ?? 0;
+    if (eventKey !== null && event >= limits.event) {
+      return { ok: false, reason: "event-limit" };
+    }
+    await transaction.put(totalKey, total + 1);
+    if (input.eventId !== null) await transaction.put(campaignKey, campaign + 1);
+    if (eventKey !== null) await transaction.put(eventKey, event + 1);
+    return { ok: true };
+  });
+};
+
+const purgeDispatchBudgets = async (
+  storage: DurableObjectStorage,
+  now: number,
+): Promise<void> => {
+  const currentPrefix = `dispatch-budget:${utcDay(now)}:`;
+  const entries = await storage.list({ prefix: "dispatch-budget:" });
+  const stale = [...entries.keys()].filter((key) => !key.startsWith(currentPrefix));
+  if (stale.length > 0) await storage.delete(stale);
+};
 type AuthRateCounter = {
   readonly windowStartedAt: number;
   readonly count: number;
@@ -52,7 +122,11 @@ const redactAuthSnapshot = async (
 };
 
 
+
 export class Scheduler extends DurableObject<Env> {
+  private isCanonicalMailScheduler(): boolean {
+    return this.ctx.id.equals(this.env.SCHEDULER.idFromName("mail"));
+  }
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method !== "POST") return new Response("Not found", { status: 404 });
@@ -66,6 +140,8 @@ export class Scheduler extends DurableObject<Env> {
       return new Response("Forbidden", { status: 403 });
     }
     if (url.pathname === "/poke") {
+      if (!this.isCanonicalMailScheduler()) return new Response("Not found", { status: 404 });
+      await this.ctx.storage.put(MAIL_SCHEDULER_ENABLED_KEY, true);
       await this.ctx.storage.setAlarm(Date.now() + 1);
       return Response.json({ ok: true });
     }
@@ -128,11 +204,16 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   override async alarm(): Promise<void> {
+    let mailSchedulerEnabled = false;
     try {
-      const db = drizzle(this.env.DB);
       const now = new Date();
       const nowMs = now.getTime();
       await this.purgeAuthRateCounters(nowMs);
+      mailSchedulerEnabled = this.isCanonicalMailScheduler()
+        && await this.ctx.storage.get<boolean>(MAIL_SCHEDULER_ENABLED_KEY) === true;
+      if (!mailSchedulerEnabled) return;
+      const db = drizzle(this.env.DB);
+      await purgeDispatchBudgets(this.ctx.storage, nowMs);
       await this.env.DB.batch([
         this.env.DB.prepare(
           `UPDATE mail_deliveries
@@ -162,6 +243,7 @@ export class Scheduler extends DurableObject<Env> {
         .select({
           id: mailDeliveries.id,
           snapshotId: mailDeliveries.snapshotId,
+          eventId: mailDeliverySnapshots.eventId,
           idempotencyKey: mailDeliveries.idempotencyKey,
           status: mailDeliveries.status,
           provider: mailDeliveries.provider,
@@ -170,6 +252,7 @@ export class Scheduler extends DurableObject<Env> {
           to: mailDeliverySnapshots.recipientEmail,
           subject: mailDeliverySnapshots.subject,
           html: mailDeliverySnapshots.renderedHtml,
+          text: mailDeliverySnapshots.renderedText,
           ics: mailDeliverySnapshots.icsContent,
           icsFilename: mailDeliverySnapshots.icsFilename,
         })
@@ -319,6 +402,42 @@ export class Scheduler extends DurableObject<Env> {
           });
         }
 
+        const dispatchNow = Date.now();
+        const budget = await reserveDispatchBudget(this.ctx.storage, {
+          eventId: delivery.eventId,
+          now: dispatchNow,
+        });
+        if (!budget.ok) {
+          const completedAt = new Date();
+          const detail = `Daily email dispatch budget exhausted: ${budget.reason}`;
+          const terminal = claim.attemptCount >= claim.maxAttempts;
+          await db
+            .update(mailDeliveryAttempts)
+            .set({
+              status: terminal ? "failed" : "retry",
+              error: detail,
+              completedAt,
+            })
+            .where(eq(mailDeliveryAttempts.id, attemptId));
+          await db
+            .update(mailDeliveries)
+            .set({
+              status: terminal ? "dead_letter" : "retry",
+              availableAt: terminal ? completedAt : nextUtcDay(dispatchNow),
+              lastError: detail,
+              deadLetteredAt: terminal ? completedAt : null,
+              leaseOwner: null,
+              leaseExpiresAt: null,
+            })
+            .where(and(
+              eq(mailDeliveries.id, delivery.id),
+              eq(mailDeliveries.status, "claimed"),
+              eq(mailDeliveries.leaseOwner, leaseOwner),
+            ));
+          continue;
+        }
+
+
         try {
           const receipt = await sendMail(this.env, {
             fromEmail: delivery.fromEmail,
@@ -326,6 +445,7 @@ export class Scheduler extends DurableObject<Env> {
             to: delivery.to,
             subject: delivery.subject,
             html: delivery.html,
+            text: delivery.text ?? "",
             ics: delivery.ics ?? undefined,
             icsFilename: delivery.icsFilename ?? undefined,
             idempotencyKey: delivery.idempotencyKey,
@@ -409,7 +529,9 @@ export class Scheduler extends DurableObject<Env> {
         }
       }
     } finally {
-      await this.ctx.storage.setAlarm(Date.now() + INTERVAL_MS);
+      if (mailSchedulerEnabled) {
+        await this.ctx.storage.setAlarm(Date.now() + INTERVAL_MS);
+      }
     }
   }
 }

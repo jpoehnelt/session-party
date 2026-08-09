@@ -28,9 +28,10 @@
     { "tag": "v1", "new_sqlite_classes": ["EventRoom", "Scheduler", "SessionPartyMcp"] }
   ],
   "ai": { "binding": "AI" },
+  "send_email": [{ "name": "EMAIL" }],
   "vars": {
     "APP_URL": "https://session-party.justin-poehnelt.workers.dev",
-    "MAIL_FROM": "Session Party <onboarding@resend.dev>"
+    "MAIL_FROM": "Session Party <welcome@sessionparty.com>"
   }
-  // Secrets (wrangler secret put): RESEND_API_KEY, SESSION_SECRET
+  // Secrets (wrangler secret put): SESSION_SECRET
 }

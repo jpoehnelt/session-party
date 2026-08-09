@@ -746,7 +746,7 @@ export const mailDeliveries = sqliteTable(
     leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
     attemptCount: integer("attempt_count").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(8),
-    provider: text("provider").notNull().default("resend"),
+    provider: text("provider").notNull().default("cloudflare-email"),
     providerMessageId: text("provider_message_id"),
     providerResult: text("provider_result", { mode: "json" }),
     lastError: text("last_error"),
