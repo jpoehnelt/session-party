@@ -10,6 +10,7 @@
  */
 import type { Conflict } from "./types";
 import type { ApiScope, EventRole } from "./principal";
+import { Schema } from "effect";
 
 // ---------- presence (handled by EventRoom itself) ----------
 
@@ -34,6 +35,7 @@ export interface EventRoomBroadcast {
 
 export type ClientMessage =
   | { t: "room/hello"; surface: string }
+  | { t: "events/get"; requestId: string }
   | {
       t: "agenda/move";
       requestId: string;
@@ -58,7 +60,14 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { t: "room/presence"; users: PresenceUser[] }
-  | { t: "room/error"; message: string; replyTo?: string }
+  | {
+      t: "room/error";
+      message: string;
+      error?: "NotFound" | "Unauthenticated" | "Forbidden" | "Validation" | "Conflict" | "External";
+      requestId?: string;
+      replyTo?: string;
+    }
+  | { t: "room/result"; operationId: string; result: unknown; replyTo: string }
   // agenda (flagship realtime demo)
   | { t: "agenda/talk_upserted"; talk: TalkSnapshot; by: string; replyTo: string }
   | { t: "agenda/talk_deleted"; talkId: string }
@@ -82,4 +91,93 @@ export interface TalkSnapshot {
   speakerNames: string[];
 }
 
-export type SlicePrefix = "room" | "agenda" | "dashboard" | "review" | "submissions";
+export type SlicePrefix = "room" | "events" | "agenda" | "dashboard" | "review" | "submissions";
+
+const PresenceUserWire = Schema.Struct({
+  userId: Schema.String,
+  name: Schema.String,
+  surface: Schema.String,
+});
+const PublicErrorTag = Schema.Literal(
+  "NotFound",
+  "Unauthenticated",
+  "Forbidden",
+  "Validation",
+  "Conflict",
+  "External",
+);
+const ConflictWire = Schema.Struct({
+  kind: Schema.Literal("room_overlap", "speaker_overlap"),
+  talkIds: Schema.Tuple(Schema.String, Schema.String),
+  roomId: Schema.optional(Schema.String),
+  speakerId: Schema.optional(Schema.String),
+});
+const TalkSnapshotWire = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  trackId: Schema.NullOr(Schema.String),
+  roomId: Schema.NullOr(Schema.String),
+  startsAt: Schema.NullOr(Schema.Number),
+  durationMin: Schema.Int.pipe(Schema.nonNegative()),
+  status: Schema.Literal("draft", "confirmed", "cancelled"),
+  speakerNames: Schema.Array(Schema.String),
+});
+const ServerMessageWire = Schema.Union(
+  Schema.Struct({
+    t: Schema.Literal("room/presence"),
+    users: Schema.Array(PresenceUserWire),
+  }),
+  Schema.Struct({
+    t: Schema.Literal("room/error"),
+    message: Schema.String,
+    error: Schema.optional(PublicErrorTag),
+    requestId: Schema.optional(Schema.String),
+    replyTo: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    t: Schema.Literal("room/result"),
+    operationId: Schema.String,
+    result: Schema.Unknown,
+    replyTo: Schema.String,
+  }),
+  Schema.Struct({
+    t: Schema.Literal("agenda/talk_upserted"),
+    talk: TalkSnapshotWire,
+    by: Schema.String,
+    replyTo: Schema.String,
+  }),
+  Schema.Struct({
+    t: Schema.Literal("agenda/talk_deleted"),
+    talkId: Schema.String,
+  }),
+  Schema.Struct({
+    t: Schema.Literal("agenda/conflicts"),
+    conflicts: Schema.Array(ConflictWire),
+  }),
+  Schema.Struct({
+    t: Schema.Literal("dashboard/progress"),
+    speakerId: Schema.String,
+    taskId: Schema.String,
+    completed: Schema.Boolean,
+    tasksDone: Schema.Int.pipe(Schema.nonNegative()),
+    tasksTotal: Schema.Int.pipe(Schema.nonNegative()),
+  }),
+  Schema.Struct({
+    t: Schema.Literal("review/scored"),
+    submissionId: Schema.String,
+    roundId: Schema.String,
+    score: Schema.Number,
+    reviewerName: Schema.String,
+  }),
+  Schema.Struct({
+    t: Schema.Literal("submissions/new"),
+    submissionId: Schema.String,
+    title: Schema.String,
+  }),
+);
+
+/** Validate unknown JSON before it crosses the server-to-client socket boundary. */
+export const decodeServerMessage = (value: unknown): ServerMessage | null => {
+  const decoded = Schema.decodeUnknownEither(ServerMessageWire)(value);
+  return decoded._tag === "Right" ? decoded.right as ServerMessage : null;
+};

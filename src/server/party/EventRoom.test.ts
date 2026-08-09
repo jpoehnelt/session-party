@@ -160,6 +160,45 @@ describe("EventRoom live authorization", () => {
     agenda.close();
   });
 
+  it("executes the canonical event operation without trusting a client event id", async () => {
+    const owner = await connect({ cookie: "room-owner-session" });
+    const result = waitForType(owner, "room/result");
+    owner.send(JSON.stringify({
+      t: "events/get",
+      requestId: "event-from-room",
+      idOrSlug: "a-client-supplied-event-id-is-ignored",
+    }));
+    expect(await result).toMatchObject({
+      t: "room/result",
+      operationId: "events.get",
+      replyTo: "event-from-room",
+      result: {
+        id: EVENT_ID,
+        slug: "room-authority",
+      },
+    });
+    owner.close();
+  });
+
+  it("rejects malformed internal broadcasts before delivery", async () => {
+    const id = env.EVENT_ROOM.idFromName(EVENT_ID);
+    const response = await env.EVENT_ROOM.get(id).fetch("https://event-room/broadcast", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-session-party-internal": sessionSecret(env),
+        "x-partykit-room": EVENT_ID,
+      },
+      body: JSON.stringify({
+        message: {
+          t: "agenda/conflicts",
+          conflicts: [{ kind: "room_overlap", talkIds: ["only-one"] }],
+        },
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
+
   it("revalidates API-key revocation before a privileged mutation", async () => {
     const writer = await connect({ bearer: "room-writer-key" });
     await env.DB.prepare(

@@ -16,7 +16,7 @@
     "dev:service": "pnpm dev:reset && pnpm dev:local",
     "build": "vite build",
     "deploy": "pnpm build && wrangler deploy",
-    "gen": "tsx scripts/gen.ts",
+    "gen": "tsx --tsconfig tsconfig.worker.json scripts/gen.ts",
     "check:registry": "pnpm gen --check",
     "check:types": "tsc -b",
     "check": "pnpm check:registry && pnpm check:types",
@@ -30,6 +30,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply session-party --remote"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.7.1",
     "agents": "^0.20.1",
     "drizzle-orm": "^0.45.2",
     "effect": "^3.22.1",
@@ -37,6 +38,7 @@
     "nanoid": "^6.0.1",
     "partyserver": "^0.5.10",
     "partysocket": "^1.3.0",
+    "react-hook-form": "^7.85.0",
     "react-router": "^8.3.0"
   },
   "devDependencies": {
