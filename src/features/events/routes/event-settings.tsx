@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import { Schema } from "effect";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
-import { Badge, Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Table, Textarea, Toaster, toast } from "@/ui";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger, Badge, Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Table, Textarea, Toaster, toast } from "@/ui";
 import {
   AddEventMemberOutput,
   EventMember,
@@ -361,6 +361,8 @@ export function EventSettingsForm({
   const [memberRole, setMemberRole] = useState<EventMemberRecord["role"]>("reviewer");
   const [memberError, setMemberError] = useState<string | null>(null);
   const [memberSaving, setMemberSaving] = useState(false);
+  const [pendingRoles, setPendingRoles] = useState<Record<string, EventMemberRecord["role"]>>({});
+  const [memberMutationId, setMemberMutationId] = useState<string | null>(null);
 
   const refreshMembers = () => {
     setMembers(null);
@@ -430,20 +432,25 @@ export function EventSettingsForm({
 
   const handleRoleChange = async (member: EventMemberRecord, role: EventMemberRecord["role"]) => {
     setMemberError(null);
+    setMemberMutationId(member.id);
     try {
       const result = await changeMemberRole(event.id, member, role);
       setMembers((current) => current?.map((item) => item.id === result.member.id ? result.member : item) ?? [result.member]);
+      setPendingRoles((current) => { const next = { ...current }; delete next[member.id]; return next; });
       toast("Member role updated.", { tone: "success" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not change member role";
       setMemberError(message);
       toast(message, { tone: "danger" });
       refreshMembers();
+    } finally {
+      setMemberMutationId(null);
     }
   };
 
   const handleRemove = async (member: EventMemberRecord) => {
     setMemberError(null);
+    setMemberMutationId(member.id);
     try {
       await removeMember(event.id, member);
       setMembers((current) => current?.filter((item) => item.id !== member.id) ?? []);
@@ -453,6 +460,8 @@ export function EventSettingsForm({
       setMemberError(message);
       toast(message, { tone: "danger" });
       refreshMembers();
+    } finally {
+      setMemberMutationId(null);
     }
   };
 
@@ -538,10 +547,17 @@ export function EventSettingsForm({
               { key: "role", header: "Role", render: (member: EventMemberRecord) => <Badge>{member.role}</Badge> },
               { key: "actions", header: "Manage", render: (member: EventMemberRecord) => (
                 <div className="flex min-w-56 items-end gap-2">
-                  <Select aria-label={`Role for ${member.email}`} value={member.role} onChange={(change) => void handleRoleChange(member, change.target.value as EventMemberRecord["role"])}>
+                  <Select aria-label={`Role for ${member.email}`} value={pendingRoles[member.id] ?? member.role} onChange={(change) => setPendingRoles((current) => ({ ...current, [member.id]: change.target.value as EventMemberRecord["role"] }))}>
                     <option value="reviewer">Reviewer</option><option value="admin">Admin</option><option value="owner">Owner</option>
                   </Select>
-                  <Button type="button" size="sm" variant="ghost" onClick={() => void handleRemove(member)}>Remove</Button>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild><Button type="button" size="sm" disabled={!pendingRoles[member.id] || pendingRoles[member.id] === member.role} loading={memberMutationId === member.id}>Change role</Button></AlertDialogTrigger>
+                    <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Change {member.name ?? member.email} to {pendingRoles[member.id]}?</AlertDialogTitle><AlertDialogDescription>This changes {member.email} from {member.role} to {pendingRoles[member.id]}. Their event permissions change immediately.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep current role</AlertDialogCancel><AlertDialogAction onClick={() => void handleRoleChange(member, pendingRoles[member.id] ?? member.role)}>Change role</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+                  </AlertDialog>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" loading={memberMutationId === member.id}>Remove</Button></AlertDialogTrigger>
+                    <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remove {member.name ?? member.email}?</AlertDialogTitle><AlertDialogDescription>{member.email} will lose their {member.role} access to this event immediately.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep member</AlertDialogCancel><AlertDialogAction onClick={() => void handleRemove(member)}>Remove member</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+                  </AlertDialog>
                 </div>
               ) },
             ]}

@@ -23,6 +23,7 @@ export function Modal({ open, onClose, title, children, footer, size = "md" }: M
         <Dialog.Overlay className="fixed inset-0 z-50 animate-fade-in bg-ink/40 motion-reduce:animate-none" />
         <div className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-[10vh] sm:p-8 sm:pt-[12vh]">
           <Dialog.Content
+            aria-modal="true"
             aria-describedby={undefined}
             className={cx(
               "pointer-events-auto relative w-full animate-slide-up rounded-card border-2 border-line-strong bg-surface shadow-pop outline-none motion-reduce:animate-none",
@@ -32,7 +33,7 @@ export function Modal({ open, onClose, title, children, footer, size = "md" }: M
             <header className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
               <Dialog.Title className="text-sm font-black uppercase tracking-[0.1em] text-on-accent">{title}</Dialog.Title>
               <Dialog.Close asChild>
-                <IconButton aria-label="Close" size="sm" className="-mr-1.5 min-h-11 min-w-11">
+                <IconButton aria-label="Close" size="sm" className="-mr-1.5 min-h-11 min-w-11 text-on-accent hover:bg-white/10 hover:text-on-accent">
                   <XIcon />
                 </IconButton>
               </Dialog.Close>

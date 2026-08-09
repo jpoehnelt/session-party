@@ -273,11 +273,59 @@ const fetchMcp = async (request: Request, env: Env, ctx: ExecutionContext<unknow
   return mcp.fetch(request, env, ctx);
 };
 
+const publicSurfaceLabels: Readonly<Record<string, string>> = {
+  sessions: "Sessions",
+  speakers: "Speakers",
+  agenda: "Agenda",
+  schedule: "Schedule itinerary",
+  gallery: "Speaker gallery",
+  widgets: "Embed & share",
+};
+
+export function publicProgramMetadata(pathname: string, eventName: string, canonicalUrl: string) {
+  const surface = pathname.split("/").filter(Boolean).at(2) ?? "sessions";
+  const label = publicSurfaceLabels[surface] ?? "Sessions";
+  return {
+    title: `${label} — ${eventName} — Session Party`,
+    description: `${eventName} ${label.toLowerCase()}: the current published event program.`,
+    canonicalUrl,
+  };
+}
+
+async function fetchPublicProgram(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const [, , slug] = url.pathname.split("/");
+  if (!slug) return env.ASSETS.fetch(request);
+  const agendaResponse = await app.fetch(
+    new Request(`${url.origin}${API}/public/events/${encodeURIComponent(slug)}/agenda/published`),
+    env,
+  );
+  if (!agendaResponse.ok) return env.ASSETS.fetch(request);
+  const agenda = await agendaResponse.json<{ eventName?: unknown }>();
+  if (typeof agenda.eventName !== "string") return env.ASSETS.fetch(request);
+  const canonicalUrl = `${url.origin}${url.pathname}`;
+  const metadata = publicProgramMetadata(url.pathname, agenda.eventName, canonicalUrl);
+  const shell = await env.ASSETS.fetch(new Request(`${url.origin}/index.html`, request));
+  return new HTMLRewriter()
+    .on("title", { element(element) { element.setInnerContent(metadata.title); } })
+    .on('meta[name="description"]', { element(element) { element.setAttribute("content", metadata.description); } })
+    .on('meta[property="og:title"]', { element(element) { element.setAttribute("content", metadata.title); } })
+    .on('meta[property="og:description"]', { element(element) { element.setAttribute("content", metadata.description); } })
+    .on('meta[property="og:url"]', { element(element) { element.setAttribute("content", metadata.canonicalUrl); } })
+    .on('meta[name="twitter:title"]', { element(element) { element.setAttribute("content", metadata.title); } })
+    .on('meta[name="twitter:description"]', { element(element) { element.setAttribute("content", metadata.description); } })
+    .on('link[rel="canonical"]', { element(element) { element.setAttribute("href", metadata.canonicalUrl); } })
+    .transform(shell);
+}
+
 export { EventRoom, Scheduler };
 export default {
   fetch(request, env, ctx) {
-    return new URL(request.url).pathname === "/mcp"
+    const pathname = new URL(request.url).pathname;
+    return pathname === "/mcp"
       ? fetchMcp(request, env, ctx)
+      : pathname.startsWith("/event/")
+        ? fetchPublicProgram(request, env)
       : app.fetch(request, env, ctx);
   },
 } satisfies ExportedHandler<Env>;

@@ -1,9 +1,19 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, apiFetch } from "@/client/api";
+import { copyText } from "@/client/clipboard";
 import { loginPathForLocation } from "@/client/return-to";
 import {
   Badge,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
   Button,
   Card,
   EmptyState,
@@ -170,22 +180,29 @@ export default function PublicationPage() {
   const isPublished = status.publication.revision > 0;
   const hasConflicts = status.conflicts.length > 0;
   const publicSessionCount = status.publication.talkCount;
+  const publicProgramPath = `/event/${eventSlug}/sessions`;
 
   return (
     <>
       <PageHeader
         title="Publish the run of show"
         description={`${status.eventName} · ${status.timezone} · one trusted audience-facing revision`}
-        actions={
-          <Button
-            className="h-12 rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow"
-            loading={publishing}
-            disabled={hasConflicts}
-            onClick={() => void publish()}
-          >
-            {status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}
-          </Button>
-        }
+        actions={<>
+          <a className="inline-flex h-12 items-center border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button" href={publicProgramPath} target="_blank" rel="noreferrer">Open public program ↗</a>
+          <Button variant="secondary" onClick={() => void copyText(`${window.location.origin}${publicProgramPath}`).then(() => toast("Public link copied", { tone: "success" }), () => toast("Could not copy public link", { tone: "danger" }))}>Copy public link</Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild><Button className="h-12 rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow" loading={publishing} disabled={hasConflicts}>{status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}</Button></AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Publish revision {status.publication.revision + 1}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This replaces the audience-facing program with {confirmedTalkCount} confirmed {confirmedTalkCount === 1 ? "session" : "sessions"}. The current public revision has {publicSessionCount}. Later agenda edits stay backstage until another revision is published.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter><AlertDialogCancel>Keep backstage</AlertDialogCancel><AlertDialogAction onClick={() => void publish()}>Publish revision {status.publication.revision + 1}</AlertDialogAction></AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </>}
       />
       <section aria-label="Publication status" className="mb-7 grid border-2 border-line-strong bg-surface shadow-card sm:grid-cols-3">
         {[

@@ -274,7 +274,7 @@ export function FormBuilder({
       aria-busy={busyAction !== null}
       onSubmit={mutationsAvailable ? submit : (event) => event.preventDefault()}
     >
-      <fieldset disabled={!mutationsAvailable || busyAction !== null} className="m-0 min-w-0 space-y-6 border-0 p-0">
+      <fieldset disabled={!mutationsAvailable || busyAction !== null} className="m-0 min-w-0 space-y-6 border-0 p-0 pb-36 sm:pb-28">
       {!mutationsAvailable && (
         <div className="border-2 border-[#171714] bg-[#ffd34e] px-4 py-3 text-sm font-semibold text-[#171714] shadow-[4px_4px_0_#171714]" role="status">
           This form is read-only right now. This client can't yet send the idempotency headers organizer edits require.
@@ -714,7 +714,7 @@ export function FormBuilder({
           {message}
         </div>
       )}
-      <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-between gap-3 border-[3px] border-[#171714] bg-[#171714]/95 p-3 text-white shadow-[6px_6px_0_#7857ff] backdrop-blur-sm">
+      <div className="fixed bottom-3 left-3 right-3 z-30 flex max-h-[calc(100dvh-1.5rem)] flex-wrap items-center justify-between gap-3 overflow-y-auto border-[3px] border-[#171714] bg-[#171714]/95 p-3 text-white shadow-[6px_6px_0_#7857ff] backdrop-blur-sm lg:left-[18rem] lg:right-8">
         <div className="text-[10px] font-black uppercase tracking-[0.12em] text-white/70">
           Draft v{watchedForm.version} <span className="px-1 text-[#caff4a]">◆</span> {watchedFields.length} {watchedFields.length === 1 ? "field" : "fields"}
         </div>

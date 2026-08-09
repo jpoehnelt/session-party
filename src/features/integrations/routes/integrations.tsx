@@ -23,6 +23,15 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
   Badge,
   Button,
   Card,
@@ -366,9 +375,18 @@ function IntegrationsWorkspace({
               )}
 
               <div className={`grid gap-3 border-2 border-line-strong p-3 shadow-[4px_4px_0_#171714] sm:grid-cols-[auto_1fr] sm:items-center ${canRun ? "bg-production-lime" : "bg-surface-muted"}`}>
-                <Button className="rounded-none bg-ink text-on-accent" onClick={onRun} loading={running} disabled={!canRun}>
-                  Import now
-                </Button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild><Button className="rounded-none bg-ink text-on-accent" loading={running} disabled={!canRun}>Import now</Button></AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Import the {capability.toLowerCase()} Accelevents feed?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Event {accelevents.accelEventId} will import every speaker and talk returned by the {capability.toLowerCase()} adapter. Matching external IDs are updated idempotently; new records are added. Result counts appear after the run.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={onRun}>Run import</AlertDialogAction></AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
                 <span role="status" aria-live="polite" className="text-xs font-black uppercase tracking-[0.08em] text-ink-secondary">
                   {running ? "Import in progress…" : canRun ? "Ready to import" : "Import is not available"}
                 </span>

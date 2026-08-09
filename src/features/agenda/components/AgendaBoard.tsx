@@ -305,7 +305,9 @@ export function AgendaBoard({
               description={view === "day" ? "Schedule a talk to create the first event day." : "Add rooms or tracks before placing talks."}
             />
           ) : (
-            <div className="overflow-x-auto pb-4">
+            <div>
+              <p className="mb-2 text-[9px] font-black uppercase tracking-[0.12em] text-ink-secondary xl:hidden">Swipe horizontally to see every schedule lane →</p>
+              <div className="overflow-x-auto pb-4">
               <div className="grid min-w-max auto-cols-[19rem] grid-flow-col gap-4 pr-1">
                 {lanes.map((lane, laneIndex) => (
                   <section
@@ -378,6 +380,7 @@ export function AgendaBoard({
                     </ol>
                   </section>
                 ))}
+              </div>
               </div>
             </div>
           )}
