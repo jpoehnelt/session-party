@@ -13059,6 +13059,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "pagination": {
           "additionalProperties": false,
           "properties": {
@@ -13184,6 +13190,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
       },
       "required": [
         "results",
+        "categories",
         "pagination"
       ],
       "type": "object"
@@ -32077,6 +32084,12 @@ export const openApi = {
                   "$schema": "https://json-schema.org/draft/2020-12/schema",
                   "additionalProperties": false,
                   "properties": {
+                    "categories": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "pagination": {
                       "additionalProperties": false,
                       "properties": {
@@ -32202,6 +32215,7 @@ export const openApi = {
                   },
                   "required": [
                     "results",
+                    "categories",
                     "pagination"
                   ],
                   "type": "object"

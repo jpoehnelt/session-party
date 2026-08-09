@@ -203,6 +203,9 @@ describe("forms organizer route", () => {
     expect(markup).not.toContain("read-only");
     expect(markup).toContain("Save draft");
     expect(markup).toContain("Publish form");
+    expect(markup).toContain("Review category");
+    expect(markup).toContain("existing submissions keep their original category");
+    expect(markup).not.toContain("Internal category key");
     expect(markup).toContain("Close form");
     expect(markup).not.toContain("Delete draft");
   });

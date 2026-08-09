@@ -1068,6 +1068,7 @@ describe("organizer submission privacy and listing", () => {
       pageSize: 25,
     }));
     expect(page.pagination).toEqual({ page: 1, pageSize: 25, total: 1, pageCount: 1 });
+    expect(page.categories).toEqual(["seed-category"]);
     expect(page.results.map((submission) => submission.id)).toEqual(["submission-seeded-accepted"]);
     expect(page.results[0]).toMatchObject({
       title: "Seeded accepted proposal",
@@ -1088,6 +1089,7 @@ describe("organizer submission privacy and listing", () => {
       pageSize: 25,
     }));
     expect(page.pagination).toEqual({ page: 1, pageSize: 25, total: 1, pageCount: 1 });
+    expect(page.categories).toEqual(["architecture", "seed-category", "validation"]);
     expect(page.results).toEqual([{
       id: "submission-seeded-accepted",
       formId: OPEN_FORM_ID,

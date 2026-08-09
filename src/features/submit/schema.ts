@@ -127,6 +127,7 @@ export type SubmissionSummary = typeof SubmissionSummary.Type;
 
 export const SubmissionPage = Schema.Struct({
   results: Schema.Array(SubmissionSummary),
+  categories: Schema.Array(Schema.String),
   pagination: Pagination,
 });
 export type SubmissionPage = typeof SubmissionPage.Type;
