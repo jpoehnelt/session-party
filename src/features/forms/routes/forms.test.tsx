@@ -51,6 +51,7 @@ const formDetail: FormDetail = {
       order: 1,
       type: "radio",
       label: "Best-fit track",
+      semanticKey: null,
       helpText: null,
       required: true,
       options: ["General"],
@@ -96,6 +97,7 @@ describe("forms organizer route", () => {
     expect(summaries).toEqual([formSummary]);
 
     const detail = await fetchFormDetail(event.id, formSummary.id);
+    expect(detail.fields[0]?.semanticKey).toBeNull();
     expect(detail).toEqual(formDetail);
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/events/ai-engineer-sandbox", expect.objectContaining({ method: "GET" }));
@@ -188,6 +190,9 @@ describe("forms organizer route", () => {
     );
     expect(markup).toContain("Call for proposals");
     expect(markup).toContain("Best-fit track");
+    expect(markup).toContain("Submission/review meaning");
+    expect(markup).toContain("Submission title");
+    expect(markup).toContain("Labels are never used as a fallback.");
     expect(markup).not.toContain("Deterministic view");
     expect(markup).not.toContain("formsFixtures");
     expect(markup).toContain("read-only");

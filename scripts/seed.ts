@@ -32,10 +32,10 @@ ON CONFLICT(id) DO UPDATE SET
   version = excluded.version, updated_at = excluded.updated_at;
 INSERT INTO form_fields (id, event_id, form_id, \`order\`, type, label, semantic_key, required, version, created_at, updated_at)
 VALUES
-  ('local-cfp-title', 'local-event', 'local-cfp', 0, 'text', 'Session title', 'submissionTitle', 1, 1, ${createdAt}, ${createdAt}),
-  ('local-cfp-abstract', 'local-event', 'local-cfp', 1, 'textarea', 'Session abstract', 'submissionAbstract', 1, 1, ${createdAt}, ${createdAt}),
-  ('local-cfp-speaker-name', 'local-event', 'local-cfp', 2, 'text', 'Speaker name', 'speakerName', 1, 1, ${createdAt}, ${createdAt}),
-  ('local-cfp-speaker-email', 'local-event', 'local-cfp', 3, 'email', 'Speaker email', 'speakerEmail', 1, 1, ${createdAt}, ${createdAt})
+  ('local-cfp-title', 'local-event', 'local-cfp', 1, 'text', 'Session title', 'submissionTitle', 1, 1, ${createdAt}, ${createdAt}),
+  ('local-cfp-abstract', 'local-event', 'local-cfp', 2, 'textarea', 'Session abstract', 'submissionAbstract', 1, 1, ${createdAt}, ${createdAt}),
+  ('local-cfp-speaker-name', 'local-event', 'local-cfp', 3, 'text', 'Speaker name', 'speakerName', 1, 1, ${createdAt}, ${createdAt}),
+  ('local-cfp-speaker-email', 'local-event', 'local-cfp', 4, 'email', 'Speaker email', 'speakerEmail', 1, 1, ${createdAt}, ${createdAt})
 ON CONFLICT(id) DO UPDATE SET
   event_id = excluded.event_id, form_id = excluded.form_id, \`order\` = excluded.\`order\`,
   type = excluded.type, label = excluded.label, semantic_key = excluded.semantic_key,
@@ -49,10 +49,10 @@ ON CONFLICT(id) DO UPDATE SET
   retired_at = excluded.retired_at;
 INSERT INTO form_version_fields (id, event_id, form_version_id, source_field_id, \`order\`, type, label, semantic_key, required, created_at)
 VALUES
-  ('local-cfp-v1-title', 'local-event', 'local-cfp-v1', 'local-cfp-title', 0, 'text', 'Session title', 'submissionTitle', 1, ${createdAt}),
-  ('local-cfp-v1-abstract', 'local-event', 'local-cfp-v1', 'local-cfp-abstract', 1, 'textarea', 'Session abstract', 'submissionAbstract', 1, ${createdAt}),
-  ('local-cfp-v1-speaker-name', 'local-event', 'local-cfp-v1', 'local-cfp-speaker-name', 2, 'text', 'Speaker name', 'speakerName', 1, ${createdAt}),
-  ('local-cfp-v1-speaker-email', 'local-event', 'local-cfp-v1', 'local-cfp-speaker-email', 3, 'email', 'Speaker email', 'speakerEmail', 1, ${createdAt})
+  ('local-cfp-v1-title', 'local-event', 'local-cfp-v1', 'local-cfp-title', 1, 'text', 'Session title', 'submissionTitle', 1, ${createdAt}),
+  ('local-cfp-v1-abstract', 'local-event', 'local-cfp-v1', 'local-cfp-abstract', 2, 'textarea', 'Session abstract', 'submissionAbstract', 1, ${createdAt}),
+  ('local-cfp-v1-speaker-name', 'local-event', 'local-cfp-v1', 'local-cfp-speaker-name', 3, 'text', 'Speaker name', 'speakerName', 1, ${createdAt}),
+  ('local-cfp-v1-speaker-email', 'local-event', 'local-cfp-v1', 'local-cfp-speaker-email', 4, 'email', 'Speaker email', 'speakerEmail', 1, ${createdAt})
 ON CONFLICT(id) DO UPDATE SET
   event_id = excluded.event_id, form_version_id = excluded.form_version_id,
   source_field_id = excluded.source_field_id, \`order\` = excluded.\`order\`,
