@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
@@ -9,7 +9,6 @@ import {
   Button,
   Card,
   EmptyState,
-  Input,
   PageHeader,
   Select,
   Skeleton,
@@ -107,10 +106,10 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
   const [eventError, setEventError] = useState<string | null>(null);
   const [page, setPage] = useState<SubmissionPageValue | null | undefined>(initialPage);
   const [forms, setForms] = useState<readonly FormSummary[]>(initialForms ?? []);
+  const [categories, setCategories] = useState<readonly string[]>(initialPage?.categories ?? []);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [formId, setFormId] = useState("");
-  const [categoryDraft, setCategoryDraft] = useState("");
   const [category, setCategory] = useState("");
   const [pageNumber, setPageNumber] = useState(1);
   const [request, setRequest] = useState(0);
@@ -155,6 +154,7 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
         if (!active) return;
         setPage(loadedPage);
         setForms(loadedForms);
+        setCategories(loadedPage.categories);
       },
       (error) => {
         if (!active) return;
@@ -172,12 +172,6 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
       active = false;
     };
   }, [category, event, formId, handleUnauthenticated, pageNumber, request, status]);
-
-  const applyCategory = (submitEvent: FormEvent) => {
-    submitEvent.preventDefault();
-    setPageNumber(1);
-    setCategory(categoryDraft.trim());
-  };
 
   const visibleRouted = page?.results.filter((submission) => submission.category != null).length ?? 0;
 
@@ -220,7 +214,7 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
         </section>
       )}
       <Card className="mb-6 [&>header]:bg-accent" title="Queue controls">
-        <form className="grid gap-4 md:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1fr)_minmax(12rem,1fr)_auto] md:items-end" onSubmit={applyCategory}>
+        <div className="grid gap-4 md:grid-cols-3 md:items-end">
           <Select
             label="State"
             value={status}
@@ -248,14 +242,18 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
             <option value="">All forms</option>
             {forms.map((form) => <option key={form.id} value={form.id}>{form.name}</option>)}
           </Select>
-          <Input
+          <Select
             label="Category"
-            value={categoryDraft}
-            placeholder="Exact routed category"
-            onChange={(changeEvent) => setCategoryDraft(changeEvent.currentTarget.value)}
-          />
-          <Button type="submit">Apply</Button>
-        </form>
+            value={category}
+            onChange={(changeEvent) => {
+              setCategory(changeEvent.currentTarget.value);
+              setPageNumber(1);
+            }}
+          >
+            <option value="">All categories</option>
+            {categories.map((value) => <option key={value} value={value}>{value}</option>)}
+          </Select>
+        </div>
       </Card>
       {page === undefined ? (
         <Skeleton className="h-[28rem]" />

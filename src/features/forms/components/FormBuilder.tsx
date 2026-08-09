@@ -685,13 +685,16 @@ export function FormBuilder({
               {(field.type === "select" || field.type === "radio") && field.options.length > 0 && (
                 <fieldset className="grid gap-3 border-2 border-[#171714] bg-[#8fdcff]/30 p-3 sm:col-span-2 sm:grid-cols-2">
                   <legend className="bg-[#8fdcff] px-2 py-1 text-xs font-black uppercase tracking-[0.08em] text-[#171714]">Category routing</legend>
+                  <p className="text-xs font-semibold text-[#665f52] sm:col-span-2">
+                    Use clear review category names. Changes reach new submissions after you publish a new version; existing submissions keep their original category.
+                  </p>
                   {field.options.map((option) => (
                     <Input
                       id={`builder-field-${field.id}-routing-${field.options.indexOf(option)}`}
                       error={(errors.fields?.[index]?.routing as { message?: string } | undefined)?.message}
                       key={option}
                       label={option}
-                      hint="Internal category key"
+                      hint="Review category"
                       className={PRODUCTION_FIELD}
                       value={field.routing[option] ?? ""}
                       onChange={(event) => patchField(index, {

@@ -18,7 +18,7 @@ import {
   submissions,
 } from "contracts/schema";
 import type { AnswerValue } from "contracts/types";
-import { and, asc, count, desc, eq, exists, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
@@ -1086,9 +1086,9 @@ export const listSubmissions = (
   Effect.gen(function* () {
     const viewer = yield* authorizeQueueViewer(input.eventId);
     const { db } = yield* Db;
-    const filters = [eq(submissions.eventId, input.eventId)];
+    const accessFilters = [eq(submissions.eventId, input.eventId)];
     if (viewer.role === "reviewer") {
-      filters.push(exists(
+      accessFilters.push(exists(
         db
           .select({ id: reviewAssignments.id })
           .from(reviewAssignments)
@@ -1099,11 +1099,12 @@ export const listSubmissions = (
           )),
       ));
     }
+    const filters = [...accessFilters];
     if (input.status) filters.push(eq(submissions.status, input.status));
     if (input.formId) filters.push(eq(submissions.formId, input.formId));
     if (input.category) filters.push(eq(submissions.category, input.category));
     const where = and(...filters);
-    const [rows, totals] = yield* Effect.all([
+    const [rows, totals, categoryRows] = yield* Effect.all([
       database(() =>
         db
           .select({
@@ -1147,6 +1148,13 @@ export const listSubmissions = (
           .offset((input.page - 1) * input.pageSize),
       ),
       database(() => db.select({ total: count() }).from(submissions).where(where)),
+      database(() =>
+        db
+          .selectDistinct({ category: submissions.category })
+          .from(submissions)
+          .where(and(...accessFilters, isNotNull(submissions.category)))
+          .orderBy(asc(submissions.category)),
+      ),
     ]);
     const total = totals[0]?.total ?? 0;
     return {
@@ -1154,6 +1162,7 @@ export const listSubmissions = (
         ...row,
         submittedAt: row.submittedAt.getTime(),
       })),
+      categories: categoryRows.flatMap(({ category }) => category === null ? [] : [category]),
       pagination: {
         page: input.page,
         pageSize: input.pageSize,

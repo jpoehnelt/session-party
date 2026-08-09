@@ -68,6 +68,7 @@ const organizerPage: SubmissionPage = {
       version: 2,
     },
   ],
+  categories: ["architecture", "community"],
   pagination: { page: 1, pageSize: 25, total: 1, pageCount: 1 },
 };
 
@@ -323,7 +324,9 @@ describe("organizer submissions route", () => {
     expect(markup).toContain("Sam Rivera");
     expect(markup).toContain("in review");
     expect(markup).toContain("Category");
-    expect(markup).toContain("Apply");
+    expect(markup).toContain("All categories");
+    expect(markup).toContain("community");
+    expect(markup).not.toContain("Exact routed category");
     expect(markup).not.toContain("AppShell");
   });
 });
