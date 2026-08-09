@@ -21,7 +21,7 @@ interface EventSummary {
   location: string | null;
 }
 
-export const path = "/";
+export const path = "/events";
 
 export default function EventsHome() {
   const [events, setEvents] = useState<EventSummary[] | null>(null);
@@ -120,4 +120,3 @@ export default function EventsHome() {
     </>
   );
 }
-
