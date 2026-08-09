@@ -1,4 +1,4 @@
-import { cloudflare } from "@cloudflare/vite-plugin";
+import { cloudflare, type WorkerConfig } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -7,6 +7,18 @@ import { resolveLocalRuntime } from "./scripts/local-runtime.ts";
 
 export default defineConfig(({ command }) => {
   const local = command === "serve" ? resolveLocalRuntime() : null;
+  const isPreview = command === "build" && process.env.CLOUDFLARE_ENV === "preview";
+  const requiredPreviewValue = (name: string): string => {
+    const value = process.env[name];
+    if (!value) throw new Error(`Preview builds require ${name}`);
+    return value;
+  };
+  const preview = isPreview
+    ? {
+        workerName: requiredPreviewValue("PREVIEW_WORKER_NAME"),
+        appUrl: requiredPreviewValue("PREVIEW_APP_URL"),
+      }
+    : null;
   return {
     plugins: [
       react(),
@@ -25,6 +37,17 @@ export default defineConfig(({ command }) => {
                 },
               }),
             }
+          : preview
+            ? {
+                config: (config: WorkerConfig) => ({
+                  name: preview.workerName,
+                  vars: {
+                    ...config.vars,
+                    PREVIEW_MODE: "1",
+                    APP_URL: preview.appUrl,
+                  },
+                }),
+              }
           : {}),
       }),
     ],
