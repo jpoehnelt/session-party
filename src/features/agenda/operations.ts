@@ -91,14 +91,14 @@ export const getPublishedAgendaOperation = {
   invoke: getPublishedAgenda,
   rest: {
     method: "get",
-    path: "/events/:eventId/agenda/published",
-    input: { path: ["eventId"] },
-    summary: "Get the published agenda projection",
+    path: "/public/events/:eventSlug/agenda/published",
+    input: { path: ["eventSlug"] },
+    summary: "Get the published agenda projection by event slug",
     successStatus: 200,
   },
   mcp: {
     name: "agenda_get_published",
-    description: "Read the latest explicit public agenda revision without private workflow fields.",
+    description: "Read an event's latest explicit public agenda revision by its canonical slug.",
   },
   idempotency: "none",
   concurrency: "none",

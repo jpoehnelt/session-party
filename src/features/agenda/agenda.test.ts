@@ -28,11 +28,12 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
 import { updateEvent } from "@/features/events/service";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
-import { operations, partyDescriptors } from "./operations";
+import { getPublishedAgendaOperation, operations, partyDescriptors } from "./operations";
 import type { AgendaMutationResult } from "./schema";
 import {
   cancelTalk,
   createTalk,
+  getAgendaDeliveryProjection,
   getPublishedAgenda,
   listAgenda,
   moveTalk,
@@ -161,6 +162,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
   const id = (value: string) => `${name}-${value}`;
   const now = new Date(FIXED_NOW);
   const eventId = id("event");
+  const eventSlug = id("slug");
   const userId = id("owner");
   const formId = id("form");
   const formVersionId = id("form-v1");
@@ -186,7 +188,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
     }),
     db.insert(events).values({
       id: eventId,
-      slug: id("slug"),
+      slug: eventSlug,
       name: `Conference ${name}`,
       location: "Pier 27",
       timezone: "America/Los_Angeles",
@@ -407,6 +409,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
   return {
     db,
     eventId,
+    eventSlug,
     user: owner(userId),
     submissionA,
     submissionB,
@@ -446,6 +449,15 @@ describe("agenda deterministic fixtures and descriptors", () => {
     expect(operations.some((operation) => "party" in operation)).toBe(false);
     expect(partyDescriptors[0].inputSchema.required).toContain("requestId");
     expect(partyDescriptors[0].inputSchema.required).not.toContain("eventId");
+    expect(getPublishedAgendaOperation).toMatchObject({
+      authorize: { kind: "public" },
+      rest: {
+        method: "get",
+        path: "/public/events/:eventSlug/agenda/published",
+        input: { path: ["eventSlug"] },
+      },
+      mcp: { name: "agenda_get_published" },
+    });
   });
 
 
@@ -766,11 +778,28 @@ describe("agenda service", () => {
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(1);
   });
 
+  it("returns NotFound for an unknown canonical event slug", async () => {
+    const result = await runEither(
+      owner("missing-agenda-owner"),
+      getPublishedAgenda({ eventSlug: "missing-event" }),
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: { _tag: "NotFound", entity: "event", id: "missing-event" },
+    });
+  });
+
   it("keeps confirmed talks private until publishing an immutable revision", async () => {
     const seeded = await seedAgenda("publication", { scheduled: true });
-    const before = await runEither(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
-    expect(before._tag).toBe("Left");
-    if (before._tag === "Left") expect(before.left).toMatchObject({ _tag: "NotFound" });
+    const before = await runEither(
+      seeded.user,
+      getPublishedAgenda({ eventSlug: seeded.eventSlug }),
+    );
+    expect(before).toMatchObject({
+      _tag: "Left",
+      left: { _tag: "NotFound", entity: "published agenda", id: seeded.eventId },
+    });
 
     const published = await runAs(seeded.user, publishAgenda({
       eventId: seeded.eventId,
@@ -783,6 +812,13 @@ describe("agenda service", () => {
     expect(published.talks).toHaveLength(1);
     expect(published.talks[0]).not.toHaveProperty("version");
     expect(published.talks[0]).not.toHaveProperty("submissionId");
+    expect(published.talks[0]).not.toHaveProperty("speakerIds");
+    const lookedUp = await runAs(
+      seeded.user,
+      getPublishedAgenda({ eventSlug: seeded.eventSlug }),
+    );
+    expect(lookedUp).toEqual(published);
+    expect(lookedUp.eventId).toBe(seeded.eventId);
     const [publicationChange] = await seeded.db.select().from(domainChanges).where(and(
       eq(domainChanges.eventId, seeded.eventId),
       eq(domainChanges.aggregateType, "agenda-publication"),
@@ -806,9 +842,169 @@ describe("agenda service", () => {
       expectedVersion: 2,
       idempotencyKey: "post-publish-move-0001",
     }));
-    const stillPublished = await runAs(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
+    const stillPublished = await runAs(
+      seeded.user,
+      getPublishedAgenda({ eventSlug: seeded.eventSlug }),
+    );
     expect(stillPublished.revision).toBe(1);
     expect(stillPublished.talks[0]?.startsAt).toBe(FIXED_DAY_START);
+  });
+
+  it("keeps the internal delivery companion byte-for-byte immutable", async () => {
+    const seeded = await seedAgenda("delivery-immutable", { scheduled: true });
+    await seeded.db.batch([
+      seeded.db
+        .update(speakers)
+        .set({ visible: false })
+        .where(and(eq(speakers.eventId, seeded.eventId), eq(speakers.id, seeded.speakerB))),
+      seeded.db.insert(talkSpeakers).values({
+        id: "delivery-immutable-talk-speaker-hidden",
+        eventId: seeded.eventId,
+        talkId: seeded.talkA,
+        speakerId: seeded.speakerB,
+        createdAt: new Date(FIXED_NOW),
+      }),
+    ]);
+
+    const published = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-delivery-immutable-0001",
+    }));
+    expect(published.talks[0]).toMatchObject({ speakerNames: ["Ada Rivera"] });
+    expect(published.talks[0]).not.toHaveProperty("speakerIds");
+
+    const before = await runAs(
+      seeded.user,
+      getAgendaDeliveryProjection({ eventId: published.eventId, revision: published.revision }),
+    );
+    expect(before).toEqual({
+      eventId: seeded.eventId,
+      revision: 1,
+      eventStartsAt: FIXED_DAY_START,
+      eventEndsAt: FIXED_DAY_START + 2 * 86_400_000,
+      talks: [{
+        talkId: seeded.talkA,
+        roomId: seeded.roomA,
+        startsAt: FIXED_DAY_START,
+        durationMin: 45,
+        speakerIds: [seeded.speakerA, seeded.speakerB],
+      }],
+    });
+
+    const changes = await seeded.db
+      .select()
+      .from(domainChanges)
+      .where(eq(domainChanges.eventId, seeded.eventId));
+    const publicChange = changes.find(({ aggregateType }) => aggregateType === "agenda-publication");
+    const deliveryChange = changes.find(({ aggregateType }) => aggregateType === "agenda-delivery");
+    expect(changes).toHaveLength(2);
+    expect(deliveryChange).toMatchObject({
+      aggregateId: seeded.eventId,
+      aggregateVersion: published.revision,
+      eventType: "agenda/delivery-published",
+      audiences: [{ kind: "admins" }],
+      payload: before,
+      requestId: publicChange?.requestId,
+      idempotencyRecordId: publicChange?.idempotencyRecordId,
+    });
+
+    await seeded.db.batch([
+      seeded.db
+        .update(events)
+        .set({
+          startsAt: new Date(FIXED_DAY_START + 86_400_000),
+          endsAt: new Date(FIXED_DAY_START + 3 * 86_400_000),
+        })
+        .where(eq(events.id, seeded.eventId)),
+      seeded.db
+        .update(talks)
+        .set({
+          roomId: seeded.roomB,
+          startsAt: new Date(FIXED_DAY_START + 7_200_000),
+          durationMin: 30,
+          version: 3,
+        })
+        .where(and(eq(talks.eventId, seeded.eventId), eq(talks.id, seeded.talkA))),
+      seeded.db
+        .delete(talkSpeakers)
+        .where(and(
+          eq(talkSpeakers.eventId, seeded.eventId),
+          eq(talkSpeakers.talkId, seeded.talkA),
+          eq(talkSpeakers.speakerId, seeded.speakerA),
+        )),
+    ]);
+
+    const after = await runAs(
+      seeded.user,
+      getAgendaDeliveryProjection({ eventId: published.eventId, revision: published.revision }),
+    );
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+  });
+
+  it("fails closed when the requested delivery revision is missing", async () => {
+    const seeded = await seedAgenda("delivery-missing", { scheduled: true });
+    await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-delivery-missing-0001",
+    }));
+
+    const result = await runEither(
+      seeded.user,
+      getAgendaDeliveryProjection({ eventId: seeded.eventId, revision: 2 }),
+    );
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "NotFound",
+        entity: "agenda delivery projection",
+        id: `${seeded.eventId}:2`,
+      },
+    });
+  });
+
+  it("fails closed when a delivery payload revision mismatches its key", async () => {
+    const seeded = await seedAgenda("delivery-mismatch", { scheduled: true });
+    const published = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-delivery-mismatch-0001",
+    }));
+    const projection = await runAs(
+      seeded.user,
+      getAgendaDeliveryProjection({ eventId: published.eventId, revision: published.revision }),
+    );
+    await seeded.db.insert(domainChanges).values({
+      id: "delivery-mismatch-corrupt-companion",
+      eventId: seeded.eventId,
+      aggregateType: "agenda-delivery",
+      aggregateId: seeded.eventId,
+      aggregateVersion: 2,
+      eventType: "agenda/delivery-published",
+      audiences: [{ kind: "admins" }],
+      payload: projection,
+      actorUserId: null,
+      actorApiKeyId: null,
+      requestId: "delivery-mismatch-request",
+      idempotencyRecordId: null,
+      occurredAt: new Date(FIXED_NOW),
+    });
+
+    const result = await runEither(
+      seeded.user,
+      getAgendaDeliveryProjection({ eventId: seeded.eventId, revision: 2 }),
+    );
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: { _tag: "External", service: "agenda-delivery-projection" },
+    });
   });
 
   it("rejects a stale publication snapshot without replacing the prior revision", async () => {
@@ -851,7 +1047,10 @@ describe("agenda service", () => {
     });
     expect(staleResult).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
 
-    const stillPublished = await runAs(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
+    const stillPublished = await runAs(
+      seeded.user,
+      getPublishedAgenda({ eventSlug: seeded.eventSlug }),
+    );
     expect(stillPublished).toEqual(firstPublication);
     const publicationChanges = await seeded.db.select().from(domainChanges).where(and(
       eq(domainChanges.eventId, seeded.eventId),

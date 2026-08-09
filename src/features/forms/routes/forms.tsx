@@ -309,7 +309,7 @@ export function FormsWorkspace({
             </Card>
           </aside>
 
-          <main className="min-w-0">
+          <section className="min-w-0" aria-label="Form editor">
             {selectedForm === undefined ? (
               <Skeleton className="h-[36rem] motion-reduce:animate-none" />
             ) : selectedForm === null ? (
@@ -330,7 +330,7 @@ export function FormsWorkspace({
                 onStatusChange={() => undefined}
               />
             )}
-          </main>
+          </section>
 
           <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start" aria-label="Live mobile preview">
             {selectedForm && (

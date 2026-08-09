@@ -13,7 +13,9 @@ import {
   toast,
 } from "@/ui";
 import { AgendaSnapshot, PublishedAgenda } from "@/features/agenda/schema";
+import { EventOutput } from "@/features/events/schema";
 import { PublishedSchedule } from "../components/PublishedSchedule";
+import { getPublicSchedule } from "../api";
 
 export const path = "/e/:eventSlug/publication";
 
@@ -40,16 +42,20 @@ export default function PublicationPage() {
     setPublished(null);
     setLoadError(null);
     void apiFetch(
-      `/api/v1/publication/${encodeURIComponent(eventSlug)}/status`,
-      { schema: AgendaSnapshot },
-    ).then(async (loaded) => {
+      `/api/v1/events/${encodeURIComponent(eventSlug)}`,
+      { schema: EventOutput },
+    ).then(async (event) => {
+      const loaded = await apiFetch(
+        `/api/v1/events/${encodeURIComponent(event.id)}/agenda?view=day`,
+        { schema: AgendaSnapshot },
+      );
       if (!active) return;
       setStatus(loaded);
       if (loaded.publication.revision === 0) return;
-      const projection = await apiFetch(
-        `/api/v1/publication/${encodeURIComponent(eventSlug)}/schedule`,
-        { schema: PublishedAgenda },
-      );
+      const projection = await getPublicSchedule(eventSlug, {
+        eventId: loaded.eventId,
+        revision: loaded.publication.revision,
+      });
       if (active) setPublished(projection);
     }).catch((caught: unknown) => {
       if (!active) return;
@@ -80,14 +86,14 @@ export default function PublicationPage() {
     setPublishing(true);
     try {
       const projection = await apiFetch(
-        `/api/v1/events/${encodeURIComponent(status.eventId)}/publication/schedule`,
+        `/api/v1/events/${encodeURIComponent(status.eventId)}/agenda/publications`,
         {
           method: "POST",
           body: {
             expectedRevision: status.publication.revision,
             expectedWorkspaceVersion: status.workspaceVersion,
             expectedEventVersion: status.eventVersion,
-            idempotencyKey: `publication-schedule-${crypto.randomUUID()}`,
+            idempotencyKey: `agenda-publication-${crypto.randomUUID()}`,
           },
           schema: PublishedAgenda,
         },

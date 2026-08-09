@@ -175,6 +175,29 @@ export const PublishedAgenda = Schema.Struct({
 });
 export type PublishedAgenda = typeof PublishedAgenda.Type;
 
+export const AgendaDeliveryTalk = Schema.Struct({
+  talkId: EntityId,
+  roomId: NullableEntityId,
+  startsAt: UnixTimestampMs,
+  durationMin: Schema.Int.pipe(Schema.positive()),
+  speakerIds: Schema.Array(EntityId),
+});
+export type AgendaDeliveryTalk = typeof AgendaDeliveryTalk.Type;
+
+export const AgendaDeliveryProjection = Schema.Struct({
+  eventId: EntityId,
+  revision: Schema.Int.pipe(Schema.positive()),
+  eventStartsAt: NullableTimestamp,
+  eventEndsAt: NullableTimestamp,
+  talks: Schema.Array(AgendaDeliveryTalk),
+});
+export type AgendaDeliveryProjection = typeof AgendaDeliveryProjection.Type;
+const EventSlug = Schema.String.pipe(
+  Schema.minLength(2),
+  Schema.maxLength(80),
+  Schema.pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+);
+
 export const PublishAgendaInput = Schema.Struct({
   eventId: EntityId,
   expectedRevision: Schema.Int.pipe(Schema.nonNegative()),
@@ -184,8 +207,14 @@ export const PublishAgendaInput = Schema.Struct({
 });
 export type PublishAgendaInput = typeof PublishAgendaInput.Type;
 
-export const GetPublishedAgendaInput = Schema.Struct({ eventId: EntityId });
+export const GetPublishedAgendaInput = Schema.Struct({ eventSlug: EventSlug });
 export type GetPublishedAgendaInput = typeof GetPublishedAgendaInput.Type;
+
+export const GetAgendaDeliveryProjectionInput = Schema.Struct({
+  eventId: EntityId,
+  revision: Schema.Int.pipe(Schema.positive()),
+});
+export type GetAgendaDeliveryProjectionInput = typeof GetAgendaDeliveryProjectionInput.Type;
 
 export const RealtimeConnectionState = Schema.Literal("connected", "reconnecting", "offline");
 export type RealtimeConnectionState = typeof RealtimeConnectionState.Type;

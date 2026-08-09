@@ -172,7 +172,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(2);
+    expect(migrations).toHaveLength(3);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
     await applyOneByOne(db, migrations.slice(1));
@@ -230,6 +230,22 @@ describe("baseline migration parity", () => {
       current_template_subject: "Changed after send",
       current_template_body: "<p>Changed after send</p>",
     });
+
+    await db.batch([
+      db.prepare(
+        `INSERT INTO mail_delivery_snapshots
+          (id, event_id, recipient_email, from_email, subject, rendered_html, rendered_text, created_at)
+         VALUES ('post-cutover-snapshot', NULL, 'speaker@example.com', 'Session Party <welcome@sessionparty.com>', 'Welcome', '<p>Welcome</p>', 'Welcome', ?)`,
+      ).bind(1_700_000_002_000),
+      db.prepare(
+        `INSERT INTO mail_deliveries
+          (id, snapshot_id, idempotency_key, scheduled_for, available_at, created_at)
+         VALUES ('post-cutover-send', 'post-cutover-snapshot', 'post-cutover-send', ?, ?, ?)`,
+      ).bind(1_700_000_002_000, 1_700_000_002_000, 1_700_000_002_000),
+    ]);
+    expect(await db.prepare(
+      "SELECT provider FROM mail_deliveries WHERE id = 'post-cutover-send'",
+    ).first()).toEqual({ provider: "cloudflare-email" });
 
     const credentials = await db.prepare(
       "SELECT (SELECT consumed_at IS NOT NULL FROM auth_tokens WHERE id = 'legacy-token') AS token_invalidated, (SELECT count(*) FROM api_keys WHERE id = 'legacy-api-key') AS legacy_api_key_count",

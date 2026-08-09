@@ -19,6 +19,29 @@ export const FORM_FIELD_TYPES = [
 export const FormFieldType = Schema.Literal(...FORM_FIELD_TYPES);
 export type FormFieldType = typeof FormFieldType.Type;
 
+const STRING_COMPATIBLE_FIELD_TYPES: Partial<Record<FormFieldType, true>> = {
+  text: true,
+  textarea: true,
+  select: true,
+  radio: true,
+  email: true,
+  url: true,
+  date: true,
+};
+
+const isStringCompatibleFieldType = (type: FormFieldType): boolean =>
+  STRING_COMPATIBLE_FIELD_TYPES[type] === true;
+
+export const FORM_SEMANTIC_KEYS = [
+  "submissionTitle",
+  "submissionAbstract",
+  "speakerName",
+  "speakerEmail",
+] as const;
+
+export const FormSemanticKey = Schema.Literal(...FORM_SEMANTIC_KEYS);
+export type FormSemanticKey = typeof FormSemanticKey.Type;
+
 export const FORM_FIELD_OPTION_TYPES: Readonly<Record<FormFieldType, boolean>> = {
   text: false,
   textarea: false,
@@ -62,6 +85,7 @@ export type ConditionalLogic = typeof ConditionalLogic.Type;
 const Label = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(240));
 const Option = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(160));
 const NullableText = Schema.NullOr(Schema.String);
+const NullableSemanticKey = Schema.NullOr(FormSemanticKey);
 const NullableTimestamp = Schema.NullOr(UnixTimestampMs);
 export const Routing = Schema.Record({ key: Schema.String, value: Schema.String });
 
@@ -82,6 +106,7 @@ export const FormFieldDraft = Schema.Struct({
   id: Schema.optional(EntityId),
   type: FormFieldType,
   label: Label,
+  semanticKey: NullableSemanticKey,
   helpText: NullableText,
   required: Schema.Boolean,
   options: Schema.Array(Option),
@@ -95,6 +120,7 @@ export const FormField = Schema.Struct({
   order: Schema.Int.pipe(Schema.positive()),
   type: FormFieldType,
   label: Label,
+  semanticKey: NullableSemanticKey,
   helpText: NullableText,
   required: Schema.Boolean,
   options: Schema.Array(Option),
@@ -110,6 +136,7 @@ export const FormVersionField = Schema.Struct({
   order: Schema.Int.pipe(Schema.positive()),
   type: FormFieldType,
   label: Label,
+  semanticKey: NullableSemanticKey,
   helpText: NullableText,
   required: Schema.Boolean,
   options: Schema.Array(Option),
@@ -222,12 +249,24 @@ export const validatePublishIntent = (form: FormDetail): readonly PublishValidat
   if (form.opensAt !== null && form.closesAt !== null && form.closesAt < form.opensAt) {
     issues.push({ controlId: "builder-closes-at", message: "Close time must be at or after open time." });
   }
+  const semanticFields = new Map<FormSemanticKey, FormField>();
   for (const [fieldIndex, field] of form.fields.entries()) {
     if (field.label.trim().length === 0) {
       issues.push({
         controlId: `builder-field-${field.id}-label`,
         message: `Field ${field.order} needs a label.`,
       });
+    }
+    if (field.semanticKey !== null) {
+      const duplicate = semanticFields.get(field.semanticKey);
+      if (duplicate) {
+        issues.push({
+          controlId: `builder-field-${field.id}-semantic-key`,
+          message: `${field.semanticKey} is already assigned to ${duplicate.label}.`,
+        });
+      } else {
+        semanticFields.set(field.semanticKey, field);
+      }
     }
     if (FORM_FIELD_OPTION_TYPES[field.type]) {
       if (field.options.length === 0) {
@@ -253,6 +292,39 @@ export const validatePublishIntent = (form: FormDetail): readonly PublishValidat
         });
       }
     });
+  }
+  if (form.purpose === "primary-cfp") {
+    for (const requiredKey of ["submissionTitle", "submissionAbstract", "speakerName"] as const) {
+      const assignedFields = form.fields.filter((field) => field.semanticKey === requiredKey);
+      const assignedField = assignedFields[0];
+      if (assignedFields.length !== 1 || !assignedField) {
+        issues.push({
+          controlId: assignedField
+            ? `builder-field-${assignedField.id}-semantic-key`
+            : (form.fields[0] ? `builder-field-${form.fields[0].id}-semantic-key` : "builder-add-field"),
+          message: `The primary CFP needs exactly one ${requiredKey} field.`,
+        });
+        continue;
+      }
+      if (!assignedField.required) {
+        issues.push({
+          controlId: `builder-field-${assignedField.id}-semantic-key`,
+          message: `The primary CFP ${requiredKey} field must be required.`,
+        });
+      }
+      if (assignedField.logic !== null) {
+        issues.push({
+          controlId: `builder-field-${assignedField.id}-semantic-key`,
+          message: `The primary CFP ${requiredKey} field cannot be conditional.`,
+        });
+      }
+      if (!isStringCompatibleFieldType(assignedField.type)) {
+        issues.push({
+          controlId: `builder-field-${assignedField.id}-type`,
+          message: `The primary CFP ${requiredKey} field must submit a text value.`,
+        });
+      }
+    }
   }
   if (form.purpose === "primary-cfp") {
     const completeRouter = form.fields.find((field) =>

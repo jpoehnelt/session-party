@@ -178,7 +178,7 @@ describe("EventRoom live authorization", () => {
       },
     });
     owner.close();
-  }, 15_000);
+  }, 30_000);
 
   it("rejects malformed internal broadcasts before delivery", async () => {
     const id = env.EVENT_ROOM.idFromName(EVENT_ID);

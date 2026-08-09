@@ -1,16 +1,83 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
-import { ApiError, apiFetch } from "@/client/api";
-import { Button, EmptyState, PageHeader, Skeleton } from "@/ui";
-import { PublishedAgenda } from "@/features/agenda/schema";
+import type { PublishedAgenda } from "@/features/agenda/schema";
+import { Button, PageHeader, Skeleton } from "@/ui";
 import { PublishedSchedule } from "../components/PublishedSchedule";
+import { getPublicSchedule, PublicationApiError } from "../api";
 
 export const path = "/embed/:eventSlug/schedule";
 export const layout = "bare";
 
-type ScheduleLoadError =
-  | { readonly kind: "unpublished" }
+export type ScheduleLoadError =
+  | { readonly kind: "unavailable" }
   | { readonly kind: "failed"; readonly message: string };
+
+export function scheduleLoadError(caught: unknown): ScheduleLoadError {
+  if (caught instanceof PublicationApiError && caught.status === 404) {
+    return { kind: "unavailable" };
+  }
+  return {
+    kind: "failed",
+    message: caught instanceof Error ? caught.message : "Could not load this schedule",
+  };
+}
+
+export interface ScheduleEmbedContentProps {
+  readonly agenda: PublishedAgenda | null | undefined;
+  readonly error: ScheduleLoadError | null;
+  readonly onRetry: () => void;
+}
+
+export function ScheduleEmbedContent({
+  agenda,
+  error,
+  onRetry,
+}: ScheduleEmbedContentProps) {
+  if (agenda === undefined) {
+    return (
+      <>
+        <PageHeader title="Event schedule" description="Loading the latest published schedule." />
+        <Skeleton className="min-h-72" />
+      </>
+    );
+  }
+  if (error?.kind === "unavailable" || (agenda === null && error === null)) {
+    return (
+      <PageHeader
+        title="Schedule not published"
+        description="This event's schedule is unavailable until the organizer publishes it."
+      />
+    );
+  }
+  if (error?.kind === "failed") {
+    return (
+      <PageHeader
+        title="Could not load the schedule"
+        description={error.message}
+        actions={<Button onClick={onRetry}>Try again</Button>}
+      />
+    );
+  }
+  if (agenda === null) {
+    return null;
+  }
+  return (
+    <>
+      <PageHeader
+        title={agenda.eventName}
+        description={`${agenda.location ?? "Online"} · ${agenda.timezone}`}
+      />
+      <PublishedSchedule agenda={agenda} />
+      <p className="mt-8 text-xs text-ink-faint">
+        Schedule revision {agenda.revision} · Published {new Intl.DateTimeFormat(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+          timeZone: agenda.timezone,
+        }).format(agenda.publishedAt)}
+      </p>
+    </>
+  );
+}
 
 export default function ScheduleEmbedPage() {
   const { eventSlug = "" } = useParams();
@@ -22,22 +89,12 @@ export default function ScheduleEmbedPage() {
     let active = true;
     setAgenda(undefined);
     setError(null);
-    void apiFetch(
-      `/api/v1/publication/${encodeURIComponent(eventSlug)}/schedule`,
-      { schema: PublishedAgenda },
-    ).then((loaded) => {
+    void getPublicSchedule(eventSlug).then((loaded) => {
       if (active) setAgenda(loaded);
     }).catch((caught: unknown) => {
       if (!active) return;
       setAgenda(null);
-      if (caught instanceof ApiError && caught.status === 404) {
-        setError({ kind: "unpublished" });
-        return;
-      }
-      setError({
-        kind: "failed",
-        message: caught instanceof Error ? caught.message : "Could not load this schedule",
-      });
+      setError(scheduleLoadError(caught));
     });
     return () => {
       active = false;
@@ -45,39 +102,13 @@ export default function ScheduleEmbedPage() {
   }, [eventSlug, request]);
 
   return (
-    <main className="min-h-screen bg-surface px-4 py-8 text-ink sm:px-8 sm:py-12">
-      <div className="mx-auto max-w-4xl">
-        {agenda === undefined ? (
-          <Skeleton className="min-h-72" />
-        ) : error?.kind === "unpublished" ? (
-          <EmptyState
-            title="Schedule not published"
-            description="This event's schedule is still private. Check back after the organizer publishes it."
-          />
-        ) : error?.kind === "failed" ? (
-          <EmptyState
-            title="Could not load the schedule"
-            description={error.message}
-            action={<Button onClick={() => setRequest((current) => current + 1)}>Try again</Button>}
-          />
-        ) : agenda === null ? (
-          <EmptyState title="Schedule not published" description="This event's schedule is still private." />
-        ) : (
-          <>
-            <PageHeader
-              title={agenda.eventName}
-              description={`${agenda.location ?? "Online"} · ${agenda.timezone}`}
-            />
-            <PublishedSchedule agenda={agenda} />
-            <p className="mt-8 text-xs text-ink-faint">
-              Schedule revision {agenda.revision} · Published {new Intl.DateTimeFormat(undefined, {
-                dateStyle: "medium",
-                timeStyle: "short",
-                timeZone: agenda.timezone,
-              }).format(agenda.publishedAt)}
-            </p>
-          </>
-        )}
+    <main className="min-h-dvh bg-surface px-3 py-6 text-ink sm:px-8 sm:py-12">
+      <div className="mx-auto w-full max-w-4xl">
+        <ScheduleEmbedContent
+          agenda={agenda}
+          error={error}
+          onRetry={() => setRequest((current) => current + 1)}
+        />
       </div>
     </main>
   );

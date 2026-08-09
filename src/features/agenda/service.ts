@@ -21,15 +21,20 @@ import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 // BaselineGreen may rename these invocation seams; keep the shared import isolated here.
 import { CurrentUser, Db, Rooms } from "@/server/services";
-import { PublishedAgenda as PublishedAgendaSchema } from "./schema";
+import {
+  AgendaDeliveryProjection as AgendaDeliveryProjectionSchema,
+  PublishedAgenda as PublishedAgendaSchema,
+} from "./schema";
 import type {
   AgendaConflict,
+  AgendaDeliveryProjection,
   AgendaMutationResult,
   AgendaSnapshot,
   AgendaTalk,
   BacklogProposal,
   CancelTalkInput,
   CreateTalkInput,
+  GetAgendaDeliveryProjectionInput,
   GetPublishedAgendaInput,
   ListAgendaInput,
   MoveTalkInput,
@@ -46,6 +51,7 @@ const PUBLIC_AUDIENCE = [{ kind: "public" }] as const;
 const TALK_CHANGE_EVENT = "agenda.talk_changed";
 const AGENDA_SNAPSHOT_MAX_ATTEMPTS = 3;
 const PUBLICATION_EVENT = "agenda/published";
+const DELIVERY_PROJECTION_EVENT = "agenda/delivery-published";
 
 type Principal = CurrentUserValue;
 type IdempotencyContext = {
@@ -147,6 +153,16 @@ const getEvent = (eventId: string) =>
     );
     if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: eventId }));
     return event;
+  });
+
+const resolveEventIdBySlug = (eventSlug: string): Effect.Effect<string, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [event] = yield* database(() =>
+      db.select({ id: events.id }).from(events).where(eq(events.slug, eventSlug)).limit(1),
+    );
+    if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: eventSlug }));
+    return event.id;
   });
 
 const loadTalkRows = (eventId: string): Effect.Effect<readonly AgendaTalk[], AppError, Db> =>
@@ -355,6 +371,15 @@ const decodePublishedAgenda = (payload: unknown): Effect.Effect<PublishedAgenda,
     ),
   );
 
+const decodeAgendaDeliveryProjection = (
+  payload: unknown,
+): Effect.Effect<AgendaDeliveryProjection, External> =>
+  Schema.decodeUnknown(AgendaDeliveryProjectionSchema)(payload).pipe(
+    Effect.mapError((error) =>
+      new External({ service: "agenda-delivery-projection", detail: String(error) }),
+    ),
+  );
+
 const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | null, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
@@ -373,6 +398,40 @@ const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | nul
     );
     if (!change) return null;
     return yield* decodePublishedAgenda(change.payload);
+  });
+
+export const getAgendaDeliveryProjection = (
+  input: GetAgendaDeliveryProjectionInput,
+): Effect.Effect<AgendaDeliveryProjection, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [change] = yield* database(() =>
+      db
+        .select({ payload: domainChanges.payload })
+        .from(domainChanges)
+        .where(and(
+          eq(domainChanges.eventId, input.eventId),
+          eq(domainChanges.aggregateType, "agenda-delivery"),
+          eq(domainChanges.aggregateId, input.eventId),
+          eq(domainChanges.aggregateVersion, input.revision),
+          eq(domainChanges.eventType, DELIVERY_PROJECTION_EVENT),
+        ))
+        .limit(1),
+    );
+    if (!change) {
+      return yield* Effect.fail(new NotFound({
+        entity: "agenda delivery projection",
+        id: `${input.eventId}:${input.revision}`,
+      }));
+    }
+    const projection = yield* decodeAgendaDeliveryProjection(change.payload);
+    if (projection.eventId !== input.eventId || projection.revision !== input.revision) {
+      return yield* Effect.fail(new External({
+        service: "agenda-delivery-projection",
+        detail: `Projection key does not match ${input.eventId}:${input.revision}`,
+      }));
+    }
+    return projection;
   });
 
 const currentWorkspaceVersion = (eventId: string): Effect.Effect<number, AppError, Db> =>
@@ -932,28 +991,48 @@ export const publishAgenda = (
       names.push(row.name);
       visibleSpeakerNames.set(row.talkId, names);
     }
-    const publicTalks: PublicAgendaTalk[] = agendaTalks
-      .filter((talk): talk is AgendaTalk & { startsAt: number } => talk.status === "confirmed" && talk.startsAt !== null)
-      .map((talk) => ({
-        id: talk.id,
-        title: talk.title,
-        description: talk.description,
-        track: talk.trackId === null ? null : trackNames.get(talk.trackId) ?? null,
-        room: talk.roomId === null ? null : roomNames.get(talk.roomId) ?? null,
-        startsAt: talk.startsAt,
-        durationMin: talk.durationMin,
-        speakerNames: visibleSpeakerNames.get(talk.id) ?? [],
-      }))
-      .sort((left, right) => left.startsAt - right.startsAt || left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
+    const confirmedTalks = agendaTalks
+      .filter((talk): talk is AgendaTalk & { startsAt: number } =>
+        talk.status === "confirmed" && talk.startsAt !== null
+      )
+      .sort((left, right) =>
+        left.startsAt - right.startsAt ||
+        left.title.localeCompare(right.title) ||
+        left.id.localeCompare(right.id)
+      );
+    const publicTalks: PublicAgendaTalk[] = confirmedTalks.map((talk) => ({
+      id: talk.id,
+      title: talk.title,
+      description: talk.description,
+      track: talk.trackId === null ? null : trackNames.get(talk.trackId) ?? null,
+      room: talk.roomId === null ? null : roomNames.get(talk.roomId) ?? null,
+      startsAt: talk.startsAt,
+      durationMin: talk.durationMin,
+      speakerNames: visibleSpeakerNames.get(talk.id) ?? [],
+    }));
+    const revision = currentRevision + 1;
     const published = yield* decodePublishedAgenda({
       eventId: event.id,
       eventName: event.name,
       eventSlug: event.slug,
       timezone: event.timezone,
       location: event.location,
-      revision: currentRevision + 1,
+      revision,
       publishedAt: prepared.now.getTime(),
       talks: publicTalks,
+    });
+    const deliveryProjection = yield* decodeAgendaDeliveryProjection({
+      eventId: event.id,
+      revision,
+      eventStartsAt: timestamp(event.startsAt),
+      eventEndsAt: timestamp(event.endsAt),
+      talks: confirmedTalks.map((talk) => ({
+        talkId: talk.id,
+        roomId: talk.roomId,
+        startsAt: talk.startsAt,
+        durationMin: talk.durationMin,
+        speakerIds: [...talk.speakerIds].sort(),
+      })),
     });
     if (interlock) {
       yield* interlock({
@@ -965,6 +1044,7 @@ export const publishAgenda = (
     }
     const actor = actorColumns(principal);
     const changeId = nanoid();
+    const deliveryChangeId = nanoid();
     const auditId = nanoid();
     const completedIdempotency = idempotencyInsert(
       prepared,
@@ -1006,6 +1086,20 @@ export const publishAgenda = (
         idempotencyRecordId: prepared.id,
         occurredAt: prepared.now,
       }),
+      db.insert(domainChanges).values({
+        id: deliveryChangeId,
+        eventId: input.eventId,
+        aggregateType: "agenda-delivery",
+        aggregateId: input.eventId,
+        aggregateVersion: deliveryProjection.revision,
+        eventType: DELIVERY_PROJECTION_EVENT,
+        audiences: PRIVATE_AUDIENCE,
+        payload: deliveryProjection,
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
       db.insert(auditLog).values({
         id: auditId,
         eventId: input.eventId,
@@ -1027,8 +1121,8 @@ export const getPublishedAgenda = (
   input: GetPublishedAgendaInput,
 ): Effect.Effect<PublishedAgenda, AppError, Db> =>
   Effect.gen(function* () {
-    yield* getEvent(input.eventId);
-    const published = yield* latestPublication(input.eventId);
-    if (!published) return yield* Effect.fail(new NotFound({ entity: "published agenda", id: input.eventId }));
+    const eventId = yield* resolveEventIdBySlug(input.eventSlug);
+    const published = yield* latestPublication(eventId);
+    if (!published) return yield* Effect.fail(new NotFound({ entity: "published agenda", id: eventId }));
     return published;
   });

@@ -364,7 +364,7 @@ auth.post("/request-link", async (c) => {
         nowMs,
       ),
       c.env.DB.prepare(
-        "INSERT INTO mail_deliveries (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, lease_owner, lease_expires_at, attempt_count, max_attempts, provider, provider_message_id, provider_result, last_error, sent_at, dead_lettered_at, created_at) VALUES (?, ?, ?, 'pending', ?, ?, NULL, NULL, 0, 8, 'resend', NULL, NULL, NULL, NULL, NULL, ?)",
+        "INSERT INTO mail_deliveries (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, lease_owner, lease_expires_at, attempt_count, max_attempts, provider, provider_message_id, provider_result, last_error, sent_at, dead_lettered_at, created_at) VALUES (?, ?, ?, 'pending', ?, ?, NULL, NULL, 0, 8, 'cloudflare-email', NULL, NULL, NULL, NULL, NULL, ?)",
       ).bind(deliveryId, snapshotId, deliveryIdempotencyKey, nowMs, nowMs, nowMs),
     );
 

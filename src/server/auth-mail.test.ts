@@ -7,12 +7,15 @@ import {
   SELF,
   type D1Migration,
 } from "cloudflare:test";
+import { Effect } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { hashBearerMaterial } from "./auth";
 import worker from "./index";
 import {
+  AppLayer,
   isExplicitLocalEnvironment,
   mailFrom,
+  MailQueue,
   requireMailConfiguration,
   sendMail,
   sessionSecret,
@@ -42,7 +45,8 @@ const nonLocalAuthEnv = new Proxy(env, {
   get(target, property, receiver) {
     if (property === "LOCAL_MODE") return undefined;
     if (property === "SESSION_SECRET") return "explicit-local-only-session-secret-v1";
-    if (property === "MAIL_FROM") return "Session Party <onboarding@resend.dev>";
+    if (property === "MAIL_FROM") return "Session Party <welcome@sessionparty.com>";
+    if (property === "EMAIL") return { send: async () => ({ messageId: "test-email-id" }) };
     return Reflect.get(target, property, receiver);
   },
 }) as Env;
@@ -138,8 +142,7 @@ describe("durable magic-link authentication", () => {
       event_id: null,
       template_id: null,
       recipient_email: email,
-      recipient_name: "Concurrent Auth",
-      from_email: "Session Party <onboarding@resend.dev>",
+      from_email: "Session Party <welcome@sessionparty.com>",
       reply_to_email: null,
       subject: "Sign in to Session Party",
       ics_filename: null,
@@ -510,6 +513,7 @@ describe("durable magic-link authentication", () => {
       to: "recipient@example.com",
       subject: "Stable delivery",
       html: "<p>Stable</p>",
+      text: "Stable",
       icsFilename: "session.ics",
       ics: "BEGIN:VCALENDAR\nEND:VCALENDAR",
       idempotencyKey: "private-stable-delivery-key",
@@ -520,40 +524,111 @@ describe("durable magic-link authentication", () => {
     expect(first.providerMessageId).toBe(second.providerMessageId);
     expect(first.providerMessageId).toMatch(/^local-fake:[a-f0-9]{64}$/);
     expect(first.providerMessageId).not.toContain(payload.idempotencyKey);
+    expect(first.providerResult.outboundCorrelationId).toBe(second.providerResult.outboundCorrelationId);
+    expect(first.providerResult.outboundCorrelationId).toMatch(/^sp-[a-f0-9]{64}$/);
+    expect(first.providerResult.outboundCorrelationId).not.toContain(payload.idempotencyKey);
   });
   it("forces deterministic local secrets and fake mail despite production-looking secrets", async () => {
     const localEnv = Object.assign(Object.create(env), {
       LOCAL_MODE: "1",
       SESSION_SECRET: "must-not-win",
-      RESEND_API_KEY: "must-not-egress",
+      EMAIL: { send: async () => { throw new Error("local fake attempted egress"); } },
       MAIL_FROM: "must-not-win@example.com",
     }) as Env & {
       LOCAL_MODE: string;
       SESSION_SECRET: string;
-      RESEND_API_KEY: string;
     };
     expect(isExplicitLocalEnvironment(localEnv)).toBe(true);
     expect(sessionSecret(localEnv)).toBe("explicit-local-only-session-secret-v1");
-    expect(mailFrom(localEnv)).toBe("Session Party <onboarding@resend.dev>");
+    expect(mailFrom(localEnv)).toBe("Session Party <welcome@sessionparty.com>");
     expect((await sendMail(localEnv, {
       fromEmail: mailFrom(localEnv),
       to: "sensitive-recipient@example.com",
       subject: "Sensitive subject",
       html: "<p>Sensitive body</p>",
+      text: "Sensitive body",
       idempotencyKey: "local-no-egress",
     })).provider).toBe("local-fake");
   });
+  it("provides the configured sender and wakes only the canonical mail scheduler", async () => {
+    const sender = await Effect.runPromise(
+      Effect.gen(function* () {
+        const queue = yield* MailQueue;
+        yield* queue.wake();
+        return queue.fromEmail;
+      }).pipe(Effect.provide(AppLayer(env))),
+    );
+    expect(sender).toBe("Session Party <welcome@sessionparty.com>");
+    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail"));
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.get("mail-scheduler-enabled")).toBe(true);
+    });
+  });
 
+
+  it("maps immutable content to Cloudflare Email with stable correlation metadata", async () => {
+    const sent: EmailMessageBuilder[] = [];
+    const productionEnv = Object.assign(Object.create(env), {
+      LOCAL_MODE: undefined,
+      EMAIL: {
+        send: async (message: EmailMessageBuilder) => {
+          sent.push(message);
+          return { messageId: `cloudflare-${sent.length}` };
+        },
+      },
+      MAIL_FROM: "Session Party <welcome@sessionparty.com>",
+    }) as Env;
+    const payload = {
+      fromEmail: "Session Party <welcome@sessionparty.com>",
+      replyToEmail: "organizer@example.com",
+      to: "speaker@example.com",
+      subject: "Session confirmed",
+      html: "<p>Confirmed</p>",
+      text: "Confirmed",
+      icsFilename: "session.ics",
+      ics: "BEGIN:VCALENDAR\nEND:VCALENDAR",
+      idempotencyKey: "mail-delivery:stable",
+    } as const;
+    const first = await sendMail(productionEnv, payload);
+    const second = await sendMail(productionEnv, payload);
+    expect(first).toMatchObject({
+      provider: "cloudflare-email",
+      providerMessageId: "cloudflare-1",
+    });
+    expect(second.providerMessageId).toBe("cloudflare-2");
+    expect(sent[0]).toMatchObject({
+      from: payload.fromEmail,
+      replyTo: payload.replyToEmail,
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
+      attachments: [{
+        disposition: "attachment",
+        filename: payload.icsFilename,
+        type: "text/calendar; charset=utf-8; method=REQUEST",
+        content: btoa(payload.ics),
+      }],
+    });
+    expect(sent[0]?.headers?.["Message-ID"]).toBeUndefined();
+    expect(sent[0]?.headers?.["X-Session-Party-Delivery-ID"]).toBe(
+      sent[1]?.headers?.["X-Session-Party-Delivery-ID"],
+    );
+    expect(first.providerResult.outboundCorrelationId).toBe(
+      sent[0]?.headers?.["X-Session-Party-Delivery-ID"],
+    );
+    expect(first.providerResult.outboundCorrelationId).not.toContain(payload.idempotencyKey);
+  });
   it("fails production secrets closed, hides local smoke, and sets Secure cookies", async () => {
     const productionMissing = Object.assign(Object.create(env), {
       LOCAL_MODE: undefined,
       SESSION_SECRET: undefined,
-      RESEND_API_KEY: undefined,
+      EMAIL: undefined,
       MAIL_FROM: "Session Party <mail@example.com>",
     }) as Env;
     expect(isExplicitLocalEnvironment(productionMissing)).toBe(false);
     expect(() => sessionSecret(productionMissing)).toThrow(/SESSION_SECRET/);
-    expect(() => requireMailConfiguration(productionMissing)).toThrow(/RESEND_API_KEY/);
+    expect(() => requireMailConfiguration(productionMissing)).toThrow(/EMAIL/);
     const smokeContext = createExecutionContext();
     const smoke = await worker.fetch(
       new Request("https://example.test/__local/smoke", { method: "POST" }),
@@ -565,7 +640,7 @@ describe("durable magic-link authentication", () => {
     const productionEnv = Object.assign(Object.create(env), {
       LOCAL_MODE: undefined,
       SESSION_SECRET: "production-cookie-test-secret",
-      RESEND_API_KEY: "production-mail-test-secret",
+      EMAIL: { send: async () => ({ messageId: "production-test" }) },
       MAIL_FROM: "Session Party <mail@example.com>",
     }) as Env;
     const rawToken = "production-secure-cookie-token";

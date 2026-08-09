@@ -14,19 +14,14 @@ import { eq } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server.edge";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppLayer, Authorizer, CurrentUser, Db } from "@/server/services";
-import type { PublishedAgenda } from "@/features/agenda/schema";
-import { PublishedSchedule } from "./components/PublishedSchedule";
-import { operations } from "./operations";
 import {
-  getPublicationStatus,
-  getPublicSchedule,
-  publishSchedule,
-} from "./service";
-import { layout as embedLayout, path as embedPath } from "./routes/schedule-embed";
+  getPublishedAgendaOperation,
+  listAgendaOperation,
+  publishAgendaOperation,
+} from "@/features/agenda/operations";
+import { getPublishedAgenda, publishAgenda } from "@/features/agenda/service";
+import { AppLayer, CurrentUser, Db } from "@/server/services";
 
 interface TestEnv extends Cloudflare.Env {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -46,18 +41,18 @@ const browserPrincipal = (userId: string): Principal => ({
   expiresAt: FIXED_NOW + 86_400_000,
 });
 
-const runEitherAs = <A, E, R extends Authorizer | CurrentUser | Db>(
+const runEitherAs = <A, E>(
   principal: Principal,
-  effect: Effect.Effect<A, E, R>,
+  effect: Effect.Effect<A, E, CurrentUser | Db>,
 ) =>
   Effect.runPromise(effect.pipe(
     Effect.either,
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
   ));
 
-const runAs = <A, E, R extends Authorizer | CurrentUser | Db>(
+const runAs = <A, E>(
   principal: Principal,
-  effect: Effect.Effect<A, E, R>,
+  effect: Effect.Effect<A, E, CurrentUser | Db>,
 ) =>
   Effect.runPromise(effect.pipe(
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
@@ -70,7 +65,6 @@ const seedPublication = async (name: string) => {
   const eventId = id("event");
   const eventSlug = id("summit");
   const ownerId = id("owner");
-  const reviewerId = id("reviewer");
   const trackId = id("track");
   const roomId = id("room");
   const visibleSpeakerId = id("speaker-visible");
@@ -79,22 +73,13 @@ const seedPublication = async (name: string) => {
   const draftTalkId = id("talk-draft");
 
   const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
-    db.insert(users).values([
-      {
-        id: ownerId,
-        email: `${ownerId}@example.com`,
-        name: "Publication Owner",
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: reviewerId,
-        email: `${reviewerId}@example.com`,
-        name: "Publication Reviewer",
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]),
+    db.insert(users).values({
+      id: ownerId,
+      email: `${ownerId}@example.com`,
+      name: "Publication Owner",
+      createdAt: now,
+      updatedAt: now,
+    }),
     db.insert(events).values({
       id: eventId,
       slug: eventSlug,
@@ -106,24 +91,14 @@ const seedPublication = async (name: string) => {
       createdAt: now,
       updatedAt: now,
     }),
-    db.insert(eventMembers).values([
-      {
-        id: id("member-owner"),
-        eventId,
-        userId: ownerId,
-        role: "owner",
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: id("member-reviewer"),
-        eventId,
-        userId: reviewerId,
-        role: "reviewer",
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]),
+    db.insert(eventMembers).values({
+      id: id("member-owner"),
+      eventId,
+      userId: ownerId,
+      role: "owner",
+      createdAt: now,
+      updatedAt: now,
+    }),
     db.insert(tracks).values({
       id: trackId,
       eventId,
@@ -215,7 +190,7 @@ const seedPublication = async (name: string) => {
     eventId,
     eventSlug,
     owner: browserPrincipal(ownerId),
-    reviewer: browserPrincipal(reviewerId),
+    visibleSpeakerId,
   };
 };
 
@@ -224,67 +199,67 @@ beforeAll(async () => {
   await applyD1Migrations(env.DB, [...env.TEST_MIGRATIONS]);
 });
 
-describe("publication service and descriptors", () => {
-  it("owns publication operations and enforces organizer authorization", async () => {
-    expect(operations.map(({ id }) => id)).toEqual([
-      "publication.getSchedule",
-      "publication.getStatus",
-      "publication.publishSchedule",
+describe("publication boundary", () => {
+  it("owns no shadow agenda REST, MCP, DTO, or operation aliases", () => {
+    expect([
+      listAgendaOperation.id,
+      publishAgendaOperation.id,
+      getPublishedAgendaOperation.id,
+    ]).toEqual(["agenda.list", "agenda.publish", "agenda.getPublished"]);
+    expect([
+      listAgendaOperation.rest.path,
+      publishAgendaOperation.rest.path,
+      getPublishedAgendaOperation.rest.path,
+    ]).toEqual([
+      "/events/:eventId/agenda",
+      "/events/:eventId/agenda/publications",
+      "/public/events/:eventSlug/agenda/published",
     ]);
-    expect(operations.map(({ mcp }) => mcp?.name)).toEqual([
-      "publication_get_schedule",
-      "publication_get_status",
-      "publication_publish_schedule",
-    ]);
-
-    const seeded = await seedPublication("organizer-auth");
-    const ownerStatus = await runEitherAs(
-      seeded.owner,
-      getPublicationStatus({ eventSlug: seeded.eventSlug }),
-    );
-    expect(ownerStatus).toMatchObject({ _tag: "Right", right: { eventId: seeded.eventId } });
-
-    const reviewerStatus = await runEitherAs(
-      seeded.reviewer,
-      getPublicationStatus({ eventSlug: seeded.eventSlug }),
-    );
-    expect(reviewerStatus).toMatchObject({ _tag: "Left", left: { _tag: "Forbidden" } });
-
-    const reviewerPublish = await runEitherAs(
-      seeded.reviewer,
-      publishSchedule({
-        eventId: seeded.eventId,
-        expectedRevision: 0,
-        expectedWorkspaceVersion: 0,
-        expectedEventVersion: 1,
-        idempotencyKey: "publication-reviewer-denied-0001",
-      }),
-    );
-    expect(reviewerPublish).toMatchObject({ _tag: "Left", left: { _tag: "Forbidden" } });
+    expect([
+      listAgendaOperation.mcp?.name,
+      publishAgendaOperation.mcp?.name,
+      getPublishedAgendaOperation.mcp?.name,
+    ]).toEqual(["agenda_list", "agenda_publish", "agenda_get_published"]);
   });
 
-  it("reads the immutable publication after private agenda changes", async () => {
-    const seeded = await seedPublication("immutable-read");
+  it("keeps unpublished schedules private", async () => {
+    const seeded = await seedPublication("unpublished-privacy");
+    const result = await runEitherAs(
+      seeded.owner,
+      getPublishedAgenda({ eventSlug: seeded.eventSlug }),
+    );
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "NotFound" } });
+    expect(JSON.stringify(result)).not.toContain("Effects at scale");
+    expect(JSON.stringify(result)).not.toContain("Private draft talk");
+  });
+
+  it("publishes only confirmed talks and visible speaker names as an immutable snapshot", async () => {
+    const seeded = await seedPublication("immutable-publication");
     const published = await runAs(
       seeded.owner,
-      publishSchedule({
+      publishAgenda({
         eventId: seeded.eventId,
         expectedRevision: 0,
         expectedWorkspaceVersion: 0,
         expectedEventVersion: 1,
-        idempotencyKey: "publication-immutable-read-0001",
+        idempotencyKey: "publication-immutable-snapshot-0001",
       }),
     );
+
     expect(published.talks).toEqual([
       expect.objectContaining({
         id: seeded.confirmedTalkId,
         speakerNames: ["Ada Rivera"],
         startsAt: STARTS_AT,
         title: "Effects at scale",
+        track: "Systems",
+        room: "Harbor",
       }),
     ]);
     expect(JSON.stringify(published)).not.toContain("Private Speaker");
     expect(JSON.stringify(published)).not.toContain("Private draft talk");
+    expect(published.talks[0]).not.toHaveProperty("submissionId");
+    expect(published.talks[0]).not.toHaveProperty("version");
 
     await seeded.db
       .update(talks)
@@ -295,65 +270,21 @@ describe("publication service and descriptors", () => {
         updatedAt: new Date(FIXED_NOW + 1_000),
       })
       .where(eq(talks.id, seeded.confirmedTalkId));
+    await seeded.db
+      .update(speakers)
+      .set({
+        displayName: "Unpublished speaker edit",
+        version: 2,
+        updatedAt: new Date(FIXED_NOW + 1_000),
+      })
+      .where(eq(speakers.id, seeded.visibleSpeakerId));
 
-    const publicRead = await runAs(
+    const stillPublished = await runAs(
       seeded.owner,
-      getPublicSchedule({ eventSlug: seeded.eventSlug }),
+      getPublishedAgenda({ eventSlug: seeded.eventSlug }),
     );
-    expect(publicRead).toEqual(published);
-    expect(JSON.stringify(publicRead)).not.toContain("Unpublished agenda edit");
-  });
-
-  it("returns no private schedule before the first publication", async () => {
-    const seeded = await seedPublication("unpublished-privacy");
-    const result = await runEitherAs(
-      seeded.owner,
-      getPublicSchedule({ eventSlug: seeded.eventSlug }),
-    );
-    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "NotFound" } });
-    expect(JSON.stringify(result)).not.toContain("Effects at scale");
-    expect(JSON.stringify(result)).not.toContain("Private draft talk");
+    expect(stillPublished).toEqual(published);
+    expect(JSON.stringify(stillPublished)).not.toContain("Unpublished");
   });
 });
 
-describe("public schedule rendering", () => {
-  const agenda: PublishedAgenda = {
-    eventId: "render-event",
-    eventName: "Render Summit",
-    eventSlug: "render-summit",
-    timezone: "America/Los_Angeles",
-    location: "Harbor Hall",
-    revision: 2,
-    publishedAt: FIXED_NOW,
-    talks: [{
-      id: "render-talk",
-      title: "Immutable systems",
-      description: "How to publish without leaking drafts.",
-      track: "Systems",
-      room: "Harbor",
-      startsAt: STARTS_AT,
-      durationMin: 45,
-      speakerNames: ["Ada Rivera"],
-    }],
-  };
-
-  it("owns the bare public embed route and renders only publication fields", () => {
-    expect(embedPath).toBe("/embed/:eventSlug/schedule");
-    expect(embedLayout).toBe("bare");
-    const markup = renderToStaticMarkup(createElement(PublishedSchedule, { agenda }));
-    expect(markup).toContain("Immutable systems");
-    expect(markup).toContain("Ada Rivera");
-    expect(markup).toContain("Systems");
-    expect(markup).toContain("Harbor");
-    expect(markup).not.toContain("submissionId");
-    expect(markup).not.toContain("version");
-  });
-
-  it("renders a truthful empty state for an empty published revision", () => {
-    const markup = renderToStaticMarkup(createElement(PublishedSchedule, {
-      agenda: { ...agenda, talks: [] },
-    }));
-    expect(markup).toContain("Schedule coming soon");
-    expect(markup).toContain("no sessions have been added");
-  });
-});

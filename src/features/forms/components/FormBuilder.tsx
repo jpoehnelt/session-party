@@ -5,6 +5,7 @@ import { Badge, Button, Card, Checkbox, Input, Select, Textarea } from "@/ui";
 import {
   FORM_FIELD_OPTION_TYPES,
   FORM_FIELD_TYPES,
+  FORM_SEMANTIC_KEYS,
   FormDetail,
   normalizeOptionDraft,
   updateConditionAt,
@@ -12,6 +13,7 @@ import {
   type ConditionalLogic,
   type FormField,
   type FormFieldType,
+  type FormSemanticKey,
   type FormStatus,
   type PublishValidationIssue,
 } from "../schema";
@@ -29,6 +31,13 @@ const FIELD_TYPE_LABELS: Record<FormFieldType, string> = {
   date: "Date",
   heading: "Section heading",
   html: "Guidance text",
+};
+
+const SEMANTIC_KEY_LABELS: Record<FormSemanticKey, string> = {
+  submissionTitle: "Submission title",
+  submissionAbstract: "Submission abstract",
+  speakerName: "Speaker name",
+  speakerEmail: "Speaker email",
 };
 
 
@@ -159,6 +168,7 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange,
       options: [],
       logic: null,
       routing: {},
+      semanticKey: null,
       version: 1,
     });
     clearFeedback();
@@ -187,6 +197,7 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange,
     if (index < 0) return "root.publish";
     if (issue.controlId.endsWith("-label")) return `fields.${index}.label`;
     if (issue.controlId.endsWith("-options")) return `fields.${index}.options`;
+    if (issue.controlId.endsWith("-semantic-key")) return `fields.${index}.semanticKey`;
     if (issue.controlId.includes("-routing-")) return `fields.${index}.routing`;
     return `fields.${index}`;
   };
@@ -441,6 +452,23 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange,
                 }}
               >
                 {FORM_FIELD_TYPES.map((type) => <option key={type} value={type}>{FIELD_TYPE_LABELS[type]}</option>)}
+              </Select>
+              <Select
+                id={`builder-field-${field.id}-semantic-key`}
+                label="Submission/review meaning"
+                hint="Assign a stable meaning for public submission and review. Labels are never used as a fallback."
+                value={field.semanticKey ?? ""}
+                error={errors.fields?.[index]?.semanticKey?.message}
+                onChange={(event) => patchField(index, {
+                  semanticKey: event.currentTarget.value === ""
+                    ? null
+                    : event.currentTarget.value as FormSemanticKey,
+                })}
+              >
+                <option value="">None</option>
+                {FORM_SEMANTIC_KEYS.map((semanticKey) => (
+                  <option key={semanticKey} value={semanticKey}>{SEMANTIC_KEY_LABELS[semanticKey]}</option>
+                ))}
               </Select>
               <div className="sm:col-span-2">
                 <Input
