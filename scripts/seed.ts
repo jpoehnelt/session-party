@@ -6,7 +6,7 @@ const createdAt = 1_786_118_400_000;
 const expiresAt = 4_102_444_800_000;
 const expiredAt = 1_700_000_000_000;
 const eventStartsAt = 1_789_660_800_000;
-const eventEndsAt = 1_789_686_000_000;
+const eventEndsAt = 1_789_858_800_000;
 
 const hmac = (value: string): string =>
   createHmac("sha256", localSecret).update(value).digest("hex");

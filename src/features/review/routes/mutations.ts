@@ -6,12 +6,14 @@ import {
   AssignReviewerOutput,
   CreateReviewRoundOutput,
   RequestAiSuggestionOutput,
+  RejectSubmissionOutput,
   SaveScoreOutput,
   type AcceptSubmissionInput,
   type AdvanceReviewRoundInput,
   type AssignReviewerInput,
   type CreateReviewRoundInput,
   type RequestAiSuggestionInput,
+  type RejectSubmissionInput,
   type SaveScoreInput,
 } from "../schema";
 
@@ -146,5 +148,16 @@ export function acceptSubmissionRequest(input: AcceptSubmissionInput) {
     idempotencyKey: input.idempotencyKey,
     body: { expectedVersion: input.expectedVersion },
     schema: AcceptSubmissionOutput,
+  });
+}
+
+export function rejectSubmissionRequest(input: RejectSubmissionInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/submissions/${segment(input.submissionId)}/rejection`,
+    method: "POST",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: { expectedVersion: input.expectedVersion },
+    schema: RejectSubmissionOutput,
   });
 }

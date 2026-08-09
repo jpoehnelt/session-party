@@ -4,12 +4,23 @@ import {
   CreatePublicSubmissionInput,
   CreatePublicSubmissionOutput,
   CreateTaskSubmissionInput,
+  GetOwnSubmissionsInput,
   GetPublicSubmissionFormInput,
   ListSubmissionsInput,
+  OwnSubmissions,
   PublicSubmissionForm,
   SubmissionPage,
+  UpdateOwnSubmissionAbstractInput,
+  UpdateOwnSubmissionAbstractOutput,
 } from "./schema";
-import { createPublicSubmission, createTaskSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
+import {
+  createPublicSubmission,
+  createTaskSubmission,
+  getOwnSubmissions,
+  getPublicSubmissionForm,
+  listSubmissions,
+  updateOwnSubmissionAbstract,
+} from "./service";
 
 const organizerReadAuthorization = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
@@ -84,6 +95,24 @@ export const getPublicSubmissionFormOperation = {
   emits: [],
 } satisfies AnyOperationDef;
 
+export const getOwnSubmissionsOperation = {
+  id: "submit.getOwn",
+  kind: "query",
+  input: GetOwnSubmissionsInput,
+  output: OwnSubmissions,
+  authorize: browserSessionAuthorization,
+  invoke: getOwnSubmissions,
+  rest: {
+    method: "get",
+    path: "/events/by-slug/:eventSlug/my-submissions",
+    input: { path: ["eventSlug"] },
+    summary: "List CFP submissions owned by the signed-in account",
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} satisfies AnyOperationDef;
+
 export const listSubmissionsOperation = {
   id: "submit.list",
   kind: "query",
@@ -109,10 +138,35 @@ export const listSubmissionsOperation = {
   emits: [],
 } satisfies AnyOperationDef;
 
+export const updateOwnSubmissionAbstractOperation = {
+  id: "submit.updateOwnAbstract",
+  kind: "command",
+  input: UpdateOwnSubmissionAbstractInput,
+  output: UpdateOwnSubmissionAbstractOutput,
+  authorize: browserSessionAuthorization,
+  invoke: updateOwnSubmissionAbstract,
+  rest: {
+    method: "put",
+    path: "/events/by-slug/:eventSlug/my-submissions/:submissionId/abstract",
+    input: {
+      path: ["eventSlug", "submissionId"],
+      headers: { idempotencyKey: "idempotency-key" },
+      body: ["abstract", "expectedVersion"],
+    },
+    summary: "Edit an owned proposal abstract while its CFP remains open",
+    successStatus: 200,
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["submit.abstract.updated"],
+} satisfies AnyOperationDef;
+
 /** Operation IDs are kept in bytewise ascending order for deterministic registry generation. */
 export const operations = [
   createPublicSubmissionOperation,
   createTaskSubmissionOperation,
+  getOwnSubmissionsOperation,
   getPublicSubmissionFormOperation,
   listSubmissionsOperation,
+  updateOwnSubmissionAbstractOperation,
 ] as const satisfies readonly AnyOperationDef[];

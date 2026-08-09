@@ -36,6 +36,8 @@ import {
   type HumanReview,
   type RequestAiSuggestionInput,
   type RequestAiSuggestionOutput,
+  RejectSubmissionOutput,
+  type RejectSubmissionInput,
   ReviewRubric,
   type ReviewRubric as ReviewRubricType,
   type ReviewRound,
@@ -767,7 +769,7 @@ export const getWorkbench = (
       const [answerRows, speakerRows] = yield* Effect.all([
         database(() =>
           db
-            .select({ value: submissionAnswers.value, label: formVersionFields.label })
+            .select({ value: submissionAnswers.value, semanticKey: formVersionFields.semanticKey })
             .from(submissionAnswers)
             .innerJoin(formVersionFields, eq(formVersionFields.id, submissionAnswers.formVersionFieldId))
             .where(
@@ -793,7 +795,7 @@ export const getWorkbench = (
         ),
       ]);
       const abstract = answerRows.find(
-        (answer) => answer.label.trim().toLocaleLowerCase() === "abstract" && typeof answer.value === "string",
+        (answer) => answer.semanticKey === "submissionAbstract" && typeof answer.value === "string",
       )?.value;
       const detailAssignments = visibleAssignments
         .filter((assignment) => assignment.submissionId === submissionId && (!relevantRoundId || assignment.roundId === relevantRoundId))
@@ -1084,12 +1086,12 @@ export const requestAiSuggestion = (
     );
     if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
     const answerRows = yield* database(() =>
-      db.select({ value: submissionAnswers.value, label: formVersionFields.label }).from(submissionAnswers)
+      db.select({ value: submissionAnswers.value, semanticKey: formVersionFields.semanticKey }).from(submissionAnswers)
         .innerJoin(formVersionFields, eq(formVersionFields.id, submissionAnswers.formVersionFieldId))
         .where(and(eq(submissionAnswers.eventId, input.eventId), eq(submissionAnswers.submissionId, input.submissionId)))
         .orderBy(asc(formVersionFields.order)),
     );
-    const abstract = answerRows.find((answer) => answer.label.trim().toLocaleLowerCase() === "abstract" && typeof answer.value === "string")?.value;
+    const abstract = answerRows.find((answer) => answer.semanticKey === "submissionAbstract" && typeof answer.value === "string")?.value;
     if (typeof abstract !== "string" || abstract.length === 0) {
       return yield* Effect.fail(new Validation({ message: "AI review requires the published Abstract answer" }));
     }
@@ -1340,4 +1342,145 @@ export const acceptSubmission = (
         }),
       ),
     );
+  });
+
+const readIdempotentRejection = (value: unknown) =>
+  Schema.decodeUnknown(RejectSubmissionOutput)(value).pipe(
+    Effect.map((output) => ({ ...output, idempotent: true })),
+    Effect.mapError((error) => new External({ service: "database", detail: `Invalid stored rejection output: ${String(error)}` })),
+  );
+
+export const rejectSubmission = (
+  input: RejectSubmissionInput,
+): Effect.Effect<typeof RejectSubmissionOutput.Type, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write", "submissions:write"]);
+    if (viewer.actorApiKeyId) {
+      return yield* Effect.fail(new Forbidden({ reason: "API keys cannot reject submissions" }));
+    }
+    yield* requireOrganizer(viewer);
+    const { db } = yield* Db;
+    const [submission] = yield* database(() =>
+      db
+        .select({ id: submissions.id, status: submissions.status, version: submissions.version })
+        .from(submissions)
+        .innerJoin(forms, and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)))
+        .where(and(
+          eq(submissions.eventId, input.eventId),
+          eq(submissions.id, input.submissionId),
+          eq(forms.kind, "cfp"),
+        ))
+        .limit(1),
+    );
+    if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      submissionId: input.submissionId,
+      expectedVersion: input.expectedVersion,
+    }));
+    const principalId = viewer.userId;
+    const [replay] = yield* database(() =>
+      db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, input.eventId),
+        eq(idempotencyRecords.operationId, "review.rejectSubmission"),
+        eq(idempotencyRecords.principalId, principalId),
+        eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1),
+    );
+    if (replay) {
+      if (replay.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different rejection request" }));
+      }
+      if (replay.status === "completed") return yield* readIdempotentRejection(replay.responseBody);
+      return yield* Effect.fail(new Conflict({ message: "Rejection request with this idempotency key is already in progress" }));
+    }
+    if (submission.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before rejecting" }));
+    }
+    if (submission.status === "accepted") {
+      return yield* Effect.fail(new Conflict({ message: "Accepted submissions must be revoked before they can be rejected" }));
+    }
+    if (submission.status === "rejected") {
+      return yield* Effect.fail(new Conflict({ message: "Submission is already rejected" }));
+    }
+    const speakerRows = yield* database(() =>
+      db.select({ speakerId: submissionSpeakers.speakerId }).from(submissionSpeakers).where(and(
+        eq(submissionSpeakers.eventId, input.eventId), eq(submissionSpeakers.submissionId, input.submissionId),
+      )),
+    );
+    const rejectedAt = now();
+    const rejectedAtMs = rejectedAt.getTime();
+    const nextVersion = submission.version + 1;
+    const idempotencyId = id("idempotency");
+    const output = {
+      submissionId: submission.id,
+      submissionVersion: nextVersion,
+      status: "rejected" as const,
+      idempotent: false,
+    };
+    yield* database(() => db.batch([
+      db.update(submissions).set({ status: "rejected", acceptedAt: null, version: nextVersion, updatedAt: rejectedAt }).where(and(
+        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId),
+        eq(submissions.version, input.expectedVersion), sql`${submissions.status} <> 'accepted'`,
+      )),
+      db.insert(idempotencyRecords).select(db.select({
+        id: sql<string>`${idempotencyId}`.as("id"), eventId: submissions.eventId,
+        operationId: sql<string>`'review.rejectSubmission'`.as("operation_id"),
+        principalId: sql<string>`${principalId}`.as("principal_id"), keyHash: sql<string>`${keyHash}`.as("key_hash"),
+        requestHash: sql<string>`${requestHash}`.as("request_hash"), status: sql<"completed">`'completed'`.as("status"),
+        responseStatus: sql<number>`200`.as("response_status"), responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+        expiresAt: sql<Date>`${rejectedAtMs + 86_400_000}`.as("expires_at"), completedAt: sql<Date>`${rejectedAtMs}`.as("completed_at"),
+        createdAt: sql<Date>`${rejectedAtMs}`.as("created_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId), eq(submissions.version, nextVersion), sql`changes() > 0`,
+      ))),
+      db.insert(domainChanges).select(db.select({
+        sequence: sql<number | null>`null`.as("sequence"), id: sql<string>`${id("change")}`.as("id"),
+        eventId: submissions.eventId, aggregateType: sql<string>`'submission'`.as("aggregate_type"), aggregateId: submissions.id,
+        aggregateVersion: submissions.version, eventType: sql<string>`'review.submission.rejected'`.as("event_type"),
+        audiences: sql<unknown>`${JSON.stringify([{ kind: "admins" }, { kind: "speaker", speakerIds: speakerRows.map((row) => row.speakerId) }])}`.as("audiences"),
+        payload: sql<unknown>`${JSON.stringify({ submissionId: input.submissionId, submissionVersion: nextVersion })}`.as("payload"),
+        actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"), actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+        requestId: sql<string>`${input.requestId}`.as("request_id"), idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+        occurredAt: sql<Date>`${rejectedAtMs}`.as("occurred_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId),
+        sql`exists (select 1 from idempotency_records where id = ${idempotencyId})`,
+      ))),
+      db.insert(auditLog).select(db.select({
+        id: sql<string>`${id("audit")}`.as("id"), eventId: submissions.eventId,
+        requestId: sql<string>`${input.requestId}`.as("request_id"), actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+        actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"), action: sql<string>`'review.rejectSubmission'`.as("action"),
+        resourceType: sql<string>`'submission'`.as("resource_type"), resourceId: submissions.id,
+        before: sql<unknown>`${JSON.stringify({ status: submission.status, version: submission.version })}`.as("before"),
+        after: sql<unknown>`${JSON.stringify({ status: "rejected", version: nextVersion })}`.as("after"),
+        metadata: sql<unknown>`${JSON.stringify({ idempotencyRecordId: idempotencyId })}`.as("metadata"), occurredAt: sql<Date>`${rejectedAtMs}`.as("occurred_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId),
+        sql`exists (select 1 from idempotency_records where id = ${idempotencyId})`,
+      ))),
+    ] as never)).pipe(
+      Effect.as(true),
+      Effect.catchIf(
+        (error): error is External => error.detail?.includes("idempotency_key_unique") === true
+          || error.detail?.includes("UNIQUE constraint failed: idempotency_records.event_id") === true,
+        () => Effect.succeed(false),
+      ),
+    );
+    const [committed] = yield* database(() => db.select().from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId)).limit(1));
+    if (committed) return output;
+    const [concurrent] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, input.eventId),
+      eq(idempotencyRecords.operationId, "review.rejectSubmission"),
+      eq(idempotencyRecords.principalId, principalId),
+      eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1));
+    if (concurrent) {
+      if (concurrent.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different rejection request" }));
+      }
+      if (concurrent.status === "completed") return yield* readIdempotentRejection(concurrent.responseBody);
+    }
+    return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before rejecting" }));
   });

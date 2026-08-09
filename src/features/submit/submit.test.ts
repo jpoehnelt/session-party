@@ -23,14 +23,21 @@ import {
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Hono } from "hono";
-import { Effect, Layer } from "effect";
+import { Effect, Either, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { runRestOperation, type AppHono } from "@/server/adapt";
 import { AppLayer, CurrentUser } from "@/server/services";
 import { createPublicSubmissionOperation, createTaskSubmissionOperation, operations } from "./operations";
 import { localTestPublicSubmissionAbuse, PublicSubmissionAbuse, PublicSubmissionRequest, type PublicSubmissionAbuseAttempt } from "./abuse";
 import type { CreatePublicSubmissionInput, CreateTaskSubmissionInput } from "./schema";
-import { createPublicSubmission, createTaskSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
+import {
+  createPublicSubmission,
+  createTaskSubmission,
+  getOwnSubmissions,
+  getPublicSubmissionForm,
+  listSubmissions,
+  updateOwnSubmissionAbstract,
+} from "./service";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
 const EVENT_ID = "event-submit-tests";
@@ -70,6 +77,14 @@ const outsider: Principal = {
   email: "submit-outsider@example.com",
   name: "Submit Outsider",
   sessionId: "session-submit-outsider",
+  expiresAt: NOW + 86_400_000,
+};
+const submittingSpeaker: Principal = {
+  kind: "browser-session",
+  userId: "user-submitting-speaker",
+  email: "sam@example.com",
+  name: "Sam Rivera",
+  sessionId: "session-submitting-speaker",
   expiresAt: NOW + 86_400_000,
 };
 const wrongEventApiKey: Principal = {
@@ -187,6 +202,14 @@ const runAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>) =>
     ) as Effect.Effect<A, E, never>,
   );
 
+const runEitherAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>) =>
+  Effect.runPromise(
+    effect.pipe(
+      Effect.either,
+      Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+    ) as Effect.Effect<Either.Either<A, E>, never, never>,
+  );
+
 beforeAll(async () => {
   if (!("TEST_MIGRATIONS" in env)) throw new Error("TEST_MIGRATIONS test binding is unavailable");
   await applyD1Migrations(env.DB, [...(env as TestEnv).TEST_MIGRATIONS]);
@@ -197,6 +220,7 @@ beforeAll(async () => {
       { id: owner.userId, email: owner.email!, name: owner.name, createdAt: now, updatedAt: now },
       { id: reviewer.userId, email: reviewer.email!, name: reviewer.name, createdAt: now, updatedAt: now },
       { id: outsider.userId, email: outsider.email!, name: outsider.name, createdAt: now, updatedAt: now },
+      { id: submittingSpeaker.userId, email: submittingSpeaker.email!, name: submittingSpeaker.name, createdAt: now, updatedAt: now },
     ]),
     db.insert(events).values({
       id: EVENT_ID,
@@ -469,14 +493,18 @@ describe("submit operation descriptors", () => {
     expect(operations.map((operation) => operation.id)).toEqual([
       "submit.create",
       "submit.createTask",
+      "submit.getOwn",
       "submit.getPublicForm",
       "submit.list",
+      "submit.updateOwnAbstract",
     ]);
     expect(operations.map((operation) => "rest" in operation ? [operation.rest.method, operation.rest.path] : null)).toEqual([
       ["post", "/public/events/:eventSlug/forms/:formId/submissions"],
       ["post", "/events/:eventId/portal/forms/:formId/submissions"],
+      ["get", "/events/by-slug/:eventSlug/my-submissions"],
       ["get", "/public/events/:eventSlug/forms/:formId"],
       ["get", "/events/:eventId/submissions"],
+      ["put", "/events/by-slug/:eventSlug/my-submissions/:submissionId/abstract"],
     ]);
     expect(operations.filter((operation) => "mcp" in operation).map((operation) => operation.mcp.name)).toEqual([
       "submit_get_public_form",
@@ -510,6 +538,83 @@ describe("public submission creation", () => {
     expect(speaker?.name).toBe("Sam Rivera");
     expect(change).toMatchObject({ eventType: "submit.created", idempotencyRecordId: expect.any(String) });
     expect(audit).toMatchObject({ action: "submit.create", actorUserId: null, actorApiKeyId: null });
+  });
+
+  it("scopes a speaker dashboard by signed-in email and edits the canonical abstract while the CFP is open", async () => {
+    const created = await runPublic(createPublicSubmission(submissionInput(
+      "submit-own-dashboard-create-001",
+      OPEN_FORM_ID,
+      "A speaker-owned proposal",
+    )));
+    const owned = await runAs(submittingSpeaker, getOwnSubmissions({ eventSlug: EVENT_SLUG }));
+    expect(owned.event).toMatchObject({ slug: EVENT_SLUG, name: "Submit behavior tests" });
+    expect(owned.submissions.find((submission) => submission.id === created.submissionId)).toMatchObject({
+      title: "A speaker-owned proposal",
+      abstract: "A proposal grounded in real immutable answers.",
+      status: "submitted",
+      editable: true,
+      version: 1,
+    });
+
+    const outsiderView = await runAs(outsider, getOwnSubmissions({ eventSlug: EVENT_SLUG }));
+    expect(outsiderView.submissions.map((submission) => submission.id)).not.toContain(created.submissionId);
+
+    const input = {
+      eventSlug: EVENT_SLUG,
+      submissionId: created.submissionId,
+      abstract: "An edited abstract from the submitting account.",
+      expectedVersion: 1,
+      idempotencyKey: "submit-own-dashboard-update-001",
+    };
+    const updated = await runAs(submittingSpeaker, updateOwnSubmissionAbstract(input));
+    const replayed = await runAs(submittingSpeaker, updateOwnSubmissionAbstract(input));
+    expect(updated).toMatchObject({
+      submission: { id: created.submissionId, abstract: input.abstract, version: 2, editable: true },
+      idempotent: false,
+    });
+    expect(replayed).toMatchObject({ submission: { version: 2 }, idempotent: true });
+
+    const db = drizzle(env.DB);
+    const [storedAbstract] = await db
+      .select({ value: submissionAnswers.value, answerVersion: submissionAnswers.version })
+      .from(submissionAnswers)
+      .innerJoin(formVersionFields, eq(formVersionFields.id, submissionAnswers.formVersionFieldId))
+      .where(and(
+        eq(submissionAnswers.submissionId, created.submissionId),
+        eq(formVersionFields.semanticKey, "submissionAbstract"),
+      ));
+    expect(storedAbstract).toEqual({ value: input.abstract, answerVersion: 2 });
+    const unauthorized = await runEitherAs(outsider, updateOwnSubmissionAbstract({
+      ...input,
+      expectedVersion: 2,
+      idempotencyKey: "submit-own-dashboard-outsider-001",
+    }));
+    expect(unauthorized._tag).toBe("Left");
+    if (unauthorized._tag === "Left") expect(unauthorized.left._tag).toBe("Forbidden");
+  });
+
+  it("collapses concurrent retries of one speaker edit into a single version", async () => {
+    const created = await runPublic(createPublicSubmission(submissionInput(
+      "submit-own-dashboard-concurrent-create",
+      OPEN_FORM_ID,
+      "A concurrently edited proposal",
+    )));
+    const input = {
+      eventSlug: EVENT_SLUG,
+      submissionId: created.submissionId,
+      abstract: "One durable result from two network retries.",
+      expectedVersion: 1,
+      idempotencyKey: "submit-own-dashboard-concurrent-update",
+    } as const;
+    const results = await Promise.all([
+      runAs(submittingSpeaker, updateOwnSubmissionAbstract(input)),
+      runAs(submittingSpeaker, updateOwnSubmissionAbstract(input)),
+    ]);
+    expect(results.map((result) => result.idempotent).sort()).toEqual([false, true]);
+    expect(new Set(results.map((result) => result.submission.version))).toEqual(new Set([2]));
+    const db = drizzle(env.DB);
+    const [stored] = await db.select({ version: submissions.version }).from(submissions).where(eq(submissions.id, created.submissionId));
+    expect(stored?.version).toBe(2);
   });
 
   it("passes only a bounded Turnstile token and trusted request metadata to the abuse boundary", async () => {

@@ -3,6 +3,7 @@ import { Badge, Button, Card, Select, Textarea } from "@/ui";
 import {
   acceptSubmissionRequest,
   assignReviewerRequest,
+  rejectSubmissionRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
 } from "../routes/mutations";
@@ -99,9 +100,10 @@ export function SubmissionReviewPane({
   const [scores, setScores] = useState<readonly CriterionScore[]>(currentReview?.scores ?? []);
   const [comment, setComment] = useState(currentReview?.comment ?? "");
   const [confirmedAiSuggestionId, setConfirmedAiSuggestionId] = useState<string>();
-  const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "ai" | "accept">();
+  const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "ai" | "accept" | "reject">();
   const [mutationError, setMutationError] = useState<string>();
   const acceptanceKey = useRef(`review-accept-${crypto.randomUUID()}`);
+  const rejectionKey = useRef(`review-reject-${crypto.randomUUID()}`);
 
   useEffect(() => {
     setScores(currentReview?.scores ?? []);
@@ -170,13 +172,24 @@ export function SubmissionReviewPane({
   };
 
   const acceptSubmission = () => {
-    if (!organizer || submission.acceptance || !primarySpeaker) return;
+    if (!organizer || submission.acceptance || submission.status === "rejected" || !primarySpeaker) return;
     void runMutation("accept", () => acceptSubmissionRequest({
       eventId,
       submissionId: submission.id,
       expectedVersion: submission.version,
       idempotencyKey: acceptanceKey.current,
       requestId: operationRequestId("review-accept"),
+    }));
+  };
+
+  const rejectSubmission = () => {
+    if (!organizer || submission.acceptance || submission.status === "rejected") return;
+    void runMutation("reject", () => rejectSubmissionRequest({
+      eventId,
+      submissionId: submission.id,
+      expectedVersion: submission.version,
+      idempotencyKey: rejectionKey.current,
+      requestId: operationRequestId("review-reject"),
     }));
   };
 
@@ -329,20 +342,34 @@ export function SubmissionReviewPane({
           <Badge tone="success">Accepted · provisioning {submission.acceptance.provisioningStatus}</Badge>
           <p className="mt-2 text-sm text-ink-secondary">Durable acceptance {submission.acceptance.acceptanceEventId} at submission version {submission.acceptance.submissionVersion}.</p>
         </Card>
+      ) : submission.status === "rejected" ? (
+        <Card title="Proposal decision">
+          <Badge tone="danger">Rejected</Badge>
+          <p className="mt-2 text-sm text-ink-secondary">This decision is visible to the submitting account in its proposal dashboard.</p>
+        </Card>
       ) : organizer ? (
         <Card title="Acceptance decision">
           <p className="text-sm text-ink-secondary">
             Accepting records this exact proposal version and requests portal provisioning for {primarySpeaker?.displayName ?? "the primary speaker"}.
           </p>
           {!primarySpeaker && <p role="alert" className="mt-2 text-sm text-danger">A primary speaker is required before acceptance.</p>}
-          <Button
-            className="mt-4"
-            disabled={!primarySpeaker || pendingOperation !== undefined}
-            loading={pendingOperation === "accept"}
-            onClick={acceptSubmission}
-          >
-            Accept &amp; provision primary speaker
-          </Button>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button
+              disabled={!primarySpeaker || pendingOperation !== undefined}
+              loading={pendingOperation === "accept"}
+              onClick={acceptSubmission}
+            >
+              Accept &amp; provision primary speaker
+            </Button>
+            <Button
+              variant="danger"
+              disabled={pendingOperation !== undefined}
+              loading={pendingOperation === "reject"}
+              onClick={rejectSubmission}
+            >
+              Reject proposal
+            </Button>
+          </div>
         </Card>
       ) : null}
     </article>
