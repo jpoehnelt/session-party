@@ -334,6 +334,27 @@ Speaker/public:
 
 Router owns the app shell; route modules render page content only. This avoids the current prototype’s duplicate nested `AppShell`.
 
+#### Frozen route ownership manifest
+
+One feature directory owns each route and operation prefix. A producer may serve multiple routes; consumers call its operations rather than reimplementing its queries. Slice writers never edit the router, navigation, generated registry, shared UI, contracts, or server composition. Main integrates one accepted operation-bearing slice at a time, runs `pnpm gen`, commits the generated registry with that slice, and verifies the complete application before merging the next slice.
+
+| Feature owner | Client routes | Operation prefix | REST path family below `/api/v1` | Audience / layout |
+|---|---|---|---|---|
+| `events` | `/`, `/e/:eventSlug`, `/e/:eventSlug/settings` | `events.*` | `/events`, `/events/:idOrSlug` | event member; organizer shell. Settings P0 edits event metadata only; team/security waits for explicit operations |
+| `forms` | `/e/:eventSlug/forms` | `forms.*` | `/events/:eventId/forms/**` | owner/admin or scoped API key; organizer shell |
+| `submissions` | `/e/:eventSlug/submissions`, `/submit/:eventSlug/:formId` | `submissions.*` | `/events/:eventId/submissions/**`; public read/create at `/public/events/:eventSlug/forms/:formId` and `/public/events/:eventSlug/forms/:formId/submissions` | organizer queue uses owner/admin/reviewer policy; CFP is anonymous, Turnstile/rate-limited, and `layout = "bare"` |
+| `review` | `/e/:eventSlug/review` | `review.*` | `/events/:eventId/review/**`, `/events/:eventId/submissions/:submissionId/acceptance` | assigned reviewer or owner/admin by operation; organizer shell |
+| `agenda` | `/e/:eventSlug/agenda`, `/e/:eventSlug/publication`, `/embed/:eventSlug/schedule` | `agenda.*` | `/events/:eventId/agenda/**`; public slug read at `/public/events/:eventSlug/agenda/published` | agenda/publication use owner/admin or scoped API key and organizer shell; schedule embed is public, immutable-published data only, and bare |
+| `speakers` | `/e/:eventSlug/speakers`, `/embed/:eventSlug/speakers` | `speakers.*` | `/events/:eventId/speakers/**`; public read at `/public/events/:eventSlug/speakers` | directory uses owner/admin or scoped API key and organizer shell; embed is public projection only and bare |
+| `tasks` | `/e/:eventSlug/tasks` | `tasks.*` | `/events/:eventId/tasks/**`, `/events/:eventId/speakers/:speakerId/task-completions/**` | definitions use owner/admin; completion requires exact speaker-self proof; organizer shell |
+| `resources` | `/e/:eventSlug/resources` | `resources.*` | `/events/:eventId/resources/**` | owner/admin writes; exact event speaker reads; organizer management route |
+| `portal` | `/e/:eventSlug/portal/*` | `portal.*` | `/events/:eventId/portal/**` | browser session plus exact `speakers.userId` ownership; bare; consumes speakers/tasks/resources and owns provisioning orchestration, not their stores |
+| `dashboard` | `/e/:eventSlug/dashboard` | `dashboard.*` | `/events/:eventId/dashboard/**` | owner/admin or approved read scope; organizer shell; starts after the tasks completion read/event contract |
+| `comms` | `/e/:eventSlug/comms` | `comms.*` | `/events/:eventId/comms/**` | owner/admin or communications scope; organizer shell; template/preview may precede delivery, scheduled ICS consumes agenda artifacts |
+| `integrations` | `/e/:eventSlug/integrations` | `integrations.*` | `/events/:eventId/integrations/**` | owner/admin or integrations scope; organizer shell; health must name observed `fake` or `live` adapter mode |
+
+The public CFP operations above are the only anonymous submission producer. The agenda owner is the only schedule-publication producer and serves the schedule embed from its immutable published projection. The speakers owner is the only public-speaker projection producer. Dashboard never derives readiness from forms/review/agenda; it consumes the tasks completion read model and post-commit event. Central navigation is updated once after accepted routes exist, never by a slice writer.
+
 ### Signature interaction
 
 **Readiness Thread:** a consistent accepted → tasks → confirmed-on-agenda progression shown as:
