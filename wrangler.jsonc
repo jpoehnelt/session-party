@@ -30,7 +30,7 @@
   "ai": { "binding": "AI" },
   "send_email": [{ "name": "EMAIL" }],
   "vars": {
-    "APP_URL": "https://session-party.justin-poehnelt.workers.dev",
+    "APP_URL": "https://sessionparty.com",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>"
   }
   // Secrets (wrangler secret put): SESSION_SECRET, ACCELEVENTS_API_TOKEN
