@@ -131,6 +131,30 @@ describe("MCP transport", () => {
       params: { name: "agenda_publish", arguments: { eventId: EVENT_ID } },
     }, sessionId);
     expect(hidden.rpc.error).toMatchObject({ code: -32603, message: "Unknown tool: agenda_publish" });
+
+    const switchedCredential = await SELF.fetch("https://example.test/mcp", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer mcp-speakers-write-key",
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "mcp-session-id": sessionId,
+        "mcp-protocol-version": "2025-06-18",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/list", params: {} }),
+    });
+    expect(switchedCredential.status).toBe(200);
+    expect(await switchedCredential.text()).toBe("");
+
+    const originalCredential = await request("mcp-agenda-read-key", {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/list",
+      params: {},
+    }, sessionId);
+    expect((originalCredential.rpc.result?.tools as readonly { readonly name: string }[])
+      .map(({ name }) => name))
+      .toContain("agenda_list");
   });
 
   it("executes the consolidated speaker-onboarding workflow", async () => {

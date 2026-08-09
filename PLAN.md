@@ -141,7 +141,7 @@ Adapters only decode, authorize, invoke, encode, and map errors. They never cont
 - Pagination: `page`/`pageSize`, default 25, max 100; `{ results, pagination }`
 - Externally retryable commands require `idempotencyKey`; versioned updates/deletes require `expectedVersion`
 - Errors: safe public `{ error, message, requestId, details? }`; causes stay in redacted logs
-- API keys: event-bound, scoped, expiring/revocable; MCP uses a least-privilege key, hides tools outside that key's scopes, and rejects cross-event input
+- API keys: event-bound, scoped, expiring/revocable; MCP uses a least-privilege key, persistently binds each MCP session to its originating API key, hides tools outside that key's scopes, and rejects credential switching or cross-event input
 - Speaker self-service and human-only decisions remain browser-session REST operations and are never MCP tools
 - OpenAPI/MCP output schemas derive from the same Effect schemas
 
