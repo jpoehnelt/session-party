@@ -10,6 +10,7 @@ import {
   AiService,
   AcceleventsAdapter,
   AcceleventsImports,
+  ApiKeyCredentials,
   AppLayer,
   Authorizer,
   CurrentUser,
@@ -27,6 +28,7 @@ export type RuntimeServices =
   | SecretResolver
   | AcceleventsAdapter
   | AcceleventsImports
+  | ApiKeyCredentials
   | Mail
   | MailQueue
   | Files

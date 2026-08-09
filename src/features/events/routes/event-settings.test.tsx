@@ -4,15 +4,20 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/client/api";
 import EventSettingsPage, {
+  ApiAccessPanel,
+  apiKeyPresets,
   buildEventPatch,
+  createEventApiKey,
   EventSettingsForm,
   fetchEventMetadata,
+  fetchEventApiKeys,
   formatDateTimeForTimezone,
   parseDateTimeInTimezone,
   path,
+  revokeEventApiKey,
   updateEventMetadata,
 } from "./event-settings";
-import type { EventOutput, UpdateEventInput } from "../schema";
+import type { EventApiKey, EventOutput, UpdateEventInput } from "../schema";
 
 const eventPayload = {
   id: "event_123",
@@ -222,5 +227,56 @@ describe("event metadata settings route", () => {
         accentColor: "",
       }),
     ).toThrow("Enter a name, a valid lowercase slug, and a timezone before saving.");
+  });
+
+  it("renders organizer-facing MCP discovery, least-privilege presets, and key management", () => {
+    const key: EventApiKey = {
+      id: "api_key_123", name: "Agenda automation", scopes: ["event:read", "agenda:read", "agenda:write"],
+      expiresAt: new Date("2100-01-01T00:00:00.000Z"), revokedAt: null, version: 1,
+      createdAt: new Date("2026-08-09T00:00:00.000Z"),
+    };
+    const markup = renderToStaticMarkup(createElement(ApiAccessPanel, { eventId: event.id, initialApiKeys: [key] }));
+
+    expect(markup).toContain("MCP &amp; API access");
+    expect(markup).toContain("speaker self-service stays in the browser portal");
+    expect(markup).toContain("https://sessionparty.example/mcp");
+    expect(markup).toContain("Read-only assistant");
+    expect(markup).toContain("Agenda automation");
+    expect(markup).toContain("Speaker onboarding");
+    expect(markup).toContain("Full organizer automation");
+    expect(markup).toContain("event:read");
+    expect(markup).toContain("agenda:write");
+    expect(markup).toContain("Revoke");
+    expect(markup).not.toContain("spk_");
+    expect(apiKeyPresets.read.scopes.every((scope) => scope.endsWith(":read"))).toBe(true);
+  });
+
+  it("uses browser-session REST endpoints for list, one-time creation, and revocation", async () => {
+    const keyPayload = {
+      id: "api_key_456", name: "Read access", scopes: ["event:read"],
+      expiresAt: "2100-01-01T00:00:00.000Z", revokedAt: null, version: 1,
+      createdAt: "2026-08-09T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method === "POST") return new Response(JSON.stringify({ apiKey: keyPayload, secret: `spk_${"a".repeat(64)}` }), { status: 201 });
+      if (method === "DELETE") return new Response(JSON.stringify({ ...keyPayload, revokedAt: "2026-08-10T00:00:00.000Z", version: 2 }), { status: 200 });
+      return new Response(JSON.stringify([keyPayload]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const listed = await fetchEventApiKeys(event.id);
+    const issued = await createEventApiKey(event.id, {
+      name: "Read access", scopes: ["event:read"], expiresAt: Date.UTC(2100, 0, 1),
+    });
+    const revoked = await revokeEventApiKey(event.id, listed[0]!);
+
+    expect(listed[0]?.expiresAt).toBeInstanceOf(Date);
+    expect(issued.secret).toMatch(/^spk_/);
+    expect(revoked.revokedAt).toBeInstanceOf(Date);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `/api/v1/events/${event.id}/api-keys`, expect.objectContaining({ method: "GET", credentials: "include" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/v1/events/${event.id}/api-keys`, expect.objectContaining({ method: "POST", credentials: "include" }));
+    const [, revokeRequest] = fetchMock.mock.calls[2] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(revokeRequest.body))).toEqual({ expectedVersion: 1 });
   });
 });
