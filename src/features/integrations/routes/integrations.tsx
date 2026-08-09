@@ -21,12 +21,6 @@ import {
 
 export const path = "/e/:eventSlug/integrations";
 
-const EventIdentity = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  slug: Schema.String,
-});
-type EventIdentity = typeof EventIdentity.Type;
 
 export const configurationTruth = (configurations: readonly IntegrationConfigType[]) => ({
   airtable: configurations.some((configuration) => configuration.kind === "airtable"),
@@ -114,11 +108,9 @@ function MappingTable({ configuration }: { readonly configuration: AirtableConfi
 }
 
 function IntegrationsWorkspace({
-  event,
   configurations,
   onReload,
 }: {
-  readonly event: EventIdentity;
   readonly configurations: readonly IntegrationConfigType[];
   readonly onReload: () => void;
 }) {
@@ -134,7 +126,7 @@ function IntegrationsWorkspace({
     <>
       <PageHeader
         title="Integrations"
-        description={`Provider configuration for ${event.name}. Saved configuration is not treated as proof of live connectivity.`}
+        description="Saved provider configuration is shown without treating it as proof of live connectivity."
         actions={<Button variant="secondary" onClick={onReload}>Reload configuration</Button>}
       />
 
@@ -200,7 +192,6 @@ export default function IntegrationsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { eventSlug = "" } = useParams();
-  const [event, setEvent] = useState<EventIdentity | null | undefined>(undefined);
   const [configurations, setConfigurations] = useState<readonly IntegrationConfigType[] | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState(0);
@@ -209,23 +200,14 @@ export default function IntegrationsPage() {
 
   useEffect(() => {
     let active = true;
-    setEvent(undefined);
     setConfigurations(undefined);
     setError(null);
-    void apiFetch<EventIdentity>(`/api/v1/events/${encodeURIComponent(eventSlug)}`, {
-      schema: EventIdentity,
-    })
-      .then(async (loadedEvent) => ({
-        event: loadedEvent,
-        configurations: await apiFetch<readonly IntegrationConfigType[]>(
-          `/api/v1/events/${encodeURIComponent(loadedEvent.id)}/integrations/configurations`,
-          { schema: Schema.Array(IntegrationConfig) },
-        ),
-      }))
+    void apiFetch<readonly IntegrationConfigType[]>(
+      `/api/v1/events/${encodeURIComponent(eventSlug)}/integrations/configurations`,
+      { schema: Schema.Array(IntegrationConfig) },
+    )
       .then((loaded) => {
-        if (!active) return;
-        setEvent(loaded.event);
-        setConfigurations(loaded.configurations);
+        if (active) setConfigurations(loaded);
       })
       .catch((cause) => {
         if (!active) return;
@@ -233,7 +215,6 @@ export default function IntegrationsPage() {
         const notFound = cause instanceof ApiError && cause.status === 404;
         const message = cause instanceof Error ? cause.message : "Could not load integrations";
         setError(unauthenticated ? "unauthenticated" : notFound ? null : message);
-        setEvent(null);
         setConfigurations(null);
         if (!unauthenticated && !notFound) toast(message, { tone: "danger" });
       });
@@ -242,11 +223,11 @@ export default function IntegrationsPage() {
     };
   }, [eventSlug, request]);
 
-  if (event === undefined || configurations === undefined) {
+  if (configurations === undefined) {
     return <LoadingRegion label="Loading integration configuration" />;
   }
 
-  if (event === null || configurations === null) {
+  if (configurations === null) {
     if (error === "unauthenticated") {
       return (
         <>
@@ -273,8 +254,7 @@ export default function IntegrationsPage() {
 
   return (
     <IntegrationsWorkspace
-      key={`${event.id}-${request}`}
-      event={event}
+      key={`${eventSlug}-${request}`}
       configurations={configurations}
       onReload={reload}
     />

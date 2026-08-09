@@ -26,6 +26,7 @@ interface TestEnv extends Cloudflare.Env {
 
 const expiresAt = Date.UTC(2100, 0, 1);
 const targetEventId = "integrations-event-target";
+const targetEventSlug = "integrations-target-slug";
 const otherEventId = "integrations-event-other";
 
 const browserPrincipal = (
@@ -165,7 +166,7 @@ beforeAll(async () => {
     updatedAt: now,
   }))).onConflictDoNothing().run();
   await db.insert(events).values([
-    { id: targetEventId, slug: targetEventId, name: "Integrations target", createdAt: now, updatedAt: now },
+    { id: targetEventId, slug: targetEventSlug, name: "Integrations target", createdAt: now, updatedAt: now },
     { id: otherEventId, slug: otherEventId, name: "Integrations other", createdAt: now, updatedAt: now },
   ]).run();
   await db.insert(eventMembers).values([
@@ -191,8 +192,8 @@ beforeAll(async () => {
 });
 
 describe("integrations configuration service", () => {
-  it("allows only organizer roles and the exact event-scoped read capability", async () => {
-    await expect(runAs(owner, listIntegrationConfigurations(targetEventId))).resolves.toHaveLength(1);
+  it("resolves event IDs and slugs before enforcing organizer authorization", async () => {
+    await expect(runAs(owner, listIntegrationConfigurations(targetEventSlug))).resolves.toHaveLength(1);
     await expect(runAs(admin, listIntegrationConfigurations(targetEventId))).resolves.toHaveLength(1);
     await expectFailure(reviewer, listIntegrationConfigurations(targetEventId), "Forbidden");
     await expectFailure(outsider, listIntegrationConfigurations(targetEventId), "Forbidden");

@@ -1,8 +1,8 @@
-import { External, type AppError } from "contracts/errors";
+import { External, NotFound, type AppError } from "contracts/errors";
 import { eventAuthorization, type AuthorizationPolicy } from "contracts/principal";
-import { integrations } from "contracts/schema";
+import { events, integrations } from "contracts/schema";
 import { IntegrationConfig, type IntegrationConfig as IntegrationConfigType } from "contracts/types";
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { Authorizer, CurrentUser, Db } from "@/server/services";
 
@@ -56,20 +56,30 @@ const decodeConfiguration = (
  * cursor, provider errors, and raw JSON column never cross this boundary.
  */
 export const listIntegrationConfigurations = (
-  eventId: string,
+  idOrSlug: string,
 ): Effect.Effect<
   readonly IntegrationConfigType[],
   AppError,
   Authorizer | CurrentUser | Db
 > =>
   Effect.gen(function* () {
-    yield* authorizeCurrent(integrationsReadAuthorization, eventId);
     const { db } = yield* Db;
+    const [event] = yield* database(() =>
+      db
+        .select({ id: events.id })
+        .from(events)
+        .where(or(eq(events.id, idOrSlug), eq(events.slug, idOrSlug)))
+        .limit(1),
+    );
+    if (!event) {
+      return yield* Effect.fail(new NotFound({ entity: "event", id: idOrSlug }));
+    }
+    yield* authorizeCurrent(integrationsReadAuthorization, event.id);
     const rows = yield* database(() =>
       db
         .select({ kind: integrations.kind, config: integrations.config })
         .from(integrations)
-        .where(eq(integrations.eventId, eventId)),
+        .where(eq(integrations.eventId, event.id)),
     );
     return yield* Effect.forEach(rows, (row) =>
       decodeConfiguration(row.kind, row.config),
