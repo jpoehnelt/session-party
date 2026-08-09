@@ -709,15 +709,6 @@ export class EventRoom extends Server<Env> {
       return;
     }
 
-    if (message.t === "agenda/preview" && state.agendaCollaboration?.talkId !== talkId) {
-      sendServerMessage(connection, {
-        t: "room/error",
-        error: "Conflict",
-        message: "Claim the talk before previewing a move",
-      });
-      return;
-    }
-
     connection.setState({
       ...state,
       agendaCollaboration: {

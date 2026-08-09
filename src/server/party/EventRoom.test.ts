@@ -209,27 +209,6 @@ describe("EventRoom live authorization", () => {
     owner.send(JSON.stringify({ t: "room/hello", surface: "agenda" }));
     peer.send(JSON.stringify({ t: "room/hello", surface: "agenda" }));
 
-    const locked = waitForMessage(peer, (message) =>
-      message.t === "agenda/collaboration" && message.collaborators.length === 1);
-    owner.send(JSON.stringify({ t: "agenda/focus", talkId: "room-live-talk" }));
-    expect(await locked).toMatchObject({
-      t: "agenda/collaboration",
-      collaborators: [{
-        userId: "room-owner",
-        name: "Room Owner",
-        talkId: "room-live-talk",
-        preview: null,
-      }],
-    });
-
-    const conflict = waitForType(peer, "room/error");
-    peer.send(JSON.stringify({ t: "agenda/focus", talkId: "room-live-talk" }));
-    expect(await conflict).toMatchObject({
-      t: "room/error",
-      error: "Conflict",
-      message: "Room Owner is already moving this talk",
-    });
-
     const preview = waitForMessage(peer, (message) =>
       message.t === "agenda/collaboration" && message.collaborators.some(({ preview }) => preview !== null));
     owner.send(JSON.stringify({
@@ -244,10 +223,20 @@ describe("EventRoom live authorization", () => {
     }));
     expect(await preview).toMatchObject({
       t: "agenda/collaboration",
-      collaborators: [expect.objectContaining({
+      collaborators: [{
+        userId: "room-owner",
+        name: "Room Owner",
         talkId: "room-live-talk",
         preview: expect.objectContaining({ roomId: "room-a", durationMin: 45 }),
-      })],
+      }],
+    });
+
+    const conflict = waitForType(peer, "room/error");
+    peer.send(JSON.stringify({ t: "agenda/focus", talkId: "room-live-talk" }));
+    expect(await conflict).toMatchObject({
+      t: "room/error",
+      error: "Conflict",
+      message: "Room Owner is already moving this talk",
     });
 
     const released = waitForMessage(peer, (message) =>
