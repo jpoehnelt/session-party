@@ -81,10 +81,10 @@ describe("review workbench route", () => {
     expect(path).toBe("/e/:eventSlug/review");
   });
 
-  it("keeps queue focus local and does not reload the current authoritative submission", () => {
+  it("preloads proposal detail as queue focus changes without reloading current or pending detail", () => {
     expect(decideQueueInteraction("focus", "submission_other", "submission_authoritative", undefined)).toEqual({
       focusedSubmissionId: "submission_other",
-      loadSubmissionId: undefined,
+      loadSubmissionId: "submission_other",
     });
     expect(decideQueueInteraction(
       "focus",
