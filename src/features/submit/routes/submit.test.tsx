@@ -124,6 +124,28 @@ describe("public submit route", () => {
     );
   });
 
+  it("surfaces the CFP-only validation response from the public producer", async () => {
+    const message = "Public submissions are only available for CFP forms.";
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({
+        error: "Validation",
+        message,
+        requestId: "request-cfp-only",
+      }), { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(postPublicSubmission(
+      "architecture-summit",
+      "form-task",
+      "submit-route-task-001",
+      { "field-task": "Portal follow-up details" },
+    )).rejects.toThrow(message);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/public/events/architecture-summit/forms/form-task/submissions",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
 
   it("renders closed published content without an active submit control", () => {
     const markup = renderRoute(

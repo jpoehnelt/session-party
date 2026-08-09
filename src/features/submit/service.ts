@@ -443,6 +443,11 @@ export const createPublicSubmission = (
 ): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, Db | Rooms> =>
   Effect.gen(function* () {
     const loaded = yield* loadPublishedForm(input.eventSlug, input.formId);
+    if (loaded.formKind !== "cfp") {
+      return yield* Effect.fail(new Validation({
+        message: "Public submissions are only available for CFP forms.",
+      }));
+    }
     const [keyHash, requestHash] = yield* Effect.all([
       sha256(input.idempotencyKey),
       sha256(stableStringify(input.answers)),

@@ -19,10 +19,12 @@ import {
 } from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
+import { Hono } from "hono";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
+import { runRestOperation, type AppHono } from "@/server/adapt";
 import { AppLayer, CurrentUser } from "@/server/services";
-import { operations } from "./operations";
+import { createPublicSubmissionOperation, operations } from "./operations";
 import type { CreatePublicSubmissionInput } from "./schema";
 import { createPublicSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
 
@@ -37,6 +39,9 @@ const RACE_FORM_ID = "form-submit-race";
 const RACE_VERSION_ID = "form-submit-race-v1";
 const EXTRAS_FORM_ID = "form-submit-extras";
 const EXTRAS_VERSION_ID = "form-submit-extras-v1";
+const TASK_FORM_ID = "form-submit-task";
+const TASK_VERSION_ID = "form-submit-task-v1";
+const TASK_FIELD_ID = "submit-task-notes";
 const NOW = Date.UTC(2026, 7, 8, 12, 0, 0);
 
 const owner: Principal = {
@@ -82,10 +87,12 @@ const fieldIds = {
 } as const;
 const extraFieldIds = {
   title: "submit-extra-title",
+  abstract: "submit-extra-abstract",
   speakerName: "submit-extra-speaker-name",
   consent: "submit-extra-consent",
   details: "submit-extra-details",
   when: "submit-extra-when",
+  category: "submit-extra-category",
 } as const;
 
 
@@ -120,12 +127,24 @@ const extrasInput = (
   idempotencyKey,
   answers: [
     { fieldId: `${EXTRAS_VERSION_ID}-${extraFieldIds.title}`, value: "Follow-up task" },
+    { fieldId: `${EXTRAS_VERSION_ID}-${extraFieldIds.abstract}`, value: "Focused validation behavior." },
     { fieldId: `${EXTRAS_VERSION_ID}-${extraFieldIds.speakerName}`, value: "Robin Vale" },
+    { fieldId: `${EXTRAS_VERSION_ID}-${extraFieldIds.category}`, value: "Validation" },
     ...answers.map((answer) => ({
       fieldId: `${EXTRAS_VERSION_ID}-${answer.fieldId}`,
       value: answer.value,
     })),
   ],
+});
+
+const taskInput = (): CreatePublicSubmissionInput => ({
+  eventSlug: EVENT_SLUG,
+  formId: TASK_FORM_ID,
+  idempotencyKey: "submit-task-public-001",
+  answers: [{
+    fieldId: `${TASK_VERSION_ID}-${TASK_FIELD_ID}`,
+    value: "Portal follow-up details",
+  }],
 });
 
 const runPublic = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -192,8 +211,17 @@ beforeAll(async () => {
       {
         id: EXTRAS_FORM_ID,
         eventId: EVENT_ID,
+        kind: "cfp",
+        name: "Extras CFP draft",
+        status: "open",
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: TASK_FORM_ID,
+        eventId: EVENT_ID,
         kind: "task",
-        name: "Extras draft",
+        name: "Portal follow-up",
         status: "open",
         createdAt: now,
         updatedAt: now,
@@ -240,6 +268,16 @@ beforeAll(async () => {
         publishedAt: now,
         createdAt: now,
       },
+      {
+        id: TASK_VERSION_ID,
+        eventId: EVENT_ID,
+        formId: TASK_FORM_ID,
+        versionNumber: 1,
+        name: "Published portal follow-up",
+        description: "Immutable additional-form snapshot",
+        publishedAt: now,
+        createdAt: now,
+      },
     ]),
   ]);
 
@@ -272,11 +310,12 @@ beforeAll(async () => {
 
   await db.insert(formVersionFields).values([
     { id: extraFieldIds.title, order: 1, type: "text", label: "Task title", semanticKey: "submissionTitle" as const, required: true, logic: null },
-    { id: extraFieldIds.speakerName, order: 2, type: "text", label: "Speaker name", semanticKey: "speakerName" as const, required: true, logic: null },
-    { id: extraFieldIds.consent, order: 3, type: "checkbox", label: "Needs follow-up", semanticKey: null, required: false, logic: null },
+    { id: extraFieldIds.abstract, order: 2, type: "textarea", label: "Abstract", semanticKey: "submissionAbstract" as const, required: true, logic: null },
+    { id: extraFieldIds.speakerName, order: 3, type: "text", label: "Speaker name", semanticKey: "speakerName" as const, required: true, logic: null },
+    { id: extraFieldIds.consent, order: 4, type: "checkbox", label: "Needs follow-up", semanticKey: null, required: false, logic: null },
     {
       id: extraFieldIds.details,
-      order: 4,
+      order: 5,
       type: "textarea",
       label: "Follow-up details",
       semanticKey: null,
@@ -287,7 +326,18 @@ beforeAll(async () => {
         conditions: [{ fieldId: extraFieldIds.consent, op: "not_empty" }],
       }),
     },
-    { id: extraFieldIds.when, order: 5, type: "date", label: "Preferred date", semanticKey: null, required: false, logic: null },
+    { id: extraFieldIds.when, order: 6, type: "date", label: "Preferred date", semanticKey: null, required: false, logic: null },
+    {
+      id: extraFieldIds.category,
+      order: 7,
+      type: "select",
+      label: "Track",
+      semanticKey: null,
+      required: true,
+      options: ["Validation"],
+      routing: { Validation: "validation" },
+      logic: null,
+    },
   ].map((field) => ({
     ...field,
     id: `${EXTRAS_VERSION_ID}-${field.id}`,
@@ -296,6 +346,18 @@ beforeAll(async () => {
     formVersionId: EXTRAS_VERSION_ID,
     createdAt: now,
   })));
+
+  await db.insert(formVersionFields).values({
+    id: `${TASK_VERSION_ID}-${TASK_FIELD_ID}`,
+    sourceFieldId: TASK_FIELD_ID,
+    eventId: EVENT_ID,
+    formVersionId: TASK_VERSION_ID,
+    order: 1,
+    type: "text",
+    label: "Follow-up notes",
+    required: true,
+    createdAt: now,
+  });
 
   await db.batch([
     db.insert(submissions).values({
@@ -411,6 +473,78 @@ describe("public submission creation", () => {
     expect(rows).toEqual([]);
   });
 
+  it("rejects a published open non-CFP form before producer writes", async () => {
+    const form = await runPublic(getPublicSubmissionForm({ eventSlug: EVENT_SLUG, formId: TASK_FORM_ID }));
+    expect(form.form).toMatchObject({
+      versionId: TASK_VERSION_ID,
+      name: "Published portal follow-up",
+      availability: "open",
+    });
+
+    const db = drizzle(env.DB);
+    const producerCounts = async () => {
+      const [submissionRows, speakerRows, answerRows, speakerLinkRows, idempotencyRows, changeRows, auditRows] =
+        await Promise.all([
+          db.select({ id: submissions.id }).from(submissions),
+          db.select({ id: speakers.id }).from(speakers),
+          db.select({ id: submissionAnswers.id }).from(submissionAnswers),
+          db.select({ id: submissionSpeakers.id }).from(submissionSpeakers),
+          db.select({ id: idempotencyRecords.id }).from(idempotencyRecords),
+          db.select({ id: domainChanges.id }).from(domainChanges),
+          db.select({ id: auditLog.id }).from(auditLog),
+        ]);
+      return {
+        submissions: submissionRows.length,
+        speakers: speakerRows.length,
+        answers: answerRows.length,
+        speakerLinks: speakerLinkRows.length,
+        idempotency: idempotencyRows.length,
+        changes: changeRows.length,
+        audits: auditRows.length,
+      };
+    };
+    const before = await producerCounts();
+    const result = await runPublic(createPublicSubmission(taskInput()).pipe(Effect.either));
+
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        _tag: "Validation",
+        message: "Public submissions are only available for CFP forms.",
+      });
+    }
+    expect(await producerCounts()).toEqual(before);
+    expect(await db.select().from(submissions).where(eq(submissions.formId, TASK_FORM_ID))).toEqual([]);
+  });
+
+  it("maps the non-CFP producer validation to the public HTTP response", async () => {
+    const app = new Hono<AppHono>();
+    const rest = createPublicSubmissionOperation.rest;
+    app.post(`/api/v1${rest.path}`, (context) =>
+      runRestOperation(context, null, createPublicSubmissionOperation, rest.input));
+    const input = taskInput();
+
+    const response = await app.request(
+      `/api/v1/public/events/${EVENT_SLUG}/forms/${TASK_FORM_ID}/submissions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": input.idempotencyKey,
+        },
+        body: JSON.stringify({ answers: input.answers }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "Validation",
+      message: "Public submissions are only available for CFP forms.",
+      requestId: expect.any(String),
+    });
+  });
+
   it("replays one creation and rejects reuse with different answers", async () => {
     const input = submissionInput("submit-idempotency-001", OPEN_FORM_ID, "One idempotent proposal");
     const first = await runPublic(createPublicSubmission(input));
@@ -518,7 +652,9 @@ describe("public submission creation", () => {
       .select()
       .from(submissionAnswers)
       .where(eq(submissionAnswers.submissionId, unchecked.submissionId));
-    expect(storedAnswers).toHaveLength(3);
+    expect(storedAnswers.some(
+      (answer) => answer.formVersionFieldId === `${EXTRAS_VERSION_ID}-${extraFieldIds.details}`,
+    )).toBe(false);
 
     const hidden = await runPublic(createPublicSubmission(extrasInput("submit-checkbox-false-002", [
       { fieldId: extraFieldIds.consent, value: "false" },
