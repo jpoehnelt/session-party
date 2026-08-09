@@ -16,8 +16,6 @@ export default defineConfig(({ command }) => {
   const preview = isPreview
     ? {
         workerName: requiredPreviewValue("PREVIEW_WORKER_NAME"),
-        databaseName: requiredPreviewValue("PREVIEW_DATABASE_NAME"),
-        bucketName: requiredPreviewValue("PREVIEW_BUCKET_NAME"),
         appUrl: requiredPreviewValue("PREVIEW_APP_URL"),
       }
     : null;
@@ -41,25 +39,14 @@ export default defineConfig(({ command }) => {
             }
           : preview
             ? {
-                config: (config: WorkerConfig) => {
-                  config.d1_databases = (config.d1_databases ?? []).map((database) => ({
-                    ...database,
-                    database_name: preview.databaseName,
-                    database_id: undefined,
-                  }));
-                  config.r2_buckets = (config.r2_buckets ?? []).map((bucket) => ({
-                    ...bucket,
-                    bucket_name: preview.bucketName,
-                  }));
-                  return {
-                    name: preview.workerName,
-                    vars: {
-                      ...config.vars,
-                      PREVIEW_MODE: "1",
-                      APP_URL: preview.appUrl,
-                    },
-                  };
-                },
+                config: (config: WorkerConfig) => ({
+                  name: preview.workerName,
+                  vars: {
+                    ...config.vars,
+                    PREVIEW_MODE: "1",
+                    APP_URL: preview.appUrl,
+                  },
+                }),
               }
           : {}),
       }),

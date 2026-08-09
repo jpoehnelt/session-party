@@ -45,11 +45,13 @@
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "session-party-preview-db",
+          // Hackathon previews deliberately share production data. PR CI never migrates it.
+          "database_name": "session-party",
+          "database_id": "2cb93013-05e8-48bc-865d-f99a0a0096da",
           "migrations_dir": "migrations"
         }
       ],
-      "r2_buckets": [{ "binding": "FILES", "bucket_name": "session-party-preview-files" }],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "session-party-files" }],
       "durable_objects": {
         "bindings": [
           { "name": "EVENT_ROOM", "class_name": "EventRoom" },
