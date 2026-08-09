@@ -7,6 +7,7 @@ import PublicSubmitPage, {
   layout,
   path as publicPath,
   postPublicSubmission,
+  visibleFields,
 } from "./public-submit";
 import SubmissionsPage, { fetchSubmissionQueue, path as organizerPath } from "./submissions";
 import type { PublicSubmissionForm, SubmissionPage } from "../schema";
@@ -145,6 +146,42 @@ describe("public submit route", () => {
     expect(markup).toContain("Submission received");
     expect(markup).toContain("submission-created");
     expect(markup).not.toContain("Submit proposal");
+  });
+
+  it("hides checkbox-dependent fields until the box is actually checked", () => {
+    const fields: PublicSubmissionForm["form"]["fields"] = [
+      {
+        id: "field-consent",
+        order: 1,
+        type: "checkbox",
+        label: "Needs follow-up",
+        helpText: null,
+        required: false,
+        options: [],
+        logic: null,
+      },
+      {
+        id: "field-details",
+        order: 2,
+        type: "textarea",
+        label: "Follow-up details",
+        helpText: null,
+        required: true,
+        options: [],
+        logic: {
+          action: "show",
+          mode: "all",
+          conditions: [{ fieldId: "field-consent", op: "not_empty" }],
+        },
+      },
+    ];
+
+    expect(visibleFields(fields, { "field-consent": "false" }).map((field) => field.id)).toEqual(["field-consent"]);
+    expect(visibleFields(fields, { "field-consent": "true" }).map((field) => field.id)).toEqual([
+      "field-consent",
+      "field-details",
+    ]);
+    expect(visibleFields(fields, {}).map((field) => field.id)).toEqual(["field-consent"]);
   });
 });
 

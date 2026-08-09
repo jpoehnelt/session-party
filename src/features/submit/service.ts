@@ -16,7 +16,7 @@ import {
   submissions,
 } from "contracts/schema";
 import type { AnswerValue } from "contracts/types";
-import { and, asc, count, desc, eq, exists, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
@@ -223,15 +223,15 @@ export const getPublicSubmissionForm = (
 
 const conditionMatches = (
   condition: typeof ConditionalLogic.Type["conditions"][number],
+  sourceType: InternalField["type"] | undefined,
   value: AnswerValue | undefined,
 ): boolean => {
-  if (condition.op === "not_empty") {
-    return Array.isArray(value)
-      ? value.length > 0
-      : typeof value === "string"
-        ? value.trim().length > 0
-        : value !== undefined;
-  }
+  /** An unchecked checkbox persists the literal "false"; it is an empty answer, not a present one. */
+  const empty = value === undefined
+    || (Array.isArray(value) && value.length === 0)
+    || (typeof value === "string" && value.trim().length === 0)
+    || (sourceType === "checkbox" && value === "false");
+  if (condition.op === "not_empty") return !empty;
   if (condition.op === "in") {
     const accepted = Array.isArray(condition.value) ? condition.value : [condition.value ?? ""];
     return Array.isArray(value)
@@ -246,10 +246,15 @@ const conditionMatches = (
 const isVisible = (
   field: InternalField,
   activeAnswers: Readonly<Record<string, AnswerValue>>,
+  fieldsById: ReadonlyMap<string, InternalField>,
 ): boolean => {
   if (field.logic === null) return true;
   const matches = field.logic.conditions.map((condition) =>
-    conditionMatches(condition, activeAnswers[condition.fieldId]));
+    conditionMatches(
+      condition,
+      fieldsById.get(condition.fieldId)?.type,
+      activeAnswers[condition.fieldId],
+    ));
   const passed = field.logic.mode === "all" ? matches.every(Boolean) : matches.some(Boolean);
   return field.logic.action === "hide" ? !passed : passed;
 };
@@ -290,8 +295,12 @@ const validateValue = (field: InternalField, value: AnswerValue | undefined): st
       return `${field.label} must be a valid URL.`;
     }
   }
-  if (field.type === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return `${field.label} must be a date.`;
+  if (field.type === "date") {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return `${field.label} must be a date.`;
+    const [, year, month, day] = match;
+    const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+    if (parsed.toISOString().slice(0, 10) !== value) return `${field.label} must be a real calendar date.`;
   }
   return null;
 };
@@ -326,7 +335,7 @@ const validateAnswers = (
     const activeAnswers: Record<string, AnswerValue> = {};
     const validated: Array<{ field: InternalField; value: AnswerValue }> = [];
     for (const field of loaded.fields) {
-      const visible = isVisible(field, activeAnswers);
+      const visible = isVisible(field, activeAnswers, byId);
       const value = provided.get(field.id);
       if (!visible) {
         if (value !== undefined) {
@@ -421,8 +430,14 @@ const loadReplay = (
     return yield* replayOutput(record.responseBody);
   });
 
+/** Focused-test synchronization only; transports never provide command hooks. */
+export interface SubmitCommandTestHooks {
+  readonly beforeCommit?: () => Promise<void>;
+}
+
 export const createPublicSubmission = (
   input: CreatePublicSubmissionInput,
+  testHooks?: SubmitCommandTestHooks,
 ): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, Db | Rooms> =>
   Effect.gen(function* () {
     const loaded = yield* loadPublishedForm(input.eventSlug, input.formId);
@@ -444,95 +459,176 @@ export const createPublicSubmission = (
       status: "submitted" as const,
       submittedAt: now.getTime(),
     };
+    const versionId = loaded.publicForm.form.versionId;
+    const nowMs = now.getTime();
+    /**
+     * The reservation re-evaluates published availability inside the commit, so a
+     * concurrent close or retirement between the read and the write yields zero rows.
+     */
+    const reserveSubmission = db.insert(submissions).select(
+      db
+        .select({
+          id: sql<string>`${submissionId}`.as("id"),
+          eventId: forms.eventId,
+          formId: forms.id,
+          formVersionId: formVersions.id,
+          title: sql<string>`${validated.title}`.as("title"),
+          category: validated.category === null
+            ? sql<string | null>`null`.as("category")
+            : sql<string | null>`${validated.category}`.as("category"),
+          status: sql<"submitted">`'submitted'`.as("status"),
+          submittedAt: sql<Date>`${nowMs}`.as("submitted_at"),
+          acceptedAt: sql<Date | null>`null`.as("accepted_at"),
+          version: sql<number>`1`.as("version"),
+          createdAt: sql<Date>`${nowMs}`.as("created_at"),
+          updatedAt: sql<Date>`${nowMs}`.as("updated_at"),
+        })
+        .from(forms)
+        .innerJoin(
+          formVersions,
+          and(
+            eq(formVersions.eventId, forms.eventId),
+            eq(formVersions.formId, forms.id),
+            eq(formVersions.id, versionId),
+            isNull(formVersions.retiredAt),
+          ),
+        )
+        .where(and(
+          eq(forms.eventId, loaded.eventId),
+          eq(forms.id, input.formId),
+          eq(forms.status, "open"),
+          or(isNull(forms.opensAt), lte(forms.opensAt, now)),
+          or(isNull(forms.closesAt), gt(forms.closesAt, now)),
+        )),
+    );
+    /** Every dependent write selects the reserved row, so an unavailable form writes nothing. */
     const statements = [
-      db.insert(idempotencyRecords).values({
-        id: idempotencyId,
-        eventId: loaded.eventId,
-        operationId: "submit.create",
-        principalId: `public-form:${input.formId}`,
-        keyHash,
-        requestHash,
-        status: "completed",
-        responseStatus: 201,
-        responseBody: output,
-        expiresAt: new Date(now.getTime() + COMMAND_TTL_MS),
-        completedAt: now,
-        createdAt: now,
-      }),
-      db.insert(submissions).values({
-        id: submissionId,
-        eventId: loaded.eventId,
-        formId: input.formId,
-        formVersionId: loaded.publicForm.form.versionId,
-        title: validated.title,
-        category: validated.category,
-        status: "submitted",
-        submittedAt: now,
-        createdAt: now,
-        updatedAt: now,
-      }),
+      reserveSubmission,
+      db.insert(speakers).select(
+        db
+          .select({
+            id: sql<string>`${speakerId}`.as("id"),
+            eventId: submissions.eventId,
+            userId: sql<string | null>`null`.as("user_id"),
+            displayName: sql<string>`${validated.speakerName}`.as("display_name"),
+            title: sql<string | null>`null`.as("title"),
+            company: sql<string | null>`null`.as("company"),
+            bio: sql<string | null>`null`.as("bio"),
+            headshotAssetId: sql<string | null>`null`.as("headshot_asset_id"),
+            links: sql<unknown>`null`.as("links"),
+            visible: sql<boolean>`1`.as("visible"),
+            version: sql<number>`1`.as("version"),
+            createdAt: sql<Date>`${nowMs}`.as("created_at"),
+            updatedAt: sql<Date>`${nowMs}`.as("updated_at"),
+          })
+          .from(submissions)
+          .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
+      ),
+      db.insert(submissionSpeakers).select(
+        db
+          .select({
+            id: sql<string>`${nanoid()}`.as("id"),
+            eventId: submissions.eventId,
+            submissionId: submissions.id,
+            speakerId: sql<string>`${speakerId}`.as("speaker_id"),
+            isPrimary: sql<boolean>`1`.as("is_primary"),
+            createdAt: sql<Date>`${nowMs}`.as("created_at"),
+          })
+          .from(submissions)
+          .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
+      ),
       ...validated.answers.map(({ field, value }) =>
-        db.insert(submissionAnswers).values({
-          id: nanoid(),
-          eventId: loaded.eventId,
-          submissionId,
-          formVersionId: loaded.publicForm.form.versionId,
-          formVersionFieldId: field.id,
-          value,
-          createdAt: now,
-          updatedAt: now,
-        })),
-      db.insert(speakers).values({
-        id: speakerId,
-        eventId: loaded.eventId,
-        displayName: validated.speakerName,
-        createdAt: now,
-        updatedAt: now,
-      }),
-      db.insert(submissionSpeakers).values({
-        id: nanoid(),
-        eventId: loaded.eventId,
-        submissionId,
-        speakerId,
-        isPrimary: true,
-        createdAt: now,
-      }),
-      db.insert(domainChanges).values({
-        id: nanoid(),
-        eventId: loaded.eventId,
-        aggregateType: "submission",
-        aggregateId: submissionId,
-        aggregateVersion: 1,
-        eventType: "submit.created",
-        audiences: [{ kind: "admins" }, { kind: "reviewers" }],
-        payload: { submissionId, title: validated.title, category: validated.category, status: "submitted" },
-        actorUserId: null,
-        actorApiKeyId: null,
-        requestId,
-        idempotencyRecordId: idempotencyId,
-        occurredAt: now,
-      }),
-      db.insert(auditLog).values({
-        id: nanoid(),
-        eventId: loaded.eventId,
-        requestId,
-        actorUserId: null,
-        actorApiKeyId: null,
-        action: "submit.create",
-        resourceType: "submission",
-        resourceId: submissionId,
-        before: null,
-        after: output,
-        metadata: {
-          formId: input.formId,
-          formVersionId: loaded.publicForm.form.versionId,
-          answerCount: validated.answers.length,
-        },
-        occurredAt: now,
-      }),
-    ] as const;
+        db.insert(submissionAnswers).select(
+          db
+            .select({
+              id: sql<string>`${nanoid()}`.as("id"),
+              eventId: submissions.eventId,
+              submissionId: submissions.id,
+              formVersionId: submissions.formVersionId,
+              formVersionFieldId: sql<string>`${field.id}`.as("form_version_field_id"),
+              value: sql<AnswerValue>`${JSON.stringify(value)}`.as("value"),
+              version: sql<number>`1`.as("version"),
+              createdAt: sql<Date>`${nowMs}`.as("created_at"),
+              updatedAt: sql<Date>`${nowMs}`.as("updated_at"),
+            })
+            .from(submissions)
+            .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
+        )),
+      db.insert(idempotencyRecords).select(
+        db
+          .select({
+            id: sql<string>`${idempotencyId}`.as("id"),
+            eventId: submissions.eventId,
+            operationId: sql<string>`'submit.create'`.as("operation_id"),
+            principalId: sql<string>`${`public-form:${input.formId}`}`.as("principal_id"),
+            keyHash: sql<string>`${keyHash}`.as("key_hash"),
+            requestHash: sql<string>`${requestHash}`.as("request_hash"),
+            status: sql<"completed">`'completed'`.as("status"),
+            responseStatus: sql<number>`201`.as("response_status"),
+            responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+            expiresAt: sql<Date>`${nowMs + COMMAND_TTL_MS}`.as("expires_at"),
+            completedAt: sql<Date>`${nowMs}`.as("completed_at"),
+            createdAt: sql<Date>`${nowMs}`.as("created_at"),
+          })
+          .from(submissions)
+          .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
+      ),
+      db.insert(domainChanges).select(
+        db
+          .select({
+            sequence: sql<number | null>`null`.as("sequence"),
+            id: sql<string>`${nanoid()}`.as("id"),
+            eventId: submissions.eventId,
+            aggregateType: sql<string>`'submission'`.as("aggregate_type"),
+            aggregateId: submissions.id,
+            aggregateVersion: submissions.version,
+            eventType: sql<string>`'submit.created'`.as("event_type"),
+            audiences: sql<unknown>`${JSON.stringify([{ kind: "admins" }, { kind: "reviewers" }])}`.as("audiences"),
+            payload: sql<unknown>`${JSON.stringify({
+              submissionId,
+              title: validated.title,
+              category: validated.category,
+              status: "submitted",
+            })}`.as("payload"),
+            actorUserId: sql<string | null>`null`.as("actor_user_id"),
+            actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+            requestId: sql<string>`${requestId}`.as("request_id"),
+            idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+            occurredAt: sql<Date>`${nowMs}`.as("occurred_at"),
+          })
+          .from(submissions)
+          .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
+      ),
+      db.insert(auditLog).select(
+        db
+          .select({
+            id: sql<string>`${nanoid()}`.as("id"),
+            eventId: submissions.eventId,
+            requestId: sql<string>`${requestId}`.as("request_id"),
+            actorUserId: sql<string | null>`null`.as("actor_user_id"),
+            actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+            action: sql<string>`'submit.create'`.as("action"),
+            resourceType: sql<string>`'submission'`.as("resource_type"),
+            resourceId: submissions.id,
+            before: sql<unknown>`null`.as("before"),
+            after: sql<unknown>`${JSON.stringify(output)}`.as("after"),
+            metadata: sql<unknown>`${JSON.stringify({
+              formId: input.formId,
+              formVersionId: versionId,
+              answerCount: validated.answers.length,
+            })}`.as("metadata"),
+            occurredAt: sql<Date>`${nowMs}`.as("occurred_at"),
+          })
+          .from(submissions)
+          .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
+      ),
+    ];
 
-    const inserted = yield* database(() => db.batch(statements)).pipe(
+    if (testHooks?.beforeCommit) {
+      yield* Effect.promise(testHooks.beforeCommit);
+    }
+
+    const committed = yield* database(() => db.batch(statements as never)).pipe(
       Effect.as(true),
       Effect.catchIf(
         (error): error is External =>
@@ -541,10 +637,20 @@ export const createPublicSubmission = (
         () => Effect.succeed(false),
       ),
     );
-    if (!inserted) {
+    if (!committed) {
       const concurrentReplay = yield* loadReplay(loaded.eventId, input.formId, keyHash, requestHash);
       if (concurrentReplay) return concurrentReplay;
       return yield* Effect.fail(new External({ service: "database", detail: "Idempotent submission replay was not found" }));
+    }
+    const [reserved] = yield* database(() =>
+      db
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId)))
+        .limit(1),
+    );
+    if (!reserved) {
+      return yield* Effect.fail(new Validation({ message: "This form is not accepting submissions." }));
     }
     const rooms = yield* Rooms;
     yield* rooms.broadcast(loaded.eventId, {

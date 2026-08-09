@@ -69,15 +69,15 @@ export async function postPublicSubmission(
 
 const conditionMatches = (
   condition: NonNullable<PublicFormField["logic"]>["conditions"][number],
+  sourceType: PublicFormField["type"] | undefined,
   answer: AnswerValue | undefined,
 ): boolean => {
-  if (condition.op === "not_empty") {
-    return Array.isArray(answer)
-      ? answer.length > 0
-      : typeof answer === "string"
-        ? answer.trim().length > 0
-        : answer !== undefined;
-  }
+  /** An unchecked checkbox submits the literal "false"; it is an empty answer, not a present one. */
+  const empty = answer === undefined
+    || (Array.isArray(answer) && answer.length === 0)
+    || (typeof answer === "string" && answer.trim().length === 0)
+    || (sourceType === "checkbox" && answer === "false");
+  if (condition.op === "not_empty") return !empty;
   if (condition.op === "in") {
     const values = Array.isArray(condition.value) ? condition.value : [condition.value ?? ""];
     return Array.isArray(answer)
@@ -89,14 +89,16 @@ const conditionMatches = (
   return condition.op === "eq" ? equal : !equal;
 };
 
-function visibleFields(
+export function visibleFields(
   fields: readonly PublicFormField[],
   answers: Readonly<Record<string, AnswerValue>>,
 ): readonly PublicFormField[] {
   const visible: PublicFormField[] = [];
   const active: Record<string, AnswerValue> = {};
+  const byId = new Map(fields.map((field) => [field.id, field]));
   for (const field of fields) {
-    const matches = field.logic?.conditions.map((condition) => conditionMatches(condition, active[condition.fieldId]));
+    const matches = field.logic?.conditions.map((condition) =>
+      conditionMatches(condition, byId.get(condition.fieldId)?.type, active[condition.fieldId]));
     const conditionsPass = field.logic === null
       ? true
       : field.logic.mode === "all" ? matches!.every(Boolean) : matches!.some(Boolean);
