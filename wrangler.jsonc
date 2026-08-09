@@ -35,6 +35,37 @@
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAELTRHiRum336lV9",
     "TURNSTILE_HOSTNAMES": "sessionparty.com"
+  },
+  "env": {
+    "preview": {
+      "name": "session-party-preview",
+      "workers_dev": true,
+      "preview_urls": false,
+      "observability": { "enabled": true },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "session-party-preview-db",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "session-party-preview-files" }],
+      "durable_objects": {
+        "bindings": [
+          { "name": "EVENT_ROOM", "class_name": "EventRoom" },
+          { "name": "SCHEDULER", "class_name": "Scheduler" },
+          { "name": "MCP_OBJECT", "class_name": "SessionPartyMcp" }
+        ]
+      },
+      "send_email": [], // Preview mail is captured by the fake adapter; never bind live Email.
+      "vars": {
+        "PREVIEW_MODE": "1",
+        "APP_URL": "https://preview.invalid",
+        "MAIL_FROM": "Session Party Preview <welcome@sessionparty.com>",
+        "TURNSTILE_SITE_KEY": "preview-fake",
+        "TURNSTILE_HOSTNAMES": "invalid"
+      }
+    }
   }
   // Secrets (wrangler secret put): SESSION_SECRET, TURNSTILE_SECRET, ACCELEVENTS_API_TOKEN
 }

@@ -14,6 +14,7 @@ import worker from "./index";
 import {
   AppLayer,
   isExplicitLocalEnvironment,
+  isExplicitPreviewEnvironment,
   mailFrom,
   MailQueue,
   requireMailConfiguration,
@@ -548,6 +549,26 @@ describe("durable magic-link authentication", () => {
       html: "<p>Sensitive body</p>",
       text: "Sensitive body",
       idempotencyKey: "local-no-egress",
+    })).provider).toBe("local-fake");
+  });
+  it("uses fake external services in preview while requiring an explicit session secret", async () => {
+    const previewEnv = {
+      PREVIEW_MODE: "1",
+      SESSION_SECRET: "preview-session-secret",
+      APP_URL: "https://session-party-pr-42.example.workers.dev",
+    } as unknown as Env;
+
+    expect(isExplicitPreviewEnvironment(previewEnv)).toBe(true);
+    expect(isExplicitLocalEnvironment(previewEnv)).toBe(false);
+    expect(sessionSecret(previewEnv)).toBe("preview-session-secret");
+    expect(mailFrom(previewEnv)).toBe("Session Party <welcome@sessionparty.com>");
+    expect((await sendMail(previewEnv, {
+      fromEmail: mailFrom(previewEnv),
+      to: "reviewer@example.com",
+      subject: "Preview delivery",
+      html: "<p>Preview</p>",
+      text: "Preview",
+      idempotencyKey: "preview-delivery",
     })).provider).toBe("local-fake");
   });
   it.each([

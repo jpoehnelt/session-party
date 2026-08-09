@@ -115,6 +115,7 @@ export class CurrentUser extends Context.Tag("session-party/CurrentUser")<
 
 type SecretBindings = {
   readonly LOCAL_MODE?: string;
+  readonly PREVIEW_MODE?: string;
   readonly SESSION_SECRET?: string;
   readonly ACCELEVENTS_API_TOKEN?: string;
   readonly TURNSTILE_SECRET?: string;
@@ -137,6 +138,12 @@ const optionalSecret = (
 
 export const isExplicitLocalEnvironment = (env: object): boolean =>
   "LOCAL_MODE" in env && env.LOCAL_MODE === "1";
+
+export const isExplicitPreviewEnvironment = (env: object): boolean =>
+  "PREVIEW_MODE" in env && env.PREVIEW_MODE === "1";
+
+const usesFakeExternalServices = (env: object): boolean =>
+  isExplicitLocalEnvironment(env) || isExplicitPreviewEnvironment(env);
 
 export const sessionSecret = (env: Env & SecretBindings): string => {
   if (isExplicitLocalEnvironment(env)) return LOCAL_SESSION_SECRET;
@@ -164,7 +171,7 @@ const hmacBearerMaterial = async (env: Env & SecretBindings, value: string): Pro
 };
 
 const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
-  if (isExplicitLocalEnvironment(env)) return localTestPublicSubmissionAbuse;
+  if (usesFakeExternalServices(env)) return localTestPublicSubmissionAbuse;
 
   const siteKey = configuredValue(env.TURNSTILE_SITE_KEY) ?? null;
   const expectedHostnames = new Set(
@@ -308,7 +315,7 @@ const toBase64 = (value: string): string => {
 const LOCAL_MAIL_FROM = "Session Party <welcome@sessionparty.com>";
 
 export const mailFrom = (env: Env & SecretBindings): string => {
-  if (isExplicitLocalEnvironment(env)) return LOCAL_MAIL_FROM;
+  if (usesFakeExternalServices(env)) return LOCAL_MAIL_FROM;
   const configured = typeof env.MAIL_FROM === "string" ? env.MAIL_FROM.trim() : "";
   if (configured) return configured;
   throw new Error("Missing required production binding: MAIL_FROM");
@@ -346,7 +353,7 @@ const appOrigin = (env: Env): string => {
 
 export const requireMailConfiguration = (env: Env & SecretBindings): void => {
   mailFrom(env);
-  if (!isExplicitLocalEnvironment(env) && !env.EMAIL) {
+  if (!usesFakeExternalServices(env) && !env.EMAIL) {
     throw new Error("Missing required production binding: EMAIL");
   }
 };
@@ -364,7 +371,7 @@ export const sendMail = async (
 ): Promise<MailReceipt> => {
   requireMailConfiguration(env);
   const correlationId = await outboundCorrelationId(payload.idempotencyKey);
-  if (isExplicitLocalEnvironment(env)) {
+  if (usesFakeExternalServices(env)) {
     const providerMessageId = payload.idempotencyKey
       ? `local-fake:${await sha256Hex(payload.idempotencyKey)}`
       : `local-fake:${crypto.randomUUID()}`;
@@ -488,7 +495,7 @@ export const AppLayer = (env: Env) => {
   const db = drizzle(env.DB, { schema });
   const secrets = createSecretResolver(optionalSecret(env, "ACCELEVENTS_API_TOKEN"));
   const fixtureAcceleventsAdapter = createFixtureAcceleventsAdapter();
-  const acceleventsAdapter = isExplicitLocalEnvironment(env)
+  const acceleventsAdapter = usesFakeExternalServices(env)
     ? fixtureAcceleventsAdapter
     : createLiveAcceleventsAdapter();
   const acceleventsImports = createAcceleventsImports({
@@ -550,20 +557,25 @@ export const AppLayer = (env: Env) => {
     }),
     Layer.succeed(AiService, {
       reviewText: (prompt) =>
-        externalEffect("workers-ai", async () => {
-          const result: unknown = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-            prompt,
-          });
-          if (
-            typeof result === "object" &&
-            result !== null &&
-            "response" in result &&
-            typeof result.response === "string"
-          ) {
-            return result.response;
-          }
-          throw new Error("Workers AI returned an unexpected response");
-        }),
+        usesFakeExternalServices(env)
+          ? Effect.fail(new External({
+              service: "workers-ai",
+              detail: "Workers AI is disabled in local and preview environments",
+            }))
+          : externalEffect("workers-ai", async () => {
+              const result: unknown = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+                prompt,
+              });
+              if (
+                typeof result === "object" &&
+                result !== null &&
+                "response" in result &&
+                typeof result.response === "string"
+              ) {
+                return result.response;
+              }
+              throw new Error("Workers AI returned an unexpected response");
+            }),
     }),
   );
 };
