@@ -6,6 +6,7 @@ import {
   auditLog,
   domainChanges,
   events,
+  eventMembers,
   formVersions,
   forms,
   idempotencyRecords,
@@ -19,12 +20,13 @@ import {
   tracks,
   users,
 } from "contracts/schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppLayer, CurrentUser, Db, Rooms } from "@/server/services";
+import { AppLayer, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import { updateEvent } from "@/features/events/service";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
 import { operations, partyDescriptors } from "./operations";
 import type { AgendaMutationResult } from "./schema";
@@ -59,6 +61,14 @@ const owner = (userId: string): CurrentUserValue => ({
 const runAs = <A, E>(
   principal: CurrentUserValue,
   effect: Effect.Effect<A, E, Db | CurrentUser | Rooms>,
+) =>
+  Effect.runPromise(effect.pipe(
+    Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+  ));
+
+const runEventAs = <A, E>(
+  principal: CurrentUserValue,
+  effect: Effect.Effect<A, E, Db | CurrentUser | Authorizer>,
 ) =>
   Effect.runPromise(effect.pipe(
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
@@ -182,6 +192,14 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
       timezone: "America/Los_Angeles",
       startsAt: new Date(FIXED_DAY_START),
       endsAt: new Date(FIXED_DAY_START + 2 * 86_400_000),
+      createdAt: now,
+      updatedAt: now,
+    }),
+    db.insert(eventMembers).values({
+      id: id("member-owner"),
+      eventId,
+      userId,
+      role: "owner",
       createdAt: now,
       updatedAt: now,
     }),
@@ -857,14 +875,12 @@ describe("agenda service", () => {
     }, barrier.interlock));
     await barrier.sampled;
     try {
-      await seeded.db
-        .update(events)
-        .set({
+      await runEventAs(
+        seeded.user,
+        updateEvent(seeded.eventId, {
           name: "Conference publication-event-race updated",
-          version: sql`${events.version} + 1`,
-          updatedAt: new Date(FIXED_NOW + 1_000),
-        })
-        .where(eq(events.id, seeded.eventId));
+        }),
+      );
     } finally {
       barrier.release();
     }
