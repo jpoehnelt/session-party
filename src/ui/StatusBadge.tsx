@@ -61,7 +61,7 @@ export function StatusBadge({
       tone={presentation.tone}
       className={cx("gap-1.5", className)}
     >
-      <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
+      <span aria-hidden="true" className="size-1.5 bg-current" />
       <span>{label ?? presentation.label}</span>
       {details && <span className="sr-only"> — {details}</span>}
     </Badge>

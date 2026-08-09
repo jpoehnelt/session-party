@@ -1,10 +1,16 @@
 import { useCallback, useRef, useState } from "react";
 import { useParams } from "react-router";
-import { Badge, EmptyState, PageHeader, Table } from "@/ui";
+import { Badge, EmptyState, Table } from "@/ui";
 import { useEventRoom } from "@/client/socket";
 import type { PortalDashboard } from "../schema";
 import { getPortalDashboard } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
+import {
+  ProductionHeader,
+  ProductionSectionLabel,
+  ProductionStats,
+  productionTableClass,
+} from "../components/production-ui";
 
 export const path = "/e/:eventSlug/dashboard";
 
@@ -40,36 +46,38 @@ function LiveOrganizerDashboard({
 
 export function OrganizerDashboardContent({ dashboard }: { readonly dashboard: PortalDashboard }) {
   return (
-    <div className="space-y-6">
-      <PageHeader
+    <div className="space-y-8">
+      <ProductionHeader
+        eyebrow="Organizer control room / Readiness"
         title="Speaker readiness"
         description={`A compact production check for ${dashboard.event.name}. Every count comes from the current task definitions and persisted completions.`}
+        accent="lime"
+        actions={
+          <span className="border-2 border-[#171714] bg-[#caff4a] px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] shadow-[3px_3px_0_#171714]">
+            Live production state
+          </span>
+        }
       />
-      <dl className="grid gap-3 border-y border-line py-4 sm:grid-cols-4">
-        <div>
-          <dt className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Speakers</dt>
-          <dd className="mt-1 text-lg font-semibold text-ink">{dashboard.totals.speakers}</dd>
-        </div>
-        <div>
-          <dt className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Ready</dt>
-          <dd className="mt-1 text-lg font-semibold text-success">{dashboard.totals.ready}</dd>
-        </div>
-        <div>
-          <dt className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Tasks complete</dt>
-          <dd className="mt-1 text-lg font-semibold text-ink">{dashboard.totals.tasksDone}</dd>
-        </div>
-        <div>
-          <dt className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Tasks assigned</dt>
-          <dd className="mt-1 text-lg font-semibold text-ink">{dashboard.totals.tasksTotal}</dd>
-        </div>
-      </dl>
-      {dashboard.speakers.length === 0 ? (
-        <EmptyState title="No speakers to track" description="Provision an accepted speaker to begin tracking production readiness." />
-      ) : (
-        <Table
-          rows={[...dashboard.speakers]}
-          rowKey={(item) => item.speaker.id}
-          columns={[
+      <ProductionStats
+        stats={[
+          { label: "Speakers", value: dashboard.totals.speakers, tone: "paper" },
+          { label: "Ready", value: dashboard.totals.ready, tone: "lime" },
+          { label: "Tasks complete", value: dashboard.totals.tasksDone, tone: "sky" },
+          { label: "Tasks assigned", value: dashboard.totals.tasksTotal, tone: "coral" },
+        ]}
+      />
+      <section aria-label="Speaker production matrix">
+        <ProductionSectionLabel>Speaker production matrix</ProductionSectionLabel>
+        {dashboard.speakers.length === 0 ? (
+          <div className="border-2 border-[#171714] bg-[#fffdf7] p-6 shadow-[6px_6px_0_#171714]">
+            <EmptyState title="No speakers to track" description="Provision an accepted speaker to begin tracking production readiness." />
+          </div>
+        ) : (
+          <div className={productionTableClass}>
+            <Table
+              rows={[...dashboard.speakers]}
+              rowKey={(item) => item.speaker.id}
+              columns={[
             {
               key: "speaker",
               header: "Speaker",
@@ -100,7 +108,7 @@ export function OrganizerDashboardContent({ dashboard }: { readonly dashboard: P
                       <span
                         key={index}
                         aria-hidden="true"
-                        className={`h-2 flex-1 rounded-full ${index < item.readiness.tasksDone ? "bg-success" : "bg-line-strong"}`}
+                        className={`h-2 flex-1 ${index < item.readiness.tasksDone ? "bg-[#7857ff]" : "bg-[#d8d1c3]"}`}
                       />
                     ))}
                   </div>
@@ -116,9 +124,11 @@ export function OrganizerDashboardContent({ dashboard }: { readonly dashboard: P
                 <span>{item.readiness.outstandingTaskIds.length} remaining</span>
               ),
             },
-          ]}
-        />
-      )}
+              ]}
+            />
+          </div>
+        )}
+      </section>
     </div>
   );
 }

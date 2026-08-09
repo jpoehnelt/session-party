@@ -47,7 +47,7 @@ export function Combobox({
           aria-expanded={open}
           aria-label={ariaLabel}
           disabled={disabled}
-          className={cx("w-64 justify-between font-normal", !selected && "text-ink-faint", className)}
+          className={cx("w-64 justify-between", !selected && "text-ink-faint", className)}
         >
           <span className="truncate">{selected?.label ?? placeholder}</span>
           <ChevronsUpDown className="size-4 shrink-0 text-ink-faint" aria-hidden="true" />

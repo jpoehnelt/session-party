@@ -7,14 +7,14 @@ export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md";
 
 const buttonVariants = cva(
-  "inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-control font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex select-none items-center justify-center gap-2 whitespace-nowrap rounded-control border-2 font-black uppercase tracking-[0.075em] outline-none transition-transform duration-150 hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3 focus-visible:ring-offset-canvas disabled:pointer-events-none disabled:translate-y-0 disabled:opacity-50",
   {
     variants: {
       variant: {
-        primary: "bg-accent text-on-accent shadow-xs hover:bg-accent-hover",
-        secondary: "border border-line-strong bg-surface text-ink shadow-xs hover:bg-surface-muted",
-        ghost: "text-ink-secondary hover:bg-surface-muted hover:text-ink",
-        danger: "bg-danger text-on-accent shadow-xs hover:bg-danger-hover",
+        primary: "border-line-strong bg-accent text-on-accent shadow-button hover:bg-accent-hover",
+        secondary: "border-line-strong bg-surface text-ink shadow-button hover:bg-production-sky",
+        ghost: "border-transparent text-ink-secondary hover:bg-surface-muted hover:text-ink",
+        danger: "border-line-strong bg-production-coral text-ink shadow-button hover:bg-danger-soft",
       },
       size: {
         sm: "h-8 px-3 text-[13px]",
@@ -29,12 +29,12 @@ const buttonVariants = cva(
 );
 
 const iconButtonVariants = cva(
-  "inline-flex select-none items-center justify-center whitespace-nowrap rounded-control font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex select-none items-center justify-center whitespace-nowrap rounded-control border-2 font-black outline-none transition-transform duration-150 hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:pointer-events-none disabled:translate-y-0 disabled:opacity-50",
   {
     variants: {
       variant: {
-        secondary: "border border-line-strong bg-surface text-ink shadow-xs hover:bg-surface-muted",
-        ghost: "text-ink-secondary hover:bg-surface-muted hover:text-ink",
+        secondary: "border-line-strong bg-surface text-ink shadow-button hover:bg-production-sky",
+        ghost: "border-transparent text-ink-secondary hover:bg-surface-muted hover:text-ink",
       },
       size: {
         sm: "size-8 [&>svg]:size-4",

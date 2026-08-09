@@ -18,7 +18,7 @@ export function FilterBar({
     <section
       aria-label={label}
       className={cx(
-        "flex flex-col gap-3 rounded-card border border-line bg-surface p-4 sm:flex-row sm:items-end sm:justify-between",
+        "flex flex-col gap-3 rounded-card border-2 border-line-strong bg-surface p-4 shadow-[3px_3px_0_#171714] sm:flex-row sm:items-end sm:justify-between",
         className,
       )}
     >
@@ -50,7 +50,7 @@ export function DataToolbar({
       role="toolbar"
       aria-label="Data actions"
       className={cx(
-        "flex min-h-12 flex-col gap-3 rounded-control border border-line bg-surface px-3 py-2 sm:flex-row sm:items-center",
+        "flex min-h-12 flex-col gap-3 rounded-control border-2 border-line-strong bg-surface px-3 py-2 shadow-[3px_3px_0_#171714] sm:flex-row sm:items-center",
         className,
       )}
     >

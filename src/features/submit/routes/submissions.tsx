@@ -74,8 +74,8 @@ const columns: TableColumn<SubmissionSummary>[] = [
     header: "Submission",
     render: (row) => (
       <div>
-        <p className="font-medium text-ink">{row.title}</p>
-        <p className="mt-0.5 text-xs text-ink-faint">{row.primarySpeakerName ?? "No primary speaker"}</p>
+        <p className="font-black tracking-[-0.015em] text-ink">{row.title}</p>
+        <p className="mt-1 text-[10px] font-black uppercase tracking-[0.08em] text-ink-faint">{row.primarySpeakerName ?? "No primary speaker"}</p>
       </div>
     ),
   },
@@ -179,6 +179,8 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
     setCategory(categoryDraft.trim());
   };
 
+  const visibleRouted = page?.results.filter((submission) => submission.category != null).length ?? 0;
+
   if (event === undefined) {
     return <><Skeleton className="h-24" /><Skeleton className="mt-5 h-[28rem]" /><Toaster /></>;
   }
@@ -198,8 +200,26 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
 
   return (
     <>
-      <PageHeader title="Submissions" description={`Review the live proposal queue for ${event.name}.`} />
-      <Card className="mb-5">
+      <PageHeader
+        title="Submission board"
+        description={`Run the live proposal queue for ${event.name}. Filter the intake, track routing, and keep every review moving.`}
+        actions={<Badge tone="accent">Live queue</Badge>}
+      />
+      {page && (
+        <section className="mb-6 grid border-2 border-line-strong bg-surface shadow-card sm:grid-cols-3" aria-label="Submission queue summary">
+          {[
+            [String(page.pagination.total), "Queue total", "bg-production-lime"],
+            [String(page.results.length), "On this page", "bg-production-sky"],
+            [String(visibleRouted), "Routed here", "bg-production-coral"],
+          ].map(([value, label, color], index) => (
+            <div className={`px-5 py-4 ${color} ${index > 0 ? "border-t-2 border-line-strong sm:border-l-2 sm:border-t-0" : ""}`} key={label}>
+              <p className="text-3xl font-black leading-none tracking-[-0.055em]">{value}</p>
+              <p className="mt-2 text-[10px] font-black uppercase tracking-[0.13em]">{label}</p>
+            </div>
+          ))}
+        </section>
+      )}
+      <Card className="mb-6 [&>header]:bg-accent" title="Queue controls">
         <form className="grid gap-4 md:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1fr)_minmax(12rem,1fr)_auto] md:items-end" onSubmit={applyCategory}>
           <Select
             label="State"
@@ -249,14 +269,20 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
         </Card>
       ) : (
         <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent">
+            <p className="text-[10px] font-black uppercase tracking-[0.15em]">Current intake</p>
+            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-white/55">
+              Page {page.pagination.page} · newest first
+            </p>
+          </div>
           <Table
             columns={columns}
             rows={[...page.results]}
             rowKey={(row) => row.id}
             empty="No submissions match these filters."
           />
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-sm text-ink-faint">
+          <div className="flex flex-col gap-4 border-t-2 border-line-strong pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-black uppercase tracking-[0.08em] text-ink-faint">
               {page.pagination.total} submission{page.pagination.total === 1 ? "" : "s"} · page {page.pagination.page} of {Math.max(1, page.pagination.pageCount)}
             </p>
             <div className="flex gap-2">

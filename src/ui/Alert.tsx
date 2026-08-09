@@ -4,13 +4,13 @@ import { cx } from "./cx";
 
 export type AlertTone = "neutral" | "success" | "warning" | "danger";
 
-const alertVariants = cva("relative w-full rounded-control border px-4 py-3 text-sm", {
+const alertVariants = cva("relative w-full rounded-control border-2 border-line-strong px-4 py-3 text-sm font-medium shadow-[3px_3px_0_#171714]", {
   variants: {
     tone: {
-      neutral: "border-line-strong bg-surface text-ink",
-      success: "border-success/20 bg-success-soft text-success",
-      warning: "border-warning/20 bg-warning-soft text-warning",
-      danger: "border-danger/20 bg-danger-soft text-danger",
+      neutral: "bg-surface text-ink",
+      success: "bg-success-soft text-ink",
+      warning: "bg-warning-soft text-ink",
+      danger: "bg-danger-soft text-danger",
     },
   },
   defaultVariants: { tone: "neutral" },
@@ -26,7 +26,7 @@ export function Alert({ tone = "neutral", className, role = "alert", ...props }:
 
 export type AlertTitleProps = ComponentPropsWithRef<"h5">;
 export function AlertTitle({ className, ...props }: AlertTitleProps) {
-  return <h5 className={cx("mb-1 font-semibold leading-none tracking-tight", className)} {...props} />;
+  return <h5 className={cx("mb-1 font-black uppercase leading-none tracking-[0.08em]", className)} {...props} />;
 }
 
 export type AlertDescriptionProps = ComponentPropsWithRef<"div">;

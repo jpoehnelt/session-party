@@ -12,32 +12,32 @@ export const DropdownMenuRadioGroup = Primitive.RadioGroup;
 
 export type DropdownMenuContentProps = ComponentPropsWithRef<typeof Primitive.Content>;
 export function DropdownMenuContent({ className, sideOffset = 6, ...props }: DropdownMenuContentProps) {
-  return <Primitive.Portal><Primitive.Content sideOffset={sideOffset} className={cx("z-50 min-w-44 overflow-hidden rounded-control border border-line bg-surface p-1 text-ink shadow-pop outline-none", className)} {...props} /></Primitive.Portal>;
+  return <Primitive.Portal><Primitive.Content sideOffset={sideOffset} className={cx("z-50 min-w-44 overflow-hidden rounded-control border-2 border-line-strong bg-surface p-1 text-ink shadow-pop outline-none", className)} {...props} /></Primitive.Portal>;
 }
 
 export type DropdownMenuSubContentProps = ComponentPropsWithRef<typeof Primitive.SubContent>;
 export function DropdownMenuSubContent({ className, ...props }: DropdownMenuSubContentProps) {
-  return <Primitive.Portal><Primitive.SubContent className={cx("z-50 min-w-40 overflow-hidden rounded-control border border-line bg-surface p-1 text-ink shadow-pop outline-none", className)} {...props} /></Primitive.Portal>;
+  return <Primitive.Portal><Primitive.SubContent className={cx("z-50 min-w-40 overflow-hidden rounded-control border-2 border-line-strong bg-surface p-1 text-ink shadow-pop outline-none", className)} {...props} /></Primitive.Portal>;
 }
 
 export interface DropdownMenuSubTriggerProps extends ComponentPropsWithRef<typeof Primitive.SubTrigger> { inset?: boolean; }
 export function DropdownMenuSubTrigger({ className, inset, children, ...props }: DropdownMenuSubTriggerProps) {
-  return <Primitive.SubTrigger className={cx("flex cursor-default select-none items-center rounded-md px-2 py-1.5 text-sm outline-none focus:bg-surface-muted data-[state=open]:bg-surface-muted", inset && "pl-8", className)} {...props}>{children}<ChevronRight className="ml-auto size-4" /></Primitive.SubTrigger>;
+  return <Primitive.SubTrigger className={cx("flex cursor-default select-none items-center rounded-control px-2 py-2 text-sm font-bold outline-none focus:bg-production-sky data-[state=open]:bg-production-sky", inset && "pl-8", className)} {...props}>{children}<ChevronRight className="ml-auto size-4" /></Primitive.SubTrigger>;
 }
 
 export interface DropdownMenuItemProps extends ComponentPropsWithRef<typeof Primitive.Item> { inset?: boolean; }
 export function DropdownMenuItem({ className, inset, ...props }: DropdownMenuItemProps) {
-  return <Primitive.Item className={cx("relative flex cursor-default select-none items-center rounded-md px-2 py-1.5 text-sm outline-none transition-colors focus:bg-surface-muted focus:text-ink data-[disabled]:pointer-events-none data-[disabled]:opacity-50", inset && "pl-8", className)} {...props} />;
+  return <Primitive.Item className={cx("relative flex cursor-default select-none items-center rounded-control px-2 py-2 text-sm font-bold outline-none transition-colors focus:bg-production-sky focus:text-ink data-[disabled]:pointer-events-none data-[disabled]:opacity-50", inset && "pl-8", className)} {...props} />;
 }
 
 export type DropdownMenuCheckboxItemProps = ComponentPropsWithRef<typeof Primitive.CheckboxItem>;
 export function DropdownMenuCheckboxItem({ className, children, checked, ...props }: DropdownMenuCheckboxItemProps) {
-  return <Primitive.CheckboxItem checked={checked} className={cx("relative flex cursor-default select-none items-center rounded-md py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-surface-muted data-[disabled]:pointer-events-none data-[disabled]:opacity-50", className)} {...props}><span className="absolute left-2 flex size-4 items-center justify-center"><Primitive.ItemIndicator><Check className="size-4" /></Primitive.ItemIndicator></span>{children}</Primitive.CheckboxItem>;
+  return <Primitive.CheckboxItem checked={checked} className={cx("relative flex cursor-default select-none items-center rounded-control py-2 pl-8 pr-2 text-sm font-bold outline-none focus:bg-production-sky data-[disabled]:pointer-events-none data-[disabled]:opacity-50", className)} {...props}><span className="absolute left-2 flex size-4 items-center justify-center"><Primitive.ItemIndicator><Check className="size-4" /></Primitive.ItemIndicator></span>{children}</Primitive.CheckboxItem>;
 }
 
 export type DropdownMenuRadioItemProps = ComponentPropsWithRef<typeof Primitive.RadioItem>;
 export function DropdownMenuRadioItem({ className, children, ...props }: DropdownMenuRadioItemProps) {
-  return <Primitive.RadioItem className={cx("relative flex cursor-default select-none items-center rounded-md py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-surface-muted data-[disabled]:pointer-events-none data-[disabled]:opacity-50", className)} {...props}><span className="absolute left-2 flex size-4 items-center justify-center"><Primitive.ItemIndicator><Circle className="size-2 fill-current" /></Primitive.ItemIndicator></span>{children}</Primitive.RadioItem>;
+  return <Primitive.RadioItem className={cx("relative flex cursor-default select-none items-center rounded-control py-2 pl-8 pr-2 text-sm font-bold outline-none focus:bg-production-sky data-[disabled]:pointer-events-none data-[disabled]:opacity-50", className)} {...props}><span className="absolute left-2 flex size-4 items-center justify-center"><Primitive.ItemIndicator><Circle className="size-2 fill-current" /></Primitive.ItemIndicator></span>{children}</Primitive.RadioItem>;
 }
 
 export interface DropdownMenuLabelProps extends ComponentPropsWithRef<typeof Primitive.Label> { inset?: boolean; }
@@ -47,7 +47,7 @@ export function DropdownMenuLabel({ className, inset, ...props }: DropdownMenuLa
 
 export type DropdownMenuSeparatorProps = ComponentPropsWithRef<typeof Primitive.Separator>;
 export function DropdownMenuSeparator({ className, ...props }: DropdownMenuSeparatorProps) {
-  return <Primitive.Separator className={cx("-mx-1 my-1 h-px bg-line", className)} {...props} />;
+  return <Primitive.Separator className={cx("-mx-1 my-1 h-0.5 bg-line-strong", className)} {...props} />;
 }
 
 export type DropdownMenuShortcutProps = ComponentPropsWithRef<"span">;

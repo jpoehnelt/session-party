@@ -101,8 +101,8 @@ export default function EventOverviewPage() {
         <EmptyState title="Event not found" description="This event may have moved or been removed." />
       ) : (
         <>
-          <PageHeader title={event.name} description={event.description || "Event overview"} />
-          <Card title="Event details">
+          <PageHeader title={event.name} description={event.description || "Your live production overview."} />
+          <Card className="[&>header]:bg-accent" title="Production brief">
             <Table
               columns={[
                 { key: "label", header: "Detail" },
@@ -111,7 +111,7 @@ export default function EventOverviewPage() {
               rows={[
                 { label: "Location", value: event.location || "Not set" },
                 { label: "Timezone", value: event.timezone },
-                { label: "Status", value: <Badge>Planning</Badge> },
+                { label: "Status", value: <Badge tone="accent">Planning</Badge> },
               ]}
               rowKey={(row) => row.label}
             />
@@ -122,4 +122,3 @@ export default function EventOverviewPage() {
     </>
   );
 }
-

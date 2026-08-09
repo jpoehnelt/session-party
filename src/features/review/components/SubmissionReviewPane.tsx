@@ -57,16 +57,16 @@ function ReadOnlyReviewEvidence({
   const scoreByCriterion: Record<string, number> = {};
   for (const entry of review.scores) scoreByCriterion[entry.criterionKey] = entry.score;
   return (
-    <Card title={`${isCurrentReviewer ? "Your review" : review.reviewerName} · read-only evidence`}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-3">
+    <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title={`${isCurrentReviewer ? "Your review" : review.reviewerName} · read-only evidence`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-line-strong pb-3">
         <Badge tone="neutral">Human review · version {review.version}</Badge>
         <span className="font-mono text-sm font-semibold tabular-nums text-ink">{review.score.toFixed(1)} / 5</span>
       </div>
       <dl className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {submission.round?.rubric.criteria.map((criterion) => (
-          <div key={criterion.key} className="rounded-control border border-line bg-surface-muted px-3 py-2">
-            <dt className="text-xs text-ink-faint">{criterion.label}</dt>
-            <dd className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-ink">{scoreByCriterion[criterion.key] ?? "—"} / 5</dd>
+          <div key={criterion.key} className="rounded-control border-2 border-line-strong bg-surface-muted px-3 py-2">
+            <dt className="text-[10px] font-black uppercase tracking-[0.08em] text-ink-faint">{criterion.label}</dt>
+            <dd className="mt-0.5 font-mono text-sm font-black tabular-nums text-ink">{scoreByCriterion[criterion.key] ?? "—"} / 5</dd>
           </div>
         ))}
       </dl>
@@ -201,28 +201,28 @@ export function SubmissionReviewPane({
 
   return (
     <article className="space-y-4" aria-label={`Review ${submission.title}`}>
-      <header className="border-b border-line pb-4">
+      <header className="border-[3px] border-line-strong bg-accent p-5 text-on-accent shadow-[6px_6px_0_#171714]">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={statusTone[submission.status]}>{statusLabel[submission.status]}</Badge>
           <Badge tone="neutral">{submission.category ?? "Uncategorized"}</Badge>
-          <span className="text-xs text-ink-faint">Version {submission.version}</span>
+          <span className="text-[10px] font-black uppercase tracking-[0.08em] text-white/65">Version {submission.version}</span>
         </div>
-        <h2 id={`proposal-heading-${submission.id}`} className="mt-3 max-w-4xl text-2xl font-semibold leading-tight tracking-tight text-ink">{submission.title}</h2>
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-secondary">
+        <h2 id={`proposal-heading-${submission.id}`} className="mt-3 max-w-4xl text-3xl font-black leading-tight tracking-[-0.045em] text-white">{submission.title}</h2>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm font-semibold text-white/70">
           <span>{submission.speakers.map((speaker) => `${speaker.displayName}${speaker.isPrimary ? " (primary)" : ""}`).join(", ")}</span>
           <span>Submitted {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(submission.submittedAt)} {timezone}</span>
         </div>
       </header>
 
       {mutationError && (
-        <div role="alert" className="rounded-control border border-danger/40 bg-danger/5 px-4 py-3 text-sm text-danger">
+        <div role="alert" className="rounded-control border-2 border-line-strong bg-danger-soft px-4 py-3 text-sm font-bold text-danger shadow-[3px_3px_0_#171714]">
           {mutationError}
         </div>
       )}
 
-      <Card title="Proposal"><p className="max-w-4xl whitespace-pre-wrap text-sm leading-6 text-ink-secondary">{submission.abstract}</p></Card>
+      <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title="Proposal brief"><p className="max-w-4xl whitespace-pre-wrap text-sm font-medium leading-6 text-ink-secondary">{submission.abstract}</p></Card>
 
-      <Card title="Reviewer assignments">
+      <Card className="[&>header]:bg-production-coral [&>header_h3]:text-ink" title="Reviewer assignments">
         {submission.assignments.length === 0 ? (
           <p className="text-sm text-ink-faint">No reviewers are assigned in this round.</p>
         ) : (
@@ -231,7 +231,7 @@ export function SubmissionReviewPane({
           </div>
         )}
         {organizer && round && (
-          <div className="mt-4 grid gap-2 border-t border-line pt-4 sm:grid-cols-[minmax(14rem,1fr)_auto] sm:items-end">
+          <div className="mt-4 grid gap-2 border-t-2 border-line-strong pt-4 sm:grid-cols-[minmax(14rem,1fr)_auto] sm:items-end">
             <Select
               label="Assign reviewer"
               value={selectedReviewerUserId}
@@ -260,7 +260,7 @@ export function SubmissionReviewPane({
       </Card>
 
       {round && (canScore || canRequestAi) && (
-        <Card title={`${round.name} · ${round.status}`}>
+        <Card className="[&>header]:bg-production-lime [&>header_h3]:text-ink" title={`${round.name} · ${round.status}`}>
           {canScore && (
             <div className="space-y-4">
               <RubricScorecard
@@ -294,7 +294,7 @@ export function SubmissionReviewPane({
             </div>
           )}
           {canRequestAi && (
-            <div className={`${canScore ? "mt-5 border-t border-line pt-4" : ""} flex flex-wrap items-center justify-between gap-3`}>
+            <div className={`${canScore ? "mt-5 border-t-2 border-line-strong pt-4" : ""} flex flex-wrap items-center justify-between gap-3`}>
               <p className="max-w-2xl text-sm text-ink-secondary">AI assistance uses only the proposal title, abstract, and rubric. It cannot accept a proposal or count as a human review.</p>
               <Button
                 variant="secondary"
@@ -314,7 +314,7 @@ export function SubmissionReviewPane({
         .map((review) => <ReadOnlyReviewEvidence key={review.id} review={review} submission={submission} isCurrentReviewer={review.reviewerUserId === viewerUserId} />)}
 
       {submission.aiSuggestions.map((suggestion) => (
-        <Card key={suggestion.id} title="AI suggestion · non-authoritative">
+        <Card className="[&>header]:bg-warning-soft [&>header_h3]:text-ink" key={suggestion.id} title="AI suggestion · non-authoritative">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Badge tone="warning">AI · human confirmation required</Badge>
             {canScore && (
@@ -338,7 +338,7 @@ export function SubmissionReviewPane({
       ))}
 
       {submission.acceptance ? (
-        <Card title="Acceptance decision">
+        <Card className="[&>header]:bg-production-lime [&>header_h3]:text-ink" title="Acceptance decision">
           <Badge tone="success">Accepted · provisioning {submission.acceptance.provisioningStatus}</Badge>
           <p className="mt-2 text-sm text-ink-secondary">Durable acceptance {submission.acceptance.acceptanceEventId} at submission version {submission.acceptance.submissionVersion}.</p>
         </Card>
@@ -348,7 +348,7 @@ export function SubmissionReviewPane({
           <p className="mt-2 text-sm text-ink-secondary">This decision is visible to the submitting account in its proposal dashboard.</p>
         </Card>
       ) : organizer ? (
-        <Card title="Acceptance decision">
+        <Card className="[&>header]:bg-production-lime [&>header_h3]:text-ink" title="Acceptance decision">
           <p className="text-sm text-ink-secondary">
             Accepting records this exact proposal version and requests portal provisioning for {primarySpeaker?.displayName ?? "the primary speaker"}.
           </p>

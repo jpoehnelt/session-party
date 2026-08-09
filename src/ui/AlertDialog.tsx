@@ -17,7 +17,7 @@ export function AlertDialogContent({ className, ...props }: AlertDialogContentPr
     <AlertDialogPortal>
       <AlertDialogOverlay />
       <Primitive.Content
-        className={cx("fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-card border border-line bg-surface p-6 shadow-pop outline-none", className)}
+        className={cx("fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-card border-2 border-line-strong bg-surface p-6 shadow-pop outline-none", className)}
         {...props}
       />
     </AlertDialogPortal>
@@ -36,7 +36,7 @@ export function AlertDialogFooter({ className, ...props }: AlertDialogFooterProp
 
 export type AlertDialogTitleProps = ComponentPropsWithRef<typeof Primitive.Title>;
 export function AlertDialogTitle({ className, ...props }: AlertDialogTitleProps) {
-  return <Primitive.Title className={cx("text-lg font-semibold text-ink", className)} {...props} />;
+  return <Primitive.Title className={cx("text-2xl font-black tracking-[-0.04em] text-ink", className)} {...props} />;
 }
 
 export type AlertDialogDescriptionProps = ComponentPropsWithRef<typeof Primitive.Description>;
@@ -46,10 +46,10 @@ export function AlertDialogDescription({ className, ...props }: AlertDialogDescr
 
 export type AlertDialogActionProps = ComponentPropsWithRef<typeof Primitive.Action>;
 export function AlertDialogAction({ className, ...props }: AlertDialogActionProps) {
-  return <Primitive.Action className={cx("inline-flex h-10 items-center justify-center rounded-control bg-danger px-4 text-sm font-medium text-on-accent outline-none hover:bg-danger-hover focus-visible:ring-2 focus-visible:ring-danger/40 focus-visible:ring-offset-2", className)} {...props} />;
+  return <Primitive.Action className={cx("inline-flex h-10 items-center justify-center rounded-control border-2 border-line-strong bg-production-coral px-4 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button outline-none hover:bg-danger-soft focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2", className)} {...props} />;
 }
 
 export type AlertDialogCancelProps = ComponentPropsWithRef<typeof Primitive.Cancel>;
 export function AlertDialogCancel({ className, ...props }: AlertDialogCancelProps) {
-  return <Primitive.Cancel className={cx("inline-flex h-10 items-center justify-center rounded-control border border-line-strong bg-surface px-4 text-sm font-medium text-ink outline-none hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2", className)} {...props} />;
+  return <Primitive.Cancel className={cx("inline-flex h-10 items-center justify-center rounded-control border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button outline-none hover:bg-production-sky focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2", className)} {...props} />;
 }

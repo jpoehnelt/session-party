@@ -42,18 +42,18 @@ export function SyncStatusCard({
     >
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
         <div>
-          <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Adapter</dt>
-          <dd className="mt-1 font-medium text-ink">{adapterMode === "live" ? "Live connection" : "Demo adapter"}</dd>
+          <dt className="text-[10px] font-black uppercase tracking-[0.1em] text-ink-faint">Adapter</dt>
+          <dd className="mt-1 font-black text-ink">{adapterMode === "live" ? "Live connection" : "Demo adapter"}</dd>
         </div>
         <div>
-          <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Last confirmed</dt>
+          <dt className="text-[10px] font-black uppercase tracking-[0.1em] text-ink-faint">Last confirmed</dt>
           <dd className="mt-1 text-ink-secondary">
             {lastSyncedAt ? <time dateTime={lastSyncedAt}>{lastSyncedAt}</time> : "Not synced yet"}
           </dd>
         </div>
       </dl>
       {error && (
-        <p role="alert" className="mt-4 rounded-control border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger">
+        <p role="alert" className="mt-4 rounded-control border-2 border-line-strong bg-danger-soft px-3 py-2 text-sm font-bold text-danger shadow-[3px_3px_0_#171714]">
           {error}
         </p>
       )}

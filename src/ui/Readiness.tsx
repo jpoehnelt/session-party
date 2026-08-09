@@ -33,12 +33,12 @@ export function ReadinessThread({
           className="relative grid grid-cols-[1.25rem_minmax(0,1fr)] gap-3 pb-4 last:pb-0"
         >
           {index < items.length - 1 && (
-            <span aria-hidden="true" className="absolute left-[0.6rem] top-5 h-[calc(100%-0.25rem)] w-px bg-line" />
+            <span aria-hidden="true" className="absolute left-[0.6rem] top-5 h-[calc(100%-0.25rem)] w-0.5 bg-line-strong" />
           )}
           <span
             aria-hidden="true"
             className={cx(
-              "relative z-10 mt-1 size-5 rounded-full border-2 bg-surface",
+              "relative z-10 mt-1 size-5 rounded-control border-2 bg-surface",
               item.state === "complete" && "border-success bg-success",
               item.state === "error" && "border-danger bg-danger",
               item.state === "pending" && "border-line-strong",
@@ -46,7 +46,7 @@ export function ReadinessThread({
           />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-ink">{item.label}</span>
+              <span className="text-sm font-black text-ink">{item.label}</span>
               <StatusBadge state={item.state} timestamp={item.timestamp} />
             </div>
             {!compact && item.description && (
@@ -85,8 +85,8 @@ export function ProgressChecklist({
   return (
     <section className={cx("space-y-3", className)} aria-labelledby={headingId}>
       <div className="flex items-center justify-between gap-3">
-        <h3 id={headingId} className="text-sm font-semibold text-ink">Tasks</h3>
-        <span className="text-xs text-ink-faint">{completed} of {items.length} complete</span>
+        <h3 id={headingId} className="text-xs font-black uppercase tracking-[0.1em] text-ink">Tasks</h3>
+        <span className="border-2 border-line-strong bg-production-lime px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-ink">{completed} of {items.length} complete</span>
       </div>
       <div className="space-y-3">
         {items.map((item) => (

@@ -40,14 +40,14 @@ export const CardAndAvatars: Story = {
 
 export const ScheduleTable: Story = {
   render: () => (
-    <div className="w-[min(44rem,calc(100vw-2rem))] overflow-hidden rounded-card border border-line bg-surface">
+    <div className="w-[min(44rem,calc(100vw-2rem))] overflow-hidden rounded-card border-2 border-line-strong bg-surface shadow-card">
       <Table columns={columns} rows={[{ id: "1", title: "Effect at scale", room: "Main stage", status: "Confirmed" }, { id: "2", title: "Durable workflows", room: "Studio", status: "Draft" }]} rowKey={(row) => row.id} />
     </div>
   ),
 };
 
 export const EmptyTable: Story = {
-  render: () => <div className="w-[min(44rem,calc(100vw-2rem))] overflow-hidden rounded-card border border-line bg-surface"><Table columns={columns} rows={[]} empty="No sessions are scheduled." /></div>,
+  render: () => <div className="w-[min(44rem,calc(100vw-2rem))] overflow-hidden rounded-card border-2 border-line-strong bg-surface shadow-card"><Table columns={columns} rows={[]} empty="No sessions are scheduled." /></div>,
 };
 
 export const FileDropzone: Story = {

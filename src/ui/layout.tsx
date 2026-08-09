@@ -10,10 +10,10 @@ export interface AppShellProps {
 
 export function AppShell({ sidebar, sidebarClassName, topbar, children }: AppShellProps) {
   return (
-    <div className="min-h-dvh bg-canvas text-ink lg:grid lg:h-dvh lg:grid-cols-[15rem_minmax(0,1fr)] lg:overflow-hidden">
+    <div className="min-h-dvh bg-canvas text-ink lg:grid lg:h-dvh lg:grid-cols-[16.5rem_minmax(0,1fr)] lg:overflow-hidden">
       <aside
         className={cx(
-          "border-b border-line bg-surface lg:sticky lg:top-0 lg:h-dvh lg:overflow-y-auto lg:border-b-0 lg:border-r",
+          "border-b-2 border-line-strong bg-ink text-on-accent lg:sticky lg:top-0 lg:h-dvh lg:overflow-y-auto lg:border-b-0 lg:border-r-2",
           sidebarClassName,
         )}
       >
@@ -21,11 +21,11 @@ export function AppShell({ sidebar, sidebarClassName, topbar, children }: AppShe
       </aside>
       <div className="min-w-0 lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden">
         {topbar != null && (
-          <header className="sticky top-0 z-20 shrink-0 border-b border-line bg-canvas/95 px-4 py-3 backdrop-blur-sm sm:px-6 lg:px-8">
+          <header className="sticky top-0 z-20 shrink-0 border-b-2 border-line-strong bg-canvas/95 px-4 py-2.5 backdrop-blur-sm sm:px-6 lg:px-8">
             {topbar}
           </header>
         )}
-        <main className="min-w-0 flex-1 overflow-y-auto">
+        <main className="production-grid min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
             {children}
           </div>
@@ -46,16 +46,16 @@ export function PageHeader({ title, description, actions, className }: PageHeade
   return (
     <header
       className={cx(
-        "mb-7 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between",
+        "mb-8 flex flex-col gap-5 border-b-2 border-line-strong pb-6 sm:flex-row sm:items-end sm:justify-between",
         className,
       )}
     >
       <div className="min-w-0">
-        <h1 className="text-2xl font-semibold tracking-[-0.025em] text-ink sm:text-3xl">
+        <h1 className="text-4xl font-black leading-[0.92] tracking-[-0.055em] text-ink sm:text-5xl">
           {title}
         </h1>
         {description != null && (
-          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-secondary sm:text-[15px]">
+          <p className="mt-3 max-w-2xl text-sm font-semibold leading-relaxed text-ink-secondary sm:text-[15px]">
             {description}
           </p>
         )}

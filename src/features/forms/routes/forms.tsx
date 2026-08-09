@@ -303,13 +303,17 @@ type MutationState = Readonly<{
 function LoadingRegion({ label }: { readonly label: string }) {
   return (
     <>
-      <div role="status" aria-live="polite" aria-label={label}>
+      <div className="border-2 border-[#171714] bg-[#f3efe3] p-5 shadow-[6px_6px_0_#171714]" role="status" aria-live="polite" aria-label={label}>
         <span className="sr-only">{label}</span>
-        <div className="space-y-5">
-          <Skeleton className="h-20 motion-reduce:animate-none" />
-          <div className="grid gap-5 lg:grid-cols-[15rem_minmax(0,1fr)]">
-            <Skeleton className="h-72 motion-reduce:animate-none" />
-            <Skeleton className="h-[36rem] motion-reduce:animate-none" />
+        <div className="space-y-4">
+          <div className="flex items-center justify-between border-2 border-[#171714] bg-[#171714] px-4 py-3 text-white">
+            <span className="text-[10px] font-black uppercase tracking-[0.18em]">Loading production board</span>
+            <span className="size-3 animate-pulse bg-[#caff4a] motion-reduce:animate-none" aria-hidden="true" />
+          </div>
+          <Skeleton className="h-24 rounded-none border-2 border-[#171714] motion-reduce:animate-none" />
+          <div className="grid gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
+            <Skeleton className="h-72 rounded-none border-2 border-[#171714] motion-reduce:animate-none" />
+            <Skeleton className="h-[36rem] rounded-none border-2 border-[#171714] motion-reduce:animate-none" />
           </div>
         </div>
       </div>
@@ -370,15 +374,17 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
     if (eventError === "unauthenticated") {
       return (
         <>
-          <EmptyState
-            title="Sign in to view this event"
-            description="Sign in to continue to this event's forms."
-            action={
-              <Button className="min-h-11" onClick={() => navigate(loginPathForLocation(location))}>
-                Sign in
-              </Button>
-            }
-          />
+          <Card className="rounded-none border-[3px] border-[#171714] bg-[#caff4a] shadow-[8px_8px_0_#171714]">
+            <EmptyState
+              title="Sign in to view this event"
+              description="Sign in to continue to this event's forms."
+              action={
+                <Button className="min-h-11 rounded-none border-2 border-[#171714] bg-[#171714] font-black uppercase tracking-[0.08em] text-white shadow-[4px_4px_0_#7857ff]" onClick={() => navigate(loginPathForLocation(location))}>
+                  Sign in
+                </Button>
+              }
+            />
+          </Card>
           <Toaster />
         </>
       );
@@ -387,17 +393,19 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
     const recoverable = eventError !== null;
     return (
       <>
-        <EmptyState
-          title={recoverable ? "Could not load event" : "Event not found"}
-          description={eventError ?? "The event may have moved or been removed."}
-          action={
-            recoverable ? (
-              <Button className="min-h-11" onClick={() => setEventRequest((request) => request + 1)}>
-                Try again
-              </Button>
-            ) : undefined
-          }
-        />
+        <Card className="rounded-none border-[3px] border-[#171714] bg-[#ff714f] shadow-[8px_8px_0_#171714]">
+          <EmptyState
+            title={recoverable ? "Could not load event" : "Event not found"}
+            description={eventError ?? "The event may have moved or been removed."}
+            action={
+              recoverable ? (
+                <Button className="min-h-11 rounded-none border-2 border-[#171714] bg-[#fffdf7] font-black uppercase tracking-[0.08em] text-[#171714] shadow-[4px_4px_0_#171714]" onClick={() => setEventRequest((request) => request + 1)}>
+                  Try again
+                </Button>
+              ) : undefined
+            }
+          />
+        </Card>
         <Toaster />
       </>
     );
@@ -603,11 +611,11 @@ export function FormsWorkspace({
   if (summaries === null) {
     return (
       <>
-        <Card>
+        <Card className="rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[6px_6px_0_#ff714f]">
           <EmptyState
             title="Forms could not be loaded"
             description={listError ?? "Retry after the event connection is restored."}
-            action={<Button onClick={() => setListRequest((request) => request + 1)}>Retry</Button>}
+            action={<Button className="rounded-none border-2 border-[#171714] bg-[#ff714f] font-black uppercase tracking-[0.08em] text-[#171714] shadow-[4px_4px_0_#171714]" onClick={() => setListRequest((request) => request + 1)}>Retry</Button>}
           />
         </Card>
         <Toaster />
@@ -616,12 +624,16 @@ export function FormsWorkspace({
   }
 
   return (
-    <>
+    <div className="relative -mx-4 -my-6 min-h-full overflow-hidden bg-[#f3efe3] px-4 py-6 text-[#171714] sm:-mx-6 sm:-my-8 sm:px-6 sm:py-8 lg:-mx-8 lg:-my-10 lg:px-8 lg:py-10">
+      <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(#b9b1a1_1px,transparent_1px),linear-gradient(90deg,#b9b1a1_1px,transparent_1px)] [background-size:36px_36px]" aria-hidden="true" />
+      <div className="relative">
       <PageHeader
         title="CFP & forms"
         description="Build routed proposal forms, publish immutable versions, and control submission availability."
+        className="border-[3px] border-[#171714] bg-[#7857ff] p-5 text-white shadow-[7px_7px_0_#171714] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-none [&_h1]:tracking-[-0.055em] [&_h1]:text-white sm:[&_h1]:text-5xl [&_p]:mt-3 [&_p]:max-w-xl [&_p]:font-semibold [&_p]:text-white/80"
         actions={summaries.length > 0 ? (
           <Button
+            className="min-h-11 rounded-none border-2 border-[#171714] bg-[#caff4a] px-5 text-xs font-black uppercase tracking-[0.1em] text-[#171714] shadow-[4px_4px_0_#171714] hover:bg-[#d7ff78]"
             loading={mutation.action === "create"}
             onClick={() => {
               if (summaries.some((form) => form.purpose === "primary-cfp")) {
@@ -636,12 +648,25 @@ export function FormsWorkspace({
         ) : undefined}
       />
 
+      <div className="-mt-3 mb-7 ml-3 grid max-w-2xl grid-cols-3 border-2 border-[#171714] bg-[#fffdf7] shadow-[4px_4px_0_#171714]" aria-label="Form lifecycle totals">
+        {[
+          ["Open", summaries.filter((form) => form.status === "open").length, "bg-[#caff4a]"],
+          ["Draft", summaries.filter((form) => form.status === "draft").length, "bg-[#8fdcff]"],
+          ["Versions", summaries.reduce((total, form) => total + (form.publishedVersionNumber ? 1 : 0), 0), "bg-[#ff714f]"],
+        ].map(([label, value, color], index) => (
+          <div className={`px-3 py-2.5 ${color} ${index > 0 ? "border-l-2 border-[#171714]" : ""}`} key={label}>
+            <span className="block text-xl font-black leading-none tracking-[-0.04em] sm:text-2xl">{value}</span>
+            <span className="mt-1 block text-[9px] font-black uppercase tracking-[0.13em]">{label}</span>
+          </div>
+        ))}
+      </div>
+
       {mutation.message && (
         <Alert
           tone={mutation.tone}
           role={mutation.tone === "danger" ? "alert" : "status"}
           aria-live="polite"
-          className="mb-5"
+          className="mb-5 rounded-none border-2 border-[#171714] bg-[#fffdf7] text-[#171714] shadow-[4px_4px_0_#171714]"
         >
           <AlertTitle>
             {mutation.action ? "Working" : mutation.tone === "success" ? "Completed" : "Form update failed"}
@@ -651,22 +676,29 @@ export function FormsWorkspace({
       )}
 
       {summaries.length === 0 ? (
-        <Card>
+        <Card className="rounded-none border-[3px] border-[#171714] bg-[#caff4a] shadow-[8px_8px_0_#171714]">
           <EmptyState
             title="No forms yet"
             description="Create the primary CFP to start collecting routed proposals."
             action={
-              <Button loading={mutation.action === "create"} onClick={() => void handleCreate("primary-cfp")}>
+              <Button
+                className="rounded-none border-2 border-[#171714] bg-[#171714] font-black uppercase tracking-[0.08em] text-white shadow-[4px_4px_0_#7857ff]"
+                loading={mutation.action === "create"}
+                onClick={() => void handleCreate("primary-cfp")}
+              >
                 Create primary CFP
               </Button>
             }
           />
         </Card>
       ) : (
-        <div className="grid min-w-0 gap-5 xl:grid-cols-[15rem_minmax(0,1fr)_22rem]">
+        <div className="grid min-w-0 gap-6 xl:grid-cols-[15rem_minmax(0,1fr)_22rem]">
           <aside className="min-w-0 space-y-4" aria-label="Event forms">
-            <Card title="Forms">
-              <div className="space-y-2">
+            <Card
+              className="rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[5px_5px_0_#171714] [&>header]:border-b-2 [&>header]:border-[#171714] [&>header]:bg-[#171714] [&>header]:text-white [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.12em] [&>header_h3]:text-white"
+              title="Form queue"
+            >
+              <div className="space-y-3">
                 {summaries.map((form) => {
                   const active = form.id === selectedId;
                   return (
@@ -675,16 +707,16 @@ export function FormsWorkspace({
                       variant={active ? "secondary" : "ghost"}
                       aria-current={active ? "page" : undefined}
                       onClick={() => setSelectedId(form.id)}
-                      className={`h-auto w-full flex-col items-stretch whitespace-normal px-3 py-2.5 text-left ${
-                        active ? "border-accent bg-accent-soft" : ""
+                      className={`h-auto w-full flex-col items-stretch whitespace-normal rounded-none border-2 border-[#171714] px-3 py-3 text-left transition-transform hover:-translate-y-0.5 ${
+                        active ? "bg-[#7857ff] text-white shadow-[3px_3px_0_#171714]" : "bg-[#f3efe3] hover:bg-[#caff4a]"
                       }`}
                     >
-                      <span className="block truncate text-sm font-medium text-ink">{form.name}</span>
+                      <span className={`block truncate text-sm font-black ${active ? "text-white" : "text-[#171714]"}`}>{form.name}</span>
                       <span className="mt-1 flex flex-wrap items-center gap-1.5">
-                        <Badge tone={form.status === "open" ? "success" : form.status === "closed" ? "warning" : "neutral"}>
+                        <Badge className="rounded-none border-[#171714] bg-[#fffdf7] font-black uppercase text-[#171714]" tone={form.status === "open" ? "success" : form.status === "closed" ? "warning" : "neutral"}>
                           {form.status}
                         </Badge>
-                        <span className="text-xs text-ink-faint">
+                        <span className={`text-[10px] font-bold uppercase tracking-[0.08em] ${active ? "text-white/75" : "text-[#665f52]"}`}>
                           {form.purpose === "primary-cfp" ? "Primary CFP" : "Additional"}
                         </span>
                       </span>
@@ -693,19 +725,19 @@ export function FormsWorkspace({
                 })}
               </div>
             </Card>
-            <Card title="Lifecycle">
-              <dl className="space-y-3 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-ink-faint">Open</dt>
-                  <dd className="font-medium text-ink">{summaries.filter((form) => form.status === "open").length}</dd>
+            <Card className="rounded-none border-2 border-[#171714] bg-[#8fdcff] shadow-[5px_5px_0_#171714] [&>header]:border-b-2 [&>header]:border-[#171714] [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.12em]" title="Lifecycle">
+              <dl className="space-y-0 border-2 border-[#171714] bg-[#fffdf7] text-sm">
+                <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                  <dt className="font-bold uppercase tracking-[0.08em] text-[#665f52]">Open</dt>
+                  <dd className="text-lg font-black text-[#171714]">{summaries.filter((form) => form.status === "open").length}</dd>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-ink-faint">Draft</dt>
-                  <dd className="font-medium text-ink">{summaries.filter((form) => form.status === "draft").length}</dd>
+                <div className="flex items-center justify-between gap-3 border-t-2 border-[#171714] px-3 py-2.5">
+                  <dt className="font-bold uppercase tracking-[0.08em] text-[#665f52]">Draft</dt>
+                  <dd className="text-lg font-black text-[#171714]">{summaries.filter((form) => form.status === "draft").length}</dd>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-ink-faint">Published versions</dt>
-                  <dd className="font-medium text-ink">
+                <div className="flex items-center justify-between gap-3 border-t-2 border-[#171714] px-3 py-2.5">
+                  <dt className="font-bold uppercase tracking-[0.08em] text-[#665f52]">Published</dt>
+                  <dd className="text-lg font-black text-[#171714]">
                     {summaries.reduce((total, form) => total + (form.publishedVersionNumber ? 1 : 0), 0)}
                   </dd>
                 </div>
@@ -715,9 +747,9 @@ export function FormsWorkspace({
 
           <section className="min-w-0" aria-label="Form editor">
             {selectedForm === undefined ? (
-              <Skeleton className="h-[36rem] motion-reduce:animate-none" />
+              <Skeleton className="h-[36rem] rounded-none border-2 border-[#171714] motion-reduce:animate-none" />
             ) : selectedForm === null ? (
-              <Card>
+              <Card className="rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[5px_5px_0_#ff714f]">
                 <EmptyState
                   title={detailError ? "Could not load form" : "Choose a form"}
                   description={detailError ?? "Select a form to view its draft."}
@@ -801,6 +833,7 @@ export function FormsWorkspace({
         </form>
       </Modal>
       <Toaster />
-    </>
+      </div>
+    </div>
   );
 }

@@ -23,6 +23,12 @@ interface EventSummary {
 
 export const path = "/events";
 
+const EVENT_TONES = [
+  "[&>header]:bg-accent",
+  "[&>header]:bg-production-coral [&>header]:text-ink [&>header_h3]:text-ink",
+  "[&>header]:bg-production-sky [&>header]:text-ink [&>header_h3]:text-ink",
+] as const;
+
 export default function EventsHome() {
   const [events, setEvents] = useState<EventSummary[] | null>(null);
   const navigate = useNavigate();
@@ -69,8 +75,8 @@ export default function EventsHome() {
   return (
     <>
       <PageHeader
-        title="Events"
-        description="Plan programs, speakers, and every detail in one place."
+        title="Event control room"
+        description="Every program you are producing, with its next cue close at hand."
         actions={
           events !== null && loadError === null ? (
             <Button onClick={() => setOpen(true)}>Create event</Button>
@@ -97,24 +103,33 @@ export default function EventsHome() {
           action={<Button onClick={() => setOpen(true)}>Create event</Button>}
         />
       ) : (
-        events.map((event) => (
-          <Link
-            className="block text-inherit no-underline"
-            key={event.id}
-            to={`/e/${event.slug}`}
-          >
-            <Card title={event.name}>
-              {event.description || event.location || "Ready to set up"}
-            </Card>
-          </Link>
-        ))
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+          {events.map((event, index) => (
+            <Link
+              className="block h-full text-inherit no-underline transition-transform hover:-translate-y-1"
+              key={event.id}
+              to={`/e/${event.slug}`}
+            >
+              <Card className={`h-full ${EVENT_TONES[index % EVENT_TONES.length]}`} title={event.name}>
+                <p className="min-h-12 text-sm font-semibold leading-6 text-ink-secondary">
+                  {event.description || event.location || "Ready to set up"}
+                </p>
+                <p className="mt-5 border-t-2 border-line-strong pt-3 text-[10px] font-black uppercase tracking-[0.12em] text-accent">
+                  Open production board →
+                </p>
+              </Card>
+            </Link>
+          ))}
+        </div>
       )}
       <Modal open={open} onClose={() => setOpen(false)} title="Create an event">
-        <Input label="Event name" value={name} onChange={(event) => setName(event.target.value)} />
-        <Input label="Slug" value={slug} onChange={(event) => setSlug(event.target.value)} />
-        <Button disabled={saving || !name || !slug} onClick={() => void create()}>
-          {saving ? "Creating…" : "Create event"}
-        </Button>
+        <div className="space-y-4">
+          <Input label="Event name" value={name} onChange={(event) => setName(event.target.value)} />
+          <Input label="Slug" value={slug} onChange={(event) => setSlug(event.target.value)} />
+          <Button className="w-full" disabled={saving || !name || !slug} onClick={() => void create()}>
+            {saving ? "Creating…" : "Create event"}
+          </Button>
+        </div>
       </Modal>
       <Toaster />
     </>

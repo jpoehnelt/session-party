@@ -28,7 +28,6 @@ import {
   Card,
   EmptyState,
   Input,
-  PageHeader,
   Separator,
   Skeleton,
   Toaster,
@@ -43,10 +42,10 @@ function LoadingRegion({ label }: { readonly label: string }) {
     <>
       <div role="status" aria-live="polite" aria-label={label} className="space-y-5">
         <span className="sr-only">{label}</span>
-        <Skeleton className="h-20 motion-reduce:animate-none" />
+        <Skeleton className="h-36 rounded-none motion-reduce:animate-none" />
         <div className="grid gap-5 lg:grid-cols-2">
-          <Skeleton className="h-72 motion-reduce:animate-none" />
-          <Skeleton className="h-72 motion-reduce:animate-none" />
+          <Skeleton className="h-[34rem] rounded-none motion-reduce:animate-none" />
+          <Skeleton className="h-[34rem] rounded-none motion-reduce:animate-none" />
         </div>
       </div>
       <Toaster />
@@ -55,16 +54,23 @@ function LoadingRegion({ label }: { readonly label: string }) {
 }
 
 function ProviderHeading({
+  cue,
   name,
   configured,
 }: {
+  readonly cue: string;
   readonly name: string;
   readonly configured: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <span>{name}</span>
-      <Badge tone={configured ? "success" : "neutral"}>
+      <span className="flex items-center gap-3">
+        <span className="grid size-8 place-items-center border-2 border-line-strong bg-surface text-[10px] font-black text-ink shadow-[2px_2px_0_#171714]">
+          {cue}
+        </span>
+        <span className="text-base tracking-[-0.025em]">{name}</span>
+      </span>
+      <Badge className="bg-surface" tone={configured ? "success" : "neutral"}>
         {configured ? "Configured" : "Not configured"}
       </Badge>
     </div>
@@ -73,40 +79,46 @@ function ProviderHeading({
 
 function MappingTable({ configuration }: { readonly configuration: AirtableConfig }) {
   const tables = [
-    { entity: "Speakers", configuration: configuration.tables.speakers },
-    { entity: "Submissions", configuration: configuration.tables.submissions },
-    { entity: "Talks", configuration: configuration.tables.talks },
+    { number: "01", entity: "Speakers", accent: "bg-production-lime", configuration: configuration.tables.speakers },
+    { number: "02", entity: "Submissions", accent: "bg-production-sky", configuration: configuration.tables.submissions },
+    { number: "03", entity: "Talks", accent: "bg-production-coral", configuration: configuration.tables.talks },
   ] as const;
 
   return (
-    <div className="space-y-4">
-      <dl className="grid gap-3 text-sm sm:grid-cols-2">
-        <div>
-          <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Base</dt>
-          <dd className="mt-1 break-all font-mono text-xs text-ink">{configuration.baseId}</dd>
+    <div className="space-y-5">
+      <dl className="grid border-2 border-line-strong bg-surface text-sm sm:grid-cols-2">
+        <div className="border-b-2 border-line-strong sm:border-b-0 sm:border-r-2">
+          <dt className="bg-ink px-3 py-2 text-[9px] font-black uppercase tracking-[0.16em] text-production-sky">Destination base</dt>
+          <dd className="break-all px-3 py-3 font-mono text-xs font-bold text-ink">{configuration.baseId}</dd>
         </div>
         <div>
-          <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Origin</dt>
-          <dd className="mt-1 break-all font-mono text-xs text-ink">{configuration.origin}</dd>
+          <dt className="bg-ink px-3 py-2 text-[9px] font-black uppercase tracking-[0.16em] text-production-lime">Mapping origin</dt>
+          <dd className="break-all px-3 py-3 font-mono text-xs font-bold text-ink">{configuration.origin}</dd>
         </div>
       </dl>
-      <Separator />
-      <div className="space-y-5">
-        {tables.map(({ entity, configuration: table }) => (
-          <section key={entity} aria-labelledby={`airtable-${entity.toLowerCase()}`}>
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h4 id={`airtable-${entity.toLowerCase()}`} className="text-sm font-semibold text-ink">
-                {entity}
-              </h4>
-              <code className="break-all text-xs text-ink-faint">{table.tableId}</code>
+      <div className="border-2 border-line-strong shadow-[4px_4px_0_#171714]">
+        {tables.map(({ number, entity, accent, configuration: table }, tableIndex) => (
+          <section
+            className={tableIndex > 0 ? "border-t-2 border-line-strong" : undefined}
+            key={entity}
+            aria-labelledby={`airtable-${entity.toLowerCase()}`}
+          >
+            <div className={`grid grid-cols-[3.5rem_minmax(0,1fr)] border-b-2 border-line-strong ${accent}`}>
+              <span className="grid place-items-center border-r-2 border-line-strong text-lg font-black tracking-[-0.04em]" aria-hidden="true">{number}</span>
+              <div className="min-w-0 px-3 py-2.5">
+                <h4 id={`airtable-${entity.toLowerCase()}`} className="text-sm font-black uppercase tracking-[0.1em] text-ink">
+                  {entity}
+                </h4>
+                <code className="block truncate text-[10px] font-bold text-ink/70" title={table.tableId}>{table.tableId}</code>
+              </div>
             </div>
-            <dl className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+            <dl className="grid bg-surface sm:grid-cols-2">
               {Object.entries(table.fields).map(([key, fieldId]) => (
-                <div key={key} className="flex min-w-0 items-baseline justify-between gap-3 border-b border-line-subtle py-1.5 text-xs">
-                  <dt className="capitalize text-ink-secondary">
+                <div key={key} className="flex min-w-0 items-baseline justify-between gap-3 border-b border-line px-3 py-2 text-xs odd:bg-surface-muted sm:even:border-l sm:even:border-line sm:odd:bg-surface">
+                  <dt className="capitalize font-semibold text-ink-secondary">
                     {key.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`)}
                   </dt>
-                  <dd className="max-w-[55%] truncate font-mono text-ink" title={fieldId}>{fieldId}</dd>
+                  <dd className="max-w-[55%] truncate font-mono text-[10px] font-bold text-ink" title={fieldId}>{fieldId}</dd>
                 </div>
               ))}
             </dl>
@@ -168,14 +180,31 @@ function AcceleventsConfigEditor({
   };
 
   return (
-    <section className="space-y-3" aria-labelledby="accelevents-configuration">
-      <h4 id="accelevents-configuration" className="text-sm font-semibold text-ink">Configuration</h4>
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Accelevents source">
-        <Button variant={source === "fixture" ? "primary" : "secondary"} onClick={() => selectSource("fixture")} disabled={saving}>
-          Demo fixture
+    <section className="space-y-4" aria-labelledby="accelevents-configuration">
+      <div className="border-l-4 border-production-coral pl-3">
+        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-ink-faint">Input rail / source control</p>
+        <h4 id="accelevents-configuration" className="mt-0.5 text-xl font-black tracking-[-0.035em] text-ink">Configuration</h4>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label="Accelevents source">
+        <Button
+          className={`h-auto min-h-16 justify-start rounded-none px-4 py-3 text-left ${source === "fixture" ? "bg-production-lime text-ink hover:bg-production-lime" : ""}`}
+          variant="secondary"
+          onClick={() => selectSource("fixture")}
+          disabled={saving}
+          aria-pressed={source === "fixture"}
+        >
+          <span className="text-lg" aria-hidden="true">01</span>
+          <span><span className="block">Demo fixture</span><span className="mt-0.5 block text-[9px] opacity-65">No provider call</span></span>
         </Button>
-        <Button variant={source === "live" ? "primary" : "secondary"} onClick={() => selectSource("live")} disabled={saving}>
-          Live event
+        <Button
+          className={`h-auto min-h-16 justify-start rounded-none px-4 py-3 text-left ${source === "live" ? "bg-production-sky text-ink hover:bg-production-sky" : ""}`}
+          variant="secondary"
+          onClick={() => selectSource("live")}
+          disabled={saving}
+          aria-pressed={source === "live"}
+        >
+          <span className="text-lg" aria-hidden="true">02</span>
+          <span><span className="block">Live event</span><span className="mt-0.5 block text-[9px] opacity-65">Server-held token</span></span>
         </Button>
       </div>
       {source === "fixture" ? (
@@ -184,16 +213,19 @@ function AcceleventsConfigEditor({
           <AlertDescription>This imports labeled fixture speakers and talks. It does not call Accelevents.</AlertDescription>
         </Alert>
       ) : (
-        <p className="text-xs leading-relaxed text-ink-secondary">
-          The live adapter uses the server-held <code>ACCELEVENTS_API_TOKEN</code>; this form never accepts or exposes credentials.
-        </p>
+        <div className="border-2 border-line-strong bg-production-sky/35 px-4 py-3 shadow-[3px_3px_0_#171714]">
+          <p className="text-[9px] font-black uppercase tracking-[0.14em] text-ink">Credential boundary</p>
+          <p className="mt-1 text-xs font-semibold leading-relaxed text-ink-secondary">
+            The live adapter uses the server-held <code>ACCELEVENTS_API_TOKEN</code>; this form never accepts or exposes credentials.
+          </p>
+        </div>
       )}
       <div className="grid gap-3 sm:grid-cols-2">
         <Input label="Accelevents event ID" value={accelEventId} onChange={(event) => setAccelEventId(event.target.value)} disabled={source === "fixture" || saving} />
         <Input label="Event URL key" value={eventUrl} onChange={(event) => setEventUrl(event.target.value)} disabled={source === "fixture" || saving} />
       </div>
-      {error && <p className="text-xs text-danger" role="alert">{error}</p>}
-      <Button onClick={save} loading={saving}>
+      {error && <p className="border-l-4 border-danger pl-3 text-xs font-bold text-danger" role="alert">{error}</p>}
+      <Button className="rounded-none" onClick={save} loading={saving}>
         {configuration ? "Save configuration" : "Configure Accelevents"}
       </Button>
     </section>
@@ -231,52 +263,92 @@ function IntegrationsWorkspace({
   const capability = acceleventsCapabilityLabel(status);
   const canRun = status.configured && status.capability.state === "ready";
   const latest = runResult ?? status.latestRun;
+  const configuredCount = Number(truth.airtable) + Number(status.configured);
 
   return (
-    <>
-      <PageHeader
-        title="Integrations"
-        description="Provider configuration and server-observed import state for this event."
-        actions={<Button variant="secondary" onClick={onReload}>Reload status</Button>}
-      />
+    <div className="relative -mx-4 -my-6 min-h-full overflow-hidden bg-canvas px-4 py-6 text-ink sm:-mx-6 sm:-my-8 sm:px-6 sm:py-8 lg:-mx-8 lg:-my-10 lg:px-8 lg:py-10">
+      <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(#b9b1a1_1px,transparent_1px),linear-gradient(90deg,#b9b1a1_1px,transparent_1px)] [background-size:44px_44px]" aria-hidden="true" />
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card
-          title={<ProviderHeading name="Airtable" configured={truth.airtable} />}
-          footer={
-            <p className="text-xs leading-relaxed text-ink-faint">
-              Credentials are held by secret reference and are never returned here.
+      <div className="relative">
+        <header className="grid gap-5 border-[3px] border-line-strong bg-ink px-5 py-6 text-on-accent shadow-[8px_8px_0_#7857ff] sm:px-7 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div>
+            <p className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-production-lime">External feeds / patch bay</p>
+            <h1 className="text-4xl font-black leading-[0.88] tracking-[-0.055em] sm:text-6xl">Integrations</h1>
+            <p className="mt-4 max-w-2xl text-sm font-semibold leading-relaxed text-on-accent/70 sm:text-[15px]">
+              Bring external event data into the same production board without losing delivery truth.
             </p>
-          }
-        >
-          {airtable ? (
-            <MappingTable configuration={airtable} />
-          ) : (
-            <EmptyState
-              title="Airtable is not configured"
-              description="No validated Airtable field map exists for this event."
-            />
-          )}
-        </Card>
+          </div>
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center lg:flex-col lg:items-end">
+            <div className="border-2 border-on-accent bg-production-lime px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-ink shadow-[4px_4px_0_#fffdf7]">
+              {configuredCount} / 2 feeds patched
+            </div>
+            <Button className="border-on-accent bg-surface text-ink shadow-[4px_4px_0_#7857ff]" variant="secondary" onClick={onReload}>
+              Reload status
+            </Button>
+          </div>
+        </header>
 
-        <Card
-          title={<ProviderHeading name="Accelevents" configured={status.configured} />}
+        <dl className="mt-7 grid border-2 border-line-strong bg-surface shadow-[5px_5px_0_#171714] sm:grid-cols-3">
+          {[
+            ["01", "Airtable map", truth.airtable ? "Validated" : "Not configured", "bg-production-sky"],
+            ["02", "Accelevents adapter", capability, "bg-production-coral"],
+            ["03", "Latest import", latest?.status ?? "No completed run", "bg-production-lime"],
+          ].map(([number, label, value, color], index) => (
+            <div className={`grid grid-cols-[3rem_1fr] ${color} ${index > 0 ? "border-t-2 border-line-strong sm:border-l-2 sm:border-t-0" : ""}`} key={label}>
+              <dt className="grid place-items-center border-r-2 border-line-strong text-base font-black" aria-label={`Status ${number}`}>{number}</dt>
+              <dd className="min-w-0 px-3 py-3">
+                <span className="block text-[9px] font-black uppercase tracking-[0.13em] text-ink/65">{label}</span>
+                <span className="mt-0.5 block truncate text-sm font-black capitalize tracking-[-0.015em] text-ink" title={value}>{value}</span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+
+        <div className="mt-7 grid gap-7 lg:grid-cols-[minmax(0,1.08fr)_minmax(24rem,0.92fr)]">
+          <Card
+            className="h-fit rounded-none shadow-[7px_7px_0_#171714] [&>div]:p-4 [&>header]:bg-production-sky [&>header]:px-4 [&>header]:py-3 [&>header_h3]:text-ink sm:[&>div]:p-5"
+            title={<ProviderHeading cue="A1" name="Airtable" configured={truth.airtable} />}
+            footer={
+              <div className="flex gap-3">
+                <span className="mt-0.5 size-2.5 shrink-0 bg-production-lime" aria-hidden="true" />
+                <p className="text-xs font-semibold leading-relaxed text-ink-secondary">
+                  Credentials are held by secret reference and are never returned here.
+                </p>
+              </div>
+            }
+          >
+            {airtable ? (
+              <MappingTable configuration={airtable} />
+            ) : (
+              <EmptyState
+                title="Airtable is not configured"
+                description="No validated Airtable field map exists for this event."
+              />
+            )}
+          </Card>
+
+          <Card
+          className="h-fit rounded-none shadow-[7px_7px_0_#171714] [&>div]:p-4 [&>header]:bg-production-coral [&>header]:px-4 [&>header]:py-3 [&>header_h3]:text-ink sm:[&>div]:p-5"
+          title={<ProviderHeading cue="A2" name="Accelevents" configured={status.configured} />}
           footer={
-            <p className="text-xs leading-relaxed text-ink-faint">
-              Live, fixture, and unavailable states come from the server runtime—not saved IDs.
-            </p>
+            <div className="flex gap-3">
+              <span className="mt-0.5 size-2.5 shrink-0 bg-production-coral" aria-hidden="true" />
+              <p className="text-xs font-semibold leading-relaxed text-ink-secondary">
+                Live, fixture, and unavailable states come from the server runtime—not saved IDs.
+              </p>
+            </div>
           }
         >
           {accelevents ? (
             <div className="space-y-5">
-              <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                <div>
-                  <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Event ID</dt>
-                  <dd className="mt-1 break-all font-mono text-xs text-ink">{accelevents.accelEventId}</dd>
+              <dl className="grid border-2 border-line-strong bg-surface text-sm sm:grid-cols-[minmax(0,1fr)_7rem]">
+                <div className="border-b-2 border-line-strong sm:border-b-0 sm:border-r-2">
+                  <dt className="bg-ink px-3 py-2 text-[9px] font-black uppercase tracking-[0.14em] text-production-coral">Event patch</dt>
+                  <dd className="break-all px-3 py-3 font-mono text-xs font-bold text-ink">{accelevents.accelEventId}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Adapter</dt>
-                  <dd className="mt-1">
+                  <dt className="bg-ink px-3 py-2 text-[9px] font-black uppercase tracking-[0.14em] text-production-lime">Adapter</dt>
+                  <dd className="px-3 py-2.5">
                     <Badge tone={capability === "Live" ? "success" : capability === "Fixture" ? "warning" : "neutral"}>
                       {capability}
                     </Badge>
@@ -293,11 +365,11 @@ function IntegrationsWorkspace({
                 </Alert>
               )}
 
-              <div className="flex flex-wrap items-center gap-3">
-                <Button onClick={onRun} loading={running} disabled={!canRun}>
+              <div className={`grid gap-3 border-2 border-line-strong p-3 shadow-[4px_4px_0_#171714] sm:grid-cols-[auto_1fr] sm:items-center ${canRun ? "bg-production-lime" : "bg-surface-muted"}`}>
+                <Button className="rounded-none bg-ink text-on-accent" onClick={onRun} loading={running} disabled={!canRun}>
                   Import now
                 </Button>
-                <span role="status" aria-live="polite" className="text-xs text-ink-secondary">
+                <span role="status" aria-live="polite" className="text-xs font-black uppercase tracking-[0.08em] text-ink-secondary">
                   {running ? "Import in progress…" : canRun ? "Ready to import" : "Import is not available"}
                 </span>
               </div>
@@ -314,19 +386,29 @@ function IntegrationsWorkspace({
                   <Separator />
                   <div className="space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h4 className="text-sm font-semibold text-ink">Latest import</h4>
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.14em] text-ink-faint">Run report</p>
+                        <h4 className="text-lg font-black tracking-[-0.025em] text-ink">Latest import</h4>
+                      </div>
                       <Badge tone={latest.status === "succeeded" ? "success" : latest.status === "partial" ? "warning" : "danger"}>
                         {latest.status}
                       </Badge>
                     </div>
-                    <dl className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
-                      <div><dt className="text-ink-faint">Created</dt><dd className="mt-1 font-semibold text-ink">{latest.counts.created}</dd></div>
-                      <div><dt className="text-ink-faint">Updated</dt><dd className="mt-1 font-semibold text-ink">{latest.counts.updated}</dd></div>
-                      <div><dt className="text-ink-faint">Unchanged</dt><dd className="mt-1 font-semibold text-ink">{latest.counts.unchanged}</dd></div>
-                      <div><dt className="text-ink-faint">Failed</dt><dd className="mt-1 font-semibold text-ink">{latest.counts.failed}</dd></div>
-                      <div><dt className="text-ink-faint">Mode</dt><dd className="mt-1 font-semibold capitalize text-ink">{latest.mode}</dd></div>
+                    <dl className="grid grid-cols-2 border-2 border-line-strong text-xs sm:grid-cols-5">
+                      {[
+                        ["Created", latest.counts.created, "bg-production-lime"],
+                        ["Updated", latest.counts.updated, "bg-production-sky"],
+                        ["Unchanged", latest.counts.unchanged, "bg-surface-muted"],
+                        ["Failed", latest.counts.failed, latest.counts.failed > 0 ? "bg-production-coral" : "bg-surface"],
+                        ["Mode", latest.mode, "bg-production-yellow"],
+                      ].map(([label, value, color], index) => (
+                        <div className={`px-2.5 py-3 ${color} ${index > 0 ? "border-l-0 sm:border-l-2" : ""} ${index > 1 ? "border-t-2 sm:border-t-0" : ""} ${index % 2 === 1 ? "border-l-2" : ""}`} key={label}>
+                          <dt className="text-[8px] font-black uppercase tracking-[0.1em] text-ink/60">{label}</dt>
+                          <dd className="mt-1 text-lg font-black capitalize tracking-[-0.04em] text-ink">{value}</dd>
+                        </div>
+                      ))}
                     </dl>
-                    {latest.errorDetail && <p className="text-xs text-danger">{latest.errorDetail}</p>}
+                    {latest.errorDetail && <p className="border-l-4 border-danger pl-3 text-xs font-bold text-danger">{latest.errorDetail}</p>}
                   </div>
                 </>
               )}
@@ -346,10 +428,11 @@ function IntegrationsWorkspace({
               onConfigured={onConfigured}
             />
           )}
-        </Card>
+          </Card>
+        </div>
       </div>
       <Toaster />
-    </>
+    </div>
   );
 }
 

@@ -108,7 +108,17 @@ export default function PublicationPage() {
     }
   };
 
-  if (status === undefined) return <Skeleton className="min-h-72" />;
+  if (status === undefined) {
+    return (
+      <>
+        <PageHeader title="Publish the run of show" description="Loading the latest publication state." />
+        <div className="grid gap-5 lg:grid-cols-[20rem_1fr]">
+          <Skeleton className="min-h-80 rounded-none" />
+          <Skeleton className="min-h-[30rem] rounded-none" />
+        </div>
+      </>
+    );
+  }
 
   if (loadError) {
     const content = loadError.kind === "unauthenticated"
@@ -136,7 +146,8 @@ export default function PublicationPage() {
             };
     return (
       <>
-        <EmptyState {...content} />
+        <PageHeader title="Publication desk" description="The public run of show stops here until this is resolved." />
+        <EmptyState className="min-h-72 bg-production-coral/20" {...content} />
         <Toaster />
       </>
     );
@@ -156,63 +167,97 @@ export default function PublicationPage() {
         timeStyle: "short",
         timeZone: status.timezone,
       }).format(status.publication.publishedAt);
+  const isPublished = status.publication.revision > 0;
+  const hasConflicts = status.conflicts.length > 0;
+  const publicSessionCount = status.publication.talkCount;
 
   return (
     <>
       <PageHeader
-        title="Publication"
-        description={`${status.eventName} · ${status.timezone}`}
+        title="Publish the run of show"
+        description={`${status.eventName} · ${status.timezone} · one trusted audience-facing revision`}
         actions={
           <Button
+            className="h-12 rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow"
             loading={publishing}
-            disabled={status.conflicts.length > 0}
+            disabled={hasConflicts}
             onClick={() => void publish()}
           >
             {status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}
           </Button>
         }
       />
-      <div className="grid gap-5 lg:grid-cols-[18rem_1fr]">
-        <Card title="Schedule status">
-          <dl className="space-y-4 text-sm">
-            <div>
-              <dt className="text-ink-faint">Public revision</dt>
-              <dd className="mt-1">
-                <Badge tone={status.publication.revision > 0 ? "success" : "neutral"}>
-                  {status.publication.revision > 0 ? `Revision ${status.publication.revision}` : "Unpublished"}
-                </Badge>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-ink-faint">Published</dt>
-              <dd className="mt-1 font-medium text-ink">{publishedAt}</dd>
-            </div>
-            <div>
-              <dt className="text-ink-faint">Current agenda</dt>
-              <dd className="mt-1 font-medium text-ink">{confirmedTalkCount} confirmed sessions</dd>
-            </div>
-            <div>
-              <dt className="text-ink-faint">Public projection</dt>
-              <dd className="mt-1 font-medium text-ink">{status.publication.talkCount} sessions</dd>
-            </div>
-          </dl>
-          {status.conflicts.length > 0 ? (
-            <p className="mt-5 text-sm text-danger">
-              Resolve {status.conflicts.length} schedule {status.conflicts.length === 1 ? "conflict" : "conflicts"} before publishing.
+      <section aria-label="Publication status" className="mb-7 grid border-2 border-line-strong bg-surface shadow-card sm:grid-cols-3">
+        {[
+          [String(confirmedTalkCount).padStart(2, "0"), "Confirmed cues", "Current private agenda", "bg-production-sky"],
+          [String(publicSessionCount).padStart(2, "0"), "Public cues", isPublished ? `Revision ${status.publication.revision}` : "Waiting for first publish", "bg-production-lime"],
+          [String(status.conflicts.length).padStart(2, "0"), "Blocking conflicts", hasConflicts ? "Hold publication" : "Clear to broadcast", hasConflicts ? "bg-production-coral" : "bg-production-yellow"],
+        ].map(([value, label, detail, color], index) => (
+          <div className={`p-4 sm:p-5 ${color} ${index > 0 ? "border-t-2 border-line-strong sm:border-l-2 sm:border-t-0" : ""}`} key={label}>
+            <p className="text-4xl font-black tracking-[-0.06em]">{value}</p>
+            <p className="mt-1 text-[10px] font-black uppercase tracking-[0.14em]">{label}</p>
+            <p className="mt-3 border-t-2 border-line-strong pt-2 text-xs font-bold text-ink-secondary">{detail}</p>
+          </div>
+        ))}
+      </section>
+
+      <div className="grid items-start gap-6 xl:grid-cols-[20rem_minmax(0,1fr)]">
+        <div className="space-y-6">
+          <Card className="rounded-none [&>div]:p-0 [&>header]:bg-production-lime [&>header_h3]:text-ink" title="Broadcast manifest">
+            <dl className="divide-y-2 divide-line-strong text-sm">
+              <div className="px-4 py-4">
+                <dt className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-faint">Public revision</dt>
+                <dd className="mt-2">
+                  <Badge tone={isPublished ? "success" : "neutral"}>
+                    {isPublished ? `Revision ${status.publication.revision}` : "Unpublished"}
+                  </Badge>
+                </dd>
+              </div>
+              <div className="px-4 py-4">
+                <dt className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-faint">Last transmission</dt>
+                <dd className="mt-1 font-bold leading-5 text-ink">{publishedAt}</dd>
+              </div>
+              <div className="px-4 py-4">
+                <dt className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-faint">Audience clock</dt>
+                <dd className="mt-1 font-bold text-ink">{status.timezone}</dd>
+              </div>
+            </dl>
+          </Card>
+
+          <section
+            className={`border-2 border-line-strong p-4 shadow-[5px_5px_0_#171714] ${hasConflicts ? "bg-production-coral" : "bg-ink text-on-accent"}`}
+            aria-live="polite"
+          >
+            <p className={`text-[10px] font-black uppercase tracking-[0.16em] ${hasConflicts ? "text-ink" : "text-production-lime"}`}>
+              {hasConflicts ? "Publication hold" : "Immutable by design"}
             </p>
-          ) : (
-            <p className="mt-5 text-xs leading-5 text-ink-faint">
-              Publishing creates an immutable public revision. Later agenda edits stay private until you publish again.
-            </p>
-          )}
-        </Card>
-        <Card title="Public schedule preview">
+            {hasConflicts ? (
+              <p className="mt-2 text-sm font-bold leading-6 text-ink">
+                Resolve {status.conflicts.length} schedule {status.conflicts.length === 1 ? "conflict" : "conflicts"} before publishing.
+              </p>
+            ) : (
+              <p className="mt-2 text-sm font-semibold leading-6 text-white/75">
+                Publishing freezes a public revision. Later agenda edits stay backstage until the next publish.
+              </p>
+            )}
+          </section>
+        </div>
+
+        <Card className="min-w-0 rounded-none [&>div]:p-4 [&>header]:bg-accent sm:[&>div]:p-5" title="Audience preview / live revision">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-production-sky">Public output</p>
+              <p className="mt-1 text-sm font-black">{status.eventName}</p>
+            </div>
+            <Badge tone={isPublished ? "success" : "warning"}>{isPublished ? "On air" : "Off air"}</Badge>
+          </div>
           {published ? (
             <PublishedSchedule agenda={published} compact />
           ) : (
             <EmptyState
+              className="min-h-72 bg-production-yellow/20"
               title="Schedule not published"
-              description="The public embed stays empty until you publish the first revision."
+              description="The audience embed stays off air until you publish the first immutable revision."
             />
           )}
         </Card>

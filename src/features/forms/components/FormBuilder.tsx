@@ -57,6 +57,14 @@ const SEMANTIC_KEY_LABELS: Record<FormSemanticKey, string> = {
   speakerEmail: "Speaker email",
 };
 
+const PRODUCTION_CARD =
+  "rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[5px_5px_0_#171714] [&>header]:border-b-2 [&>header]:border-[#171714] [&>header]:px-4 [&>header]:py-3 [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.08em] [&>div]:px-4 [&>div]:py-4";
+const PRODUCTION_FIELD =
+  "rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-none focus:border-[#7857ff] focus:ring-[#7857ff]/25";
+const PRODUCTION_BADGE =
+  "rounded-none border-[#171714] bg-[#fffdf7] font-black uppercase tracking-[0.08em] text-[#171714]";
+const SECONDARY_BUTTON =
+  "rounded-none border-2 border-[#171714] bg-[#fffdf7] font-black uppercase tracking-[0.06em] text-[#171714] shadow-[3px_3px_0_#171714] hover:bg-[#caff4a]";
 
 const LOGIC_OPERATOR_LABELS: Record<string, string> = {
   eq: "equals",
@@ -92,6 +100,7 @@ function OptionsEditor({ field, error, onCommit }: OptionsEditorProps) {
       label="Ordered options"
       hint="One option per line. Options are normalized when you leave this field."
       error={error}
+      className={PRODUCTION_FIELD}
       rows={Math.max(3, field.options.length)}
       defaultValue={field.options.join("\n")}
       onBlur={(event) => {
@@ -265,25 +274,26 @@ export function FormBuilder({
       aria-busy={busyAction !== null}
       onSubmit={mutationsAvailable ? submit : (event) => event.preventDefault()}
     >
-      <fieldset disabled={!mutationsAvailable || busyAction !== null} className="m-0 min-w-0 space-y-5 border-0 p-0">
+      <fieldset disabled={!mutationsAvailable || busyAction !== null} className="m-0 min-w-0 space-y-6 border-0 p-0">
       {!mutationsAvailable && (
-        <div className="rounded-control border border-line bg-surface-muted px-4 py-3 text-sm text-ink-secondary" role="status">
+        <div className="border-2 border-[#171714] bg-[#ffd34e] px-4 py-3 text-sm font-semibold text-[#171714] shadow-[4px_4px_0_#171714]" role="status">
           This form is read-only right now. This client can't yet send the idempotency headers organizer edits require.
         </div>
       )}
       {errors.root?.publish?.message && (
-        <div className="rounded-control border border-danger bg-danger-soft px-4 py-3 text-sm text-ink" role="alert">
-          <h2 className="font-semibold">Fix these issues before publishing</h2>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-secondary">
+        <div className="border-2 border-[#171714] bg-[#ff714f] px-4 py-3 text-sm text-[#171714] shadow-[4px_4px_0_#171714]" role="alert">
+          <h2 className="font-black uppercase tracking-[0.06em]">Fix these issues before publishing</h2>
+          <ul className="mt-2 list-disc space-y-1 pl-5 font-semibold">
             {errors.root.publish.message.split("\n").map((issue) => <li key={issue}>{issue}</li>)}
           </ul>
         </div>
       )}
       <Card
+        className={`${PRODUCTION_CARD} [&>header]:bg-[#caff4a]`}
         title={
           <span className="flex flex-wrap items-center justify-between gap-2">
             <span>Form settings</span>
-            <Badge tone={watchedForm.status === "open" ? "success" : watchedForm.status === "closed" ? "warning" : "neutral"}>
+            <Badge className={PRODUCTION_BADGE} tone={watchedForm.status === "open" ? "success" : watchedForm.status === "closed" ? "warning" : "neutral"}>
               {watchedForm.status === "open" ? "Open" : watchedForm.status === "closed" ? "Closed" : "Draft"}
             </Badge>
           </span>
@@ -296,6 +306,7 @@ export function FormBuilder({
               label="Form name"
               required
               error={errors.name?.message}
+              className={PRODUCTION_FIELD}
               {...register("name")}
             />
           </div>
@@ -303,6 +314,7 @@ export function FormBuilder({
             <Textarea
               label="Description"
               hint="Shown at the top of the public form."
+              className={PRODUCTION_FIELD}
               {...register("description", { setValueAs: (value) => value || null })}
             />
           </div>
@@ -310,6 +322,7 @@ export function FormBuilder({
             id="builder-opens-at"
             type="datetime-local"
             label="Opens"
+            className={PRODUCTION_FIELD}
             value={toDateTimeLocal(watchedForm.opensAt)}
             onChange={(event) => {
               setValue("opensAt", event.currentTarget.value ? new Date(event.currentTarget.value).getTime() : null, {
@@ -324,6 +337,7 @@ export function FormBuilder({
             type="datetime-local"
             label="Closes"
             error={errors.closesAt?.message}
+            className={PRODUCTION_FIELD}
             value={toDateTimeLocal(watchedForm.closesAt)}
             onChange={(event) => {
               setValue("closesAt", event.currentTarget.value ? new Date(event.currentTarget.value).getTime() : null, {
@@ -337,67 +351,67 @@ export function FormBuilder({
       </Card>
 
       <Card
-        className="border-accent/30"
+        className={`${PRODUCTION_CARD} [&>header]:bg-[#7857ff] [&>header_h3]:text-white`}
         title={
           <span className="flex flex-wrap items-center justify-between gap-2">
             <span>Proposal routing map</span>
-            <Badge tone="accent">
+            <Badge className={PRODUCTION_BADGE} tone="accent">
               {routingFields.length} {routingFields.length === 1 ? "router" : "routers"} · {conditionalFields.length} conditional
             </Badge>
           </span>
         }
       >
         {routingFields.length === 0 && conditionalFields.length === 0 ? (
-          <div className="rounded-control border border-dashed border-line-strong px-4 py-5 text-sm text-ink-secondary">
+          <div className="border-2 border-dashed border-[#171714] bg-[#f3efe3] px-4 py-5 text-sm font-semibold text-[#665f52]">
             Add category routing or a conditional rule to see how answers move through this form.
           </div>
         ) : (
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(12rem,0.75fr)]">
             <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#7857ff]">
                 Answer to review category
               </p>
               {routingFields.length === 0 ? (
-                <p className="text-sm text-ink-faint">No track or category routing yet.</p>
+                <p className="text-sm font-semibold text-[#665f52]">No track or category routing yet.</p>
               ) : routingFields.map((field) => (
-                <section key={field.id} className="overflow-hidden rounded-control border border-accent/25 bg-accent-soft/40">
-                  <header className="flex flex-wrap items-center justify-between gap-2 border-b border-accent/20 px-3 py-2">
-                    <h3 className="text-sm font-semibold text-ink">{field.label}</h3>
-                    <span className="text-xs text-ink-faint">{field.required ? "Required choice" : "Optional choice"}</span>
+                <section key={field.id} className="overflow-hidden border-2 border-[#171714] bg-[#f3efe3]">
+                  <header className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-[#171714] bg-[#8fdcff] px-3 py-2">
+                    <h3 className="text-sm font-black text-[#171714]">{field.label}</h3>
+                    <span className="text-[10px] font-black uppercase tracking-[0.08em] text-[#4f4a40]">{field.required ? "Required choice" : "Optional choice"}</span>
                   </header>
                   <ul className="divide-y divide-accent/15">
                     {field.options.map((option) => (
                       <li key={option} className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-3 py-2 text-sm">
-                        <span className="truncate text-ink-secondary">{option}</span>
-                        <span className="font-semibold text-accent-deep" aria-hidden="true">→</span>
-                        <span className="truncate font-medium text-ink">{field.routing[option] || "Needs category"}</span>
+                        <span className="truncate font-semibold text-[#4f4a40]">{option}</span>
+                        <span className="font-black text-[#7857ff]" aria-hidden="true">→</span>
+                        <span className="truncate font-black text-[#171714]">{field.routing[option] || "Needs category"}</span>
                       </li>
                     ))}
                   </ul>
                 </section>
               ))}
             </div>
-            <div className="border-t border-line pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">
+            <div className="border-t-2 border-[#171714] pt-4 lg:border-l-2 lg:border-t-0 lg:pl-5 lg:pt-0">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#7857ff]">
                 Conditional branches
               </p>
               {conditionalFields.length === 0 ? (
-                <p className="mt-3 text-sm text-ink-faint">Every field is always shown.</p>
+                <p className="mt-3 text-sm font-semibold text-[#665f52]">Every field is always shown.</p>
               ) : (
                 <ol className="mt-3 space-y-3">
                   {conditionalFields.map((field) => (
-                    <li key={field.id} className="rounded-control border border-line bg-surface-muted/60 px-3 py-2.5">
+                    <li key={field.id} className="border-2 border-[#171714] bg-[#f3efe3] px-3 py-2.5 shadow-[3px_3px_0_#171714]">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge tone={field.logic?.action === "hide" ? "warning" : "accent"}>
+                        <Badge className={PRODUCTION_BADGE} tone={field.logic?.action === "hide" ? "warning" : "accent"}>
                           {field.logic?.action === "hide" ? "Hide" : "Show"}
                         </Badge>
-                        <span className="text-sm font-medium text-ink">{field.label}</span>
+                        <span className="text-sm font-black text-[#171714]">{field.label}</span>
                       </div>
-                      <div className="mt-1.5 space-y-1 text-xs leading-relaxed text-ink-secondary">
+                      <div className="mt-1.5 space-y-1 text-xs font-semibold leading-relaxed text-[#665f52]">
                         {field.logic?.conditions.map((condition, index) => (
                           <p key={index}>
                             {index > 0 ? `${field.logic?.mode === "all" ? "and" : "or"} ` : "when "}
-                            <span className="font-medium text-ink">{fieldLabels[condition.fieldId] ?? "Missing field"}</span>
+                            <span className="font-black text-[#171714]">{fieldLabels[condition.fieldId] ?? "Missing field"}</span>
                             {" "}{LOGIC_OPERATOR_LABELS[condition.op] ?? condition.op}
                             {condition.value === undefined
                               ? ""
@@ -414,12 +428,13 @@ export function FormBuilder({
         )}
       </Card>
 
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b-[3px] border-[#171714] pb-3">
         <div>
-          <h2 className="text-lg font-semibold text-ink">Fields</h2>
-          <p className="text-sm text-ink-faint">Order, validation, conditions, and category routing.</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7857ff]">Build the call sheet</p>
+          <h2 className="mt-1 text-2xl font-black uppercase tracking-[-0.04em] text-[#171714]">Fields</h2>
+          <p className="text-sm font-semibold text-[#665f52]">Order, validation, conditions, and category routing.</p>
         </div>
-        <Button id="builder-add-field" size="sm" variant="secondary" onClick={addField}>Add field</Button>
+        <Button className={`${SECONDARY_BUTTON} bg-[#caff4a]`} id="builder-add-field" size="sm" variant="secondary" onClick={addField}>+ Add field</Button>
       </div>
 
       {fieldRows.map((row, index) => {
@@ -430,10 +445,11 @@ export function FormBuilder({
         return (
           <Card
             key={row.formKey}
+            className={`${PRODUCTION_CARD} ${index % 4 === 0 ? "[&>header]:bg-[#8fdcff]" : index % 4 === 1 ? "[&>header]:bg-[#ff714f]" : index % 4 === 2 ? "[&>header]:bg-[#caff4a]" : "[&>header]:bg-[#7857ff] [&>header_h3]:text-white"}`}
             title={
               <span className="flex flex-wrap items-center justify-between gap-2">
-                <span>{index + 1}. {field.label || "Untitled field"}</span>
-                <Badge>{FIELD_TYPE_LABELS[field.type]}</Badge>
+                <span><span className="mr-2 opacity-60">{String(index + 1).padStart(2, "0")}</span>{field.label || "Untitled field"}</span>
+                <Badge className={PRODUCTION_BADGE}>{FIELD_TYPE_LABELS[field.type]}</Badge>
               </span>
             }
             footer={
@@ -441,7 +457,8 @@ export function FormBuilder({
                 <div className="flex gap-1">
                   <Button
                     size="sm"
-                    variant="ghost"
+                    variant="secondary"
+                    className={SECONDARY_BUTTON}
                     aria-label={`Move ${field.label} up`}
                     disabled={index === 0}
                     onClick={() => moveField(field.id, -1)}
@@ -450,7 +467,8 @@ export function FormBuilder({
                   </Button>
                   <Button
                     size="sm"
-                    variant="ghost"
+                    variant="secondary"
+                    className={SECONDARY_BUTTON}
                     aria-label={`Move ${field.label} down`}
                     disabled={index === watchedFields.length - 1}
                     onClick={() => moveField(field.id, 1)}
@@ -458,7 +476,7 @@ export function FormBuilder({
                     Move down
                   </Button>
                 </div>
-                <Button size="sm" variant="ghost" onClick={() => removeField(field.id, index)}>Remove</Button>
+                <Button className="rounded-none border-2 border-[#171714] bg-[#ff714f] font-black uppercase tracking-[0.06em] text-[#171714]" size="sm" variant="ghost" onClick={() => removeField(field.id, index)}>Remove</Button>
               </div>
             }
           >
@@ -468,11 +486,13 @@ export function FormBuilder({
                 label="Label"
                 required
                 error={errors.fields?.[index]?.label?.message}
+                className={PRODUCTION_FIELD}
                 {...register(`fields.${index}.label`)}
               />
               <Select
                 id={`builder-field-${field.id}-type`}
                 label="Field type"
+                className={PRODUCTION_FIELD}
                 value={field.type}
                 onChange={(event) => {
                   const type = event.currentTarget.value as FormFieldType;
@@ -490,6 +510,7 @@ export function FormBuilder({
                 id={`builder-field-${field.id}-semantic-key`}
                 label="Submission/review meaning"
                 hint="Assign a stable meaning for public submission and review. Labels are never used as a fallback."
+                className={PRODUCTION_FIELD}
                 value={field.semanticKey ?? ""}
                 error={errors.fields?.[index]?.semanticKey?.message}
                 onChange={(event) => patchField(index, {
@@ -506,11 +527,13 @@ export function FormBuilder({
               <div className="sm:col-span-2">
                 <Input
                   label="Help text"
+                  className={PRODUCTION_FIELD}
                   value={field.helpText ?? ""}
                   onChange={(event) => patchField(index, { helpText: event.currentTarget.value || null })}
                 />
               </div>
               <Checkbox
+                className="border-l-[3px] border-[#caff4a] pl-3 [&_input]:rounded-none [&_input]:border-2 [&_input]:border-[#171714]"
                 label="Required response"
                 description="The browser blocks submission until this field is completed."
                 disabled={field.type === "heading" || field.type === "html"}
@@ -518,6 +541,7 @@ export function FormBuilder({
                 onChange={(event) => patchField(index, { required: event.currentTarget.checked })}
               />
               <Checkbox
+                className="border-l-[3px] border-[#8fdcff] pl-3 [&_input]:rounded-none [&_input]:border-2 [&_input]:border-[#171714]"
                 label="Conditional field"
                 description="Show or hide this field based on an earlier answer."
                 disabled={precedingFields.length === 0}
@@ -544,11 +568,12 @@ export function FormBuilder({
               )}
 
               {field.logic && (
-                <fieldset className="space-y-3 rounded-control border border-line bg-surface-muted/50 p-3 sm:col-span-2">
-                  <legend className="px-1 text-sm font-medium text-ink">Conditional rules</legend>
+                <fieldset className="space-y-3 border-2 border-[#171714] bg-[#f3efe3] p-3 sm:col-span-2">
+                  <legend className="bg-[#7857ff] px-2 py-1 text-xs font-black uppercase tracking-[0.08em] text-white">Conditional rules</legend>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Select
                       label="Action"
+                      className={PRODUCTION_FIELD}
                       value={field.logic.action}
                       onChange={(event) => patchField(index, {
                         logic: { ...field.logic!, action: event.currentTarget.value as "show" | "hide" },
@@ -559,6 +584,7 @@ export function FormBuilder({
                     </Select>
                     <Select
                       label="Match"
+                      className={PRODUCTION_FIELD}
                       value={field.logic.mode}
                       onChange={(event) => patchField(index, {
                         logic: { ...field.logic!, mode: event.currentTarget.value as "all" | "any" },
@@ -570,10 +596,11 @@ export function FormBuilder({
                   </div>
                   <div className="space-y-3">
                     {field.logic.conditions.map((condition, conditionIndex) => (
-                      <div key={conditionIndex} className="grid gap-3 rounded-control border border-line bg-surface p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                      <div key={conditionIndex} className="grid gap-3 border-2 border-[#171714] bg-[#fffdf7] p-3 shadow-[3px_3px_0_#171714] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
                         <Select
                           id={`builder-field-${field.id}-condition-${conditionIndex}-source`}
                           label={`Earlier field ${conditionIndex + 1}`}
+                          className={PRODUCTION_FIELD}
                           value={condition.fieldId}
                           onChange={(event) => patchField(index, {
                             logic: updateConditionAt(field.logic!, conditionIndex, {
@@ -585,6 +612,7 @@ export function FormBuilder({
                         </Select>
                         <Select
                           label="Comparison"
+                          className={PRODUCTION_FIELD}
                           value={condition.op}
                           onChange={(event) => {
                             const op = event.currentTarget.value as typeof condition.op;
@@ -603,6 +631,7 @@ export function FormBuilder({
                         </Select>
                         <Input
                           label="Value"
+                          className={PRODUCTION_FIELD}
                           disabled={condition.op === "not_empty"}
                           value={Array.isArray(condition.value) ? condition.value.join(", ") : condition.value ?? ""}
                           onChange={(event) => patchField(index, {
@@ -614,7 +643,7 @@ export function FormBuilder({
                           })}
                         />
                         <Button
-                          className="self-end"
+                          className={`${SECONDARY_BUTTON} self-end`}
                           size="sm"
                           variant="ghost"
                           disabled={field.logic!.conditions.length === 1}
@@ -631,6 +660,7 @@ export function FormBuilder({
                     ))}
                   </div>
                   <Button
+                    className={SECONDARY_BUTTON}
                     size="sm"
                     variant="secondary"
                     disabled={precedingFields.length === 0}
@@ -653,8 +683,8 @@ export function FormBuilder({
               )}
 
               {(field.type === "select" || field.type === "radio") && field.options.length > 0 && (
-                <fieldset className="grid gap-3 rounded-control border border-line p-3 sm:col-span-2 sm:grid-cols-2">
-                  <legend className="px-1 text-sm font-medium text-ink">Category routing</legend>
+                <fieldset className="grid gap-3 border-2 border-[#171714] bg-[#8fdcff]/30 p-3 sm:col-span-2 sm:grid-cols-2">
+                  <legend className="bg-[#8fdcff] px-2 py-1 text-xs font-black uppercase tracking-[0.08em] text-[#171714]">Category routing</legend>
                   {field.options.map((option) => (
                     <Input
                       id={`builder-field-${field.id}-routing-${field.options.indexOf(option)}`}
@@ -662,6 +692,7 @@ export function FormBuilder({
                       key={option}
                       label={option}
                       hint="Internal category key"
+                      className={PRODUCTION_FIELD}
                       value={field.routing[option] ?? ""}
                       onChange={(event) => patchField(index, {
                         routing: { ...field.routing, [option]: event.currentTarget.value },
@@ -676,13 +707,13 @@ export function FormBuilder({
       })}
 
       {message && (
-        <div className="rounded-control border border-line bg-surface-muted px-3 py-2 text-sm text-ink-secondary" role="status">
+        <div className="border-2 border-[#171714] bg-[#ffd34e] px-3 py-2 text-sm font-semibold text-[#171714] shadow-[3px_3px_0_#171714]" role="status">
           {message}
         </div>
       )}
-      <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-between gap-3 rounded-card border border-line bg-surface/95 p-3 shadow-card backdrop-blur-sm">
-        <div className="text-xs text-ink-faint">
-          Draft v{watchedForm.version} · {watchedFields.length} {watchedFields.length === 1 ? "field" : "fields"}
+      <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-between gap-3 border-[3px] border-[#171714] bg-[#171714]/95 p-3 text-white shadow-[6px_6px_0_#7857ff] backdrop-blur-sm">
+        <div className="text-[10px] font-black uppercase tracking-[0.12em] text-white/70">
+          Draft v{watchedForm.version} <span className="px-1 text-[#caff4a]">◆</span> {watchedFields.length} {watchedFields.length === 1 ? "field" : "fields"}
         </div>
         <div className="flex flex-wrap gap-2">
           {watchedForm.purpose === "additional" &&
@@ -710,6 +741,7 @@ export function FormBuilder({
           {watchedForm.status === "open" && (
             <Button
               variant="secondary"
+              className={SECONDARY_BUTTON}
               loading={busyAction === "status"}
               onClick={() => onStatusChange("closed", watchedForm)}
             >
@@ -719,16 +751,17 @@ export function FormBuilder({
           {watchedForm.status === "closed" && watchedForm.publishedVersion && (
             <Button
               variant="secondary"
+              className={SECONDARY_BUTTON}
               loading={busyAction === "status"}
               onClick={() => onStatusChange("open", watchedForm)}
             >
               Reopen form
             </Button>
           )}
-          <Button type="submit" name="intent" value="save" variant="secondary" loading={busyAction === "save"}>
+          <Button className={SECONDARY_BUTTON} type="submit" name="intent" value="save" variant="secondary" loading={busyAction === "save"}>
             Save draft
           </Button>
-          <Button type="submit" name="intent" value="publish" loading={busyAction === "publish"}>
+          <Button className="rounded-none border-2 border-[#171714] bg-[#caff4a] font-black uppercase tracking-[0.06em] text-[#171714] shadow-[3px_3px_0_#7857ff] hover:bg-[#d7ff78]" type="submit" name="intent" value="publish" loading={busyAction === "publish"}>
             {watchedForm.publishedVersion ? "Publish new version" : "Publish form"}
           </Button>
         </div>

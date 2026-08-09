@@ -21,7 +21,7 @@ export function ScrollBar({ className, orientation = "vertical", ...props }: Scr
       className={cx("flex touch-none select-none p-px transition-colors data-[orientation=horizontal]:h-2.5 data-[orientation=horizontal]:flex-col data-[orientation=vertical]:h-full data-[orientation=vertical]:w-2.5", className)}
       {...props}
     >
-      <Primitive.Thumb className="relative flex-1 rounded-full bg-line-strong" />
+      <Primitive.Thumb className="relative flex-1 rounded-control bg-line-strong" />
     </Primitive.Scrollbar>
   );
 }

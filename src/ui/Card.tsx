@@ -12,18 +12,18 @@ export function Card({ title, footer, children, className }: CardProps) {
   return (
     <section
       className={cx(
-        "rounded-card border border-line bg-surface shadow-card",
+        "rounded-card border-2 border-line-strong bg-surface shadow-card",
         className,
       )}
     >
       {title != null && (
-        <header className="border-b border-line px-5 py-4">
-          <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        <header className="border-b-2 border-line-strong bg-ink px-5 py-3.5 text-on-accent">
+          <h3 className="text-xs font-black uppercase tracking-[0.12em] text-on-accent">{title}</h3>
         </header>
       )}
       <div className="px-5 py-4">{children}</div>
       {footer != null && (
-        <footer className="rounded-b-card border-t border-line bg-surface-muted/60 px-5 py-3">
+        <footer className="rounded-b-card border-t-2 border-line-strong bg-surface-muted px-5 py-3">
           {footer}
         </footer>
       )}

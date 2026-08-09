@@ -37,17 +37,26 @@ const navItems = availableEventNavItems(
 function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) {
   const { eventSlug } = useParams();
   const navClassName = mobile
-    ? "flex h-full flex-col gap-5 p-1"
-    : "flex h-full flex-col gap-5 p-4";
+    ? "flex h-full flex-col gap-5 bg-ink p-1 text-on-accent"
+    : "flex h-full flex-col gap-6 p-5";
+
+  const brand = (
+    <span className="flex items-center gap-3">
+      <span className="grid size-9 place-items-center border-2 border-on-accent bg-production-lime text-[10px] font-black tracking-[-0.04em] text-ink shadow-[3px_3px_0_#7857ff]">
+        SP
+      </span>
+      <span className="font-black tracking-[-0.035em]">Session Party</span>
+    </span>
+  );
 
   if (!eventSlug) {
     return (
       <nav className={navClassName} aria-label="Main navigation">
-        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-lg font-semibold tracking-tight`} to="/" onClick={onNavigate}>
-          Session Party
+        <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-accent`} to="/" onClick={onNavigate}>
+          {brand}
         </Link>
-        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-sm font-medium`} to="/events" onClick={onNavigate}>
-          Events
+        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} border-2 border-on-accent bg-production-lime px-3 py-2.5 text-xs font-black uppercase tracking-[0.1em] text-ink shadow-[4px_4px_0_#7857ff]`} to="/events" onClick={onNavigate}>
+          Event control room →
         </Link>
       </nav>
     );
@@ -56,24 +65,24 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
   const eventPath = `/e/${eventSlug}`;
   return (
     <nav className={navClassName} aria-label="Event navigation">
-      <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-lg font-semibold tracking-tight`} to="/" onClick={onNavigate}>
-        Session Party
+      <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-accent`} to="/" onClick={onNavigate}>
+        {brand}
       </Link>
       <Link
-        className={`${mobile ? "flex min-h-11 items-center" : "block"} rounded-md px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint hover:bg-surface-muted hover:text-ink`}
+        className={`${mobile ? "flex min-h-11 items-center" : "block"} border-y border-white/25 px-3 py-2.5 text-[10px] font-black uppercase tracking-[0.14em] text-white/55 hover:bg-white/10 hover:text-white`}
         to="/events"
         onClick={onNavigate}
       >
         ← All events
       </Link>
-      <div className="space-y-1">
+      <div className="space-y-1.5">
         {navItems.map(({ label, segment }) => {
           const to = segment ? `${eventPath}/${segment}` : eventPath;
           return (
             <NavLink
               className={({ isActive }) =>
-                `${mobile ? "flex min-h-11 items-center" : "block"} rounded-md px-3 py-2 text-sm font-medium ${
-                  isActive ? "bg-accent text-on-accent" : "text-ink-secondary hover:bg-muted"
+                `${mobile ? "flex min-h-11 items-center" : "block"} border-2 px-3 py-2.5 text-[11px] font-black uppercase tracking-[0.08em] transition-transform ${
+                  isActive ? "border-on-accent bg-production-lime text-ink shadow-[4px_4px_0_#7857ff]" : "border-transparent text-white/65 hover:border-white/40 hover:bg-white/10 hover:text-white"
                 }`
               }
               end={!segment}
@@ -127,7 +136,7 @@ function Topbar({
   }
 
   return (
-    <div className="flex items-center gap-3 px-4 py-2">
+    <div className="flex items-center justify-between gap-3 py-1">
       <Button
         className="min-h-11 lg:hidden"
         variant="secondary"
@@ -139,7 +148,7 @@ function Topbar({
       >
         Menu
       </Button>
-      <span className="text-sm text-ink-secondary">
+      <span className="ml-auto hidden border-l-2 border-line-strong pl-4 text-[10px] font-black uppercase tracking-[0.08em] text-ink-secondary sm:block">
         {session.status === "loading"
           ? "Checking session…"
           : session.status === "signed-in"

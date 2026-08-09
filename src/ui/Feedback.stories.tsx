@@ -41,7 +41,7 @@ function ControlledTabs() {
         role="tabpanel"
         tabIndex={0}
         aria-labelledby={`feedback-${active}-tab`}
-        className="rounded-card border border-line bg-surface p-4 text-sm text-ink-secondary"
+        className="rounded-card border-2 border-line-strong bg-surface p-4 text-sm font-medium text-ink-secondary shadow-card"
       >
         The {active} view is selected. Arrow keys move between tabs.
       </section>

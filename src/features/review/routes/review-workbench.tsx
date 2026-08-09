@@ -119,7 +119,7 @@ export function selectVisibleFallback(
 
 function LoadingWorkbench() {
   return (
-    <main className="space-y-4 p-3 sm:p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
+    <main className="production-grid min-h-screen space-y-4 bg-canvas p-3 sm:p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Skeleton className="h-8 w-full max-w-72 motion-reduce:animate-none" />
         <Skeleton className="h-8 w-32 motion-reduce:animate-none sm:w-36" />
@@ -157,7 +157,7 @@ export function ReviewLoadFailure({
 }) {
   if (error.kind === "unauthenticated") {
     return (
-      <main className="p-4 sm:p-6">
+      <main className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
         <EmptyState
           title="Sign in to review proposals"
           description="Sign in to continue to this event review workspace."
@@ -169,7 +169,7 @@ export function ReviewLoadFailure({
 
   if (error.kind === "event-not-found") {
     return (
-      <main className="p-4 sm:p-6">
+      <main className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
         <EmptyState title="Event not found" description="This event may have moved or been removed." />
       </main>
     );
@@ -177,14 +177,14 @@ export function ReviewLoadFailure({
 
   if (error.kind === "review-not-found") {
     return (
-      <main className="p-4 sm:p-6">
+      <main className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
         <EmptyState title="Review workspace unavailable" description="Review is not available for this event." />
       </main>
     );
   }
 
   return (
-    <main className="p-4 sm:p-6">
+    <main className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
       <Card>
         <EmptyState
           title="Review queue could not load"
@@ -406,7 +406,7 @@ export function ReviewWorkbenchContent({
 
   return (
     <main
-      className="min-h-screen bg-canvas p-3 sm:p-4 lg:p-6"
+      className="production-grid min-h-screen bg-canvas p-3 sm:p-4 lg:p-6"
       onKeyDown={(event) => {
         const target = event.target as HTMLElement;
         if (event.key === "/" && !target.matches("input, textarea, select")) {
@@ -415,16 +415,17 @@ export function ReviewWorkbenchContent({
         }
       }}
     >
-      <header className="mb-4 flex flex-wrap items-end justify-between gap-4 border-b border-line pb-4">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-5 border-[3px] border-line-strong bg-accent p-5 text-on-accent shadow-[7px_7px_0_#171714] sm:p-6">
         <div>
+          <p className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-white/65">Review desk / evidence queue</p>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight text-ink">Proposal review</h1>
+            <h1 className="text-4xl font-black leading-none tracking-[-0.055em] text-white sm:text-5xl">Proposal review</h1>
             <Badge tone="neutral">{queue.length} in round</Badge>
             <Badge tone="accent">{loadedRound ? `${loadedRound.name} · ${loadedRound.status}` : "No review round"}</Badge>
           </div>
-          <p className="mt-1 text-sm text-ink-secondary">Evidence-first triage for {workbench.eventName}. Times shown in {workbench.timezone}.</p>
+          <p className="mt-3 text-sm font-semibold text-white/75">Evidence-first triage for {workbench.eventName}. Times shown in {workbench.timezone}.</p>
         </div>
-        <div className="text-left text-xs text-ink-faint sm:text-right">
+        <div className="border-l-2 border-white/35 pl-4 text-left text-[10px] font-black uppercase tracking-[0.08em] text-white/65 sm:text-right">
           <p>Queue focus: ↑/↓ · Open detail: Enter · Search: /</p>
           <p>Last updated {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: workbench.timezone }).format(workbench.lastUpdatedAt)} {workbench.timezone}</p>
         </div>
@@ -441,7 +442,7 @@ export function ReviewWorkbenchContent({
       )}
 
       {queue.length > 0 && (
-        <section className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1.5fr)_repeat(3,minmax(9rem,0.7fr))]" aria-label="Queue filters">
+        <section className="mb-6 grid gap-3 border-2 border-line-strong bg-surface p-4 shadow-[4px_4px_0_#171714] sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1.5fr)_repeat(3,minmax(9rem,0.7fr))]" aria-label="Queue filters">
           <Input ref={searchRef} label="Search proposals" placeholder="Title or category" value={query} onChange={(event) => setQuery(event.target.value)} />
           <Select label="Status" value={status} onChange={(event) => setStatus(event.target.value as SubmissionStatus | "all")}>
             <option value="all">All statuses</option>
@@ -458,17 +459,17 @@ export function ReviewWorkbenchContent({
       )}
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(19rem,0.78fr)_minmax(0,1.7fr)]">
-        <Card className="overflow-hidden lg:sticky lg:top-4" title={<span className="flex items-center justify-between gap-3"><span>Queue</span><span className="font-mono text-xs font-normal tabular-nums text-ink-faint">{queue.length === 0 ? "Empty round" : `${visibleQueue.length} shown`}</span></span>}>
+        <Card className="overflow-hidden shadow-[5px_5px_0_#171714] lg:sticky lg:top-4 [&>header]:bg-production-sky [&>header_h3]:text-ink" title={<span className="flex items-center justify-between gap-3"><span>Review queue</span><span className="font-mono text-[10px] font-black tabular-nums text-ink">{queue.length === 0 ? "Empty round" : `${visibleQueue.length} shown`}</span></span>}>
           {queue.length === 0 ? (
             <EmptyState title="No submissions in this round" description={`${loadedRound?.name ?? "This round"} has no assigned or eligible proposals yet. Add proposals to the round before triage.`} />
           ) : visibleQueue.length === 0 ? (
             <EmptyState title="No proposals match these filters" description="Clear the current search, status, category, or assignment filters. No proposal state has changed." action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>} />
           ) : (
-            <ol className="-mx-5 -my-4 max-h-[calc(100vh-15rem)] divide-y divide-line overflow-y-auto" aria-label="Submission review queue">
+            <ol className="-mx-5 -my-4 max-h-[calc(100vh-15rem)] divide-y-2 divide-line-strong overflow-y-auto" aria-label="Submission review queue">
               {visibleQueue.map((submission, index) => {
                 const isSelected = submission.id === focusedId;
-                return <li key={submission.id}><button ref={(element) => { if (element) queueButtonRefs.current.set(submission.id, element); else queueButtonRefs.current.delete(submission.id); }} type="button" tabIndex={isSelected ? 0 : -1} className="group grid w-full grid-cols-[2.25rem_minmax(0,1fr)_auto] gap-2 px-3 py-3 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none" aria-current={isSelected ? "true" : undefined} onFocus={() => focusSubmission(submission.id)} onClick={() => openSubmission(submission.id)} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); moveQueueFocus(submission.id, 1); } else if (event.key === "ArrowUp") { event.preventDefault(); moveQueueFocus(submission.id, -1); } else if (event.key === "Home") { event.preventDefault(); const firstId = visibleQueue[0]!.id; focusSubmission(firstId); focusQueueItem(firstId); } else if (event.key === "End") { event.preventDefault(); const lastId = visibleQueue[visibleQueue.length - 1]!.id; focusSubmission(lastId); focusQueueItem(lastId); } else if (event.key === "Enter") { event.preventDefault(); openSubmission(submission.id); detailRef.current?.focus(); } }}>
-                  <span className="pt-0.5 font-mono text-xs tabular-nums text-ink-faint">{String(index + 1).padStart(2, "0")}</span><span className="min-w-0"><span className="block truncate text-sm font-medium text-ink">{submission.title}</span><span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-ink-faint"><span>{submission.category ?? "Uncategorized"}</span><span aria-hidden="true">·</span><span>{statusLabel[submission.status]}</span></span><span className="mt-1.5 block"><Badge tone={reviewStateTone[submission.reviewState]}>{reviewStateLabel[submission.reviewState]}</Badge></span></span><span className="pt-0.5 text-right font-mono text-sm font-semibold tabular-nums text-ink">{submission.averageScore === null ? "—" : submission.averageScore.toFixed(1)}<span className="block text-[10px] font-normal text-ink-faint">/ 5</span></span>
+                return <li key={submission.id}><button ref={(element) => { if (element) queueButtonRefs.current.set(submission.id, element); else queueButtonRefs.current.delete(submission.id); }} type="button" tabIndex={isSelected ? 0 : -1} className="group grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-3 px-3 py-3 text-left outline-none transition-colors hover:bg-production-sky/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent aria-[current=true]:bg-production-lime motion-reduce:transition-none" aria-current={isSelected ? "true" : undefined} onFocus={() => focusSubmission(submission.id)} onClick={() => openSubmission(submission.id)} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); moveQueueFocus(submission.id, 1); } else if (event.key === "ArrowUp") { event.preventDefault(); moveQueueFocus(submission.id, -1); } else if (event.key === "Home") { event.preventDefault(); const firstId = visibleQueue[0]!.id; focusSubmission(firstId); focusQueueItem(firstId); } else if (event.key === "End") { event.preventDefault(); const lastId = visibleQueue[visibleQueue.length - 1]!.id; focusSubmission(lastId); focusQueueItem(lastId); } else if (event.key === "Enter") { event.preventDefault(); openSubmission(submission.id); detailRef.current?.focus(); } }}>
+                  <span className="grid size-8 place-items-center border-2 border-line-strong bg-ink font-mono text-[10px] font-black tabular-nums text-production-lime">{String(index + 1).padStart(2, "0")}</span><span className="min-w-0"><span className="block truncate text-sm font-black text-ink">{submission.title}</span><span className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.06em] text-ink-faint"><span>{submission.category ?? "Uncategorized"}</span><span aria-hidden="true">·</span><span>{statusLabel[submission.status]}</span></span><span className="mt-1.5 block"><Badge tone={reviewStateTone[submission.reviewState]}>{reviewStateLabel[submission.reviewState]}</Badge></span></span><span className="pt-0.5 text-right font-mono text-base font-black tabular-nums text-ink">{submission.averageScore === null ? "—" : submission.averageScore.toFixed(1)}<span className="block text-[9px] font-black uppercase tracking-[0.08em] text-ink-faint">/ 5</span></span>
                 </button></li>;
               })}
             </ol>

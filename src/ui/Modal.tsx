@@ -25,21 +25,21 @@ export function Modal({ open, onClose, title, children, footer, size = "md" }: M
           <Dialog.Content
             aria-describedby={undefined}
             className={cx(
-              "pointer-events-auto relative w-full animate-slide-up rounded-card border border-line bg-surface shadow-pop outline-none motion-reduce:animate-none",
+              "pointer-events-auto relative w-full animate-slide-up rounded-card border-2 border-line-strong bg-surface shadow-pop outline-none motion-reduce:animate-none",
               SIZES[size],
             )}
           >
-            <header className="flex items-center justify-between gap-4 px-5 pb-3 pt-4">
-              <Dialog.Title className="text-base font-semibold text-ink">{title}</Dialog.Title>
+            <header className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
+              <Dialog.Title className="text-sm font-black uppercase tracking-[0.1em] text-on-accent">{title}</Dialog.Title>
               <Dialog.Close asChild>
                 <IconButton aria-label="Close" size="sm" className="-mr-1.5 min-h-11 min-w-11">
                   <XIcon />
                 </IconButton>
               </Dialog.Close>
             </header>
-            <div className="px-5 pb-5">{children}</div>
+            <div className="px-5 py-5">{children}</div>
             {footer != null && (
-              <footer className="flex items-center justify-end gap-2 rounded-b-card border-t border-line bg-surface-muted/60 px-5 py-3.5">
+              <footer className="flex items-center justify-end gap-2 rounded-b-card border-t-2 border-line-strong bg-surface-muted px-5 py-3.5">
                 {footer}
               </footer>
             )}

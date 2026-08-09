@@ -202,19 +202,18 @@ export function AgendaBoard({
   };
 
   return (
-    <section className="space-y-4" aria-labelledby={boardHeadingId}>
+    <section className="space-y-5" aria-labelledby={boardHeadingId}>
       <h2 id={boardHeadingId} className="sr-only">{agenda.eventName} agenda scheduling board</h2>
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-line bg-surface px-4 py-2.5">
-        <div className="flex flex-wrap items-center gap-2 text-sm text-ink-secondary">
-          <span className="font-medium text-ink">All times in {agenda.timezone}</span>
-          <span aria-hidden="true">·</span>
-          <span>{scheduled.length} active talks</span>
-          <span aria-hidden="true">·</span>
-          <span>{agenda.backlog.length} in backlog</span>
+      <div className="flex flex-wrap items-center justify-between gap-4 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent shadow-card sm:px-5">
+        <div className="flex flex-wrap items-center gap-3 text-xs font-black uppercase tracking-[0.09em]">
+          <span className="bg-production-lime px-2.5 py-1.5 text-ink">Cue clock · {agenda.timezone}</span>
+          <span>{scheduled.length} active</span>
+          <span className="text-on-accent/35" aria-hidden="true">◆</span>
+          <span>{agenda.backlog.length} waiting</span>
         </div>
         <div className="flex items-center gap-2" role="status" aria-live="polite">
           <Badge tone={connection.tone}>{connection.label}</Badge>
-          {intent.message && <span className="max-w-md text-xs text-ink-secondary">{intent.message}</span>}
+          {intent.message && <span className="max-w-md text-xs font-semibold text-on-accent/70">{intent.message}</span>}
         </div>
       </div>
 
@@ -222,12 +221,12 @@ export function AgendaBoard({
 
       {(view === "day" || view === "room") && (
         <fieldset
-          className="flex items-center gap-2 overflow-x-auto rounded-control border border-line bg-surface px-3 py-2"
+          className="flex items-center gap-2 overflow-x-auto border-2 border-line-strong bg-production-sky px-3 py-3 shadow-[4px_4px_0_#171714]"
         >
           <legend className="sr-only">Choose active agenda day in {agenda.timezone}</legend>
-          <span className="mr-1 shrink-0 text-xs font-semibold uppercase tracking-wide text-ink-faint" aria-hidden="true">Active day</span>
+          <span className="mr-1 shrink-0 text-[10px] font-black uppercase tracking-[0.14em] text-ink" aria-hidden="true">On deck</span>
           {availableDays.length === 0 ? (
-            <span className="text-sm text-ink-secondary">Schedule a talk to create the first day rail.</span>
+            <span className="text-sm font-semibold text-ink-secondary">Schedule a talk to create the first day rail.</span>
           ) : availableDays.map((day) => (
             <Button
               className="shrink-0"
@@ -243,7 +242,7 @@ export function AgendaBoard({
         </fieldset>
       )}
 
-      <div className="grid min-h-[34rem] gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="grid min-h-[34rem] gap-6 xl:grid-cols-[19rem_minmax(0,1fr)]">
 
         <section
           className="order-1 min-w-0 xl:order-2"
@@ -298,24 +297,29 @@ export function AgendaBoard({
               description={view === "day" ? "Schedule a talk to create the first event day." : "Add rooms or tracks before placing talks."}
             />
           ) : (
-            <div className="overflow-x-auto pb-3">
-              <div className="grid min-w-max auto-cols-[18rem] grid-flow-col gap-3">
-                {lanes.map((lane) => (
+            <div className="overflow-x-auto pb-4">
+              <div className="grid min-w-max auto-cols-[19rem] grid-flow-col gap-4 pr-1">
+                {lanes.map((lane, laneIndex) => (
                   <section
                     key={lane.id}
-                    className="min-h-[30rem] rounded-card border border-line bg-surface-muted"
+                    className="min-h-[30rem] border-2 border-line-strong bg-surface-muted shadow-[5px_5px_0_#171714]"
                     aria-label={lane.label}
                     onDragOver={lane.target ? (event) => event.preventDefault() : undefined}
                     onDrop={lane.target ? (event) => dropOnLane(event, lane) : undefined}
                   >
-                    <header className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-surface px-3 py-2.5">
+                    <header className={`sticky top-0 z-10 flex min-h-[4.5rem] items-center justify-between border-b-2 border-line-strong px-3 py-3 ${
+                      ["bg-production-sky", "bg-production-coral", "bg-production-lime", "bg-accent text-on-accent"][laneIndex % 4]
+                    }`}>
                       <div>
-                        <h3 className="text-sm font-semibold text-ink">{lane.label}</h3>
-                        <p className="text-xs text-ink-faint">{lane.hint}</p>
+                        <p className="text-[9px] font-black uppercase tracking-[0.15em] opacity-65">Lane {String(laneIndex + 1).padStart(2, "0")}</p>
+                        <h3 className="mt-0.5 text-base font-black leading-tight tracking-[-0.03em]">{lane.label}</h3>
+                        <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.09em] opacity-65">{lane.hint}</p>
                       </div>
-                      <Badge>{lane.talks.length}</Badge>
+                      <span className="grid size-8 place-items-center border-2 border-line-strong bg-surface text-xs font-black text-ink shadow-[2px_2px_0_#171714]">
+                        {lane.talks.length}
+                      </span>
                     </header>
-                    <ol className="space-y-2 p-2">
+                    <ol className="space-y-3 p-3">
                       {lane.talks.map((talk) => {
                         const talkConflicts = agenda.conflicts.filter(({ talkIds }) => talkIds.includes(talk.id));
                         const formattedStart = talk.startsAt === null
@@ -333,25 +337,27 @@ export function AgendaBoard({
                               event.dataTransfer.setData("text/agenda-talk", talk.id);
                             }}
                             onDragEnd={() => setDraggedTalkId(null)}
-                            className={`rounded-control border bg-surface p-3 shadow-card transition motion-reduce:transition-none ${
-                              selectedTalkId === talk.id ? "border-accent ring-2 ring-accent/20" : "border-line"
+                            className={`border-2 bg-surface p-3 shadow-[3px_3px_0_#171714] transition motion-reduce:transition-none ${
+                              selectedTalkId === talk.id ? "border-accent bg-accent-soft ring-2 ring-accent ring-offset-2" : "border-line-strong"
                             } ${draggedTalkId === talk.id ? "opacity-50" : ""}`}
                           >
                             <button
                               type="button"
-                              className="block w-full rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                               aria-label={`Edit ${talk.title}. ${formattedStart}. Press Enter for move controls.`}
                               onClick={() => onSelectTalk(talk)}
                               onKeyDown={(event) => openWithKeyboard(event, talk)}
                             >
                               <span className="flex items-start justify-between gap-2">
-                                <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+                                <span className={`px-1.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] text-ink ${
+                                  talk.status === "confirmed" ? "bg-production-lime" : "bg-production-yellow"
+                                }`}>
                                   {formattedStart}
                                 </span>
-                                <span className="text-xs text-ink-faint">{talk.durationMin}m</span>
+                                <span className="text-[10px] font-black uppercase tracking-[0.1em] text-ink-faint">{talk.durationMin}m</span>
                               </span>
-                              <span className="mt-1 block text-sm font-semibold leading-snug text-ink">{talk.title}</span>
-                              <span className="mt-1 block text-xs text-ink-secondary">{talk.speakerNames.join(", ")}</span>
+                              <span className="mt-2 block text-base font-black leading-tight tracking-[-0.025em] text-ink">{talk.title}</span>
+                              <span className="mt-1.5 block border-t border-line pt-1.5 text-xs font-semibold text-ink-secondary">{talk.speakerNames.join(", ")}</span>
                             </button>
                             {talkConflicts.length > 0 && (
                               <div className="mt-2">
@@ -369,8 +375,8 @@ export function AgendaBoard({
           )}
         </section>
         <Card
-          className="order-2 xl:order-1"
-          title={<span className="flex items-center justify-between"><span>Accepted backlog</span><Badge>{agenda.backlog.length}</Badge></span>}
+          className="order-2 self-start xl:order-1"
+          title={<span className="flex items-center justify-between"><span>Accepted backlog</span><Badge tone="accent">{agenda.backlog.length}</Badge></span>}
         >
           {agenda.backlog.length === 0 ? (
             <EmptyState
@@ -378,11 +384,11 @@ export function AgendaBoard({
               description="Accepted, provisioned proposals appear here until a talk is created."
             />
           ) : (
-            <ol className="space-y-2">
+            <ol className="space-y-3">
               {agenda.backlog.map((proposal) => (
-                <li key={proposal.submissionId} className="rounded-control border border-line bg-surface-muted p-3">
-                  <p className="text-sm font-semibold text-ink">{proposal.title}</p>
-                  <p className="mt-1 text-xs text-ink-secondary">
+                <li key={proposal.submissionId} className="border-2 border-line-strong bg-production-yellow/25 p-3 shadow-[3px_3px_0_#171714] odd:bg-production-sky/35">
+                  <p className="text-sm font-black leading-snug tracking-[-0.015em] text-ink">{proposal.title}</p>
+                  <p className="mt-1.5 text-xs font-semibold text-ink-secondary">
                     {proposal.primarySpeakerName}{proposal.category ? ` · ${proposal.category}` : ""}
                   </p>
                   <Button
@@ -400,7 +406,8 @@ export function AgendaBoard({
           )}
         </Card>
       </div>
-      <p className="text-xs text-ink-faint">
+      <p className="border-l-4 border-accent bg-surface px-4 py-2.5 text-xs font-semibold text-ink-secondary">
+        <span className="font-black uppercase tracking-[0.1em] text-ink">Stage direction:</span>{" "}
         Drag a talk between track or room lanes. For exact track, room, start, and duration changes, open the talk and use the labeled form controls.
       </p>
     </section>
