@@ -1,3 +1,4 @@
+import { Toast } from "radix-ui";
 import { useSyncExternalStore } from "react";
 import { IconButton } from "./Button";
 import { cx } from "./cx";
@@ -14,6 +15,7 @@ interface ToastItem {
   id: number;
   message: string;
   tone: ToastTone;
+  duration: number;
 }
 
 let nextId = 0;
@@ -33,9 +35,16 @@ function dismiss(id: number) {
 /** Publish a toast from anywhere — no provider or context required. */
 export function toast(message: string, options: ToastOptions = {}): number {
   const id = ++nextId;
-  snapshot = [...snapshot, { id, message, tone: options.tone ?? "neutral" }];
+  snapshot = [
+    ...snapshot,
+    {
+      id,
+      message,
+      tone: options.tone ?? "neutral",
+      duration: options.duration ?? 4_500,
+    },
+  ];
   emit();
-  globalThis.setTimeout(() => dismiss(id), options.duration ?? 4_500);
   return id;
 }
 
@@ -57,32 +66,38 @@ export function Toaster() {
   );
 
   return (
-    <div
-      aria-live="polite"
-      aria-relevant="additions removals"
-      className="pointer-events-none fixed inset-x-4 bottom-4 z-[60] flex flex-col items-end gap-2 sm:inset-x-auto sm:right-5 sm:w-96"
-    >
+    <Toast.Provider swipeDirection="right">
       {items.map((item) => (
-        <div
+        <Toast.Root
           key={item.id}
+          open
+          duration={item.duration}
           role={item.tone === "danger" ? "alert" : "status"}
+          onOpenChange={(nextOpen) => { if (!nextOpen) dismiss(item.id); }}
           className={cx(
-            "pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-control border px-4 py-3 shadow-pop",
+            "pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-control border px-4 py-3 shadow-pop motion-reduce:animate-none",
             TONES[item.tone],
           )}
         >
-          <p className="min-w-0 flex-1 pt-0.5 text-sm leading-snug">{item.message}</p>
-          <IconButton
-            aria-label="Dismiss notification"
-            size="sm"
-            variant="ghost"
-            onClick={() => dismiss(item.id)}
-            className="-mr-2 -mt-1 size-7 text-current"
-          >
-            <XIcon />
-          </IconButton>
-        </div>
+          <Toast.Title asChild>
+            <p className="min-w-0 flex-1 pt-0.5 text-sm font-normal leading-snug">{item.message}</p>
+          </Toast.Title>
+          <Toast.Close asChild>
+            <IconButton
+              aria-label="Dismiss notification"
+              size="sm"
+              variant="ghost"
+              className="-mr-2 -mt-1 size-7 text-current"
+            >
+              <XIcon />
+            </IconButton>
+          </Toast.Close>
+        </Toast.Root>
       ))}
-    </div>
+      <Toast.Viewport
+        aria-label="Notifications"
+        className="pointer-events-none fixed inset-x-4 bottom-4 z-[60] flex max-h-screen flex-col items-end gap-2 outline-none sm:inset-x-auto sm:right-5 sm:w-96"
+      />
+    </Toast.Provider>
   );
 }

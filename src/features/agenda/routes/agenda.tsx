@@ -38,11 +38,11 @@ interface EventIdentity {
 }
 
 const views = [
-  { id: "list", label: "List" },
-  { id: "day", label: "Day" },
-  { id: "week", label: "Week" },
-  { id: "track", label: "Track" },
-  { id: "room", label: "Room" },
+  { id: "list", label: "List", panelId: "agenda-view-list" },
+  { id: "day", label: "Day", panelId: "agenda-view-day" },
+  { id: "week", label: "Week", panelId: "agenda-view-week" },
+  { id: "track", label: "Track", panelId: "agenda-view-track" },
+  { id: "room", label: "Room", panelId: "agenda-view-room" },
 ];
 
 const idleIntent = (): RealtimeIntentState => ({
@@ -572,16 +572,23 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           )}
         </div>
       )}
-      <AgendaBoard
-        agenda={agenda}
-        view={view}
-        intent={intent}
-        selectedTalkId={selectedTalkId}
-        disabled={busy || refresh.status !== "idle" || intent.connection === "offline"}
-        onCreateTalk={(proposal) => void createTalk(proposal)}
-        onSelectTalk={selectTalk}
-        onMoveTalk={(talk, target) => void moveTalk(talk, target)}
-      />
+      <section
+        id={`agenda-view-${view}`}
+        role="tabpanel"
+        tabIndex={0}
+        aria-labelledby={`agenda-view-${view}-tab`}
+      >
+        <AgendaBoard
+          agenda={agenda}
+          view={view}
+          intent={intent}
+          selectedTalkId={selectedTalkId}
+          disabled={busy || refresh.status !== "idle" || intent.connection === "offline"}
+          onCreateTalk={(proposal) => void createTalk(proposal)}
+          onSelectTalk={selectTalk}
+          onMoveTalk={(talk, target) => void moveTalk(talk, target)}
+        />
+      </section>
 
       <Sheet
         open={selectedTalk !== null}

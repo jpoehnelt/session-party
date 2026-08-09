@@ -66,7 +66,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
             <NavLink
               className={({ isActive }) =>
                 `${mobile ? "flex min-h-11 items-center" : "block"} rounded-md px-3 py-2 text-sm font-medium ${
-                  isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"
+                  isActive ? "bg-accent text-on-accent" : "text-ink-secondary hover:bg-muted"
                 }`
               }
               end={!segment}
@@ -83,7 +83,13 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
   );
 }
 
-function Topbar({ onOpenNavigation }: { onOpenNavigation: () => void }) {
+function Topbar({
+  onOpenNavigation,
+  navigationOpen,
+}: {
+  onOpenNavigation: () => void;
+  navigationOpen: boolean;
+}) {
   const location = useLocation();
   const navigate = useNavigate();
   const [session, setSession] = useState<SessionState>({ status: "loading" });
@@ -119,11 +125,14 @@ function Topbar({ onOpenNavigation }: { onOpenNavigation: () => void }) {
         className="min-h-11 lg:hidden"
         variant="secondary"
         type="button"
+        aria-haspopup="dialog"
+        aria-expanded={navigationOpen}
+        aria-controls="mobile-navigation"
         onClick={onOpenNavigation}
       >
         Menu
       </Button>
-      <span className="text-sm text-muted-foreground">
+      <span className="text-sm text-ink-secondary">
         {session.status === "loading"
           ? "Checking session…"
           : session.status === "signed-in"
@@ -155,11 +164,17 @@ function Layout({ children }: { children: ReactNode }) {
       <AppShell
         sidebar={<Sidebar />}
         sidebarClassName="hidden lg:block"
-        topbar={<Topbar onOpenNavigation={() => setMobileNavigationOpen(true)} />}
+        topbar={(
+          <Topbar
+            onOpenNavigation={() => setMobileNavigationOpen(true)}
+            navigationOpen={mobileNavigationOpen}
+          />
+        )}
       >
         {children}
       </AppShell>
       <Sheet
+        id="mobile-navigation"
         open={mobileNavigationOpen}
         onClose={() => setMobileNavigationOpen(false)}
         title="Navigation"
