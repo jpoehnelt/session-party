@@ -311,7 +311,7 @@ describe("forms organizer behavior", () => {
                 conditions: [{
                   fieldId: form.fields[0]!.id,
                   op: "not_empty" as const,
-                }],
+                }] as const,
               },
             }
           : field),
@@ -360,7 +360,7 @@ describe("forms organizer behavior", () => {
             logic: {
               action: "show" as const,
               mode: "all" as const,
-              conditions: [{ fieldId: title.id, op: "not_empty" as const }],
+              conditions: [{ fieldId: title.id, op: "not_empty" as const }] as const,
             },
           };
         }
