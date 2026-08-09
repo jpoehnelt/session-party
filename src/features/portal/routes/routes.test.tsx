@@ -6,10 +6,12 @@ import type {
   PortalEvent,
   PortalResource,
   PortalSnapshot,
+  PortalTask,
   PortalTaskDefinition,
   PublicSpeakerGallery,
   SpeakerDirectory,
 } from "../schema";
+import type { PublicSubmissionForm } from "@/features/submit/schema";
 import {
   createResource,
   createTask,
@@ -18,9 +20,11 @@ import {
   getPublicSpeakerGallery,
   getSpeakerDirectory,
   getSpeakerPortal,
+  getSpeakerTaskForm,
   getTaskDefinitions,
   provisionSpeaker,
   setSpeakerTaskCompletion,
+  submitSpeakerTaskForm,
   updateResource,
   updateSpeakerProfile,
   updateTask,
@@ -39,6 +43,7 @@ import {
   path as portalPath,
   PORTAL_UPLOAD_MAX_BYTES,
   SpeakerPortalContent,
+  SpeakerTaskFormPanel,
 } from "./speaker-portal";
 
 const event: PortalEvent = {
@@ -110,6 +115,53 @@ const snapshot: PortalSnapshot = {
   readiness: { tasksTotal: 1, tasksDone: 0, outstandingTaskIds: [task.id], nextTaskId: task.id, state: "not_started" },
 };
 
+const formTask: PortalTask = {
+  ...task,
+  id: "task-travel-form",
+  name: "Travel details",
+  description: "Share your arrival and accessibility details.",
+  kind: "form",
+  formId: "form-travel",
+  completed: false,
+  completedAt: null,
+  completionData: null,
+  completionVersion: 0,
+  prerequisite: { satisfied: false, message: "Submit the linked form before completing this task." },
+};
+
+const linkedForm: PublicSubmissionForm = {
+  event: {
+    name: event.name,
+    slug: event.slug,
+    description: event.description,
+    timezone: event.timezone,
+    startsAt: event.startsAt,
+    endsAt: event.endsAt,
+    location: event.location,
+    accentColor: event.accentColor,
+  },
+  form: {
+    id: formTask.formId!,
+    versionId: "form-travel-v1",
+    versionNumber: 1,
+    name: "Speaker travel details",
+    description: "Help production plan your arrival.",
+    availability: "open",
+    opensAt: null,
+    closesAt: null,
+    fields: [{
+      id: "field-arrival",
+      order: 1,
+      type: "text",
+      label: "Arrival details",
+      helpText: null,
+      required: true,
+      options: [],
+      logic: null,
+    }],
+  },
+};
+
 const directory: SpeakerDirectory = {
   event,
   speakers: [{
@@ -148,6 +200,7 @@ function ok(payload: unknown, status = 200) {
 }
 
 function noop() {}
+async function succeeds() { return true; }
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -200,6 +253,47 @@ describe("portal API loading", () => {
     await expect(getPublicSpeakerGallery(event.slug)).resolves.toEqual(gallery);
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/public/events/${event.slug}/speakers`, expect.objectContaining({ method: "GET" }));
   });
+
+  it("loads linked fields publicly but submits answers through the speaker-session endpoint", async () => {
+    const created = {
+      submissionId: "submission-travel",
+      status: "submitted" as const,
+      submittedAt: Date.UTC(2026, 7, 9, 12),
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/v1/public/events/${event.slug}/forms/${formTask.formId}`) return ok(linkedForm);
+      if (url === `/api/v1/events/${event.id}/portal/forms/${formTask.formId}/submissions`) return ok(created, 201);
+      throw new Error(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getSpeakerTaskForm(event.slug, formTask.formId!)).resolves.toEqual(linkedForm);
+    await expect(submitSpeakerTaskForm({
+      eventId: event.id,
+      formId: formTask.formId!,
+      idempotencyKey: "task-form-route-submit",
+      answers: [{ fieldId: "field-arrival", value: "Tuesday afternoon" }],
+    })).resolves.toEqual(created);
+
+    expect(fetchMock.mock.calls[0]).toEqual([
+      `/api/v1/public/events/${event.slug}/forms/${formTask.formId}`,
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    ]);
+    const [request, init] = fetchMock.mock.calls[1]!;
+    expect(request).toBe(`/api/v1/events/${event.id}/portal/forms/${formTask.formId}/submissions`);
+    expect(init).toMatchObject({
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "task-form-route-submit",
+      },
+    });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      answers: [{ fieldId: "field-arrival", value: "Tuesday afternoon" }],
+    });
+  });
 });
 
 describe("speaker portal content", () => {
@@ -209,6 +303,7 @@ describe("speaker portal content", () => {
       onSaveProfile: noop,
       onToggleTask: noop,
       onUpload: noop,
+      onSubmitTaskForm: succeeds,
     }));
     expect(markup).toContain("The calm show call");
     expect(markup).toContain("River Okafor");
@@ -219,6 +314,46 @@ describe("speaker portal content", () => {
     expect(markup).toContain("sandbox=");
     expect(markup).toContain("Save profile");
     expect(markup).toContain("Up to 10 MiB with the current upload transport");
+  });
+
+  it("offers incomplete linked forms without bypassing their completion prerequisite", () => {
+    const formSnapshot: PortalSnapshot = {
+      ...snapshot,
+      tasks: [formTask],
+      readiness: {
+        tasksTotal: 1,
+        tasksDone: 0,
+        outstandingTaskIds: [formTask.id],
+        nextTaskId: formTask.id,
+        state: "not_started",
+      },
+    };
+    const markup = renderToStaticMarkup(createElement(SpeakerPortalContent, {
+      snapshot: formSnapshot,
+      onSaveProfile: noop,
+      onToggleTask: noop,
+      onUpload: noop,
+      onSubmitTaskForm: succeeds,
+    }));
+    expect(markup).toContain("Forms to complete");
+    expect(markup).toContain("Open Travel details");
+    expect(markup).toContain("Submit the linked form before completing this task.");
+    expect(markup).toMatch(/<input[^>]+disabled=""[^>]+type="checkbox"/);
+  });
+
+  it("renders the linked published form in the authenticated portal experience", () => {
+    const markup = renderToStaticMarkup(createElement(SpeakerTaskFormPanel, {
+      eventSlug: event.slug,
+      task: formTask,
+      busy: false,
+      initialForm: linkedForm,
+      onClose: noop,
+      onSubmit: succeeds,
+    }));
+    expect(markup).toContain("Linked speaker form");
+    expect(markup).toContain("Speaker travel details");
+    expect(markup).toContain("Arrival details");
+    expect(markup).toContain("Submit form");
   });
 
   it("allows only approved HTTPS resource embeds", () => {

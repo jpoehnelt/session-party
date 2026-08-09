@@ -1,6 +1,7 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import type { Principal } from "contracts/principal";
 import {
+  acceptanceEvents,
   auditLog,
   domainChanges,
   eventMembers,
@@ -11,6 +12,7 @@ import {
   idempotencyRecords,
   reviewAssignments,
   reviewRounds,
+  speakerProvisioning,
   speakers,
   submissionAnswers,
   submissionSpeakers,
@@ -24,9 +26,9 @@ import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { runRestOperation, type AppHono } from "@/server/adapt";
 import { AppLayer, CurrentUser } from "@/server/services";
-import { createPublicSubmissionOperation, operations } from "./operations";
-import type { CreatePublicSubmissionInput } from "./schema";
-import { createPublicSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
+import { createPublicSubmissionOperation, createTaskSubmissionOperation, operations } from "./operations";
+import type { CreatePublicSubmissionInput, CreateTaskSubmissionInput } from "./schema";
+import { createPublicSubmission, createTaskSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
 const EVENT_ID = "event-submit-tests";
@@ -145,6 +147,16 @@ const taskInput = (): CreatePublicSubmissionInput => ({
     fieldId: `${TASK_VERSION_ID}-${TASK_FIELD_ID}`,
     value: "Portal follow-up details",
   }],
+});
+
+const taskSpeakerInput = (
+  idempotencyKey = "submit-task-speaker-001",
+  value = "Portal follow-up details",
+): CreateTaskSubmissionInput => ({
+  eventId: EVENT_ID,
+  formId: TASK_FORM_ID,
+  idempotencyKey,
+  answers: [{ fieldId: `${TASK_VERSION_ID}-${TASK_FIELD_ID}`, value }],
 });
 
 const runPublic = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -376,6 +388,7 @@ beforeAll(async () => {
     db.insert(speakers).values({
       id: "speaker-seeded",
       eventId: EVENT_ID,
+      userId: owner.userId,
       displayName: "Seeded Speaker",
       createdAt: now,
       updatedAt: now,
@@ -387,6 +400,30 @@ beforeAll(async () => {
       speakerId: "speaker-seeded",
       isPrimary: true,
       createdAt: now,
+    }),
+    db.insert(acceptanceEvents).values({
+      id: "acceptance-submit-seeded",
+      eventId: EVENT_ID,
+      submissionId: "submission-seeded-accepted",
+      primarySubmissionSpeakerId: "submission-speaker-seeded",
+      primarySpeakerId: "speaker-seeded",
+      primaryAssociationIsPrimary: true,
+      type: "accepted",
+      submissionVersion: 1,
+      actorUserId: owner.userId,
+      occurredAt: new Date(NOW - 1_000),
+    }),
+    db.insert(speakerProvisioning).values({
+      id: "provisioning-submit-seeded",
+      eventId: EVENT_ID,
+      acceptanceEventId: "acceptance-submit-seeded",
+      submissionId: "submission-seeded-accepted",
+      primarySpeakerId: "speaker-seeded",
+      status: "provisioned",
+      availableAt: new Date(NOW - 1_000),
+      provisionedAt: new Date(NOW - 500),
+      createdAt: new Date(NOW - 1_000),
+      updatedAt: new Date(NOW - 500),
     }),
     db.insert(reviewRounds).values({
       id: "review-round-submit",
@@ -413,11 +450,13 @@ describe("submit operation descriptors", () => {
   it("owns only submit operations and the frozen routes", () => {
     expect(operations.map((operation) => operation.id)).toEqual([
       "submit.create",
+      "submit.createTask",
       "submit.getPublicForm",
       "submit.list",
     ]);
     expect(operations.map((operation) => "rest" in operation ? [operation.rest.method, operation.rest.path] : null)).toEqual([
       ["post", "/public/events/:eventSlug/forms/:formId/submissions"],
+      ["post", "/events/:eventId/portal/forms/:formId/submissions"],
       ["get", "/public/events/:eventSlug/forms/:formId"],
       ["get", "/events/:eventId/submissions"],
     ]);
@@ -697,6 +736,176 @@ describe("public submission creation", () => {
       .from(submissionAnswers)
       .where(eq(submissionAnswers.submissionId, valid.submissionId));
     expect(storedAnswers.some((answer) => answer.value === "2026-02-28")).toBe(true);
+  });
+});
+
+describe("provisioned speaker task-form submission", () => {
+  it("stores immutable answers against the exact existing speaker with actor evidence", async () => {
+    const db = drizzle(env.DB);
+    const speakerCountBefore = (await db.select({ id: speakers.id }).from(speakers)).length;
+    const output = await runAs(owner, createTaskSubmission(taskSpeakerInput()));
+    const [submission] = await db.select().from(submissions).where(eq(submissions.id, output.submissionId));
+    const [association] = await db
+      .select()
+      .from(submissionSpeakers)
+      .where(eq(submissionSpeakers.submissionId, output.submissionId));
+    const answers = await db
+      .select()
+      .from(submissionAnswers)
+      .where(eq(submissionAnswers.submissionId, output.submissionId));
+    const [change] = await db.select().from(domainChanges).where(eq(domainChanges.aggregateId, output.submissionId));
+    const [audit] = await db.select().from(auditLog).where(eq(auditLog.resourceId, output.submissionId));
+
+    expect(submission).toMatchObject({
+      eventId: EVENT_ID,
+      formId: TASK_FORM_ID,
+      formVersionId: TASK_VERSION_ID,
+      title: "Published portal follow-up",
+      category: null,
+      status: "submitted",
+    });
+    expect(association).toMatchObject({ speakerId: "speaker-seeded", isPrimary: true });
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toMatchObject({
+      formVersionId: TASK_VERSION_ID,
+      formVersionFieldId: `${TASK_VERSION_ID}-${TASK_FIELD_ID}`,
+      value: "Portal follow-up details",
+    });
+    expect((await db.select({ id: speakers.id }).from(speakers))).toHaveLength(speakerCountBefore);
+    expect(change).toMatchObject({
+      eventType: "submit.created",
+      actorUserId: owner.userId,
+      audiences: [{ kind: "admins" }, { kind: "speaker", speakerIds: ["speaker-seeded"] }],
+    });
+    expect(audit).toMatchObject({ action: "submit.createTask", actorUserId: owner.userId });
+  });
+
+  it("replays by speaker and rejects the same key with changed answers", async () => {
+    const input = taskSpeakerInput("submit-task-idempotent-001", "First answer");
+    const first = await runAs(owner, createTaskSubmission(input));
+    expect(await runAs(owner, createTaskSubmission(input))).toEqual(first);
+
+    const conflict = await runAs(
+      owner,
+      createTaskSubmission(taskSpeakerInput("submit-task-idempotent-001", "Changed answer")).pipe(Effect.either),
+    );
+    expect(conflict._tag).toBe("Left");
+    if (conflict._tag === "Left") expect(conflict.left).toMatchObject({ _tag: "Conflict" });
+
+    const db = drizzle(env.DB);
+    expect(await db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.operationId, "submit.createTask"),
+      eq(idempotencyRecords.principalId, `speaker:speaker-seeded:form:${TASK_FORM_ID}`),
+    ))).toHaveLength(2);
+    expect(await db.select().from(submissions).where(and(
+      eq(submissions.formId, TASK_FORM_ID),
+      eq(submissions.id, first.submissionId),
+    ))).toHaveLength(1);
+  });
+
+  it("requires the exact session-linked currently provisioned speaker", async () => {
+    const outsiderResult = await runAs(
+      outsider,
+      createTaskSubmission(taskSpeakerInput("submit-task-outsider-001")).pipe(Effect.either),
+    );
+    expect(outsiderResult._tag).toBe("Left");
+    if (outsiderResult._tag === "Left") expect(outsiderResult.left).toMatchObject({ _tag: "Forbidden" });
+
+    const db = drizzle(env.DB);
+    await db
+      .update(speakerProvisioning)
+      .set({ status: "revoked" })
+      .where(eq(speakerProvisioning.id, "provisioning-submit-seeded"));
+    try {
+      const revokedResult = await runAs(
+        owner,
+        createTaskSubmission(taskSpeakerInput("submit-task-revoked-001")).pipe(Effect.either),
+      );
+      expect(revokedResult._tag).toBe("Left");
+      if (revokedResult._tag === "Left") expect(revokedResult.left).toMatchObject({ _tag: "Forbidden" });
+    } finally {
+      await db
+        .update(speakerProvisioning)
+        .set({ status: "provisioned" })
+        .where(eq(speakerProvisioning.id, "provisioning-submit-seeded"));
+    }
+  });
+
+  it("re-checks current acceptance inside the commit and leaves no partial evidence", async () => {
+    const db = drizzle(env.DB);
+    const input = taskSpeakerInput("submit-task-provisioning-race-001", "Race answer");
+    const result = await runAs(owner, createTaskSubmission(input, {
+      beforeCommit: async () => {
+        await db.insert(acceptanceEvents).values({
+          id: "acceptance-submit-race-revoked",
+          eventId: EVENT_ID,
+          submissionId: "submission-seeded-accepted",
+          primarySubmissionSpeakerId: "submission-speaker-seeded",
+          primarySpeakerId: "speaker-seeded",
+          primaryAssociationIsPrimary: true,
+          type: "revoked",
+          submissionVersion: 2,
+          actorUserId: owner.userId,
+          occurredAt: new Date(NOW + 1_000),
+        });
+      },
+    }).pipe(Effect.either));
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") expect(result.left).toMatchObject({ _tag: "Forbidden" });
+    expect(await db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.operationId, "submit.createTask"),
+      eq(idempotencyRecords.principalId, `speaker:speaker-seeded:form:${TASK_FORM_ID}`),
+    ))).toHaveLength(2);
+    expect(await db.select().from(submissions).where(and(
+      eq(submissions.formId, TASK_FORM_ID),
+      eq(submissions.title, "Published portal follow-up"),
+    ))).toHaveLength(2);
+
+    await db
+      .delete(acceptanceEvents)
+      .where(eq(acceptanceEvents.id, "acceptance-submit-race-revoked"));
+    const recovered = await runAs(owner, createTaskSubmission(input));
+    expect(recovered.status).toBe("submitted");
+  });
+
+  it("rejects CFP forms and maps the authenticated REST operation", async () => {
+    const cfpResult = await runAs(owner, createTaskSubmission({
+      eventId: EVENT_ID,
+      formId: OPEN_FORM_ID,
+      idempotencyKey: "submit-task-cfp-001",
+      answers: submissionInput("submit-task-cfp-source-001").answers,
+    }).pipe(Effect.either));
+    expect(cfpResult._tag).toBe("Left");
+    if (cfpResult._tag === "Left") {
+      expect(cfpResult.left).toMatchObject({
+        _tag: "Validation",
+        message: "Speaker task submissions are only available for task forms.",
+      });
+    }
+
+    const app = new Hono<AppHono>();
+    const rest = createTaskSubmissionOperation.rest;
+    app.post(`/api/v1${rest.path}`, (context) =>
+      runRestOperation(context, owner, createTaskSubmissionOperation, rest.input));
+    const input = taskSpeakerInput("submit-task-http-001", "Submitted over REST");
+    const response = await app.request(
+      `/api/v1/events/${EVENT_ID}/portal/forms/${TASK_FORM_ID}/submissions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": input.idempotencyKey,
+        },
+        body: JSON.stringify({ answers: input.answers }),
+      },
+      env,
+    );
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      submissionId: expect.any(String),
+      status: "submitted",
+      submittedAt: expect.any(Number),
+    });
   });
 });
 

@@ -1,8 +1,10 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useParams } from "react-router";
+import type { AnswerValue } from "contracts/types";
 import {
   Alert,
   AlertDescription,
+  AlertTitle,
   Badge,
   Button,
   Card,
@@ -13,10 +15,16 @@ import {
   ProgressChecklist,
   ReadinessThread,
   Select,
+  Skeleton,
   Textarea,
   Toaster,
   toast,
 } from "@/ui";
+import {
+  type PublicSubmissionForm as PublicSubmissionFormValue,
+  type SubmissionAnswer,
+} from "@/features/submit/schema";
+import { PublicField, visibleFields } from "@/features/submit/routes/public-submit";
 import type {
   PortalResource,
   PortalSnapshot,
@@ -26,8 +34,10 @@ import type {
   UploadPortalAssetInput,
 } from "../schema";
 import {
+  getSpeakerTaskForm,
   getSpeakerPortal,
   setSpeakerTaskCompletion,
+  submitSpeakerTaskForm,
   updateSpeakerProfile,
   uploadSpeakerAsset,
 } from "./api";
@@ -117,6 +127,7 @@ export default function SpeakerPortalRoute() {
   if (state.status === "error") {
     return <SpeakerPortalFrame><RouteFailure message={state.message} onRetry={retry} /></SpeakerPortalFrame>;
   }
+  const snapshot = state.data;
 
   async function mutate(label: string, action: () => Promise<unknown>) {
     setMutation(label);
@@ -134,17 +145,45 @@ export default function SpeakerPortalRoute() {
     }
   }
 
+  async function submitTaskForm(
+    task: PortalTask,
+    answers: readonly SubmissionAnswer[],
+    idempotencyKey: string,
+  ): Promise<boolean> {
+    if (!task.formId) return false;
+    setMutation("Task form");
+    setMutationError(null);
+    try {
+      await submitSpeakerTaskForm({
+        eventId: snapshot.event.id,
+        formId: task.formId,
+        answers,
+        idempotencyKey,
+      });
+      toast(`${task.name} submitted`, { tone: "success" });
+      retry();
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `${task.name} could not be submitted`;
+      setMutationError(message);
+      toast(message, { tone: "danger" });
+      return false;
+    } finally {
+      setMutation(null);
+    }
+  }
+
   return (
     <SpeakerPortalFrame>
       <SpeakerPortalContent
-        snapshot={state.data}
+        snapshot={snapshot}
         busyAction={mutation}
         error={mutationError}
         onSaveProfile={(input) => mutate("Profile", () => updateSpeakerProfile(eventSlug, input))}
         onToggleTask={(task, completed) =>
           mutate("Task", () =>
             setSpeakerTaskCompletion(eventSlug, {
-              eventId: state.data.event.id,
+              eventId: snapshot.event.id,
               taskId: task.id,
               completed,
               idempotencyKey: crypto.randomUUID(),
@@ -152,6 +191,7 @@ export default function SpeakerPortalRoute() {
           )
         }
         onUpload={(input) => mutate("Upload", () => uploadSpeakerAsset(eventSlug, input))}
+        onSubmitTaskForm={submitTaskForm}
       />
       <Toaster />
     </SpeakerPortalFrame>
@@ -165,6 +205,11 @@ export interface SpeakerPortalContentProps {
   readonly onSaveProfile: (input: UpdateProfileInput) => void;
   readonly onToggleTask: (task: PortalTask, completed: boolean) => void;
   readonly onUpload: (input: UploadPortalAssetInput) => void;
+  readonly onSubmitTaskForm: (
+    task: PortalTask,
+    answers: readonly SubmissionAnswer[],
+    idempotencyKey: string,
+  ) => Promise<boolean>;
 }
 
 export function SpeakerPortalContent({
@@ -174,8 +219,12 @@ export function SpeakerPortalContent({
   onSaveProfile,
   onToggleTask,
   onUpload,
+  onSubmitTaskForm,
 }: SpeakerPortalContentProps) {
+  const [activeFormTaskId, setActiveFormTaskId] = useState<string | null>(null);
   const currentTask = snapshot.tasks.find((task) => !task.completed)?.id;
+  const incompleteFormTasks = snapshot.tasks.filter((task) => task.kind === "form" && !task.completed);
+  const activeFormTask = incompleteFormTasks.find((task) => task.id === activeFormTaskId);
   return (
     <div className="space-y-8">
       <PageHeader
@@ -205,6 +254,18 @@ export function SpeakerPortalContent({
                 <p className="mt-1 text-sm text-ink-secondary">{snapshot.submission.category}</p>
               )}
             </section>
+          )}
+
+          {activeFormTask?.formId && (
+            <SpeakerTaskFormPanel
+              key={activeFormTask.id}
+              eventSlug={snapshot.event.slug}
+              task={activeFormTask}
+              busy={busyAction !== null}
+              onClose={() => setActiveFormTaskId(null)}
+              onSubmit={(answers, idempotencyKey) =>
+                onSubmitTaskForm(activeFormTask, answers, idempotencyKey)}
+            />
           )}
 
           <ProfileEditor
@@ -246,6 +307,38 @@ export function SpeakerPortalContent({
                   }))}
                 />
               </Card>
+              {incompleteFormTasks.length > 0 && (
+                <Card title="Forms to complete">
+                  <ul className="space-y-4">
+                    {incompleteFormTasks.map((task) => {
+                      const open = task.id === activeFormTask?.id;
+                      return (
+                        <li key={task.id} className="space-y-2">
+                          <div>
+                            <p className="text-sm font-medium text-ink">{task.name}</p>
+                            {task.description && <p className="mt-1 text-sm text-ink-secondary">{task.description}</p>}
+                          </div>
+                          {task.formId ? (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              disabled={busyAction !== null}
+                              aria-expanded={open}
+                              aria-controls={`speaker-task-form-${task.id}`}
+                              onClick={() => setActiveFormTaskId(open ? null : task.id)}
+                            >
+                              {open ? "Close form" : `Open ${task.name}`}
+                            </Button>
+                          ) : (
+                            <p className="text-sm text-danger" role="status">The event team needs to relink this form.</p>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </Card>
+              )}
               <Card>
                 <ProgressChecklist
                   items={snapshot.tasks.map((task) => ({
@@ -266,6 +359,122 @@ export function SpeakerPortalContent({
         </aside>
       </div>
     </div>
+  );
+}
+
+export function SpeakerTaskFormPanel({
+  eventSlug,
+  task,
+  busy,
+  initialForm,
+  onClose,
+  onSubmit,
+}: {
+  readonly eventSlug: string;
+  readonly task: PortalTask;
+  readonly busy: boolean;
+  readonly initialForm?: PublicSubmissionFormValue | null;
+  readonly onClose: () => void;
+  readonly onSubmit: (
+    answers: readonly SubmissionAnswer[],
+    idempotencyKey: string,
+  ) => Promise<boolean>;
+}) {
+  const [form, setForm] = useState<PublicSubmissionFormValue | null | undefined>(initialForm);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Record<string, AnswerValue>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const idempotencyKey = useRef(crypto.randomUUID());
+
+  useEffect(() => {
+    if (initialForm !== undefined || !task.formId) return;
+    let active = true;
+    setForm(undefined);
+    setLoadError(null);
+    void getSpeakerTaskForm(eventSlug, task.formId).then(
+      (loaded) => {
+        if (active) setForm(loaded);
+      },
+      (error: unknown) => {
+        if (!active) return;
+        setLoadError(error instanceof Error ? error.message : "Could not load this form");
+        setForm(null);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [eventSlug, initialForm, task.formId]);
+
+  const shownFields = useMemo(() => form ? visibleFields(form.form.fields, answers) : [], [answers, form]);
+  const accepting = form?.form.availability === "open";
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!accepting || busy) return;
+    setSubmitError(null);
+    const activeIds = new Set(shownFields.map((field) => field.id));
+    const saved = await onSubmit(
+      Object.entries(answers)
+        .filter(([fieldId]) => activeIds.has(fieldId))
+        .map(([fieldId, value]) => ({ fieldId, value })),
+      idempotencyKey.current,
+    );
+    if (saved) onClose();
+    else setSubmitError("The form was not submitted. Review the message above and try again.");
+  };
+
+  return (
+    <section id={`speaker-task-form-${task.id}`} aria-labelledby={`speaker-task-form-title-${task.id}`}>
+      <Card title={task.name}>
+        <div className="space-y-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 id={`speaker-task-form-title-${task.id}`} className="font-semibold text-ink">Linked speaker form</h2>
+              {task.description && <p className="mt-1 text-sm text-ink-secondary">{task.description}</p>}
+            </div>
+            <Button type="button" variant="ghost" size="sm" onClick={onClose}>Close</Button>
+          </div>
+          {form === undefined ? (
+            <div className="space-y-3" aria-label="Loading linked form">
+              <Skeleton className="h-10" />
+              <Skeleton className="h-28" />
+            </div>
+          ) : form === null ? (
+            <EmptyState title="Linked form unavailable" description={loadError ?? "Ask the event team to check this task's form."} />
+          ) : (
+            <form className="space-y-5" onSubmit={(event) => void submit(event)}>
+              <div>
+                <p className="text-sm font-medium text-ink">{form.form.name}</p>
+                {form.form.description && <p className="mt-1 text-sm text-ink-secondary">{form.form.description}</p>}
+              </div>
+              {!accepting && (
+                <Alert tone="warning">
+                  <AlertTitle>{form.form.availability === "scheduled" ? "Form not open yet" : "Form closed"}</AlertTitle>
+                  <AlertDescription>The event team must open this form before you can complete the task.</AlertDescription>
+                </Alert>
+              )}
+              {shownFields.map((field) => (
+                <PublicField
+                  key={field.id}
+                  field={field}
+                  value={answers[field.id]}
+                  disabled={!accepting || busy}
+                  onChange={(value) => setAnswers((current) => ({ ...current, [field.id]: value }))}
+                />
+              ))}
+              {submitError && (
+                <Alert tone="danger">
+                  <AlertTitle>Form not submitted</AlertTitle>
+                  <AlertDescription>{submitError}</AlertDescription>
+                </Alert>
+              )}
+              {accepting && <Button type="submit" loading={busy}>Submit form</Button>}
+            </form>
+          )}
+        </div>
+      </Card>
+    </section>
   );
 }
 

@@ -157,17 +157,34 @@ beforeAll(async () => {
     createdAt,
     updatedAt: createdAt,
   });
-  await db.insert(forms).values({
-    id: "form_cfp", eventId: fixtureEventId, kind: "cfp", name: "Main CFP", status: "closed", createdAt, updatedAt: createdAt,
-  });
-  await db.insert(formVersions).values({
-    id: "form_version_01", eventId: fixtureEventId, formId: "form_cfp", versionNumber: 1,
-    name: "Main CFP", publishedAt: createdAt, createdAt,
-  });
-  await db.insert(formVersionFields).values({
-    id: "field_abstract", eventId: fixtureEventId, formVersionId: "form_version_01", order: 1,
-    type: "textarea", label: "Abstract", required: true, createdAt,
-  });
+  await db.insert(forms).values([
+    {
+      id: "form_cfp", eventId: fixtureEventId, kind: "cfp", name: "Main CFP", status: "closed", createdAt, updatedAt: createdAt,
+    },
+    {
+      id: "form_task", eventId: fixtureEventId, kind: "task", name: "Accepted speaker logistics", status: "open", createdAt, updatedAt: createdAt,
+    },
+  ]);
+  await db.insert(formVersions).values([
+    {
+      id: "form_version_01", eventId: fixtureEventId, formId: "form_cfp", versionNumber: 1,
+      name: "Main CFP", publishedAt: createdAt, createdAt,
+    },
+    {
+      id: "form_version_task", eventId: fixtureEventId, formId: "form_task", versionNumber: 1,
+      name: "Accepted speaker logistics", publishedAt: createdAt, createdAt,
+    },
+  ]);
+  await db.insert(formVersionFields).values([
+    {
+      id: "field_abstract", eventId: fixtureEventId, formVersionId: "form_version_01", order: 1,
+      type: "textarea", label: "Abstract", required: true, createdAt,
+    },
+    {
+      id: "field_task_notes", eventId: fixtureEventId, formVersionId: "form_version_task", order: 1,
+      type: "textarea", label: "Logistics notes", required: true, createdAt,
+    },
+  ]);
   await db.insert(speakers).values({
     id: fixturePrimarySpeakerId,
     eventId: fixtureEventId,
@@ -192,6 +209,18 @@ beforeAll(async () => {
     updatedAt: new Date(submission.submittedAt),
   }));
   for (const seed of submissionSeeds) await db.insert(submissions).values(seed);
+  await db.insert(submissions).values({
+    id: "submission_task_form",
+    eventId: fixtureEventId,
+    formId: "form_task",
+    formVersionId: "form_version_task",
+    title: "Accepted speaker logistics",
+    status: "submitted",
+    submittedAt: createdAt,
+    version: 1,
+    createdAt,
+    updatedAt: createdAt,
+  });
   const answerSeeds = submissionQueueFixture.map((submission, index) => ({
     id: `answer_${String(index + 1).padStart(2, "0")}`,
     eventId: fixtureEventId,
@@ -203,6 +232,16 @@ beforeAll(async () => {
     updatedAt: createdAt,
   }));
   for (const seed of answerSeeds) await db.insert(submissionAnswers).values(seed);
+  await db.insert(submissionAnswers).values({
+    id: "answer_task_form",
+    eventId: fixtureEventId,
+    submissionId: "submission_task_form",
+    formVersionId: "form_version_task",
+    formVersionFieldId: "field_task_notes",
+    value: "Task-form answer that must never enter CFP review.",
+    createdAt,
+    updatedAt: createdAt,
+  });
   const speakerLinkSeeds = submissionQueueFixture.map((submission, index) => ({
     id: `submission_speaker_${String(index + 1).padStart(2, "0")}`,
     eventId: fixtureEventId,
@@ -212,6 +251,14 @@ beforeAll(async () => {
     createdAt,
   }));
   for (const seed of speakerLinkSeeds) await db.insert(submissionSpeakers).values(seed);
+  await db.insert(submissionSpeakers).values({
+    id: "submission_speaker_task",
+    eventId: fixtureEventId,
+    submissionId: "submission_task_form",
+    speakerId: fixturePrimarySpeakerId,
+    isPrimary: true,
+    createdAt,
+  });
   await db.insert(reviewRounds).values([
     {
       id: completedRoundFixture.id,
@@ -272,6 +319,15 @@ beforeAll(async () => {
       roundId: completedRoundFixture.id,
       submissionId: "submission_22",
       reviewerUserId: fixtureOwnerId,
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: "assignment_task_legacy",
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_task_form",
+      reviewerUserId: fixtureReviewerId,
       createdAt,
       updatedAt: createdAt,
     },
@@ -386,6 +442,69 @@ describe("review and acceptance slice", () => {
     const forbidden = await runEitherAs(speakerOnly, getWorkbench({ eventId: fixtureEventId, page: 1, pageSize: 60 }));
     expect(forbidden._tag).toBe("Left");
     if (forbidden._tag === "Left") expect(forbidden.left._tag).toBe("Forbidden");
+  });
+
+  it("excludes task-form submissions and rejects every review mutation for them", async () => {
+    const organizerView = await runAs(owner, getWorkbench({
+      eventId: fixtureEventId,
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(organizerView.queue.map((submission) => submission.id)).not.toContain("submission_task_form");
+    expect(organizerView.pagination.total).toBe(60);
+    const selectedTaskForm = await runEitherAs(owner, getWorkbench({
+      eventId: fixtureEventId,
+      selectedSubmissionId: "submission_task_form",
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(selectedTaskForm._tag).toBe("Left");
+    if (selectedTaskForm._tag === "Left") expect(selectedTaskForm.left._tag).toBe("NotFound");
+
+    const assignment = await runEitherAs(owner, assignReviewer({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_task_form",
+      reviewerUserId: "user_reviewer_dev",
+      expectedVersion: 0,
+      requestId: "request_assign_task_form",
+    }));
+    const score = await runEitherAs(reviewer, saveScore({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_task_form",
+      expectedVersion: 0,
+      scores: [
+        { criterionKey: "relevance", score: 4 },
+        { criterionKey: "specificity", score: 4 },
+        { criterionKey: "delivery", score: 4 },
+      ],
+      requestId: "request_score_task_form",
+    }));
+    const aiSuggestion = await runEitherAs(owner, requestAiSuggestion({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_task_form",
+      requestId: "request_ai_task_form",
+    }));
+    const acceptance = await runEitherAs(owner, acceptSubmission({
+      eventId: fixtureEventId,
+      submissionId: "submission_task_form",
+      expectedVersion: 1,
+      idempotencyKey: "accept-task-form",
+      requestId: "request_accept_task_form",
+    }));
+
+    for (const result of [assignment, score, aiSuggestion, acceptance]) {
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") expect(result.left._tag).toBe("NotFound");
+    }
+    expect(await db.select().from(reviews).where(eq(reviews.submissionId, "submission_task_form"))).toEqual([]);
+    expect(await db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, "submission_task_form"))).toEqual([]);
+    const taskAssignments = await db.select().from(reviewAssignments).where(eq(reviewAssignments.submissionId, "submission_task_form"));
+    expect(taskAssignments.map((row) => row.id)).toEqual(["assignment_task_legacy"]);
+    const [taskSubmission] = await db.select().from(submissions).where(eq(submissions.id, "submission_task_form"));
+    expect(taskSubmission).toMatchObject({ status: "submitted", version: 1, acceptedAt: null });
   });
 
   it("assigns reviewers with version contention and records admin-only change evidence", async () => {

@@ -110,7 +110,7 @@ export function visibleFields(
   return visible;
 }
 
-function PublicField({
+export function PublicField({
   field,
   value,
   disabled,

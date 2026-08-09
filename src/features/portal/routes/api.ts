@@ -1,5 +1,10 @@
-import type { Schema } from "effect";
-import { apiFetch } from "@/client/api";
+import { Schema } from "effect";
+import { ApiError, apiFetch } from "@/client/api";
+import {
+  CreatePublicSubmissionOutput,
+  PublicSubmissionForm,
+  type CreateTaskSubmissionInput,
+} from "@/features/submit/schema";
 import {
   PortalDashboard,
   PortalSnapshot,
@@ -61,6 +66,34 @@ export const getPortalResources = (eventSlug: string) =>
 
 export const getPublicSpeakerGallery = (eventSlug: string) =>
   apiFetch(`${api}/public/events/${segment(eventSlug)}/speakers`, { schema: PublicSpeakerGallery });
+
+export const getSpeakerTaskForm = (eventSlug: string, formId: string) =>
+  apiFetch(`${api}/public/events/${segment(eventSlug)}/forms/${segment(formId)}`, {
+    schema: PublicSubmissionForm,
+  });
+
+export async function submitSpeakerTaskForm(input: CreateTaskSubmissionInput) {
+  const response = await fetch(
+    `${api}/events/${segment(input.eventId)}/portal/forms/${segment(input.formId)}/submissions`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": input.idempotencyKey,
+      },
+      body: JSON.stringify({ answers: input.answers }),
+    },
+  );
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
+      ? payload.message
+      : response.statusText || `Request failed with status ${response.status}`;
+    throw new ApiError(response.status, message);
+  }
+  return Schema.decodeUnknownSync(CreatePublicSubmissionOutput)(payload);
+}
 
 export function updateSpeakerProfile(eventSlug: string, input: UpdateProfileInput) {
   const body = requestBody(input, "eventId");

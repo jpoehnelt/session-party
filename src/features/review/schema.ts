@@ -60,6 +60,12 @@ export const ReviewerAssignment = Schema.Struct({
 });
 export type ReviewerAssignment = typeof ReviewerAssignment.Type;
 
+export const ReviewMember = Schema.Struct({
+  userId: EntityId,
+  name: NonEmptyText,
+});
+export type ReviewMember = typeof ReviewMember.Type;
+
 export const HumanReview = Schema.Struct({
   id: EntityId,
   reviewerUserId: EntityId,
@@ -170,6 +176,8 @@ export const ReviewWorkbench = Schema.Struct({
   eventName: NonEmptyText,
   timezone: NonEmptyText,
   viewerRole: Schema.Literal("owner", "admin", "reviewer"),
+  viewerUserId: EntityId,
+  reviewers: Schema.Array(ReviewMember),
   rounds: Schema.Array(ReviewRound),
   queue: Schema.Array(SubmissionReviewSummary),
   selected: Schema.NullOr(SubmissionReviewDetail),
