@@ -6,7 +6,7 @@ Open-source Sessionboard replacement for the “Kill My SaaS” competition.
 - Evaluation: nine required workflows, a deployed walkthrough, and real use by non-technical event-production staff
 - Product direction: Sessionboard capabilities with Luma’s calm, event-first public UX and a denser operations cockpit
 - Authority: **the user is final authority**; Main coordinates and recommends; Sol, Ops, advisors, and subagents are advisory or scoped executors
-- Current scope: **planning only** until the user explicitly authorizes application changes or external actions
+- Current scope: local implementation is authorized; external provisioning, migration, deployment, secrets, routes, DNS, and production promotion remain separately gated
 
 ## Outcome
 
@@ -25,17 +25,30 @@ The primary interface is the admin UI. MCP is a thin test/automation transport a
 | HTTP API | Hono at `/api/v1` |
 | MCP | Streamable HTTP at `/mcp`; stateless `createMcpHandler` is the planned Cloudflare integration |
 | Wire contracts | **camelCase** across REST, MCP, OpenAPI, and realtime (user-locked) |
+| Legacy credentials | Upgrade preserves users/events/members but revokes incompatible bearer tokens and API keys; migration never fabricates HMAC hashes, roles, scopes, creators, or expiry |
 | Realtime | PartyServer/Durable Objects; one coordination room per event with role-filtered delivery |
+| Realtime recovery | Party messages are post-commit hints/acks, not a replay source. Live delivery is audience-filtered; reconnect/gap recovery refetches canonical state through authorized REST. P0 advertises no cursor or Party replay API |
+| Realtime audiences | Rooms admit only event-member `owner`/`admin`/`reviewer` or exact event-scoped API-key scopes. Presence excludes API-key identities; `review`/`submissions` target organizer+reviewer readers, `dashboard` targets organizer readers, agenda targets agenda readers, and errors are direct replies |
+| Agenda realtime commands | Clean pre-`spine-v1` cutover: EventRoom derives event/principal; mutation messages carry request/idempotency/version and complete command state; success/error replies correlate by `replyTo` |
 | Working database | D1 + Drizzle |
 | Synchronized field authority | **Field-scoped:** every mapped field is declared Airtable-authoritative or D1-authoritative; there is no global winner |
 | D1 role | Fast transactional working copy, pending-edit overlay, outbox/event log, and read cache; D1 owns app workflow fields unless explicitly mapped |
+| Agenda publication | Latest immutable `domainChanges` snapshot (`agenda-publication` / event ID / `agenda/published`) is the P0 public projection; payload is validated and contains only confirmed scheduled talks plus visible speaker data |
 | Files | R2 |
 | Scheduling | Native Durable Object alarms through `Scheduler`; no `partywhen` dependency |
 | Email | Resend + generated `.ics` attachments |
+| Mail execution | Scheduler sends the immutable snapshot exactly—recipient, configured sender/reply-to, subject/body, ICS filename/content—and propagates the delivery idempotency key to Resend. Provider calls never reconstruct mutable template/event state |
+| Magic-link delivery | One D1 transaction commits user/token plus immutable mail snapshot/delivery; Scheduler performs the provider call after commit. A partial uniqueness invariant permits one unconsumed magic link per user; valid duplicate requests return the same generic response without extra mail, expired replacement invalidates/cancels the old delivery, raw tokens never enter logs/responses, and provider failures retain retry/dead-letter evidence |
+| Magic-link verification | Conditional session creation and one-time token consumption commit atomically; the session cookie is emitted only after commit, and concurrent replay creates no second session |
 | AI | Workers AI for optional, labeled, non-authoritative review assistance |
+| Form semantic roles | Draft and immutable form fields carry optional `semanticKey`: `submissionTitle`, `submissionAbstract`, `speakerName`, or `speakerEmail`; keys are unique per form/version, and primary CFP publication requires exactly one title and abstract key |
+| Legacy form semantics | Upgrade migration preserves legacy semantic keys as `null`; it never guesses from labels. Historical data stays readable, but explicit organizer assignment is required before republish/new submit-review activation |
+| AI review identity | AI suggestions are `reviews` rows with `ai=true` and no reviewer; only a separate human-authored row enters human evidence. Event-scoped MCP/API keys may request labeled AI suggestions with `reviews:write`, but never human-score, accept, or act on behalf of a reviewer |
+| Internal contention records | `forms.primaryClaim` and `forms.versionClaim` are approved internal-only `domainChanges` records committed atomically with idempotency/audit evidence; they are not semantic operation emits and are never broadcast |
 | Cloudflare account | `jpoehnelt` (`9cfedefc6185f3dad8ab91241b401135`) |
 | Airtable target | Base `apphFjgebe5pq9gez`; initial table `tblA29jIMOPD42pDj`; optional view `viwsCbJ68dks4nb0s` |
 | Airtable P0 topology | Three entity tables: `Speakers`, `Submissions`, `Talks`; all other entities deferred |
+| Wave 0B Airtable boundary | Durable schema, preserving migration, and transaction/claim-state proofs only; no live Airtable call. Production adapter/per-base lane and fake parity are later Main-owned integration gates |
 | Status cadence | Paseo heartbeat every 30 minutes through August 13 |
 
 ## Architecture
@@ -274,6 +287,8 @@ The generated registry must fail on duplicate operation IDs, REST method/path pa
 
 ## UX plan
 
+Visual direction and component styling follow [`docs/brand.md`](docs/brand.md). This plan remains authoritative for product behavior and architecture; the brand packet owns approved visual and verbal expression.
+
 ### Product character
 
 Borrow from Luma:
@@ -332,6 +347,8 @@ Realtime completion advances the thread only after server acknowledgement.
 ### UI freeze
 
 Freeze design tokens, primitive APIs, status vocabulary, AppShell behavior, accessibility behavior, and shared composites before slice fan-out. Required composites include:
+
+The approved component foundation is **shadcn/ui with Radix Primitives**, exposed exclusively through `@/ui`. Shared components remain source-owned and themeable; feature slices must not import Radix directly or create parallel primitives. The visual integration spike and migration rules are defined in `docs/brand.md`.
 
 - `EventIdentityHeader`
 - `StatusBadge`
@@ -544,6 +561,61 @@ flowchart TD
 
 Slices may scaffold against frozen fixtures/contracts before their producer is implemented, but activation and integration wait for the named dependency artifact and contract tests.
 
+### Active coordination ownership
+
+- One isolated, integrator-controlled `BaselineGreen` writer owns the exact green shared baseline.
+- Shared contracts, migrations, `src/server`, scripts, root configuration, generated registries, and the shared Git index are single-writer resources. `BaselineGreen` is the only writer for them; Main alone reviews and integrates its commit. No separate root/server writer lane may run.
+- `CiContract`, `MigrationParity`, and `LocalHarness` are read-only design/diagnosis lanes. They return one consolidated patch contract to Main/`BaselineGreen`; they never edit, stage, commit, or apply their proposals.
+- Concurrent slice writers are allowed only in literal, non-overlapping feature directories: Events in `src/features/events/**` plus fixture-backed Big 3 writers in `src/features/forms/**`, `src/features/review/**`, and `src/features/agenda/**`.
+- Big 3 contract packs forbid router/config/generated registry/`src/ui`/shared-contract edits, consume frozen fixtures/interfaces, and run focused slice checks only. Activation and dependency-order integration wait for the green `BaselineGreen` SHA and named producer artifacts.
+- Preview deployment, live canaries, observability expansion, rollback automation, and production promotion are separate exact-SHA gates requiring explicit external authorization.
+
+### Dependency-ordered integration queue
+
+Branch completion, commit review, integration, and activation are separate states. Main may review a fixture-backed slice as soon as its handoff arrives, but does not integrate or activate it before every producer artifact below is green.
+
+| Order | Candidate | Entry evidence | Independent acceptance | Integration/activation gate |
+|---:|---|---|---|---|
+| 0 | `BaselineGreen` + Events repair deltas | one exact SHA; owned-file inventory; registry/types/Workers/build/migration/local-smoke results | auth/tenant, schema/migration, and transport/UI reviewers approve the same SHA | all `spine-v1` checks green; no unresolved P0/P1; clean tracked checkout |
+| 1 | `forms` | one feature-local SHA; focused forms test; immutable publish/routing artifact named | forms contract/UX reviewer approves | accepted `BaselineGreen` SHA |
+| 2 | `submit` producer | public mobile CFP render/create artifact; closed-state and idempotency proof | submission security/contract reviewer approves | integrated forms operation artifact |
+| 3 | `review` + acceptance | one feature-local SHA; focused review test; accepted/provisioned-speaker artifact named | review/acceptance contract/UX reviewer approves | integrated submit artifact |
+| 4 | `agenda` | one feature-local SHA; focused agenda test; scheduled-talk/conflict artifact named | agenda contract/UX/accessibility reviewer approves | integrated acceptance artifact |
+
+The review route is always `writer → Main intake → read-only commit reviewer → original writer repair, if required → Main integration`. Main intake verifies the base SHA, exact commit SHA, owned-file boundary, and focused-check result before assigning review. A handoff must contain: base SHA; commit SHA; exact files; commands and observed results; remaining failures with owner; cross-lane contract decisions; produced artifact names; activation dependencies; and a single integration recommendation. Reviewers return `PASS` or ranked P0/P1/P2 findings with exact file/line evidence. Main integrates one queue candidate at a time, regenerates shared artifacts centrally, and runs one full train after the coherent tranche—not per branch.
+
+### Candidate acceptance matrix
+
+| Candidate | Observable behavior required before acceptance | Focused proof | Cross-lane decision |
+|---|---|---|---|
+| `BaselineGreen` | current schema migrates from blank and legacy D1; auth is tenant-safe; REST/MCP/Party errors and audiences agree; local reset/smoke is deterministic | registry freshness, strict types, Workers suite, build, fresh/upgrade migration proof, local API/MCP/DO smoke | this SHA becomes the only producer base for feature activation |
+| `forms` | organizer builds conditional fields and track routing; publish produces an immutable version and a readable routing summary | focused forms service/operation/UI test | publishes the forms operation artifact; it does not substitute for the public `submit` producer |
+| `submit` | public user renders the published mobile form, creates one routed submission, cannot submit when closed, and receives idempotent replay | focused public-CFP contract/security test and route smoke | produces the submission artifact consumed by review |
+| `review` + acceptance | assigned reviewer records bounded rubric scores by round; acceptance is auditable and yields one provisionable primary-speaker contract | focused review/acceptance service/operation/UI test | produces the acceptance artifact consumed by portal and agenda |
+| `agenda` | operator assigns accepted talks by room/time, sees speaker/room conflicts, and can complete the workflow without pointer-only drag | focused agenda service/operation/UI/accessibility test | produces the scheduled-talk artifact consumed by ICS comms and public schedule |
+
+#### Current candidate ledger — 2026-08-08
+
+| Candidate | Exact head | Focused proof | Independent review | Integration state |
+|---|---|---|---|---|
+| `BaselineGreen` | pending owner handoff | exact registry/types/Workers/build/migration/local-smoke train pending final security rerun | exact-SHA auth, migration, and transport review not started | order 0; blocks every activation |
+| `forms` | `20c131366e4ea6df30280509bb870bad9b1cea07` | forms: 9/9 green | contract PASS; UX PASS | accepted fixture-backed candidate; rebase on order 0, adopt immutable `semanticKey`, then integrate before `submit` |
+| `review` + acceptance | `e1bfbf46d6db3d82c0ee48cb9aeb6590c45e3dde` | review: 12/12 green | contract PASS; UX PASS | accepted fixture-backed candidate; rebase on order 0, replace label lookup with immutable abstract `semanticKey`, then integrate after the `submit` artifact |
+| `agenda` | `c27421667aae35ece5615ffd3b9961f0f6dfc989` | 3/10 pass; seven setup failures are the order-0 migration mismatch | contract PASS; final UX PASS | accepted fixture-backed candidate; integrate only after acceptance/provisioning artifact and order-0 green test rerun |
+
+#### Post-`BaselineGreen` activation procedure
+
+| Step | Owner and clean cutover | Required proof before the queue advances |
+|---:|---|---|
+| 0 | Main integrates the reviewed exact `BaselineGreen` SHA into the clean coordinator checkout; generated files come only from `pnpm gen` | exact-SHA registry, types, Workers, build, blank/upgrade migration, and local smoke gates stay green after integration |
+| 1 | Original `forms` owner rebases `20c1313`; removes all compatibility DDL; persists and copies `semanticKey`; primary CFP publication requires exactly one `submissionTitle` and one `submissionAbstract` | focused forms test runs against authoritative migrations with no fixture schema patch; immutable version proves both semantic keys |
+| 2 | `submit` owner consumes the published form version—not draft fields—and implements the public mobile render/create artifact | closed/scheduled availability, recursive conditional-answer validation, routing, event tenancy, primary-speaker linkage, and concurrent idempotent replay are green |
+| 3 | Original `review` owner rebases `e1bfbf4`; replaces label lookup with immutable `semanticKey === "submissionAbstract"` and consumes the real submit artifact | focused review test proves round/reviewer/API-key boundaries plus one atomic, idempotent acceptance/provisioning result |
+| 4 | Original `agenda` owner rebases `c274216`; replaces acceptance fixtures with the real acceptance/provisioning artifact and enables only descriptors supported by the reviewed Party transport | focused agenda test is fully green against authoritative migrations; published projection contains only confirmed talks and visible speakers |
+
+No compatibility table, label fallback, alias, or dual transport survives activation. Slice owners commit only their feature directories; Main regenerates registries and performs the one full integration train after the coherent dependency tranche.
+
+
 ### Wave 1A — Producers and independent foundations
 
 Start after `spine-v1`:
@@ -721,16 +793,13 @@ Logical topology, field authority, and connector metadata are resolved. Physical
 
 ## Current repository state
 
-Wave 0A is complete and pushed to `origin/main` through `f1a1467`. The runtime prototype and compatibility inventories are separately reviewable through the non-destructive repair sequence recorded above.
+The shared checkout is based on `2ab0c11`; `f1a1467` remains the last recorded pushed Phase-0 boundary. Three intentional local coordination commits follow the implementation base: `5b4b749` mirrors `cloudflare-api`, `airtable`, and `helens-foundry` across both MCP config files; `adcaa76` records implementation ownership gates; and this commit records the dependency queue, handoff route, and candidate acceptance matrix.
 
-Verification at the repaired combined head:
+The tracked checkout is clean. Five local tool directories remain untracked and untouched: `.claude/`, `.cursor/`, `.devin/`, `.factory/`, and `.smolforge/`.
 
-- `pnpm check` passes, including registry freshness
-- 3/3 Workers tests pass locally without a Cloudflare binding proxy
-- `pnpm build` passes
-- third-party MCP/cron packages emit missing-source sourcemap notices
+The exact integration gate is still `BaselineGreen`. Its queue includes the reviewed Events commits `0e9d63e` then `a505992`. Fixture-backed forms, review/acceptance, and agenda branches may complete and enter read-only commit review independently, but they remain holding candidates until the queue gates above are satisfied.
 
-No Cloudflare/Airtable resource write, deployment, migration, secret injection, route, or DNS action occurred. No `spine-v1` tag exists. Wave 0B is unblocked by history and remains gated by Airtable mapping/metadata approval. The working tree still contains the uncommitted `PLAN.md` update and untracked local tool configuration; those are not part of the Wave 0A commits.
+No Cloudflare/Airtable resource write, deployment, migration, secret injection, route, DNS, or production action occurred. No `spine-v1` tag exists.
 
 ## Reporting
 
@@ -744,6 +813,6 @@ Heartbeat `11747f36` sends a status report every 30 minutes through August 13. E
 - infrastructure authorization state
 - next 30-minute critical path
 
-## Immediate next action after planning approval
+## Immediate integration path
 
-Authorize implementation explicitly. Main then performs Wave 0A as one compatibility tranche before any contract or feature work.
+Accept one exact green `BaselineGreen` SHA, complete its independent auth/migration/transport reviews, and integrate it. Then process the holding queue in dependency order: forms → submit producer → review/acceptance → agenda. Keep fixture-backed branch work parallel; keep shared integration serial and evidence-gated.

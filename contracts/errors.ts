@@ -5,7 +5,15 @@ export class Unauthenticated extends Data.TaggedError("Unauthenticated")<{ reaso
 export class Forbidden extends Data.TaggedError("Forbidden")<{ reason?: string }> {}
 export class Validation extends Data.TaggedError("Validation")<{ message: string }> {}
 export class Conflict extends Data.TaggedError("Conflict")<{ message: string }> {}
-export class External extends Data.TaggedError("External")<{ service: string; detail?: string }> {}
+export class External extends Data.TaggedError("External")<{
+  service: string;
+  detail?: string;
+  operation?: string;
+  migration?: {
+    readonly version: string;
+    readonly entity?: string;
+  };
+}> {}
 
 export type AppError = NotFound | Unauthenticated | Forbidden | Validation | Conflict | External;
 export type AppErrorStatus = 400 | 401 | 403 | 404 | 409 | 502;
