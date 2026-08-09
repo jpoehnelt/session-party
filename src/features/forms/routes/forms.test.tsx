@@ -4,12 +4,16 @@ import { renderToStaticMarkup } from "react-dom/server.edge";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/client/api";
 import FormsPage, {
+  createFormDraft,
   fetchEventIdentity,
   fetchFormDetail,
   fetchFormSummaries,
   FormsWorkspace,
   path,
+  publishFormDraft,
+  setFormLifecycle,
   type EventIdentity,
+  updateFormDraft,
 } from "./forms";
 import type { FormDetail, FormSummary } from "../schema";
 
@@ -179,7 +183,7 @@ describe("forms organizer route", () => {
     expect(recoverable).toContain("Try again");
   });
 
-  it("renders authoritative loader data with no fixture selector and a disabled builder", () => {
+  it("renders authoritative loader data with an enabled organizer builder", () => {
     const markup = renderToStaticMarkup(
       createElement(FormsWorkspace, {
         event,
@@ -195,21 +199,143 @@ describe("forms organizer route", () => {
     expect(markup).toContain("Labels are never used as a fallback.");
     expect(markup).not.toContain("Deterministic view");
     expect(markup).not.toContain("formsFixtures");
-    expect(markup).toContain("read-only");
-    expect(markup).toMatch(/<button[^>]*disabled/);
+    expect(markup).not.toContain("read-only");
+    expect(markup).toContain("Save draft");
+    expect(markup).toContain("Publish form");
+    expect(markup).toContain("Close form");
   });
 
-  it("renders an explicit empty state when the event has no forms yet", () => {
+  it("renders a zero-form create path for the primary CFP", () => {
     const markup = renderToStaticMarkup(
       createElement(FormsWorkspace, { event, initialSummaries: [], initialSelectedId: null, initialSelectedForm: null }),
     );
     expect(markup).toContain("No forms yet");
-    expect(markup).not.toContain("Create primary CFP");
+    expect(markup).toContain("Create primary CFP");
+    expect(markup).toContain("start collecting routed proposals");
+    expect(markup).not.toContain("read-only");
   });
 
   it("renders an explicit error state distinct from empty when the forms list fails to load", () => {
     const markup = renderToStaticMarkup(createElement(FormsWorkspace, { event, initialSummaries: null }));
     expect(markup).toContain("Forms could not be loaded");
     expect(markup).toContain("Retry");
+  });
+});
+
+describe("forms organizer mutations", () => {
+  it("sends the registered create, update, publish, and lifecycle requests with command metadata", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/forms") && init?.method === "POST") {
+        return new Response(JSON.stringify({ ...formDetail, status: "draft", version: 1 }), { status: 201 });
+      }
+      if (url === `/api/v1/events/${event.id}/forms/${formDetail.id}` && init?.method === "PUT") {
+        return new Response(JSON.stringify({ ...formDetail, version: 4 }), { status: 200 });
+      }
+      if (url.endsWith("/publish")) {
+        return new Response(JSON.stringify({ ...formDetail, version: 5 }), { status: 200 });
+      }
+      if (url.endsWith("/status")) {
+        return new Response(JSON.stringify({ ...formDetail, status: "closed", version: 6 }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createFormDraft(event.id, "primary-cfp", "forms-create-test-001");
+    await updateFormDraft(event.id, formDetail, "forms-update-test-001");
+    await publishFormDraft(event.id, formDetail.id, 4, "forms-publish-test-001");
+    await setFormLifecycle(event.id, formDetail.id, 5, "closed", "forms-close-test-001");
+
+    const create = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(fetchMock.mock.calls[0]![0]).toBe(`/api/v1/events/${event.id}/forms`);
+    expect(create).toMatchObject({
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "forms-create-test-001",
+      },
+    });
+    const createBody = JSON.parse(String(create.body));
+    expect(createBody).toMatchObject({
+      purpose: "primary-cfp",
+      name: "Call for proposals",
+      opensAt: null,
+      closesAt: null,
+    });
+    expect(createBody.fields).toHaveLength(5);
+    expect(createBody.fields.map((field: { semanticKey: string | null }) => field.semanticKey)).toEqual([
+      "submissionTitle",
+      "submissionAbstract",
+      "speakerName",
+      "speakerEmail",
+      null,
+    ]);
+    expect(createBody.fields[4]).toMatchObject({
+      type: "radio",
+      options: ["General"],
+      routing: { General: "general" },
+    });
+
+    const update = fetchMock.mock.calls[1]![1] as RequestInit;
+    expect(fetchMock.mock.calls[1]![0]).toBe(`/api/v1/events/${event.id}/forms/${formDetail.id}`);
+    expect(update).toMatchObject({
+      method: "PUT",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "forms-update-test-001",
+        "If-Match": "3",
+      },
+    });
+    const updateBody = JSON.parse(String(update.body));
+    expect(updateBody.fields[0]).toMatchObject({ id: "field_track", label: "Best-fit track" });
+    expect(updateBody.fields[0]).not.toHaveProperty("order");
+    expect(updateBody.fields[0]).not.toHaveProperty("version");
+
+    const publish = fetchMock.mock.calls[2]![1] as RequestInit;
+    expect(fetchMock.mock.calls[2]![0]).toBe(
+      `/api/v1/events/${event.id}/forms/${formDetail.id}/publish`,
+    );
+    expect(publish).toMatchObject({
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Idempotency-Key": "forms-publish-test-001",
+        "If-Match": "4",
+      },
+    });
+    expect(publish).not.toHaveProperty("body");
+
+    const status = fetchMock.mock.calls[3]![1] as RequestInit;
+    expect(fetchMock.mock.calls[3]![0]).toBe(
+      `/api/v1/events/${event.id}/forms/${formDetail.id}/status`,
+    );
+    expect(status).toMatchObject({
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "forms-close-test-001",
+        "If-Match": "5",
+      },
+    });
+    expect(JSON.parse(String(status.body))).toEqual({ status: "closed" });
+  });
+
+  it("surfaces a failed mutation as an ApiError with the server message", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ message: "Expected form version 3, found 4" }),
+      { status: 409 },
+    )));
+
+    await expect(updateFormDraft(event.id, formDetail, "forms-conflict-test-001")).rejects.toEqual(
+      expect.objectContaining({
+        name: "ApiError",
+        status: 409,
+        message: "Expected form version 3, found 4",
+      }),
+    );
   });
 });

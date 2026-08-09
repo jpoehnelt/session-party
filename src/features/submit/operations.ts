@@ -1,14 +1,15 @@
 import type { AnyOperationDef } from "contracts/operation";
-import { eventAuthorization, publicAuthorization } from "contracts/principal";
+import { browserSessionAuthorization, eventAuthorization, publicAuthorization } from "contracts/principal";
 import {
   CreatePublicSubmissionInput,
   CreatePublicSubmissionOutput,
+  CreateTaskSubmissionInput,
   GetPublicSubmissionFormInput,
   ListSubmissionsInput,
   PublicSubmissionForm,
   SubmissionPage,
 } from "./schema";
-import { createPublicSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
+import { createPublicSubmission, createTaskSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
 
 const organizerReadAuthorization = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
@@ -31,6 +32,29 @@ export const createPublicSubmissionOperation = {
       body: ["answers"],
     },
     summary: "Create a public submission from an immutable published form",
+    successStatus: 201,
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["submit.created"],
+} satisfies AnyOperationDef;
+
+export const createTaskSubmissionOperation = {
+  id: "submit.createTask",
+  kind: "command",
+  input: CreateTaskSubmissionInput,
+  output: CreatePublicSubmissionOutput,
+  authorize: browserSessionAuthorization,
+  invoke: createTaskSubmission,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/portal/forms/:formId/submissions",
+    input: {
+      path: ["eventId", "formId"],
+      headers: { idempotencyKey: "Idempotency-Key" },
+      body: ["answers"],
+    },
+    summary: "Submit an immutable task form as the exact provisioned speaker",
     successStatus: 201,
   },
   idempotency: "required",
@@ -88,6 +112,7 @@ export const listSubmissionsOperation = {
 /** Operation IDs are kept in bytewise ascending order for deterministic registry generation. */
 export const operations = [
   createPublicSubmissionOperation,
+  createTaskSubmissionOperation,
   getPublicSubmissionFormOperation,
   listSubmissionsOperation,
 ] as const satisfies readonly AnyOperationDef[];

@@ -18,6 +18,8 @@ const workbench: ReviewWorkbench = {
   eventName: "Summit 2026",
   timezone: "America/Los_Angeles",
   viewerRole: "admin",
+  viewerUserId: "user_admin",
+  reviewers: [{ userId: "user_reviewer", name: "Grace Reviewer" }],
   rounds: [{
     id: "round_active",
     name: "Main review",
@@ -160,6 +162,40 @@ describe("review workbench route", () => {
     expect(markup).toContain("Returned by the review API.");
     expect(markup).not.toContain("Fixture snapshot");
     expect(markup).not.toContain("reviewWorkbenchFixture");
+    expect(markup).toContain("Assign reviewer");
+    expect(markup).toContain("Request AI suggestion");
+    expect(markup).toContain("Accept &amp; provision primary speaker");
+    expect(markup).not.toContain("Save my review");
+  });
+
+  it("renders human scoring only for the assigned signed-in reviewer", () => {
+    const reviewerWorkbench: ReviewWorkbench = {
+      ...workbench,
+      viewerRole: "reviewer",
+      viewerUserId: "user_reviewer",
+      reviewers: [],
+      selected: workbench.selected && {
+        ...workbench.selected,
+        reviewState: "assigned",
+        assignmentCount: 1,
+        assignments: [{
+          id: "assignment_reviewer",
+          reviewerUserId: "user_reviewer",
+          reviewerName: "Grace Reviewer",
+          version: 1,
+        }],
+      },
+    };
+
+    const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
+      workbench: reviewerWorkbench,
+      onSelectSubmission: () => undefined,
+    }));
+
+    expect(markup).toContain("Rubric scorecard");
+    expect(markup).toContain("Save my review");
+    expect(markup).toContain("Request AI suggestion");
+    expect(markup).not.toContain("Assign reviewer");
     expect(markup).not.toContain("Accept &amp; provision primary speaker");
   });
 

@@ -251,6 +251,11 @@ export default function ReviewWorkbenchRoute() {
     ));
   }, [eventSlug]);
 
+  const refreshSelectedDetail = useCallback(async (submissionId: string) => {
+    const loaded = await loadReviewWorkbench(eventSlug, submissionId);
+    setResult(loaded);
+  }, [eventSlug]);
+
   const retry = () => {
     if (result && detailRequest?.eventSlug === eventSlug) {
       setDetailRequest((current) => current && { ...current, version: current.version + 1 });
@@ -276,6 +281,7 @@ export default function ReviewWorkbenchRoute() {
       workbench={result.workbench}
       isDetailLoading={isDetailLoading}
       onSelectSubmission={requestDetail}
+      onMutationCommitted={() => refreshSelectedDetail(result.workbench.selected?.id ?? "")}
     />
   );
 }
@@ -284,10 +290,12 @@ export function ReviewWorkbenchContent({
   workbench,
   isDetailLoading = false,
   onSelectSubmission,
+  onMutationCommitted = async () => undefined,
 }: {
   readonly workbench: ReviewWorkbench;
   readonly isDetailLoading?: boolean;
   readonly onSelectSubmission: (submissionId: string) => void;
+  readonly onMutationCommitted?: () => Promise<void>;
 }) {
   const [focusedId, setFocusedId] = useState(workbench.selected?.id ?? workbench.queue[0]?.id ?? "");
   const [query, setQuery] = useState("");
@@ -457,7 +465,7 @@ export function ReviewWorkbenchContent({
         </Card>
 
         <section ref={detailRef} tabIndex={-1} aria-labelledby={selected ? `proposal-heading-${selected.id}` : undefined} aria-label={selected ? undefined : "Proposal detail"} className="min-w-0 scroll-mt-4 outline-none focus-visible:ring-2 focus-visible:ring-accent">
-          {selected ? <SubmissionReviewPane submission={selected} viewerRole={workbench.viewerRole} timezone={workbench.timezone} /> : <Card><EmptyState title={queue.length === 0 ? "No proposal detail in this round" : "Loading selected proposal"} description={queue.length === 0 ? "When a proposal enters this round, its abstract, rubric, assignments, and evidence will appear here." : "The authoritative proposal detail is loading."} /></Card>}
+          {selected ? <SubmissionReviewPane eventId={workbench.eventId} submission={selected} viewerRole={workbench.viewerRole} viewerUserId={workbench.viewerUserId} reviewers={workbench.reviewers} timezone={workbench.timezone} onMutationCommitted={onMutationCommitted} /> : <Card><EmptyState title={queue.length === 0 ? "No proposal detail in this round" : "Loading selected proposal"} description={queue.length === 0 ? "When a proposal enters this round, its abstract, rubric, assignments, and evidence will appear here." : "The authoritative proposal detail is loading."} /></Card>}
         </section>
       </div>
     </main>

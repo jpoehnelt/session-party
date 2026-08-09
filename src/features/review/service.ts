@@ -5,6 +5,7 @@ import {
   domainChanges,
   eventMembers,
   events,
+  forms,
   formVersionFields,
   idempotencyRecords,
   reviewAssignments,
@@ -261,6 +262,17 @@ export const getWorkbench = (
     );
     if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
 
+    const reviewerRows = viewer.role === "reviewer"
+      ? []
+      : yield* database(() =>
+          db
+            .select({ userId: eventMembers.userId, name: users.name })
+            .from(eventMembers)
+            .innerJoin(users, eq(users.id, eventMembers.userId))
+            .where(and(eq(eventMembers.eventId, input.eventId), eq(eventMembers.role, "reviewer")))
+            .orderBy(asc(users.name), asc(eventMembers.userId)),
+        );
+
     const roundRows = yield* database(() =>
       db.select().from(reviewRounds).where(eq(reviewRounds.eventId, input.eventId)).orderBy(asc(reviewRounds.order)),
     );
@@ -311,7 +323,22 @@ export const getWorkbench = (
     );
 
     let submissionRows = yield* database(() =>
-      db.select().from(submissions).where(eq(submissions.eventId, input.eventId)).orderBy(desc(submissions.submittedAt)),
+      db
+        .select({
+          id: submissions.id,
+          title: submissions.title,
+          category: submissions.category,
+          status: submissions.status,
+          submittedAt: submissions.submittedAt,
+          version: submissions.version,
+        })
+        .from(submissions)
+        .innerJoin(
+          forms,
+          and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+        )
+        .where(and(eq(submissions.eventId, input.eventId), eq(forms.kind, "cfp")))
+        .orderBy(desc(submissions.submittedAt)),
     );
     if (viewer.role === "reviewer") {
       submissionRows = submissionRows.filter((submission) => reviewerSubmissionIds.has(submission.id));
@@ -454,6 +481,11 @@ export const getWorkbench = (
       eventName: event.name,
       timezone: event.timezone,
       viewerRole: viewer.role,
+      viewerUserId: viewer.userId,
+      reviewers: reviewerRows.map((reviewer) => ({
+        userId: reviewer.userId,
+        name: reviewer.name ?? "Reviewer",
+      })),
       rounds,
       queue,
       selected,
@@ -479,7 +511,23 @@ export const assignReviewer = (
       return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot receive new assignments" }));
     }
     const [submission, reviewer, existing] = yield* Effect.all([
-      database(() => db.select({ id: submissions.id }).from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1)),
+      database(() =>
+        db
+          .select({ id: submissions.id })
+          .from(submissions)
+          .innerJoin(
+            forms,
+            and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+          )
+          .where(
+            and(
+              eq(submissions.eventId, input.eventId),
+              eq(submissions.id, input.submissionId),
+              eq(forms.kind, "cfp"),
+            ),
+          )
+          .limit(1),
+      ),
       database(() => db.select({ name: users.name }).from(eventMembers).innerJoin(users, eq(users.id, eventMembers.userId)).where(and(eq(eventMembers.eventId, input.eventId), eq(eventMembers.userId, input.reviewerUserId), eq(eventMembers.role, "reviewer"))).limit(1)),
       database(() => db.select().from(reviewAssignments).where(and(eq(reviewAssignments.eventId, input.eventId), eq(reviewAssignments.roundId, input.roundId), eq(reviewAssignments.submissionId, input.submissionId), eq(reviewAssignments.reviewerUserId, input.reviewerUserId))).limit(1)),
     ]);
@@ -571,7 +619,21 @@ export const saveScore = (
     const scoreRecord = yield* validateScores(round.rubric, input.scores);
     const { db } = yield* Db;
     const [submission] = yield* database(() =>
-      db.select({ status: submissions.status }).from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1),
+      db
+        .select({ status: submissions.status })
+        .from(submissions)
+        .innerJoin(
+          forms,
+          and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+        )
+        .where(
+          and(
+            eq(submissions.eventId, input.eventId),
+            eq(submissions.id, input.submissionId),
+            eq(forms.kind, "cfp"),
+          ),
+        )
+        .limit(1),
     );
     if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
     const [existing] = yield* database(() =>
@@ -641,7 +703,21 @@ export const requestAiSuggestion = (
     }
     const { db } = yield* Db;
     const [submission] = yield* database(() =>
-      db.select({ title: submissions.title, status: submissions.status }).from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1),
+      db
+        .select({ title: submissions.title, status: submissions.status })
+        .from(submissions)
+        .innerJoin(
+          forms,
+          and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+        )
+        .where(
+          and(
+            eq(submissions.eventId, input.eventId),
+            eq(submissions.id, input.submissionId),
+            eq(forms.kind, "cfp"),
+          ),
+        )
+        .limit(1),
     );
     if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
     const answerRows = yield* database(() =>
@@ -738,6 +814,29 @@ export const acceptSubmission = (
     }
     yield* requireOrganizer(viewer);
     const { db } = yield* Db;
+    const [submission] = yield* database(() =>
+      db
+        .select({
+          id: submissions.id,
+          status: submissions.status,
+          acceptedAt: submissions.acceptedAt,
+          version: submissions.version,
+        })
+        .from(submissions)
+        .innerJoin(
+          forms,
+          and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+        )
+        .where(
+          and(
+            eq(submissions.eventId, input.eventId),
+            eq(submissions.id, input.submissionId),
+            eq(forms.kind, "cfp"),
+          ),
+        )
+        .limit(1),
+    );
+    if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
     const keyHash = yield* sha256(input.idempotencyKey);
     const requestHash = yield* sha256(JSON.stringify({ eventId: input.eventId, submissionId: input.submissionId, expectedVersion: input.expectedVersion }));
     const principalId = viewer.actorApiKeyId ? `api-key:${viewer.actorApiKeyId}` : viewer.userId;
@@ -752,10 +851,6 @@ export const acceptSubmission = (
       return yield* Effect.fail(new Conflict({ message: "Acceptance request with this idempotency key is already in progress" }));
     }
 
-    const [submission] = yield* database(() =>
-      db.select().from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1),
-    );
-    if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
     if (submission.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before accepting" }));
     }

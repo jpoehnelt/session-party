@@ -81,6 +81,14 @@ export const CreatePublicSubmissionInput = Schema.Struct({
 });
 export type CreatePublicSubmissionInput = typeof CreatePublicSubmissionInput.Type;
 
+export const CreateTaskSubmissionInput = Schema.Struct({
+  eventId: EntityId,
+  formId: EntityId,
+  idempotencyKey: IdempotencyKey,
+  answers: Schema.Array(SubmissionAnswer),
+});
+export type CreateTaskSubmissionInput = typeof CreateTaskSubmissionInput.Type;
+
 export const CreatePublicSubmissionOutput = Schema.Struct({
   submissionId: EntityId,
   status: Schema.Literal("submitted"),

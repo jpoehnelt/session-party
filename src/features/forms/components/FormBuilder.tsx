@@ -53,9 +53,11 @@ export interface FormBuilderProps {
   onChange: (form: FormDetail) => void;
   onSave: (form: FormDetail) => void;
   onPublish: (form: FormDetail) => void;
-  onStatusChange: (status: Extract<FormStatus, "open" | "closed">) => void;
-  /** False when the client cannot yet send the write headers these operations require. Defaults to true. */
+  onStatusChange: (status: Extract<FormStatus, "open" | "closed">, form: FormDetail) => void;
+  /** False only when the surrounding client intentionally presents a read-only form. Defaults to true. */
   mutationsAvailable?: boolean;
+  /** Disables every edit while one versioned mutation is in flight. */
+  busyAction?: "create" | "save" | "publish" | "status" | null;
 }
 
 
@@ -88,7 +90,15 @@ const toDateTimeLocal = (value: number | null): string => {
   return date.toISOString().slice(0, 16);
 };
 
-export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange, mutationsAvailable = true }: FormBuilderProps) {
+export function FormBuilder({
+  form,
+  onChange,
+  onSave,
+  onPublish,
+  onStatusChange,
+  mutationsAvailable = true,
+  busyAction = null,
+}: FormBuilderProps) {
   const [message, setMessage] = useState<string | null>(null);
   const {
     control,
@@ -206,7 +216,7 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange,
     const submitter = (event?.nativeEvent as SubmitEvent | undefined)?.submitter as HTMLButtonElement | null;
     clearErrors();
     if (submitter?.value === "save") {
-      setMessage("Draft saved.");
+      setMessage(null);
       onSave(values);
       return;
     }
@@ -231,8 +241,12 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange,
   const conditionalFields = watchedFields.filter((field) => field.logic !== null);
   const fieldLabels = Object.fromEntries(watchedFields.map((field) => [field.id, field.label]));
   return (
-    <form noValidate onSubmit={mutationsAvailable ? submit : (event) => event.preventDefault()}>
-      <fieldset disabled={!mutationsAvailable} className="m-0 min-w-0 space-y-5 border-0 p-0">
+    <form
+      noValidate
+      aria-busy={busyAction !== null}
+      onSubmit={mutationsAvailable ? submit : (event) => event.preventDefault()}
+    >
+      <fieldset disabled={!mutationsAvailable || busyAction !== null} className="m-0 min-w-0 space-y-5 border-0 p-0">
       {!mutationsAvailable && (
         <div className="rounded-control border border-line bg-surface-muted px-4 py-3 text-sm text-ink-secondary" role="status">
           This form is read-only right now. This client can't yet send the idempotency headers organizer edits require.
@@ -653,13 +667,27 @@ export function FormBuilder({ form, onChange, onSave, onPublish, onStatusChange,
         </div>
         <div className="flex flex-wrap gap-2">
           {watchedForm.status === "open" && (
-            <Button variant="secondary" onClick={() => onStatusChange("closed")}>Close form</Button>
+            <Button
+              variant="secondary"
+              loading={busyAction === "status"}
+              onClick={() => onStatusChange("closed", watchedForm)}
+            >
+              Close form
+            </Button>
           )}
           {watchedForm.status === "closed" && watchedForm.publishedVersion && (
-            <Button variant="secondary" onClick={() => onStatusChange("open")}>Reopen form</Button>
+            <Button
+              variant="secondary"
+              loading={busyAction === "status"}
+              onClick={() => onStatusChange("open", watchedForm)}
+            >
+              Reopen form
+            </Button>
           )}
-          <Button type="submit" name="intent" value="save" variant="secondary">Save draft</Button>
-          <Button type="submit" name="intent" value="publish">
+          <Button type="submit" name="intent" value="save" variant="secondary" loading={busyAction === "save"}>
+            Save draft
+          </Button>
+          <Button type="submit" name="intent" value="publish" loading={busyAction === "publish"}>
             {watchedForm.publishedVersion ? "Publish new version" : "Publish form"}
           </Button>
         </div>
