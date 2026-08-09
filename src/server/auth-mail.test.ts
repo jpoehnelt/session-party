@@ -27,6 +27,7 @@ const requestLink = (
   email: string,
   name?: string,
   source = `192.0.2.${++sourceSequence}`,
+  returnTo?: string,
 ): Promise<Response> =>
   SELF.fetch("https://example.test/api/v1/auth/request-link", {
     method: "POST",
@@ -34,8 +35,33 @@ const requestLink = (
       "cf-connecting-ip": source,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ email, name }),
+    body: JSON.stringify({ email, name, returnTo }),
   });
+
+const nonLocalAuthEnv = new Proxy(env, {
+  get(target, property, receiver) {
+    if (property === "LOCAL_MODE") return undefined;
+    if (property === "SESSION_SECRET") return "explicit-local-only-session-secret-v1";
+    if (property === "MAIL_FROM") return "Session Party <onboarding@resend.dev>";
+    return Reflect.get(target, property, receiver);
+  },
+}) as Env;
+const requestNonLocalLink = (
+  email: string,
+  source = `192.0.2.${++sourceSequence}`,
+): Promise<Response> =>
+  worker.fetch(
+    new Request("https://example.test/api/v1/auth/request-link", {
+      method: "POST",
+      headers: {
+        "cf-connecting-ip": source,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email }),
+    }),
+    nonLocalAuthEnv,
+    createExecutionContext(),
+  );
 
 const requestLinkBody = (
   body: string,
@@ -121,6 +147,54 @@ describe("durable magic-link authentication", () => {
     });
     expect(snapshot?.idempotency_key).toBe(`auth-magic-link:${snapshot?.token_id}`);
   });
+  it("issues a durable local magic link without touching Scheduler", async () => {
+    const email = `local-scheduler-${crypto.randomUUID()}@example.com`;
+    let schedulerTouched = false;
+    const scheduler = new Proxy(env.SCHEDULER, {
+      get() {
+        schedulerTouched = true;
+        throw new Error("SCHEDULER must not be accessed in explicit local mode");
+      },
+    });
+    const localEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        if (property === "LOCAL_MODE") return "1";
+        if (property === "SCHEDULER") return scheduler;
+        return Reflect.get(target, property, receiver);
+      },
+      has(target, property) {
+        return property === "LOCAL_MODE" || Reflect.has(target, property);
+      },
+    }) as Env;
+    const response = await worker.fetch(
+      new Request("https://example.test/api/v1/auth/request-link", {
+        method: "POST",
+        headers: {
+          "cf-connecting-ip": "203.0.113.99",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      }),
+      localEnv,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(202);
+    expect(schedulerTouched).toBe(false);
+    const counts = await env.DB.prepare(
+      `SELECT
+        (SELECT count(*) FROM users WHERE email = ?) AS users_count,
+        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link' AND t.consumed_at IS NULL) AS token_count,
+        (SELECT count(*) FROM mail_delivery_snapshots WHERE recipient_email = ? AND redacted_at IS NULL AND rendered_html IS NOT NULL AND rendered_text IS NOT NULL) AS snapshot_count,
+        (SELECT count(*) FROM mail_deliveries d JOIN mail_delivery_snapshots s ON s.id = d.snapshot_id WHERE s.recipient_email = ? AND d.status = 'pending') AS delivery_count`,
+    ).bind(email, email, email, email).first();
+    expect(counts).toEqual({
+      users_count: 1,
+      token_count: 1,
+      snapshot_count: 1,
+      delivery_count: 1,
+    });
+  });
   it("repokes an outstanding delivery after the initial notification fails", async () => {
     const email = "repoke-existing@example.com";
     let failPoke = true;
@@ -154,7 +228,7 @@ describe("durable magic-link authentication", () => {
         };
       },
     } as unknown as Env["SCHEDULER"];
-    const wrappedEnv = new Proxy(env, {
+    const wrappedEnv = new Proxy(nonLocalAuthEnv, {
       get(target, property, receiver) {
         return property === "SCHEDULER"
           ? scheduler
@@ -251,10 +325,10 @@ describe("durable magic-link authentication", () => {
   it("enforces per-source and per-recipient limits before durable writes", async () => {
     const source = "198.51.100.44";
     for (let index = 0; index < 10; index += 1) {
-      expect((await requestLink(`source-limit-${index}@example.com`, undefined, source)).status).toBe(202);
+      expect((await requestNonLocalLink(`source-limit-${index}@example.com`, source)).status).toBe(202);
     }
     const rejectedEmail = "source-limit-rejected@example.com";
-    expect((await requestLink(rejectedEmail, undefined, source)).status).toBe(202);
+    expect((await requestNonLocalLink(rejectedEmail, source)).status).toBe(202);
     expect(await env.DB.prepare(
       `SELECT
         (SELECT count(*) FROM users WHERE email = ?) AS users_count,
@@ -266,7 +340,7 @@ describe("durable magic-link authentication", () => {
 
     const recipient = "recipient-limit@example.com";
     for (let index = 0; index < 5; index += 1) {
-      expect((await requestLink(recipient)).status).toBe(202);
+      expect((await requestNonLocalLink(recipient)).status).toBe(202);
     }
     const mailStub = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail"));
     await runDurableObjectAlarm(mailStub);
@@ -279,7 +353,7 @@ describe("durable magic-link authentication", () => {
       async (_instance, state) => state.storage.getAlarm(),
     );
     expect(beforeRejected).not.toBeNull();
-    expect((await requestLink(recipient)).status).toBe(202);
+    expect((await requestNonLocalLink(recipient)).status).toBe(202);
     expect(await runInDurableObject(
       mailStub,
       async (_instance, state) => state.storage.getAlarm(),
@@ -353,6 +427,30 @@ describe("durable magic-link authentication", () => {
     } finally {
       await env.DB.prepare("DROP TRIGGER fail_magic_delivery").run();
     }
+  });
+  it("carries only same-origin return paths through magic-link verification", async () => {
+    const validEmail = `return-to-valid-${crypto.randomUUID()}@example.com`;
+    const returnTo = "/events?scope=mine#upcoming";
+    expect((await requestLink(validEmail, undefined, undefined, returnTo)).status).toBe(202);
+    const validLink = await magicLinkFor(validEmail);
+    expect(new URL(validLink).searchParams.get("returnTo")).toBe(returnTo);
+    const validResponse = await SELF.fetch(validLink, { redirect: "manual" });
+    expect(validResponse.status).toBe(302);
+    expect(validResponse.headers.get("location")).toBe(returnTo);
+
+    const hostileEmail = `return-to-hostile-${crypto.randomUUID()}@example.com`;
+    expect((await requestLink(
+      hostileEmail,
+      undefined,
+      undefined,
+      "//attacker.example/collect",
+    )).status).toBe(202);
+    const hostileLink = new URL(await magicLinkFor(hostileEmail));
+    expect(hostileLink.searchParams.get("returnTo")).toBe("/");
+    hostileLink.searchParams.set("returnTo", "https://attacker.example/collect");
+    const hostileResponse = await SELF.fetch(hostileLink, { redirect: "manual" });
+    expect(hostileResponse.status).toBe(302);
+    expect(hostileResponse.headers.get("location")).toBe("/");
   });
 
   it("atomically consumes a link once under concurrent verification", async () => {
