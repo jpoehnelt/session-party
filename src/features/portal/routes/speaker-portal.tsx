@@ -14,7 +14,6 @@ import {
   Input,
   PageHeader,
   ProgressChecklist,
-  ReadinessThread,
   Select,
   Skeleton,
   Textarea,
@@ -68,13 +67,6 @@ export function allowlistedEmbedUrl(value: string | null): string | null {
   } catch {
     return null;
   }
-}
-
-export function formatPortalDate(value: number, timezone: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeZone: timezone,
-  }).format(value);
 }
 
 export async function fileAsBase64(file: File): Promise<string> {
@@ -304,7 +296,6 @@ export function SpeakerPortalContent({
   onSubmitTaskForm,
 }: SpeakerPortalContentProps) {
   const [activeFormTaskId, setActiveFormTaskId] = useState<string | null>(null);
-  const currentTask = snapshot.tasks.find((task) => !task.completed)?.id;
   const incompleteFormTasks = snapshot.tasks.filter((task) => task.kind === "form" && !task.completed);
   const activeFormTask = incompleteFormTasks.find((task) => task.id === activeFormTaskId);
   return (
@@ -377,18 +368,6 @@ export function SpeakerPortalContent({
             </Card>
           ) : (
             <>
-              <Card title="Production thread">
-                <ReadinessThread
-                  currentId={currentTask}
-                  items={snapshot.tasks.map((task) => ({
-                    id: task.id,
-                    label: task.name,
-                    description: task.prerequisite.message ?? task.description ?? undefined,
-                    state: task.completed ? "complete" : "pending",
-                    timestamp: task.completedAt ? formatPortalDate(task.completedAt, snapshot.event.timezone) : undefined,
-                  }))}
-                />
-              </Card>
               {incompleteFormTasks.length > 0 && (
                 <Card title="Forms to complete">
                   <ul className="space-y-4">

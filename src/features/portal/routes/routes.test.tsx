@@ -357,7 +357,7 @@ describe("speaker portal content", () => {
     expect(linked).not.toContain("speaker@example.com");
   });
 
-  it("renders profile editing, accepted submission, readiness, persisted tasks, files, and resources", () => {
+  it("renders profile editing, accepted submission, one task checklist, files, and resources", () => {
     const markup = renderToStaticMarkup(createElement(SpeakerPortalContent, {
       snapshot,
       onSaveProfile: noop,
@@ -368,7 +368,8 @@ describe("speaker portal content", () => {
     expect(markup).toContain("The calm show call");
     expect(markup).toContain("River Okafor");
     expect(markup).toContain("Review speaker profile");
-    expect(markup).toContain("Production thread");
+    expect(markup).not.toContain("Production thread");
+    expect(markup.match(/Review speaker profile/g)).toHaveLength(1);
     expect(markup).toContain("final-slides.pdf");
     expect(markup).toContain("Speaker production guide");
     expect(markup).toContain("sandbox=");
@@ -511,6 +512,8 @@ describe("organizer content and workflows", () => {
     expect(speakersMarkup).toContain("The calm show call");
     expect(speakersMarkup).toContain("Public gallery");
     expect(speakersMarkup).toContain("0/1");
+    expect(speakersMarkup).toContain('aria-label="Speaker readiness"');
+    expect(speakersMarkup).toContain("Outstanding task 1");
     expect(speakersMarkup).toContain("Provision");
 
     const dashboardMarkup = renderToStaticMarkup(createElement(OrganizerDashboardContent, { dashboard }));
