@@ -101,6 +101,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
       "body": [
         "expectedRevision",
         "expectedWorkspaceVersion",
+        "expectedEventVersion",
         "idempotencyKey"
       ],
       "path": [
@@ -1410,6 +1411,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "eventSlug": {
           "type": "string"
         },
+        "eventVersion": {
+          "$ref": "#/$defs/Int",
+          "description": "a positive number",
+          "exclusiveMinimum": 0,
+          "title": "positive"
+        },
         "publication": {
           "additionalProperties": false,
           "properties": {
@@ -1702,6 +1709,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "timezone",
         "view",
         "workspaceVersion",
+        "eventVersion",
         "tracks",
         "rooms",
         "backlog",
@@ -2081,6 +2089,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "title": "maxLength(128)",
           "type": "string"
         },
+        "expectedEventVersion": {
+          "$ref": "#/$defs/Int",
+          "description": "a positive number",
+          "exclusiveMinimum": 0,
+          "title": "positive"
+        },
         "expectedRevision": {
           "$ref": "#/$defs/Int",
           "description": "a non-negative number",
@@ -2105,6 +2119,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "eventId",
         "expectedRevision",
         "expectedWorkspaceVersion",
+        "expectedEventVersion",
         "idempotencyKey"
       ],
       "type": "object"
@@ -8064,6 +8079,12 @@ export const openApi = {
                     "eventSlug": {
                       "type": "string"
                     },
+                    "eventVersion": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a positive number",
+                      "exclusiveMinimum": 0,
+                      "title": "positive"
+                    },
                     "publication": {
                       "additionalProperties": false,
                       "properties": {
@@ -8356,6 +8377,7 @@ export const openApi = {
                     "timezone",
                     "view",
                     "workspaceVersion",
+                    "eventVersion",
                     "tracks",
                     "rooms",
                     "backlog",
@@ -8419,6 +8441,12 @@ export const openApi = {
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "expectedEventVersion": {
+                    "$ref": "#/$defs/Int",
+                    "description": "a positive number",
+                    "exclusiveMinimum": 0,
+                    "title": "positive"
+                  },
                   "expectedRevision": {
                     "$ref": "#/$defs/Int",
                     "description": "a non-negative number",
@@ -8442,6 +8470,7 @@ export const openApi = {
                 "required": [
                   "expectedRevision",
                   "expectedWorkspaceVersion",
+                  "expectedEventVersion",
                   "idempotencyKey"
                 ],
                 "type": "object"
