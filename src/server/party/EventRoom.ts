@@ -1,13 +1,18 @@
 import { ApiScope, ApiScopes, type EventRole, type Principal } from "contracts/principal";
 import {
   decodeServerMessage,
+  type AgendaPreviewTarget,
   type ClientMessage,
   type EventAudience,
   type EventRoomBroadcast,
   type PresenceUser,
   type ServerMessage,
+  type ShowCue,
+  type ShowCueKind,
+  type ShowCueTarget,
+  type ShowRunState,
 } from "contracts/protocol";
-import { apiKeys, authTokens, eventMembers } from "contracts/schema";
+import { apiKeys, authTokens, eventMembers, talks } from "contracts/schema";
 import { Server, type Connection, type ConnectionContext, type WSMessage } from "partyserver";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
@@ -21,6 +26,8 @@ const MAX_MESSAGE_BYTES = 32 * 1024;
 const MAX_MESSAGES_PER_MINUTE = 120;
 const MAX_SURFACE_LENGTH = 120;
 const MAX_CORRELATION_LENGTH = 128;
+const MAX_CUE_MESSAGE_LENGTH = 500;
+const SHOW_STATE_KEY = "show-state-v1";
 
 type RoomAuthorization = {
   readonly kind: "browser-session" | "api-key";
@@ -40,6 +47,10 @@ export interface EventRoomConnectionState {
   readonly authorization: RoomAuthorization;
   readonly rateWindowStartedAt: number;
   readonly messagesInWindow: number;
+  readonly agendaCollaboration: {
+    readonly talkId: string;
+    readonly preview: AgendaPreviewTarget | null;
+  } | null;
 }
 
 const isBoundedString = (value: unknown, maxLength: number): value is string =>
@@ -48,6 +59,27 @@ const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value > 0;
 const isOptionalId = (value: unknown): value is string | null =>
   value === null || isBoundedString(value, 255);
+const isAgendaPreviewTarget = (value: unknown): value is AgendaPreviewTarget => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const input = value as { readonly [field: string]: unknown };
+  return isOptionalId(input.trackId) &&
+    isOptionalId(input.roomId) &&
+    ((typeof input.startsAt === "number" && Number.isFinite(input.startsAt)) || input.startsAt === null) &&
+    isPositiveInteger(input.durationMin);
+};
+const showActions = ["select", "start", "hold", "resume", "complete", "reset"] as const;
+const showCueKinds = ["on_deck", "five_minutes", "start", "hold", "room_change", "custom"] as const;
+const isShowAction = (value: unknown): value is typeof showActions[number] =>
+  typeof value === "string" && showActions.some((action) => action === value);
+const isShowCueKind = (value: unknown): value is ShowCueKind =>
+  typeof value === "string" && showCueKinds.some((kind) => kind === value);
+const isShowCueTarget = (value: unknown): value is ShowCueTarget => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const input = value as { readonly [field: string]: unknown };
+  if (input.kind === "crew") return true;
+  return (input.kind === "surface" || input.kind === "room") &&
+    isBoundedString(input.value, MAX_SURFACE_LENGTH);
+};
 
 const decodeClientMessage = (value: unknown): ClientMessage | null => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -60,6 +92,12 @@ const decodeClientMessage = (value: unknown): ClientMessage | null => {
     case "events/get":
       return isBoundedString(input.requestId, MAX_CORRELATION_LENGTH)
         ? { t: input.t, requestId: input.requestId }
+        : null;
+    case "agenda/focus":
+      return isOptionalId(input.talkId) ? { t: input.t, talkId: input.talkId } : null;
+    case "agenda/preview":
+      return isBoundedString(input.talkId, 255) && isAgendaPreviewTarget(input.target)
+        ? { t: input.t, talkId: input.talkId, target: input.target }
         : null;
     case "agenda/move":
       return isBoundedString(input.requestId, MAX_CORRELATION_LENGTH) &&
@@ -95,6 +133,30 @@ const decodeClientMessage = (value: unknown): ClientMessage | null => {
             talkId: input.talkId,
             durationMin: input.durationMin,
             expectedVersion: input.expectedVersion,
+          }
+        : null;
+    case "show/control":
+      return isBoundedString(input.requestId, MAX_CORRELATION_LENGTH) &&
+        isShowAction(input.action) &&
+        (input.talkId === undefined || isBoundedString(input.talkId, 255))
+        ? {
+            t: input.t,
+            requestId: input.requestId,
+            action: input.action,
+            ...(typeof input.talkId === "string" ? { talkId: input.talkId } : {}),
+          }
+        : null;
+    case "show/cue":
+      return isBoundedString(input.requestId, MAX_CORRELATION_LENGTH) &&
+        isShowCueKind(input.kind) &&
+        isShowCueTarget(input.target) &&
+        isBoundedString(input.message, MAX_CUE_MESSAGE_LENGTH)
+        ? {
+            t: input.t,
+            requestId: input.requestId,
+            kind: input.kind,
+            target: input.target,
+            message: input.message,
           }
         : null;
     default:
@@ -161,7 +223,13 @@ export const audiencesForServerMessage = (
     case "agenda/talk_upserted":
     case "agenda/talk_deleted":
     case "agenda/conflicts":
+    case "agenda/collaboration":
       return ["role:owner", "role:admin", "role:reviewer", "scope:agenda:read"];
+    case "show/state":
+    case "show/cue":
+      return ["role:owner", "role:admin", "scope:agenda:read"];
+    case "show/cue_sent":
+      return null;
     case "dashboard/progress":
       return ["role:owner", "role:admin", "scope:speakers:read", "scope:content:read"];
     case "review/scored":
@@ -237,6 +305,7 @@ const operationInput = (
   eventId: string,
 ): Readonly<Record<string, unknown>> => {
   if (message.t === "events/get") return { eventId, idOrSlug: eventId };
+  if (!("requestId" in message)) return { eventId };
   const { t: _type, requestId: _requestId, ...input } = message;
   return { ...input, eventId };
 };
@@ -260,6 +329,22 @@ const sendServerMessage = (
     ) return;
     throw error;
   }
+};
+
+const initialShowState = (): ShowRunState => ({
+  revision: 0,
+  status: "idle",
+  currentTalkId: null,
+  startedAt: null,
+  holdStartedAt: null,
+  accumulatedHoldMs: 0,
+  updatedAt: 0,
+  updatedBy: null,
+});
+
+const decodeStoredShowState = (value: unknown): ShowRunState | null => {
+  const message = decodeServerMessage({ t: "show/state", state: value });
+  return message?.t === "show/state" ? message.state : null;
 };
 
 export class EventRoom extends Server<Env> {
@@ -288,6 +373,7 @@ export class EventRoom extends Server<Env> {
         authorization,
         rateWindowStartedAt: Date.now(),
         messagesInWindow: 0,
+        agendaCollaboration: null,
       });
       await this.broadcastPresence();
     } catch (error) {
@@ -329,6 +415,33 @@ export class EventRoom extends Server<Env> {
     if (message.t === "room/hello") {
       connection.setState({ ...refreshed, surface: message.surface });
       await this.broadcastPresence();
+      await this.broadcastAgendaCollaboration();
+      if (this.canReceiveShowState(refreshed)) {
+        sendServerMessage(connection, { t: "show/state", state: await this.getShowState() });
+      }
+      return;
+    }
+
+    if (message.t === "agenda/focus" || message.t === "agenda/preview") {
+      if (!refreshed.authorization.capabilities.includes("agenda:write")) {
+        sendServerMessage(connection, { t: "room/error", message: "Access denied" });
+        return;
+      }
+      await this.handleAgendaCollaboration(connection, refreshed, message);
+      return;
+    }
+
+    if (message.t === "show/control" || message.t === "show/cue") {
+      if (!refreshed.authorization.capabilities.includes("agenda:write")) {
+        sendServerMessage(connection, {
+          t: "room/error",
+          message: "Access denied",
+          replyTo: message.requestId,
+        });
+        return;
+      }
+      if (message.t === "show/control") await this.handleShowControl(connection, refreshed, message);
+      else await this.handleShowCue(connection, refreshed, message);
       return;
     }
     const operationIntent = partyIntents.find(({ intentType }) => intentType === message.t);
@@ -414,8 +527,11 @@ export class EventRoom extends Server<Env> {
     }
   }
 
-  override async onClose(): Promise<void> {
+  override async onClose(connection: Connection<EventRoomConnectionState>): Promise<void> {
     await this.broadcastPresence();
+    if (connection.state?.agendaCollaboration) {
+      await this.broadcastAgendaCollaboration();
+    }
   }
 
   override async onRequest(request: Request): Promise<Response> {
@@ -568,6 +684,216 @@ export class EventRoom extends Server<Env> {
     return next;
   }
 
+  private async handleAgendaCollaboration(
+    connection: Connection<EventRoomConnectionState>,
+    state: EventRoomConnectionState,
+    message: Extract<ClientMessage, { t: "agenda/focus" | "agenda/preview" }>,
+  ): Promise<void> {
+    if (message.t === "agenda/focus" && message.talkId === null) {
+      connection.setState({ ...state, agendaCollaboration: null });
+      await this.broadcastAgendaCollaboration();
+      return;
+    }
+
+    const talkId = message.talkId;
+    if (talkId === null) return;
+    for (const candidate of this.getConnections<EventRoomConnectionState>()) {
+      if (candidate.id === connection.id) continue;
+      const candidateState = await this.refreshConnectionAuthorization(candidate);
+      if (candidateState?.agendaCollaboration?.talkId !== talkId) continue;
+      sendServerMessage(connection, {
+        t: "room/error",
+        error: "Conflict",
+        message: `${candidateState.user.name} is already moving this talk`,
+      });
+      return;
+    }
+
+    if (message.t === "agenda/preview" && state.agendaCollaboration?.talkId !== talkId) {
+      sendServerMessage(connection, {
+        t: "room/error",
+        error: "Conflict",
+        message: "Claim the talk before previewing a move",
+      });
+      return;
+    }
+
+    connection.setState({
+      ...state,
+      agendaCollaboration: {
+        talkId,
+        preview: message.t === "agenda/preview" ? message.target : null,
+      },
+    });
+    await this.broadcastAgendaCollaboration();
+  }
+
+  private async getShowState(): Promise<ShowRunState> {
+    const stored = await this.ctx.storage.get<unknown>(SHOW_STATE_KEY);
+    return decodeStoredShowState(stored) ?? initialShowState();
+  }
+
+  private async isCurrentEventTalk(talkId: string): Promise<boolean> {
+    const db = drizzle(this.env.DB);
+    const [talk] = await db
+      .select({ id: talks.id })
+      .from(talks)
+      .where(and(eq(talks.eventId, this.name), eq(talks.id, talkId)))
+      .limit(1);
+    return Boolean(talk);
+  }
+
+  private async handleShowControl(
+    connection: Connection<EventRoomConnectionState>,
+    state: EventRoomConnectionState,
+    message: Extract<ClientMessage, { t: "show/control" }>,
+  ): Promise<void> {
+    const current = await this.getShowState();
+    const now = Date.now();
+    const actor = { userId: state.user.userId, name: state.user.name };
+    const talkId = message.talkId ?? current.currentTalkId;
+    let next: ShowRunState | null = null;
+
+    if ((message.action === "select" || message.action === "start") &&
+      (!talkId || !(await this.isCurrentEventTalk(talkId)))) {
+      sendServerMessage(connection, {
+        t: "room/error",
+        error: "NotFound",
+        message: "Choose a current event talk first",
+        replyTo: message.requestId,
+      });
+      return;
+    }
+
+    switch (message.action) {
+      case "select":
+        next = {
+          revision: current.revision + 1,
+          status: "ready",
+          currentTalkId: talkId!,
+          startedAt: null,
+          holdStartedAt: null,
+          accumulatedHoldMs: 0,
+          updatedAt: now,
+          updatedBy: actor,
+        };
+        break;
+      case "start":
+        next = {
+          revision: current.revision + 1,
+          status: "running",
+          currentTalkId: talkId!,
+          startedAt: now,
+          holdStartedAt: null,
+          accumulatedHoldMs: 0,
+          updatedAt: now,
+          updatedBy: actor,
+        };
+        break;
+      case "hold":
+        if (current.status === "running") {
+          next = { ...current, revision: current.revision + 1, status: "held", holdStartedAt: now, updatedAt: now, updatedBy: actor };
+        }
+        break;
+      case "resume":
+        if (current.status === "held" && current.holdStartedAt !== null) {
+          next = {
+            ...current,
+            revision: current.revision + 1,
+            status: "running",
+            holdStartedAt: null,
+            accumulatedHoldMs: current.accumulatedHoldMs + Math.max(0, now - current.holdStartedAt),
+            updatedAt: now,
+            updatedBy: actor,
+          };
+        }
+        break;
+      case "complete":
+        if (current.currentTalkId !== null && (current.status === "running" || current.status === "held")) {
+          next = {
+            ...current,
+            revision: current.revision + 1,
+            status: "completed",
+            holdStartedAt: null,
+            accumulatedHoldMs: current.accumulatedHoldMs +
+              (current.holdStartedAt === null ? 0 : Math.max(0, now - current.holdStartedAt)),
+            updatedAt: now,
+            updatedBy: actor,
+          };
+        }
+        break;
+      case "reset":
+        next = { ...initialShowState(), revision: current.revision + 1, updatedAt: now, updatedBy: actor };
+        break;
+    }
+
+    if (!next) {
+      sendServerMessage(connection, {
+        t: "room/error",
+        error: "Conflict",
+        message: `Cannot ${message.action} while show state is ${current.status}`,
+        replyTo: message.requestId,
+      });
+      return;
+    }
+
+    await this.ctx.storage.put(SHOW_STATE_KEY, next);
+    await this.broadcastAuthorized({ t: "show/state", state: next });
+    sendServerMessage(connection, {
+      t: "room/result",
+      operationId: "show.control",
+      result: next,
+      replyTo: message.requestId,
+    });
+  }
+
+  private cueMatchesConnection(
+    target: ShowCueTarget,
+    state: EventRoomConnectionState,
+  ): boolean {
+    if (!this.canReceiveShowState(state)) return false;
+    if (target.kind === "crew") return true;
+    if (target.kind === "surface") return state.surface === target.value;
+    return state.surface === `show:room:${target.value}` || state.surface === "show:control";
+  }
+
+  private canReceiveShowState(state: EventRoomConnectionState): boolean {
+    return state.authorization.role === "owner" ||
+      state.authorization.role === "admin" ||
+      state.authorization.capabilities.includes("agenda:read") ||
+      state.authorization.capabilities.includes("agenda:write");
+  }
+
+  private async handleShowCue(
+    connection: Connection<EventRoomConnectionState>,
+    state: EventRoomConnectionState,
+    message: Extract<ClientMessage, { t: "show/cue" }>,
+  ): Promise<void> {
+    const sentAt = Date.now();
+    const cue: ShowCue = {
+      id: crypto.randomUUID(),
+      kind: message.kind,
+      target: message.target,
+      message: message.message,
+      sentAt,
+      expiresAt: sentAt + 60_000,
+      by: { userId: state.user.userId, name: state.user.name },
+    };
+    let recipients = 0;
+    for (const candidate of this.getConnections<EventRoomConnectionState>()) {
+      const candidateState = await this.refreshConnectionAuthorization(candidate);
+      if (!candidateState || !this.cueMatchesConnection(message.target, candidateState)) continue;
+      sendServerMessage(candidate, { t: "show/cue", cue });
+      recipients += 1;
+    }
+    sendServerMessage(connection, {
+      t: "show/cue_sent",
+      cueId: cue.id,
+      recipients,
+      replyTo: message.requestId,
+    });
+  }
+
   private async requiredCapability(message: Exclude<ClientMessage, { t: "room/hello" }>): Promise<ApiScope | null> {
     const prefix = message.t.split("/", 1)[0];
     return Schema.decodeUnknownPromise(ApiScope)(`${prefix}:write`).catch(() => null);
@@ -589,6 +915,33 @@ export class EventRoom extends Server<Env> {
       }
       connection.send(encoded);
     }
+  }
+
+  private async broadcastAgendaCollaboration(): Promise<void> {
+    const collaborators: Extract<ServerMessage, { t: "agenda/collaboration" }>["collaborators"] = [];
+    const recipients: Connection<EventRoomConnectionState>[] = [];
+    for (const connection of this.getConnections<EventRoomConnectionState>()) {
+      const state = await this.refreshConnectionAuthorization(connection);
+      if (!state) continue;
+      if (
+        state.authorization.role === "owner" ||
+        state.authorization.role === "admin" ||
+        state.authorization.role === "reviewer" ||
+        state.authorization.capabilities.includes("agenda:read")
+      ) {
+        recipients.push(connection);
+      }
+      if (state.agendaCollaboration && state.authorization.capabilities.includes("agenda:write")) {
+        collaborators.push({
+          userId: state.user.userId,
+          name: state.user.name,
+          talkId: state.agendaCollaboration.talkId,
+          preview: state.agendaCollaboration.preview,
+        });
+      }
+    }
+    const message = { t: "agenda/collaboration", collaborators } satisfies ServerMessage;
+    for (const connection of recipients) sendServerMessage(connection, message);
   }
 
   private async broadcastPresence(): Promise<void> {

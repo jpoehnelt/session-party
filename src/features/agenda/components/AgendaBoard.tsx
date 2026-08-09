@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
+import type { AgendaCollaborator, PresenceUser } from "contracts/protocol";
 import { Badge, Button, Card, EmptyState, Table } from "@/ui";
 import type {
   AgendaSnapshot,
@@ -21,10 +22,15 @@ export interface AgendaBoardProps {
   readonly view: AgendaView;
   readonly intent: RealtimeIntentState;
   readonly selectedTalkId?: string | null;
+  readonly collaborators?: readonly AgendaCollaborator[];
+  readonly presence?: readonly PresenceUser[];
   readonly disabled?: boolean;
   readonly onCreateTalk: (proposal: BacklogProposal) => void;
   readonly onSelectTalk: (talk: AgendaTalk) => void;
   readonly onMoveTalk: (talk: AgendaTalk, target: AgendaMoveTarget) => void;
+  readonly onFocusTalk?: (talk: AgendaTalk) => void;
+  readonly onPreviewTalk?: (talk: AgendaTalk, target: AgendaMoveTarget) => void;
+  readonly onReleaseTalk?: () => void;
 }
 
 interface Lane {
@@ -77,10 +83,15 @@ export function AgendaBoard({
   view,
   intent,
   selectedTalkId = null,
+  collaborators = [],
+  presence = [],
   disabled = false,
   onCreateTalk,
   onSelectTalk,
   onMoveTalk,
+  onFocusTalk,
+  onPreviewTalk,
+  onReleaseTalk,
 }: AgendaBoardProps) {
   const boardHeadingId = useId();
   const [draggedTalkId, setDraggedTalkId] = useState<string | null>(null);
@@ -195,6 +206,19 @@ export function AgendaBoard({
     });
   };
 
+  const previewOnLane = (event: DragEvent<HTMLElement>, lane: Lane) => {
+    event.preventDefault();
+    const talkId = event.dataTransfer.getData("text/agenda-talk") || draggedTalkId;
+    const talk = agenda.talks.find(({ id }) => id === talkId);
+    if (!talk || !lane.target || disabled) return;
+    onPreviewTalk?.(talk, {
+      trackId: lane.id.startsWith("track:") ? lane.target.trackId : talk.trackId,
+      roomId: lane.id.startsWith("room:") ? lane.target.roomId : talk.roomId,
+      startsAt: talk.startsAt,
+      durationMin: talk.durationMin,
+    });
+  };
+
   const openWithKeyboard = (event: KeyboardEvent<HTMLButtonElement>, talk: AgendaTalk) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
@@ -219,7 +243,12 @@ export function AgendaBoard({
             </>
           )}
         </div>
-        <div className="flex items-center gap-2" role="status" aria-live="polite">
+        <div className="flex flex-wrap items-center justify-end gap-2" role="status" aria-live="polite">
+          {presence.slice(0, 4).map((user) => (
+            <span key={user.userId} className="border border-on-accent/40 px-2 py-1 text-[9px] font-black uppercase tracking-[0.08em] text-on-accent/75">
+              {user.name} · {user.surface || "connecting"}
+            </span>
+          ))}
           <Badge tone={connection.tone}>{connection.label}</Badge>
           {intent.message && <span className="max-w-md text-xs font-semibold text-on-accent/70">{intent.message}</span>}
         </div>
@@ -313,6 +342,7 @@ export function AgendaBoard({
                     className="min-h-[30rem] border-2 border-line-strong bg-surface-muted shadow-[5px_5px_0_#171714]"
                     aria-label={lane.label}
                     onDragOver={lane.target ? (event) => event.preventDefault() : undefined}
+                    onDragEnter={lane.target ? (event) => previewOnLane(event, lane) : undefined}
                     onDrop={lane.target ? (event) => dropOnLane(event, lane) : undefined}
                   >
                     <header className={`sticky top-0 z-10 flex min-h-[4.5rem] items-center justify-between border-b-2 border-line-strong px-3 py-3 ${
@@ -328,8 +358,27 @@ export function AgendaBoard({
                       </span>
                     </header>
                     <ol className="space-y-3 p-3">
+                      {collaborators.filter(({ preview }) => {
+                        if (!preview || !lane.target) return false;
+                        if (lane.id.startsWith("track:")) return preview.trackId === lane.target.trackId;
+                        if (lane.id.startsWith("room:")) return preview.roomId === lane.target.roomId;
+                        return false;
+                      }).map((collaborator) => {
+                        const talk = agenda.talks.find(({ id }) => id === collaborator.talkId);
+                        return (
+                          <li
+                            key={`preview:${collaborator.userId}:${collaborator.talkId}`}
+                            className="border-2 border-dashed border-accent bg-accent-soft/70 p-3 opacity-80"
+                            aria-live="polite"
+                          >
+                            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-accent">Live move · {collaborator.name}</p>
+                            <p className="mt-1 text-sm font-black text-ink">{talk?.title ?? "Agenda talk"}</p>
+                          </li>
+                        );
+                      })}
                       {lane.talks.map((talk) => {
                         const talkConflicts = agenda.conflicts.filter(({ talkIds }) => talkIds.includes(talk.id));
+                        const collaborator = collaborators.find(({ talkId }) => talkId === talk.id);
                         const formattedStart = talk.startsAt === null
                           ? "Unscheduled"
                           : view === "room"
@@ -343,8 +392,12 @@ export function AgendaBoard({
                               setDraggedTalkId(talk.id);
                               event.dataTransfer.effectAllowed = "move";
                               event.dataTransfer.setData("text/agenda-talk", talk.id);
+                              onFocusTalk?.(talk);
                             }}
-                            onDragEnd={() => setDraggedTalkId(null)}
+                            onDragEnd={() => {
+                              setDraggedTalkId(null);
+                              onReleaseTalk?.();
+                            }}
                             className={`border-2 bg-surface p-3 shadow-[3px_3px_0_#171714] transition motion-reduce:transition-none ${
                               selectedTalkId === talk.id ? "border-accent bg-accent-soft ring-2 ring-accent ring-offset-2" : "border-line-strong"
                             } ${draggedTalkId === talk.id ? "opacity-50" : ""}`}
@@ -367,6 +420,11 @@ export function AgendaBoard({
                               <span className="mt-2 block text-base font-black leading-tight tracking-[-0.025em] text-ink">{talk.title}</span>
                               <span className="mt-1.5 block border-t border-line pt-1.5 text-xs font-semibold text-ink-secondary">{talk.speakerNames.join(", ")}</span>
                             </button>
+                            {collaborator && (
+                              <p className="mt-2 bg-production-yellow px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-ink">
+                                {collaborator.name} is moving this
+                              </p>
+                            )}
                             {talkConflicts.length > 0 && (
                               <div className="mt-2">
                                 <ConflictIndicator conflicts={talkConflicts} compact />

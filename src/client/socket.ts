@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { usePartySocket } from "partysocket/react";
 import { decodeServerMessage, type ClientMessage, type ServerMessage } from "contracts/protocol";
 
@@ -49,9 +49,12 @@ export function useEventRoom(
     },
   });
 
-  return {
-    send(message: ClientMessage) {
-      socket.send(JSON.stringify(message));
-    },
-  };
+  const send = useCallback((message: ClientMessage) => {
+    socket.send(JSON.stringify(message));
+  }, [socket]);
+  const setSurface = useCallback((surface: string) => {
+    socket.send(JSON.stringify({ t: "room/hello", surface } satisfies ClientMessage));
+  }, [socket]);
+
+  return useMemo(() => ({ send, setSurface }), [send, setSurface]);
 }

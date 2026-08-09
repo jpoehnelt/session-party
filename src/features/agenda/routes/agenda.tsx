@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
+import type {
+  AgendaCollaborator,
+  PresenceUser,
+  ShowCue,
+  ShowCueKind,
+  ShowCueTarget,
+  ShowRunState,
+} from "contracts/protocol";
 import { ApiError, apiFetch } from "@/client/api";
 import { useEventRoom } from "@/client/socket";
 import { loginPathForLocation } from "@/client/return-to";
@@ -18,6 +26,7 @@ import {
 } from "@/ui";
 import { AgendaBoard, type AgendaMoveTarget } from "../components/AgendaBoard";
 import { ConflictIndicator } from "../components/ConflictIndicator";
+import { LiveShowControl } from "../components/LiveShowControl";
 import {
   AgendaMutationResult,
   AgendaSnapshot,
@@ -55,6 +64,17 @@ const idleIntent = (): RealtimeIntentState => ({
   acknowledgement: "idle",
   sentAt: null,
   message: null,
+});
+
+const idleShowState = (): ShowRunState => ({
+  revision: 0,
+  status: "idle",
+  currentTalkId: null,
+  startedAt: null,
+  holdStartedAt: null,
+  accumulatedHoldMs: 0,
+  updatedAt: 0,
+  updatedBy: null,
 });
 
 const clientIntentId = () => `intent-${crypto.randomUUID()}`;
@@ -239,6 +259,11 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [setupOpen, setSetupOpen] = useState(false);
   const [trackDraft, setTrackDraft] = useState<TrackDraft>(emptyTrackDraft);
   const [roomDraft, setRoomDraft] = useState<RoomDraft>(emptyRoomDraft);
+  const [collaborators, setCollaborators] = useState<readonly AgendaCollaborator[]>([]);
+  const [presence, setPresence] = useState<readonly PresenceUser[]>([]);
+  const [showState, setShowState] = useState<ShowRunState>(idleShowState);
+  const [showCues, setShowCues] = useState<readonly ShowCue[]>([]);
+  const [showOpen, setShowOpen] = useState(false);
   const agendaRequest = useRef(0);
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -292,7 +317,20 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     });
   }, [refreshAgenda, view]);
 
-  useEventRoom(event.id, (message) => {
+  const room = useEventRoom(event.id, (message) => {
+    if (message.t === "room/presence") setPresence(message.users);
+    if (message.t === "agenda/collaboration") setCollaborators(message.collaborators);
+    if (message.t === "show/state") setShowState(message.state);
+    if (message.t === "show/cue") {
+      setShowCues((current) => [message.cue, ...current.filter(({ id }) => id !== message.cue.id)].slice(0, 8));
+    }
+    if (message.t === "show/cue_sent") {
+      toast(`Cue sent to ${message.recipients} ${message.recipients === 1 ? "screen" : "screens"}`, { tone: "success" });
+    }
+    if (message.t === "room/error" && message.error === "Conflict") {
+      setIntent((current) => ({ ...current, acknowledgement: "rejected", message: message.message }));
+      toast(message.message, { tone: "danger" });
+    }
     if (message.t === "agenda/talk_upserted" || message.t === "agenda/talk_deleted" || message.t === "agenda/conflicts") {
       void refreshAgenda(viewRef.current).catch(() => {
         setIntent((current) => ({ ...current, connection: "reconnecting", message: "Live refresh missed; reconnecting." }));
@@ -331,6 +369,24 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     },
   });
 
+  const setRoomSurface = useCallback((surface: string) => room.setSurface(surface), [room]);
+
+  const sendShowControl = useCallback((
+    action: "select" | "start" | "hold" | "resume" | "complete" | "reset",
+    talkId?: string,
+  ) => {
+    room.send({
+      t: "show/control",
+      requestId: clientIntentId(),
+      action,
+      ...(talkId ? { talkId } : {}),
+    });
+  }, [room]);
+
+  const sendShowCue = useCallback((kind: ShowCueKind, target: ShowCueTarget, message: string) => {
+    room.send({ t: "show/cue", requestId: clientIntentId(), kind, target, message });
+  }, [room]);
+
   useEffect(() => {
     const offline = () => setIntent((current) => ({ ...current, connection: "offline", message: "Changes are unavailable while offline." }));
     const online = () => {
@@ -357,6 +413,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   );
 
   const selectTalk = (talk: AgendaTalk, message: string | null = null) => {
+    room.send({ t: "agenda/focus", talkId: talk.id });
     setSelectedTalkId(talk.id);
     setForm({
       trackId: talk.trackId ?? "",
@@ -514,6 +571,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           schema: AgendaMutationResult,
         },
       ));
+      room.send({ t: "agenda/focus", talkId: null });
       closeTalkSheet();
       toast("Talk cancelled", { tone: "success" });
       await refreshAfterCommit();
@@ -702,6 +760,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button
+              variant={showOpen ? "primary" : "secondary"}
+              onClick={() => setShowOpen((open) => !open)}
+            >
+              {showOpen ? "Back to agenda" : "Open live show"}
+            </Button>
+            <Button
               variant="secondary"
               disabled={busy || refresh.status !== "idle"}
               onClick={() => setSetupOpen(true)}
@@ -744,7 +808,19 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           </div>
         ))}
       </section>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-4 border-b-2 border-line-strong pb-5">
+      {showOpen ? (
+        <LiveShowControl
+          agenda={agenda}
+          state={showState}
+          cues={showCues}
+          disabled={intent.connection !== "connected"}
+          onControl={sendShowControl}
+          onCue={sendShowCue}
+          onSurfaceChange={setRoomSurface}
+        />
+      ) : (
+        <>
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-4 border-b-2 border-line-strong pb-5">
         <Tabs
           tabs={views}
           active={view}
@@ -778,12 +854,19 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           view={view}
           intent={intent}
           selectedTalkId={selectedTalkId}
+          collaborators={collaborators}
+          presence={presence}
           disabled={busy || refresh.status !== "idle" || intent.connection === "offline"}
           onCreateTalk={(proposal) => void createTalk(proposal)}
           onSelectTalk={selectTalk}
           onMoveTalk={(talk, target) => void moveTalk(talk, target)}
+          onFocusTalk={(talk) => room.send({ t: "agenda/focus", talkId: talk.id })}
+          onPreviewTalk={(talk, target) => room.send({ t: "agenda/preview", talkId: talk.id, target })}
+          onReleaseTalk={() => room.send({ t: "agenda/focus", talkId: null })}
         />
       </section>
+        </>
+      )}
 
       <Sheet
         open={setupOpen}
@@ -901,7 +984,10 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
       <Sheet
         open={selectedTalk !== null}
-        onClose={closeTalkSheet}
+        onClose={() => {
+          room.send({ t: "agenda/focus", talkId: null });
+          closeTalkSheet();
+        }}
         title={selectedTalk?.title ?? "Talk details"}
         size="lg"
         footer={

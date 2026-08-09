@@ -36,11 +36,17 @@ const waitForType = (
   socket: WebSocket,
   type: ServerMessage["t"],
 ): Promise<ServerMessage> =>
+  waitForMessage(socket, (message) => message.t === type);
+
+const waitForMessage = (
+  socket: WebSocket,
+  predicate: (message: ServerMessage) => boolean,
+): Promise<ServerMessage> =>
   new Promise((resolve) => {
     const onMessage = (event: MessageEvent) => {
       if (typeof event.data !== "string") return;
       const message = JSON.parse(event.data) as ServerMessage;
-      if (message.t !== type) return;
+      if (!predicate(message)) return;
       socket.removeEventListener("message", onMessage);
       resolve(message);
     };
@@ -81,6 +87,7 @@ beforeAll(async () => {
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-demoted', 'room-demoted@example.com', 'Room Demoted', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-expired', 'room-expired@example.com', 'Room Expired', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES (?, 'room-authority', 'Room Authority', 'UTC', 1, ?, ?)").bind(EVENT_ID, now, now),
+    env.DB.prepare("INSERT INTO talks (id, event_id, submission_id, title, description, track_id, room_id, starts_at, duration_min, status, version, created_at, updated_at) VALUES ('room-live-talk', ?, NULL, 'Realtime keynote', NULL, NULL, NULL, ?, 30, 'confirmed', 1, ?, ?)").bind(EVENT_ID, now + 3_600_000, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-owner-member', ?, 'room-owner', 'owner', 1, ?, ?)").bind(EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-reviewer-member', ?, 'room-reviewer', 'reviewer', 1, ?, ?)").bind(EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-demoted-member', ?, 'room-demoted', 'owner', 1, ?, ?)").bind(EVENT_ID, now, now),
@@ -103,6 +110,22 @@ describe("EventRoom live authorization", () => {
     expect(audiencesForServerMessage({ t: "agenda/conflicts", conflicts: [] })).toEqual([
       "role:owner", "role:admin", "role:reviewer", "scope:agenda:read",
     ]);
+    expect(audiencesForServerMessage({ t: "agenda/collaboration", collaborators: [] })).toEqual([
+      "role:owner", "role:admin", "role:reviewer", "scope:agenda:read",
+    ]);
+    expect(audiencesForServerMessage({
+      t: "show/state",
+      state: {
+        revision: 0,
+        status: "idle",
+        currentTalkId: null,
+        startedAt: null,
+        holdStartedAt: null,
+        accumulatedHoldMs: 0,
+        updatedAt: 0,
+        updatedBy: null,
+      },
+    })).toEqual(["role:owner", "role:admin", "scope:agenda:read"]);
     expect(audiencesForServerMessage({
       t: "dashboard/progress",
       speakerId: "speaker",
@@ -179,6 +202,148 @@ describe("EventRoom live authorization", () => {
     });
     owner.close();
   }, 30_000);
+
+  it("coordinates agenda soft locks and ghost previews across clients", async () => {
+    const owner = await connect({ cookie: "room-owner-session" });
+    const peer = await connect({ cookie: "room-demoted-session" });
+    owner.send(JSON.stringify({ t: "room/hello", surface: "agenda" }));
+    peer.send(JSON.stringify({ t: "room/hello", surface: "agenda" }));
+
+    const locked = waitForMessage(peer, (message) =>
+      message.t === "agenda/collaboration" && message.collaborators.length === 1);
+    owner.send(JSON.stringify({ t: "agenda/focus", talkId: "room-live-talk" }));
+    expect(await locked).toMatchObject({
+      t: "agenda/collaboration",
+      collaborators: [{
+        userId: "room-owner",
+        name: "Room Owner",
+        talkId: "room-live-talk",
+        preview: null,
+      }],
+    });
+
+    const conflict = waitForType(peer, "room/error");
+    peer.send(JSON.stringify({ t: "agenda/focus", talkId: "room-live-talk" }));
+    expect(await conflict).toMatchObject({
+      t: "room/error",
+      error: "Conflict",
+      message: "Room Owner is already moving this talk",
+    });
+
+    const preview = waitForMessage(peer, (message) =>
+      message.t === "agenda/collaboration" && message.collaborators.some(({ preview }) => preview !== null));
+    owner.send(JSON.stringify({
+      t: "agenda/preview",
+      talkId: "room-live-talk",
+      target: {
+        trackId: null,
+        roomId: "room-a",
+        startsAt: 1_700_003_600_000,
+        durationMin: 45,
+      },
+    }));
+    expect(await preview).toMatchObject({
+      t: "agenda/collaboration",
+      collaborators: [expect.objectContaining({
+        talkId: "room-live-talk",
+        preview: expect.objectContaining({ roomId: "room-a", durationMin: 45 }),
+      })],
+    });
+
+    const released = waitForMessage(peer, (message) =>
+      message.t === "agenda/collaboration" && message.collaborators.length === 0);
+    owner.close();
+    expect(await released).toEqual({ t: "agenda/collaboration", collaborators: [] });
+    peer.close();
+  });
+
+  it("persists synchronized show state and routes room cues to matching surfaces", async () => {
+    const control = await connect({ cookie: "room-owner-session" });
+    const roomDisplay = await connect({ cookie: "room-demoted-session" });
+    control.send(JSON.stringify({ t: "room/hello", surface: "show:control" }));
+    roomDisplay.send(JSON.stringify({ t: "room/hello", surface: "show:room:room-a" }));
+
+    const controlState = waitForMessage(control, (message) =>
+      message.t === "show/state" && message.state.status === "running");
+    const displayState = waitForMessage(roomDisplay, (message) =>
+      message.t === "show/state" && message.state.status === "running");
+    const result = waitForType(control, "room/result");
+    control.send(JSON.stringify({
+      t: "show/control",
+      requestId: "start-show",
+      action: "start",
+      talkId: "room-live-talk",
+    }));
+    expect(await controlState).toMatchObject({
+      t: "show/state",
+      state: { status: "running", currentTalkId: "room-live-talk", revision: 1 },
+    });
+    expect(await displayState).toMatchObject({
+      t: "show/state",
+      state: { status: "running", currentTalkId: "room-live-talk", revision: 1 },
+    });
+    expect(await result).toMatchObject({
+      t: "room/result",
+      operationId: "show.control",
+      replyTo: "start-show",
+    });
+
+    const lateControl = await connect({ cookie: "room-owner-session" });
+    const restored = waitForMessage(lateControl, (message) =>
+      message.t === "show/state" && message.state.status === "running");
+    lateControl.send(JSON.stringify({ t: "room/hello", surface: "show:control" }));
+    expect(await restored).toMatchObject({
+      t: "show/state",
+      state: { status: "running", currentTalkId: "room-live-talk", revision: 1 },
+    });
+
+    const cueAtDisplay = waitForType(roomDisplay, "show/cue");
+    const cueAtControl = waitForType(control, "show/cue");
+    const cueAck = waitForType(control, "show/cue_sent");
+    control.send(JSON.stringify({
+      t: "show/cue",
+      requestId: "cue-room-a",
+      kind: "five_minutes",
+      target: { kind: "room", value: "room-a" },
+      message: "Five minutes remaining in Room A.",
+    }));
+    expect(await cueAtDisplay).toMatchObject({
+      t: "show/cue",
+      cue: { kind: "five_minutes", message: "Five minutes remaining in Room A." },
+    });
+    expect(await cueAtControl).toMatchObject({ t: "show/cue" });
+    expect(await cueAck).toMatchObject({
+      t: "show/cue_sent",
+      recipients: 3,
+      replyTo: "cue-room-a",
+    });
+
+    const reset = waitForMessage(control, (message) =>
+      message.t === "show/state" && message.state.status === "idle" && message.state.revision === 2);
+    control.send(JSON.stringify({ t: "show/control", requestId: "reset-show", action: "reset" }));
+    expect(await reset).toMatchObject({ t: "show/state", state: { status: "idle", revision: 2 } });
+    control.close();
+    roomDisplay.close();
+    lateControl.close();
+  });
+
+  it("denies show control to reviewers", async () => {
+    const reviewer = await connect({ cookie: "room-reviewer-session" });
+    const denied = waitForType(reviewer, "room/error");
+    reviewer.send(JSON.stringify({
+      t: "show/cue",
+      requestId: "reviewer-cue",
+      kind: "hold",
+      target: { kind: "crew" },
+      message: "Forged hold cue",
+    }));
+    expect(await denied).toMatchObject({
+      t: "room/error",
+      message: "Access denied",
+      replyTo: "reviewer-cue",
+    });
+    reviewer.close();
+  });
 
   it("rejects malformed internal broadcasts before delivery", async () => {
     const id = env.EVENT_ROOM.idFromName(EVENT_ID);
