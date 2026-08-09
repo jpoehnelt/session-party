@@ -1,5 +1,6 @@
 import { EntityId } from "contracts/domain";
 import { EventRole } from "contracts/types";
+import { ApiScope, ApiScopes } from "contracts/principal";
 import { Schema } from "effect";
 
 const OptionalText = Schema.optional(Schema.Union(Schema.String, Schema.Null));
@@ -107,3 +108,39 @@ export const RemoveEventMemberOutput = Schema.Struct({
   idempotent: Schema.Boolean,
 });
 export type RemoveEventMemberOutput = typeof RemoveEventMemberOutput.Type;
+
+export const EventApiKey = Schema.Struct({
+  id: EntityId,
+  name: Schema.String,
+  scopes: ApiScopes,
+  expiresAt: Schema.DateFromString,
+  revokedAt: Schema.NullOr(Schema.DateFromString),
+  version: Schema.Int.pipe(Schema.positive()),
+  createdAt: Schema.DateFromString,
+});
+export type EventApiKey = typeof EventApiKey.Type;
+
+export const ListEventApiKeysInput = Schema.Struct({ eventId: EntityId });
+export type ListEventApiKeysInput = typeof ListEventApiKeysInput.Type;
+
+export const CreateEventApiKeyInput = Schema.Struct({
+  eventId: EntityId,
+  name: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(120)),
+  scopes: Schema.NonEmptyArray(ApiScope),
+  expiresAt: Schema.Number,
+});
+export type CreateEventApiKeyInput = typeof CreateEventApiKeyInput.Type;
+
+export const CreateEventApiKeyOutput = Schema.Struct({
+  apiKey: EventApiKey,
+  /** Returned exactly once. Subsequent reads expose metadata only. */
+  secret: Schema.String,
+});
+export type CreateEventApiKeyOutput = typeof CreateEventApiKeyOutput.Type;
+
+export const RevokeEventApiKeyInput = Schema.Struct({
+  eventId: EntityId,
+  apiKeyId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+});
+export type RevokeEventApiKeyInput = typeof RevokeEventApiKeyInput.Type;

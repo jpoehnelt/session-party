@@ -1,17 +1,21 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { Schema } from "effect";
+import type { ApiScope } from "contracts/principal";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { Badge, Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Table, Textarea, Toaster, toast } from "@/ui";
 import {
   AddEventMemberOutput,
+  CreateEventApiKeyOutput,
+  EventApiKey,
   EventMember,
   EventOutput,
   RemoveEventMemberOutput,
   UpdateEventInput,
   UpdateEventMemberOutput,
   type EventMember as EventMemberRecord,
+  type EventApiKey as EventApiKeyRecord,
   type EventOutput as EventMetadata,
   type UpdateEventInput as EventPatch,
 } from "../schema";
@@ -68,6 +72,208 @@ async function removeMember(eventId: string, member: EventMemberRecord) {
   return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/members/${encodeURIComponent(member.id)}`, {
     method: "DELETE", body: { expectedVersion: member.version, idempotencyKey: idempotencyKey() }, schema: RemoveEventMemberOutput,
   });
+}
+
+export function fetchEventApiKeys(eventId: string): Promise<readonly EventApiKeyRecord[]> {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/api-keys`, { schema: Schema.Array(EventApiKey) });
+}
+
+export function createEventApiKey(
+  eventId: string,
+  input: { readonly name: string; readonly scopes: readonly [ApiScope, ...ApiScope[]]; readonly expiresAt: number },
+) {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/api-keys`, {
+    method: "POST", body: input, schema: CreateEventApiKeyOutput,
+  });
+}
+
+export function revokeEventApiKey(eventId: string, apiKey: EventApiKeyRecord) {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/api-keys/${encodeURIComponent(apiKey.id)}`, {
+    method: "DELETE", body: { expectedVersion: apiKey.version }, schema: EventApiKey,
+  });
+}
+
+const allApiScopes = [
+  "event:read", "event:write", "forms:read", "forms:write", "submissions:read", "submissions:write",
+  "speakers:read", "speakers:write", "reviews:read", "reviews:write", "agenda:read", "agenda:write",
+  "communications:read", "communications:write", "content:read", "content:write",
+  "integrations:read", "integrations:write", "audit:read",
+] as const satisfies readonly ApiScope[];
+
+export const apiKeyPresets = {
+  read: {
+    label: "Read-only assistant",
+    description: "Inspect the event, program, speakers, agenda, communications, content, integrations, and audit trail.",
+    scopes: allApiScopes.filter((scope) => scope.endsWith(":read")) as [ApiScope, ...ApiScope[]],
+  },
+  agenda: {
+    label: "Agenda automation",
+    description: "Read event and speaker context, schedule talks, and publish the agenda.",
+    scopes: ["event:read", "speakers:read", "agenda:read", "agenda:write"] as const,
+  },
+  onboarding: {
+    label: "Speaker onboarding",
+    description: "Read submissions and manage organizer-owned speaker onboarding workflows.",
+    scopes: ["event:read", "submissions:read", "speakers:read", "speakers:write", "content:read"] as const,
+  },
+  full: {
+    label: "Full organizer automation",
+    description: "Grant every available event API scope. Use only for a trusted integration that needs the entire workflow.",
+    scopes: allApiScopes,
+  },
+} as const;
+
+type ApiKeyPreset = keyof typeof apiKeyPresets;
+
+const copyText = async (value: string, label: string) => {
+  await navigator.clipboard.writeText(value);
+  toast(`${label} copied.`, { tone: "success" });
+};
+
+export interface ApiAccessPanelProps {
+  readonly eventId: string;
+  readonly initialApiKeys?: readonly EventApiKeyRecord[];
+}
+
+export function ApiAccessPanel({ eventId, initialApiKeys }: ApiAccessPanelProps) {
+  const [apiKeys, setApiKeys] = useState<readonly EventApiKeyRecord[] | null>(initialApiKeys ?? null);
+  const [name, setName] = useState("");
+  const [preset, setPreset] = useState<ApiKeyPreset>("read");
+  const [lifetimeDays, setLifetimeDays] = useState("90");
+  const [creating, setCreating] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ readonly apiKey: EventApiKeyRecord; readonly secret: string } | null>(null);
+
+  const refresh = () => {
+    setApiKeys(null);
+    void fetchEventApiKeys(eventId).then(setApiKeys).catch((cause) => {
+      setApiKeys([]);
+      setError(cause instanceof Error ? cause.message : "Could not load API keys");
+    });
+  };
+
+  useEffect(() => {
+    if (initialApiKeys === undefined) refresh();
+  }, [eventId]);
+
+  const handleCreate = async (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    setError(null);
+    setCreated(null);
+    setCreating(true);
+    try {
+      const selected = apiKeyPresets[preset];
+      const result = await createEventApiKey(eventId, {
+        name,
+        scopes: [...selected.scopes] as [ApiScope, ...ApiScope[]],
+        expiresAt: Date.now() + Number(lifetimeDays) * 24 * 60 * 60_000,
+      });
+      setName("");
+      setCreated(result);
+      setApiKeys((current) => [result.apiKey, ...(current ?? [])]);
+      toast("API key created. Copy the secret now.", { tone: "success" });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Could not create API key";
+      setError(message);
+      toast(message, { tone: "danger" });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleRevoke = async (apiKey: EventApiKeyRecord) => {
+    setError(null);
+    setRevokingId(apiKey.id);
+    try {
+      const revoked = await revokeEventApiKey(eventId, apiKey);
+      setApiKeys((current) => current?.map((item) => item.id === revoked.id ? revoked : item) ?? [revoked]);
+      if (created?.apiKey.id === revoked.id) setCreated(null);
+      toast("API key revoked.", { tone: "success" });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Could not revoke API key";
+      setError(message);
+      toast(message, { tone: "danger" });
+      refresh();
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
+  const origin = typeof window === "undefined" ? "https://sessionparty.example" : window.location.origin;
+  const endpoint = `${origin}/mcp`;
+  const clientConfig = created ? JSON.stringify({
+    mcpServers: {
+      "session-party": { type: "http", url: endpoint, headers: { Authorization: `Bearer ${created.secret}` } },
+    },
+  }, null, 2) : "";
+
+  return (
+    <Card className="[&>header]:bg-production-lime [&>header_h3]:text-ink" title="MCP & API access">
+      <p className="text-sm text-ink-secondary">
+        Connect trusted organizer automation to this event. Every key is event-bound, expiring, and limited to the selected scopes; speaker self-service stays in the browser portal.
+      </p>
+      <div className="mt-4 border-2 border-line-strong bg-surface-muted p-4">
+        <p className="text-[11px] font-black uppercase tracking-[0.08em]">MCP endpoint</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs">{endpoint}</code>
+          <Button type="button" size="sm" variant="secondary" onClick={() => void copyText(endpoint, "Endpoint")}>Copy endpoint</Button>
+        </div>
+      </div>
+
+      <form className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,1fr)_10rem_auto] lg:items-end" onSubmit={handleCreate}>
+        <Input label="Key name" required maxLength={120} value={name} placeholder="Production assistant" onChange={(change) => setName(change.target.value)} />
+        <Select label="Access preset" value={preset} onChange={(change) => setPreset(change.target.value as ApiKeyPreset)}>
+          {Object.entries(apiKeyPresets).map(([value, option]) => <option key={value} value={value}>{option.label}</option>)}
+        </Select>
+        <Select label="Expires in" value={lifetimeDays} onChange={(change) => setLifetimeDays(change.target.value)}>
+          <option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option>
+        </Select>
+        <Button type="submit" loading={creating} className="min-h-11">Create key</Button>
+      </form>
+      <p className="mt-2 text-xs text-ink-faint">{apiKeyPresets[preset].description}</p>
+      <div className="mt-2 flex flex-wrap gap-1" aria-label="Selected API scopes">
+        {apiKeyPresets[preset].scopes.map((scope) => <Badge key={scope}>{scope}</Badge>)}
+      </div>
+      {error ? <p role="alert" className="mt-4 text-sm font-bold text-danger">{error}</p> : null}
+
+      {created ? (
+        <div className="mt-5 border-2 border-line-strong bg-warning-soft p-4 shadow-[4px_4px_0_#171714]">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><p className="font-black">Copy this secret now</p><p className="text-sm text-ink-secondary">It will not be shown again after you dismiss or leave this page.</p></div>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setCreated(null)}>Dismiss</Button>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs" data-testid="api-key-secret">{created.secret}</code>
+            <Button type="button" size="sm" variant="secondary" onClick={() => void copyText(created.secret, "Secret")}>Copy secret</Button>
+          </div>
+          <p className="mt-4 text-[11px] font-black uppercase tracking-[0.08em]">Client configuration</p>
+          <pre className="mt-2 max-h-64 overflow-auto bg-[#171714] p-3 text-xs text-white"><code>{clientConfig}</code></pre>
+          <Button type="button" size="sm" className="mt-3" onClick={() => void copyText(clientConfig, "Client configuration")}>Copy configuration</Button>
+        </div>
+      ) : null}
+
+      <div className="mt-6">
+        <h4 className="text-sm font-black">Event keys</h4>
+        {apiKeys === null ? <div className="mt-3"><Skeleton className="h-28" /></div> : (
+          <div className="mt-3">
+            <Table
+              columns={[
+                { key: "name", header: "Key", render: (key: EventApiKeyRecord) => <span>{key.name}<span className="block text-xs text-ink-faint">Created {key.createdAt.toLocaleDateString()}</span></span> },
+                { key: "scopes", header: "Scopes", render: (key: EventApiKeyRecord) => <span className="text-xs">{key.scopes.join(", ")}</span> },
+                { key: "status", header: "Status", render: (key: EventApiKeyRecord) => <Badge>{key.revokedAt ? "Revoked" : key.expiresAt.getTime() <= Date.now() ? "Expired" : "Active"}</Badge> },
+                { key: "expires", header: "Expires", render: (key: EventApiKeyRecord) => key.expiresAt.toLocaleDateString() },
+                { key: "actions", header: "Manage", render: (key: EventApiKeyRecord) => key.revokedAt ? null : <Button type="button" size="sm" variant="ghost" loading={revokingId === key.id} onClick={() => void handleRevoke(key)}>Revoke</Button> },
+              ]}
+              rows={[...apiKeys]}
+              rowKey={(key) => key.id}
+              empty="No API keys yet. Create a least-privilege key when an organizer integration needs one."
+            />
+          </div>
+        )}
+      </div>
+    </Card>
+  );
 }
 
 interface WallTime {
@@ -552,6 +758,7 @@ export function EventSettingsForm({
         </div>
       )}
     </Card>
+    <ApiAccessPanel eventId={event.id} />
     </div>
   );
 }

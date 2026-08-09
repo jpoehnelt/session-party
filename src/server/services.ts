@@ -113,6 +113,14 @@ export class CurrentUser extends Context.Tag("session-party/CurrentUser")<
   Principal
 >() {}
 
+export class ApiKeyCredentials extends Context.Tag("session-party/ApiKeyCredentials")<
+  ApiKeyCredentials,
+  {
+    /** Generates bearer material and its deployment-bound HMAC. The secret is never persisted. */
+    readonly generate: () => Effect.Effect<{ readonly secret: string; readonly hash: string }, External>;
+  }
+>() {}
+
 type SecretBindings = {
   readonly LOCAL_MODE?: string;
   readonly SESSION_SECRET?: string;
@@ -506,6 +514,14 @@ export const AppLayer = (env: Env) => {
     Layer.succeed(PublicSubmissionAbuse, publicSubmissionAbuse(env)),
     Layer.succeed(PublicSubmissionRequest, { remoteIp: null }),
     Layer.succeed(Authorizer, { authorize: authorizePrincipal }),
+    Layer.succeed(ApiKeyCredentials, {
+      generate: () => externalEffect("api-key-credentials", async () => {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        const secret = `spk_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+        return { secret, hash: await hmacBearerMaterial(env, secret) };
+      }),
+    }),
     Layer.succeed(Mail, {
       send: (payload) => externalEffect("cloudflare-email", () => sendMail(env, payload)),
     }),
@@ -580,4 +596,5 @@ export type AppServices =
   | Files
   | Rooms
   | AiService
+  | ApiKeyCredentials
   | Authorizer;

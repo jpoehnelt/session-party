@@ -6,13 +6,14 @@ import type {
   EventApiKeyPrincipal,
   EventRole,
 } from "contracts/principal";
-import { auditLog, domainChanges, eventMembers, events } from "contracts/schema";
+import { apiKeys, auditLog, domainChanges, eventMembers, events } from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Exit, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   type Authorizer,
+  type ApiKeyCredentials,
   type CurrentUser,
   AppLayer,
   CurrentUser as CurrentUserTag,
@@ -20,11 +21,14 @@ import {
 } from "@/server/services";
 import {
   addEventMember,
+  createEventApiKey,
   createEvent,
   getEvent,
   listEventMembers,
+  listEventApiKeys,
   listEvents,
   removeEventMember,
+  revokeEventApiKey,
   updateEvent,
   updateEventMember,
 } from "./service";
@@ -73,7 +77,7 @@ const reviewer = browserPrincipal("user-reviewer", "Reviewer");
 const outsider = browserPrincipal("user-outsider", "Outsider");
 const secondOwner = browserPrincipal("user-second-owner", "Second owner");
 
-type EventServiceRequirements = Authorizer | CurrentUser | Db;
+type EventServiceRequirements = ApiKeyCredentials | Authorizer | CurrentUser | Db;
 
 const runEitherAs = <A, E>(
   principal: BrowserSessionPrincipal | EventApiKeyPrincipal,
@@ -395,5 +399,66 @@ describe("events service", () => {
       idempotencyKey: "transfer-remove-owner",
     }));
     expect(replayed).toMatchObject({ deleted: true, idempotent: true });
+  });
+
+  it("creates, lists, and revokes event-bound API keys without persisting the bearer secret", async () => {
+    const created = await runAs(owner, createEvent({ name: "MCP access", slug: "mcp-access" }));
+    const issued = await runAs(owner, createEventApiKey({
+      eventId: created.id,
+      name: "Agenda automation",
+      scopes: ["event:read", "agenda:read", "agenda:write"],
+      expiresAt: Date.now() + 30 * 24 * 60 * 60_000,
+    }));
+
+    expect(issued.secret).toMatch(/^spk_[0-9a-f]{64}$/);
+    expect(issued.apiKey).toMatchObject({
+      name: "Agenda automation", scopes: ["event:read", "agenda:read", "agenda:write"],
+      revokedAt: null, version: 1,
+    });
+    expect(JSON.stringify(issued.apiKey)).not.toContain(issued.secret);
+
+    const db = drizzle(env.DB);
+    const [stored] = await db.select().from(apiKeys).where(eq(apiKeys.id, issued.apiKey.id));
+    expect(stored?.eventId).toBe(created.id);
+    expect(stored?.createdBy).toBe(owner.userId);
+    expect(stored?.keyHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored?.keyHash).not.toBe(issued.secret);
+
+    const listed = await runAs(owner, listEventApiKeys({ eventId: created.id }));
+    expect(listed).toEqual([issued.apiKey]);
+    expect(JSON.stringify(listed)).not.toContain(issued.secret);
+
+    const revoked = await runAs(owner, revokeEventApiKey({
+      eventId: created.id, apiKeyId: issued.apiKey.id, expectedVersion: 1,
+    }));
+    expect(revoked).toMatchObject({ id: issued.apiKey.id, version: 2 });
+    expect(revoked.revokedAt).toBeInstanceOf(Date);
+    await expectFailure(owner, revokeEventApiKey({
+      eventId: created.id, apiKeyId: issued.apiKey.id, expectedVersion: 1,
+    }), "Conflict");
+
+    const audits = await db.select().from(auditLog).where(eq(auditLog.eventId, created.id));
+    expect(audits.map(({ action }) => action)).toEqual(expect.arrayContaining([
+      "events.createApiKey", "events.revokeApiKey",
+    ]));
+    expect(JSON.stringify(audits)).not.toContain(issued.secret);
+  });
+
+  it("keeps API-key management browser-only and limited to owners and admins", async () => {
+    const created = await runAs(owner, createEvent({ name: "Guarded MCP", slug: "guarded-mcp" }));
+    await addMember(created.id, admin.userId, "admin");
+    await addMember(created.id, reviewer.userId, "reviewer");
+    const input = {
+      eventId: created.id,
+      name: "Read access",
+      scopes: ["event:read"] as const,
+      expiresAt: Date.now() + 30 * 24 * 60 * 60_000,
+    };
+
+    const adminIssued = await runAs(admin, createEventApiKey(input));
+    expect(adminIssued.apiKey.scopes).toEqual(["event:read"]);
+    await expectFailure(reviewer, createEventApiKey(input), "Forbidden");
+    await expectFailure(outsider, listEventApiKeys({ eventId: created.id }), "Forbidden");
+    await expectFailure(apiKeyPrincipal("self-managing", created.id, ["event:read", "event:write"]), createEventApiKey(input), "Forbidden");
   });
 });
