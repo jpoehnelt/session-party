@@ -88,7 +88,7 @@ const reviewStateTone = {
 } as const;
 
 export function decideQueueInteraction(
-  interaction: "focus" | "open",
+  _interaction: "focus" | "open",
   submissionId: string,
   authoritativeSubmissionId: string | undefined,
   pendingSubmissionId: string | undefined,
@@ -96,7 +96,6 @@ export function decideQueueInteraction(
   readonly focusedSubmissionId: string;
   readonly loadSubmissionId: string | undefined;
 } {
-  if (interaction === "focus") return { focusedSubmissionId: submissionId, loadSubmissionId: undefined };
   if (submissionId === authoritativeSubmissionId || submissionId === pendingSubmissionId) {
     return { focusedSubmissionId: submissionId, loadSubmissionId: undefined };
   }
@@ -380,6 +379,9 @@ export function ReviewWorkbenchContent({
       pendingSelectionRef.current,
     );
     setFocusedId(decision.focusedSubmissionId);
+    if (!decision.loadSubmissionId) return;
+    pendingSelectionRef.current = decision.loadSubmissionId;
+    onSelectSubmission(decision.loadSubmissionId);
   };
   const openSubmission = (submissionId: string) => {
     const decision = decideQueueInteraction(
@@ -433,7 +435,7 @@ export function ReviewWorkbenchContent({
           <p className="mt-3 text-sm font-semibold text-ink">Evidence-first triage for {workbench.eventName}. Times shown in {workbench.timezone}.</p>
         </div>
         <div className="border-l-2 border-ink/35 pl-4 text-left text-[10px] font-black uppercase tracking-[0.08em] text-ink sm:text-right">
-          <p>Queue focus: ↑/↓ · Open detail: Enter · Search: /</p>
+          <p>Select proposal: ↑/↓ · Focus detail: Enter · Search: /</p>
           <p>Last updated {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: workbench.timezone }).format(workbench.lastUpdatedAt)} {workbench.timezone}</p>
         </div>
       </header>
