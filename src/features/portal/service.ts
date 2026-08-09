@@ -2,47 +2,59 @@ import { Conflict, External, Forbidden, NotFound, Validation, type AppError } fr
 import { eventAuthorization, type ApiScope } from "contracts/principal";
 import {
   acceptanceEvents,
+  airtableOutbox,
+  airtablePendingEdits,
+  airtableRecordLinks,
   assets,
+  auditLog,
   domainChanges,
   events,
+  idempotencyRecords,
+  integrations,
   pages,
   speakerProvisioning,
   speakers,
+  submissionSpeakers,
   submissions,
   taskCompletions,
   tasks,
 } from "contracts/schema";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import type { BatchItem } from "drizzle-orm/batch";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db, Files, Rooms } from "@/server/services";
-import type {
-  CreateResourceInput,
-  CreateTaskInput,
-  DeletePortalEntityOutput,
-  DeleteResourceInput,
-  DeleteTaskInput,
-  PortalAsset,
-  PortalDashboard,
-  PortalEvent,
-  PortalResource,
-  PortalSnapshot,
-  PortalTask,
-  PortalTaskDefinition,
-  ProvisionSpeakerInput,
-  PublicSpeakerGallery,
-  PublicSpeakersInput,
-  ReadinessSummary,
-  SetTaskCompletionInput,
-  SpeakerDirectory,
-  SpeakerDirectoryItem,
-  SpeakerProfile,
-  UpdateProfileInput,
-  UpdateResourceInput,
-  UpdateSpeakerPublicationInput,
-  UpdateTaskInput,
-  UploadPortalAssetInput,
-  UploadPortalAssetOutput,
+import {
+  PortalTask as PortalTaskSchema,
+  SpeakerProfile as SpeakerProfileSchema,
+  UploadPortalAssetOutput as UploadPortalAssetOutputSchema,
+  type CreateResourceInput,
+  type CreateTaskInput,
+  type DeletePortalEntityOutput,
+  type DeleteResourceInput,
+  type DeleteTaskInput,
+  type PortalAsset,
+  type PortalDashboard,
+  type PortalEvent,
+  type PortalProfileSyncField,
+  type PortalResource,
+  type PortalSnapshot,
+  type PortalTask,
+  type PortalTaskDefinition,
+  type ProvisionSpeakerInput,
+  type PublicSpeakerGallery,
+  type PublicSpeakersInput,
+  type ReadinessSummary,
+  type SetTaskCompletionInput,
+  type SpeakerDirectory,
+  type SpeakerDirectoryItem,
+  type SpeakerProfile,
+  type UpdateProfileInput,
+  type UpdateResourceInput,
+  type UpdateSpeakerPublicationInput,
+  type UpdateTaskInput,
+  type UploadPortalAssetInput,
+  type UploadPortalAssetOutput,
 } from "./schema";
 
 const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
@@ -67,6 +79,98 @@ const id = (prefix: string) => `${prefix}_${nanoid()}`;
 const now = () => new Date();
 const millis = (value: Date | null) => value?.getTime() ?? null;
 const assetKey = (eventId: string, assetId: string) => `portal/${eventId}/${assetId}`;
+const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1_000;
+export const PORTAL_UPLOAD_MAX_BYTES = 10 * 1_024 * 1_024;
+const PROFILE_SYNC_FIELDS = ["displayName", "title", "company", "bio"] as const satisfies readonly PortalProfileSyncField[];
+
+const sha256 = (value: string): Effect.Effect<string, External> =>
+  Effect.tryPromise({
+    try: async () => {
+      const digest = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+      );
+      let result = "";
+      for (const byte of digest) result += byte.toString(16).padStart(2, "0");
+      return result;
+    },
+    catch: (error) =>
+      new External({
+        service: "crypto",
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+  });
+
+const commandHashes = (idempotencyKey: string, request: unknown) =>
+  Effect.all({
+    keyHash: sha256(idempotencyKey),
+    requestHash: sha256(JSON.stringify(request)),
+  });
+
+const findReplay = (
+  eventId: string,
+  operationId: string,
+  principalId: string,
+  keyHash: string,
+  requestHash: string,
+) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [record] = yield* database(() =>
+      db
+        .select()
+        .from(idempotencyRecords)
+        .where(and(
+          eq(idempotencyRecords.eventId, eventId),
+          eq(idempotencyRecords.operationId, operationId),
+          eq(idempotencyRecords.principalId, principalId),
+          eq(idempotencyRecords.keyHash, keyHash),
+        ))
+        .limit(1),
+    );
+    if (!record) return null;
+    if (record.requestHash !== requestHash) {
+      return yield* Effect.fail(
+        new Conflict({ message: "Idempotency key was already used for a different request" }),
+      );
+    }
+    if (record.status !== "completed" || record.responseBody === null) {
+      return yield* Effect.fail(
+        new Conflict({ message: "This request is already in progress; retry shortly" }),
+      );
+    }
+    return record.responseBody;
+  });
+
+const decodeReplay = <A, I>(
+  schema: Schema.Schema<A, I, never>,
+  value: unknown,
+): Effect.Effect<A, External> =>
+  Schema.decodeUnknown(schema)(value).pipe(
+    Effect.mapError((error) =>
+      new External({
+        service: "database",
+        detail: `Invalid idempotency response: ${String(error)}`,
+      })),
+  );
+
+const idempotencyInsert = (
+  eventId: string,
+  operationId: string,
+  principalId: string,
+  keyHash: string,
+  requestHash: string,
+  createdAt: Date,
+) => ({
+  id: id("idempotency"),
+  eventId,
+  operationId,
+  principalId,
+  keyHash,
+  requestHash,
+  status: "in_progress" as const,
+  expiresAt: new Date(createdAt.getTime() + IDEMPOTENCY_TTL_MS),
+  createdAt,
+});
 
 type PrincipalActor = { readonly userId: string; readonly actorUserId: string | null; readonly actorApiKeyId: string | null };
 
@@ -83,17 +187,23 @@ const eventView = (event: typeof events.$inferSelect): PortalEvent => ({
   accentColor: event.accentColor,
 });
 
-const speakerView = (speaker: typeof speakers.$inferSelect): SpeakerProfile => ({
+const speakerView = (
+  speaker: typeof speakers.$inferSelect,
+  pending = new Map<PortalProfileSyncField, unknown>(),
+): SpeakerProfile => ({
   id: speaker.id,
   eventId: speaker.eventId,
-  displayName: speaker.displayName,
-  title: speaker.title,
-  company: speaker.company,
-  bio: speaker.bio,
+  displayName: typeof pending.get("displayName") === "string"
+    ? pending.get("displayName") as string
+    : speaker.displayName,
+  title: pending.has("title") ? pending.get("title") as string | null : speaker.title,
+  company: pending.has("company") ? pending.get("company") as string | null : speaker.company,
+  bio: pending.has("bio") ? pending.get("bio") as string | null : speaker.bio,
   headshotAssetId: speaker.headshotAssetId,
   links: speaker.links ?? [],
   visible: speaker.visible,
   version: speaker.version,
+  pendingSyncFields: PROFILE_SYNC_FIELDS.filter((field) => pending.has(field)),
 });
 
 const taskDefinitionView = (task: typeof tasks.$inferSelect): PortalTaskDefinition => ({
@@ -243,11 +353,16 @@ const selfSpeaker = (eventId: string) => Effect.gen(function* () {
 const taskView = (
   task: typeof tasks.$inferSelect,
   completion: typeof taskCompletions.$inferSelect | undefined,
+  prerequisite: PortalTask["prerequisite"],
 ): PortalTask => ({
   ...taskDefinitionView(task),
   completed: completion !== undefined,
   completedAt: completion ? millis(completion.completedAt) : null,
   completionData: (completion?.data as PortalTask["completionData"]) ?? null,
+  completionVersion: completion?.version ?? 0,
+  prerequisite: completion
+    ? { satisfied: true, message: null }
+    : prerequisite,
 });
 
 const readiness = (
@@ -271,18 +386,91 @@ const readiness = (
 
 const currentTasks = (eventId: string, speakerId: string) => Effect.gen(function* () {
   const { db } = yield* Db;
-  const [definitions, completions] = yield* Effect.all([
+  const [definitions, completions, speaker, pendingBio] = yield* Effect.all([
     database(() => db.select().from(tasks).where(eq(tasks.eventId, eventId)).orderBy(asc(tasks.order), asc(tasks.id))),
     database(() => db.select().from(taskCompletions).where(and(
       eq(taskCompletions.eventId, eventId),
       eq(taskCompletions.speakerId, speakerId),
     ))),
-  ]);
+    database(() => db.select().from(speakers).where(and(
+      eq(speakers.eventId, eventId),
+      eq(speakers.id, speakerId),
+    )).limit(1).then((rows) => rows[0])),
+    database(() => db
+      .select({ intendedValue: airtablePendingEdits.intendedValue })
+      .from(airtablePendingEdits)
+      .where(and(
+        eq(airtablePendingEdits.eventId, eventId),
+        eq(airtablePendingEdits.entityType, "speaker"),
+        eq(airtablePendingEdits.entityId, speakerId),
+        eq(airtablePendingEdits.fieldKey, "bio"),
+        eq(airtablePendingEdits.status, "pending"),
+      ))
+      .limit(1)
+      .then((rows) => rows[0])),
+  ], { concurrency: 1 });
+  if (!speaker) {
+    return yield* Effect.fail(
+      new External({ service: "database", detail: "Speaker disappeared while loading tasks" }),
+    );
+  }
+  const formIds = definitions.flatMap((task) => task.formId ? [task.formId] : []);
+  const submittedFormIds = formIds.length === 0
+    ? []
+    : yield* database(() => db
+      .select({ formId: submissions.formId })
+      .from(submissions)
+      .innerJoin(submissionSpeakers, and(
+        eq(submissionSpeakers.eventId, submissions.eventId),
+        eq(submissionSpeakers.submissionId, submissions.id),
+      ))
+      .where(and(
+        eq(submissions.eventId, eventId),
+        eq(submissions.status, "submitted"),
+        eq(submissionSpeakers.speakerId, speakerId),
+        inArray(submissions.formId, formIds),
+      )));
+  const completedForms = new Set(submittedFormIds.map(({ formId }) => formId));
   const byTask = new Map(completions.map((completion) => [completion.taskId, completion]));
+  const prerequisites = new Map<string, PortalTask["prerequisite"]>();
+  const taskViews = definitions.map((task) => {
+    const profileSatisfied = Boolean(
+      speaker.bio?.trim() ||
+      (typeof pendingBio?.intendedValue === "string" && pendingBio.intendedValue.trim()),
+    );
+    const prerequisite = task.kind === "profile"
+      ? {
+        satisfied: profileSatisfied,
+        message: profileSatisfied ? null : "Add your bio before completing this task.",
+      }
+      : task.kind === "link"
+        ? {
+          satisfied: (speaker.links?.length ?? 0) > 0,
+          message: (speaker.links?.length ?? 0) > 0
+            ? null
+            : "Add at least one public link before completing this task.",
+        }
+        : task.kind === "form"
+          ? {
+            satisfied: task.formId !== null && completedForms.has(task.formId),
+            message: task.formId !== null && completedForms.has(task.formId)
+              ? null
+              : "Submit the linked form before completing this task.",
+          }
+          : task.kind === "upload"
+            ? {
+              satisfied: false,
+              message: "Upload the requested file to complete this task.",
+            }
+            : { satisfied: true, message: null };
+    prerequisites.set(task.id, prerequisite);
+    return taskView(task, byTask.get(task.id), prerequisite);
+  });
   return {
     definitions,
     completions,
-    taskViews: definitions.map((task) => taskView(task, byTask.get(task.id))),
+    taskViews,
+    prerequisites,
     readiness: readiness(definitions, completions),
   };
 });
@@ -299,6 +487,7 @@ interface PortalChange {
   readonly actorUserId: string | null;
   readonly actorApiKeyId: string | null;
   readonly requestId: string;
+  readonly idempotencyRecordId: string | null;
   readonly occurredAt: Date;
 }
 
@@ -311,6 +500,8 @@ const writeChange = (
   payload: Record<string, unknown>,
   actor: PrincipalActor,
   occurredAt: Date,
+  requestId = id("portal_request"),
+  idempotencyRecordId: string | null = null,
 ): PortalChange => ({
   id: id("change"),
   eventId,
@@ -322,7 +513,8 @@ const writeChange = (
   payload,
   actorUserId: actor.actorUserId,
   actorApiKeyId: actor.actorApiKeyId,
-  requestId: id("portal_request"),
+  requestId,
+  idempotencyRecordId,
   occurredAt,
 });
 
@@ -339,7 +531,7 @@ const changeSelection = (change: PortalChange) => ({
   actorUserId: sql<string | null>`${change.actorUserId}`.as("actor_user_id"),
   actorApiKeyId: sql<string | null>`${change.actorApiKeyId}`.as("actor_api_key_id"),
   requestId: sql<string>`${change.requestId}`.as("request_id"),
-  idempotencyRecordId: sql<string | null>`null`.as("idempotency_record_id"),
+  idempotencyRecordId: sql<string | null>`${change.idempotencyRecordId}`.as("idempotency_record_id"),
   occurredAt: sql<Date>`${change.occurredAt.getTime()}`.as("occurred_at"),
 });
 
@@ -393,11 +585,7 @@ const uploadPolicy = (
         "application/pdf": ["pdf"],
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ["docx"],
       };
-  const maxSize = purpose === "slides"
-    ? 100 * 1024 * 1024
-    : purpose === "document"
-      ? 25 * 1024 * 1024
-      : 10 * 1024 * 1024;
+  const maxSize = PORTAL_UPLOAD_MAX_BYTES;
   if (!allowed[contentType as keyof typeof allowed]?.includes(extension) || size === 0 || size > maxSize) {
     return new Validation({ message: `Invalid ${purpose} file type, extension, or size` });
   }
@@ -406,11 +594,27 @@ const uploadPolicy = (
 
 const decodeBase64 = (value: string): Effect.Effect<Uint8Array, Validation> => Effect.try({
   try: () => {
-    if (value.length % 4 !== 0) throw new Error("invalid base64 length");
+    if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+      throw new Error("invalid base64");
+    }
+    const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+    const decodedSize = value.length / 4 * 3 - padding;
+    if (decodedSize === 0 || decodedSize > PORTAL_UPLOAD_MAX_BYTES) {
+      throw new Error("decoded asset exceeds transport limit");
+    }
     const decoded = atob(value);
-    return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+    const bytes = new Uint8Array(decoded.length);
+    for (let index = 0; index < decoded.length; index += 1) {
+      bytes[index] = decoded.charCodeAt(index);
+    }
+    return bytes;
   },
-  catch: () => new Validation({ message: "Asset content is not valid base64" }),
+  catch: (error) =>
+    new Validation({
+      message: error instanceof Error && error.message === "decoded asset exceeds transport limit"
+        ? "Asset must be between 1 byte and 10 MiB with the current upload transport"
+        : "Asset content is not valid base64",
+    }),
 });
 
 export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect.Effect<SpeakerDirectory, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
@@ -486,10 +690,22 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
   const { speaker, acceptance, actor } = yield* selfSpeaker(event.id);
   const { db } = yield* Db;
   const progress = yield* currentTasks(event.id, speaker.id);
-  const [resources, uploaded] = yield* Effect.all([
+  const [resources, uploaded, pendingRows] = yield* Effect.all([
     database(() => db.select().from(pages).where(and(eq(pages.eventId, event.id), inArray(pages.audience, ["speakers", "public"]))).orderBy(asc(pages.order), asc(pages.id))),
     database(() => db.select().from(assets).where(and(eq(assets.eventId, event.id), eq(assets.uploaderUserId, actor.userId))).orderBy(desc(assets.createdAt))),
-  ]);
+    database(() => db
+      .select({
+        fieldKey: airtablePendingEdits.fieldKey,
+        intendedValue: airtablePendingEdits.intendedValue,
+      })
+      .from(airtablePendingEdits)
+      .where(and(
+        eq(airtablePendingEdits.eventId, event.id),
+        eq(airtablePendingEdits.entityType, "speaker"),
+        eq(airtablePendingEdits.entityId, speaker.id),
+        eq(airtablePendingEdits.status, "pending"),
+      ))),
+  ], { concurrency: 1 });
   const { head } = yield* Files;
   const uploadedAssets = yield* Effect.forEach(uploaded, (asset) => Effect.gen(function* () {
     if (asset.id === speaker.headshotAssetId) return assetView(asset, "headshot");
@@ -502,9 +718,15 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
         : "document";
     return assetView(asset, purpose);
   }));
+  const pending = new Map(
+    pendingRows.flatMap(({ fieldKey, intendedValue }) =>
+      PROFILE_SYNC_FIELDS.includes(fieldKey as PortalProfileSyncField)
+        ? [[fieldKey as PortalProfileSyncField, intendedValue] as const]
+        : []),
+  );
   return {
     event: eventView(event),
-    speaker: speakerView(speaker),
+    speaker: speakerView(speaker, pending),
     submission: { id: acceptance.submission.id, title: acceptance.submission.title, category: acceptance.submission.category, version: acceptance.submission.version },
     provisioningStatus: "provisioned",
     tasks: progress.taskViews,
@@ -518,61 +740,298 @@ export const updateSpeakerProfile = (input: UpdateProfileInput): Effect.Effect<S
   const event = yield* resolveEvent(input.eventId);
   const { speaker, actor } = yield* selfSpeaker(event.id);
   const { db } = yield* Db;
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const replay = yield* findReplay(
+    event.id,
+    "portal.updateProfile",
+    actor.userId,
+    keyHash,
+    requestHash,
+  );
+  if (replay !== null) return yield* decodeReplay(SpeakerProfileSchema, replay);
+  if (speaker.version !== input.expectedVersion) {
+    return yield* Effect.fail(
+      new Conflict({ message: "Speaker profile changed; reload before saving" }),
+    );
+  }
+
+  const [airtableIntegration] = yield* database(() =>
+    db
+      .select({ id: integrations.id })
+      .from(integrations)
+      .where(and(
+        eq(integrations.eventId, event.id),
+        eq(integrations.kind, "airtable"),
+      ))
+      .limit(1),
+  );
+  const changedSyncFields = PROFILE_SYNC_FIELDS.filter(
+    (field) => input[field] !== speaker[field],
+  );
+  const pending = new Map<PortalProfileSyncField, unknown>();
+  const syncStatements: BatchItem<"sqlite">[] = [];
+  if (airtableIntegration) {
+    const existingPending = yield* database(() =>
+      db
+        .select({
+          fieldKey: airtablePendingEdits.fieldKey,
+          intendedValue: airtablePendingEdits.intendedValue,
+        })
+        .from(airtablePendingEdits)
+        .where(and(
+          eq(airtablePendingEdits.eventId, event.id),
+          eq(airtablePendingEdits.integrationId, airtableIntegration.id),
+          eq(airtablePendingEdits.entityType, "speaker"),
+          eq(airtablePendingEdits.entityId, speaker.id),
+          eq(airtablePendingEdits.status, "pending"),
+        )),
+    );
+    for (const row of existingPending) {
+      if (PROFILE_SYNC_FIELDS.includes(row.fieldKey as PortalProfileSyncField)) {
+        pending.set(row.fieldKey as PortalProfileSyncField, row.intendedValue);
+      }
+    }
+    if (changedSyncFields.some((field) => pending.has(field))) {
+      return yield* Effect.fail(
+        new Conflict({ message: "Profile changes are already pending organizer sync" }),
+      );
+    }
+
+    const [[recordLink], [latestOutbox]] = yield* Effect.all([
+      database(() => db
+        .select({
+          outboundRevision: airtableRecordLinks.outboundRevision,
+          inboundRevision: airtableRecordLinks.inboundRevision,
+          inboundHash: airtableRecordLinks.inboundHash,
+        })
+        .from(airtableRecordLinks)
+        .where(and(
+          eq(airtableRecordLinks.eventId, event.id),
+          eq(airtableRecordLinks.integrationId, airtableIntegration.id),
+          eq(airtableRecordLinks.entityType, "speaker"),
+          eq(airtableRecordLinks.entityId, speaker.id),
+        ))
+        .limit(1)),
+      database(() => db
+        .select({ outboundRevision: airtableOutbox.outboundRevision })
+        .from(airtableOutbox)
+        .where(and(
+          eq(airtableOutbox.eventId, event.id),
+          eq(airtableOutbox.integrationId, airtableIntegration.id),
+          eq(airtableOutbox.entityType, "speaker"),
+          eq(airtableOutbox.entityId, speaker.id),
+        ))
+        .orderBy(desc(airtableOutbox.outboundRevision))
+        .limit(1)),
+    ], { concurrency: 1 });
+    let outboundRevision = Math.max(
+      recordLink?.outboundRevision ?? 0,
+      latestOutbox?.outboundRevision ?? 0,
+    );
+    const createdAt = now();
+    for (const field of changedSyncFields) {
+      outboundRevision += 1;
+      const pendingEditId = id("airtable_pending");
+      const changedFields: Record<string, unknown> = { [field]: input[field] };
+      const outboundHash = yield* sha256(JSON.stringify(changedFields));
+      pending.set(field, input[field]);
+      syncStatements.push(
+        db.insert(airtablePendingEdits).values({
+          id: pendingEditId,
+          eventId: event.id,
+          integrationId: airtableIntegration.id,
+          entityType: "speaker",
+          entityId: speaker.id,
+          speakerId: speaker.id,
+          submissionId: null,
+          talkId: null,
+          fieldKey: field,
+          intendedValue: input[field],
+          baseInboundRevision: recordLink?.inboundRevision ?? null,
+          baseInboundHash: recordLink?.inboundHash ?? null,
+          status: "pending",
+          version: 1,
+          createdAt,
+          updatedAt: createdAt,
+        }),
+        db.insert(airtableOutbox).values({
+          id: id("airtable_outbox"),
+          eventId: event.id,
+          integrationId: airtableIntegration.id,
+          pendingEditId,
+          entityType: "speaker",
+          entityId: speaker.id,
+          speakerId: speaker.id,
+          submissionId: null,
+          talkId: null,
+          sessionPartyId: speaker.id,
+          operation: "upsert",
+          changedFields,
+          outboundRevision,
+          outboundHash,
+          origin: "speaker-portal",
+          idempotencyKey: `${input.idempotencyKey}:${field}`,
+          status: "pending",
+          availableAt: createdAt,
+          attemptCount: 0,
+          createdAt,
+        }),
+      );
+    }
+  }
+
   const updatedAt = now();
   const version = input.expectedVersion + 1;
-  const guard = and(
-    eq(speakers.eventId, event.id),
-    eq(speakers.id, speaker.id),
-    eq(speakers.version, input.expectedVersion),
-  );
-  const change = writeChange(
+  const idempotency = idempotencyInsert(
     event.id,
-    "speaker",
-    speaker.id,
-    version,
-    "portal.profile.updated",
-    { speakerId: speaker.id },
-    actor,
+    "portal.updateProfile",
+    actor.userId,
+    keyHash,
+    requestHash,
     updatedAt,
   );
-  const [, updatedRows] = yield* database(() => db.batch([
-    db.insert(domainChanges).select(
-      db.select(changeSelection(change)).from(speakers).where(guard),
-    ),
-    db.update(speakers)
-      .set({
+  const requestId = id("portal_request");
+  const result = speakerView({
+    ...speaker,
+    ...(airtableIntegration
+      ? { links: input.links }
+      : {
         displayName: input.displayName,
         title: input.title,
         company: input.company,
         bio: input.bio,
         links: input.links,
-        version,
-        updatedAt,
+      }),
+    version,
+    updatedAt,
+  }, pending);
+  const guard = and(
+    eq(speakers.eventId, event.id),
+    eq(speakers.id, speaker.id),
+    eq(speakers.version, input.expectedVersion),
+  );
+  const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
+    db.insert(idempotencyRecords).values(idempotency),
+    ...syncStatements,
+    db.insert(domainChanges).values(writeChange(
+      event.id,
+      "speaker",
+      speaker.id,
+      version,
+      "speaker.versionClaim",
+      { version },
+      actor,
+      updatedAt,
+      requestId,
+      idempotency.id,
+    )),
+    db.insert(domainChanges).select(
+      db
+        .select(changeSelection(writeChange(
+          event.id,
+          "speaker",
+          speaker.id,
+          version,
+          "portal.profile.updated",
+          { speakerId: speaker.id, pendingSyncFields: result.pendingSyncFields },
+          actor,
+          updatedAt,
+          requestId,
+          idempotency.id,
+        )))
+        .from(speakers)
+        .where(guard),
+    ),
+    db.insert(auditLog).values({
+      id: id("audit"),
+      eventId: event.id,
+      requestId,
+      actorUserId: actor.actorUserId,
+      actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.profile.updated",
+      resourceType: "speaker",
+      resourceId: speaker.id,
+      before: speakerView(speaker),
+      after: result,
+      metadata: null,
+      occurredAt: updatedAt,
+    }),
+    db.update(speakers)
+      .set(airtableIntegration
+        ? { links: input.links, version, updatedAt }
+        : {
+          displayName: input.displayName,
+          title: input.title,
+          company: input.company,
+          bio: input.bio,
+          links: input.links,
+          version,
+          updatedAt,
+        })
+      .where(guard),
+    db.update(idempotencyRecords)
+      .set({
+        status: "completed",
+        responseStatus: 200,
+        responseBody: result,
+        completedAt: updatedAt,
       })
-      .where(guard)
-      .returning(),
-  ]));
-  const updated = updatedRows[0];
-  if (!updated) {
-    return yield* Effect.fail(
-      new Conflict({ message: "Speaker profile changed; reload before saving" }),
-    );
-  }
-  return speakerView(updated);
+      .where(eq(idempotencyRecords.id, idempotency.id)),
+  ];
+  yield* database(() => db.batch(statements)).pipe(
+    Effect.catchIf(
+      (error) =>
+        error.detail?.includes("domain_changes_aggregate_version_unique") === true ||
+        error.detail?.includes("UNIQUE constraint failed: domain_changes.event_id") === true,
+      () =>
+        Effect.fail(
+          new Conflict({ message: "Speaker profile changed; reload before saving" }),
+        ),
+    ),
+  );
+  return result;
 });
 
 export const setTaskCompletion = (input: SetTaskCompletionInput): Effect.Effect<PortalTask, AppError, Db | CurrentUser | Rooms> => Effect.gen(function* () {
   const event = yield* resolveEvent(input.eventId);
   const { speaker, actor } = yield* selfSpeaker(event.id);
   const { db } = yield* Db;
-  const [task] = yield* database(() => db.select().from(tasks).where(and(eq(tasks.eventId, event.id), eq(tasks.id, input.taskId))).limit(1));
+  const [task] = yield* database(() =>
+    db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.eventId, event.id), eq(tasks.id, input.taskId)))
+      .limit(1),
+  );
   if (!task) return yield* Effect.fail(new NotFound({ entity: "task", id: input.taskId }));
   if (task.kind === "upload" && input.completed) {
     return yield* Effect.fail(
       new Validation({ message: "Upload tasks complete only after a validated asset upload" }),
     );
   }
-  const [existing] = yield* database(() => db.select().from(taskCompletions).where(and(eq(taskCompletions.eventId, event.id), eq(taskCompletions.taskId, input.taskId), eq(taskCompletions.speakerId, speaker.id))).limit(1));
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const replay = yield* findReplay(
+    event.id,
+    "portal.setTaskCompletion",
+    actor.userId,
+    keyHash,
+    requestHash,
+  );
+  if (replay !== null) return yield* decodeReplay(PortalTaskSchema, replay);
+
+  const before = yield* currentTasks(event.id, speaker.id);
+  const prerequisite = before.prerequisites.get(task.id) ?? {
+    satisfied: false,
+    message: "Task prerequisite is unavailable.",
+  };
+  if (input.completed && !prerequisite.satisfied) {
+    return yield* Effect.fail(
+      new Conflict({
+        message: prerequisite.message ?? "Complete the task prerequisite first",
+      }),
+    );
+  }
+  const existing = before.completions.find((completion) => completion.taskId === task.id);
   const aggregateId = `${task.id}:${speaker.id}`;
   const [lastChange] = yield* database(() => db
     .select({ aggregateVersion: domainChanges.aggregateVersion })
@@ -587,16 +1046,105 @@ export const setTaskCompletion = (input: SetTaskCompletionInput): Effect.Effect<
     .limit(1));
   const completedAt = now();
   const completionVersion = (lastChange?.aggregateVersion ?? 0) + 1;
+  const completionId = existing?.id ?? id("task_completion");
+  const completion = input.completed
+    ? {
+      id: completionId,
+      eventId: event.id,
+      taskId: task.id,
+      speakerId: speaker.id,
+      completedAt,
+      data: input.data ?? null,
+      version: completionVersion,
+      createdAt: existing?.createdAt ?? completedAt,
+      updatedAt: completedAt,
+    }
+    : undefined;
+  const result = taskView(task, completion, prerequisite);
+  const idempotency = idempotencyInsert(
+    event.id,
+    "portal.setTaskCompletion",
+    actor.userId,
+    keyHash,
+    requestHash,
+    completedAt,
+  );
+  const requestId = id("portal_request");
   const command = input.completed
-    ? db.insert(taskCompletions).values({ id: existing?.id ?? id("task_completion"), eventId: event.id, taskId: task.id, speakerId: speaker.id, completedAt, data: input.data ?? null, version: completionVersion, createdAt: existing?.createdAt ?? completedAt, updatedAt: completedAt }).onConflictDoUpdate({ target: [taskCompletions.eventId, taskCompletions.taskId, taskCompletions.speakerId], set: { completedAt, data: input.data ?? null, version: completionVersion, updatedAt: completedAt } })
-    : db.delete(taskCompletions).where(and(eq(taskCompletions.eventId, event.id), eq(taskCompletions.taskId, task.id), eq(taskCompletions.speakerId, speaker.id)));
+    ? db
+      .insert(taskCompletions)
+      .values(completion!)
+      .onConflictDoUpdate({
+        target: [
+          taskCompletions.eventId,
+          taskCompletions.taskId,
+          taskCompletions.speakerId,
+        ],
+        set: {
+          completedAt,
+          data: input.data ?? null,
+          version: completionVersion,
+          updatedAt: completedAt,
+        },
+      })
+    : db
+      .delete(taskCompletions)
+      .where(and(
+        eq(taskCompletions.eventId, event.id),
+        eq(taskCompletions.taskId, task.id),
+        eq(taskCompletions.speakerId, speaker.id),
+      ));
   yield* database(() => db.batch([
+    db.insert(idempotencyRecords).values(idempotency),
     command,
-    db.insert(domainChanges).values(writeChange(event.id, "taskCompletion", aggregateId, completionVersion, "portal.task.completion.changed", { speakerId: speaker.id, taskId: task.id, completed: input.completed }, actor, completedAt)),
+    db.insert(domainChanges).values(writeChange(
+      event.id,
+      "taskCompletion",
+      aggregateId,
+      completionVersion,
+      "taskCompletion.versionClaim",
+      { version: completionVersion },
+      actor,
+      completedAt,
+      requestId,
+      idempotency.id,
+    )),
+    db.insert(domainChanges).values(writeChange(
+      event.id,
+      "taskCompletion",
+      aggregateId,
+      completionVersion,
+      "portal.task.completion.changed",
+      { speakerId: speaker.id, taskId: task.id, completed: input.completed },
+      actor,
+      completedAt,
+      requestId,
+      idempotency.id,
+    )),
+    db.insert(auditLog).values({
+      id: id("audit"),
+      eventId: event.id,
+      requestId,
+      actorUserId: actor.actorUserId,
+      actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.task.completion.changed",
+      resourceType: "taskCompletion",
+      resourceId: aggregateId,
+      before: existing ?? null,
+      after: completion ?? null,
+      metadata: null,
+      occurredAt: completedAt,
+    }),
+    db.update(idempotencyRecords)
+      .set({
+        status: "completed",
+        responseStatus: 200,
+        responseBody: result,
+        completedAt,
+      })
+      .where(eq(idempotencyRecords.id, idempotency.id)),
   ]));
   const progress = yield* currentTasks(event.id, speaker.id);
-  const result = progress.taskViews.find((candidate) => candidate.id === task.id);
-  if (!result) return yield* Effect.fail(new External({ service: "database", detail: "Task disappeared after completion write" }));
   const { broadcast } = yield* Rooms;
   yield* broadcast(event.id, {
     t: "dashboard/progress",
@@ -613,12 +1161,24 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
   const event = yield* resolveEvent(input.eventId);
   const { speaker, actor } = yield* selfSpeaker(event.id);
   const data = yield* decodeBase64(input.contentBase64);
-  const policyError = uploadPolicy(input.purpose, input.contentType, input.filename, data.byteLength);
+  const policyError = uploadPolicy(
+    input.purpose,
+    input.contentType,
+    input.filename,
+    data.byteLength,
+  );
   if (policyError) return yield* Effect.fail(policyError);
+
   const { db } = yield* Db;
   let task: typeof tasks.$inferSelect | undefined;
   if (input.taskId) {
-    const [found] = yield* database(() => db.select().from(tasks).where(and(eq(tasks.eventId, event.id), eq(tasks.id, input.taskId!))).limit(1));
+    const [found] = yield* database(() =>
+      db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.eventId, event.id), eq(tasks.id, input.taskId!)))
+        .limit(1),
+    );
     if (!found) return yield* Effect.fail(new NotFound({ entity: "task", id: input.taskId }));
     if (found.kind !== "upload") {
       return yield* Effect.fail(
@@ -627,17 +1187,90 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
     }
     task = found;
   }
-  const uploadedAt = now();
-  const assetId = id("portal_asset");
-  const { delete: deleteFile, put } = yield* Files;
-  const key = assetKey(event.id, assetId);
-  yield* put(key, data, {
-    httpMetadata: { contentType: input.contentType },
-    customMetadata: { portalPurpose: input.purpose, speakerId: speaker.id },
+  const before = yield* currentTasks(event.id, speaker.id);
+  const existingCompletion = task
+    ? before.completions.find((completion) => completion.taskId === task!.id)
+    : undefined;
+  const currentVersion = input.purpose === "headshot"
+    ? speaker.version
+    : existingCompletion?.version ?? 0;
+
+  const contentHash = yield* sha256(input.contentBase64);
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, {
+    ...input,
+    contentBase64: contentHash,
   });
-  const [existingCompletion] = task
-    ? yield* database(() => db.select().from(taskCompletions).where(and(eq(taskCompletions.eventId, event.id), eq(taskCompletions.taskId, task!.id), eq(taskCompletions.speakerId, speaker.id))).limit(1))
-    : [undefined];
+  const replay = yield* findReplay(
+    event.id,
+    "portal.uploadAsset",
+    actor.userId,
+    keyHash,
+    requestHash,
+  );
+  if (replay !== null) return yield* decodeReplay(UploadPortalAssetOutputSchema, replay);
+  if (currentVersion !== input.expectedVersion) {
+    return yield* Effect.fail(
+      new Conflict({ message: "Asset changed; reload before uploading" }),
+    );
+  }
+
+  const uploadedAt = now();
+  const idempotency = idempotencyInsert(
+    event.id,
+    "portal.uploadAsset",
+    actor.userId,
+    keyHash,
+    requestHash,
+    uploadedAt,
+  );
+  const reservation = yield* database(() =>
+    db.insert(idempotencyRecords).values(idempotency),
+  ).pipe(Effect.either);
+  if (reservation._tag === "Left") {
+    if (
+      reservation.left.detail?.includes("idempotency_key_unique") === true ||
+      reservation.left.detail?.includes("UNIQUE constraint failed: idempotency_records") === true
+    ) {
+      const racedReplay = yield* findReplay(
+        event.id,
+        "portal.uploadAsset",
+        actor.userId,
+        keyHash,
+        requestHash,
+      );
+      if (racedReplay !== null) {
+        return yield* decodeReplay(UploadPortalAssetOutputSchema, racedReplay);
+      }
+      return yield* Effect.fail(
+        new Conflict({ message: "This upload is already in progress; retry shortly" }),
+      );
+    }
+    return yield* Effect.fail(reservation.left);
+  }
+
+  const assetId = id("portal_asset");
+  const key = assetKey(event.id, assetId);
+  const filename = input.filename.trim();
+  const dispositionFilename = filename.replace(/["\\\r\n]/g, "_");
+  const { delete: deleteFile, put } = yield* Files;
+  yield* put(key, data, {
+    httpMetadata: {
+      contentType: input.contentType,
+      contentDisposition: input.purpose === "headshot"
+        ? "inline"
+        : `attachment; filename="${dispositionFilename}"`,
+    },
+    customMetadata: { portalPurpose: input.purpose, speakerId: speaker.id },
+  }).pipe(
+    Effect.catchAll((error) =>
+      database(() =>
+        db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, idempotency.id)),
+      ).pipe(
+        Effect.catchAll(() => Effect.void),
+        Effect.flatMap(() => Effect.fail(error)),
+      )),
+  );
+
   const completionAggregateId = task ? `${task.id}:${speaker.id}` : null;
   const [lastCompletionChange] = completionAggregateId
     ? yield* database(() => db
@@ -653,47 +1286,255 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
       .limit(1))
     : [undefined];
   const completionVersion = (lastCompletionChange?.aggregateVersion ?? 0) + 1;
-  const assetInsert = db.insert(assets).values({ id: assetId, eventId: event.id, uploaderUserId: actor.userId, filename: input.filename, contentType: input.contentType, size: data.byteLength, version: 1, createdAt: uploadedAt, updatedAt: uploadedAt });
-  const speakerUpdate = db
-    .update(speakers)
-    .set({
-      headshotAssetId: assetId,
-      version: sql`${speakers.version} + 1`,
+  const nextSpeakerVersion = input.purpose === "headshot"
+    ? speaker.version + 1
+    : speaker.version;
+  const assetRecord = {
+    id: assetId,
+    eventId: event.id,
+    uploaderUserId: actor.userId,
+    filename,
+    contentType: input.contentType,
+    size: data.byteLength,
+    version: 1,
+    createdAt: uploadedAt,
+    updatedAt: uploadedAt,
+  };
+  const completion = task
+    ? {
+      id: existingCompletion?.id ?? id("task_completion"),
+      eventId: event.id,
+      taskId: task.id,
+      speakerId: speaker.id,
+      completedAt: uploadedAt,
+      data: { assetId, purpose: input.purpose },
+      version: completionVersion,
+      createdAt: existingCompletion?.createdAt ?? uploadedAt,
       updatedAt: uploadedAt,
-    })
-    .where(and(eq(speakers.eventId, event.id), eq(speakers.id, speaker.id)));
-  const completionWrite = task
-    ? db.insert(taskCompletions).values({ id: existingCompletion?.id ?? id("task_completion"), eventId: event.id, taskId: task.id, speakerId: speaker.id, completedAt: uploadedAt, data: { assetId, purpose: input.purpose }, version: completionVersion, createdAt: existingCompletion?.createdAt ?? uploadedAt, updatedAt: uploadedAt }).onConflictDoUpdate({ target: [taskCompletions.eventId, taskCompletions.taskId, taskCompletions.speakerId], set: { completedAt: uploadedAt, data: { assetId, purpose: input.purpose }, version: completionVersion, updatedAt: uploadedAt } })
+    }
     : undefined;
-  const completionChangeInsert = task && completionAggregateId
-    ? db.insert(domainChanges).values(writeChange(event.id, "taskCompletion", completionAggregateId, completionVersion, "portal.task.completion.changed", { speakerId: speaker.id, taskId: task.id, completed: true, assetId }, actor, uploadedAt))
-    : undefined;
-  const changeInsert = db.insert(domainChanges).values(writeChange(event.id, "asset", assetId, 1, "portal.asset.uploaded", { speakerId: speaker.id, taskId: task?.id ?? null, purpose: input.purpose }, actor, uploadedAt));
-  const persist = (run: () => Promise<unknown>) =>
-    database(run).pipe(Effect.tapError(() => deleteFile(key)));
-  if (input.purpose === "headshot" && completionWrite && completionChangeInsert) {
-    yield* persist(() => db.batch([assetInsert, speakerUpdate, completionWrite, completionChangeInsert, changeInsert]));
-  } else if (input.purpose === "headshot") {
-    yield* persist(() => db.batch([assetInsert, speakerUpdate, changeInsert]));
-  } else if (completionWrite && completionChangeInsert) {
-    yield* persist(() => db.batch([assetInsert, completionWrite, completionChangeInsert, changeInsert]));
-  } else {
-    yield* persist(() => db.batch([assetInsert, changeInsert]));
-  }
-  const progress = yield* currentTasks(event.id, speaker.id);
-  const taskResult = task ? progress.taskViews.find((candidate) => candidate.id === task!.id) ?? null : null;
-  const [persistedSpeaker] = input.purpose === "headshot"
-    ? yield* database(() => db.select().from(speakers).where(and(
-      eq(speakers.eventId, event.id),
-      eq(speakers.id, speaker.id),
-    )).limit(1))
-    : [speaker];
-  if (!persistedSpeaker) {
-    return yield* Effect.fail(
-      new External({ service: "database", detail: "Speaker disappeared after asset upload" }),
+  const taskResult = task && completion
+    ? taskView(
+      task,
+      completion,
+      before.prerequisites.get(task.id) ?? {
+        satisfied: false,
+        message: "Upload the requested file to complete this task.",
+      },
+    )
+    : null;
+  const outstandingTaskIds = before.definitions
+    .filter((definition) =>
+      definition.id !== task?.id &&
+      !before.completions.some((candidate) => candidate.taskId === definition.id))
+    .map((definition) => definition.id);
+  const tasksTotal = before.definitions.length;
+  const tasksDone = tasksTotal - outstandingTaskIds.length;
+  const result: UploadPortalAssetOutput = {
+    asset: assetView(assetRecord, input.purpose),
+    task: taskResult,
+    speaker: speakerView(input.purpose === "headshot"
+      ? {
+        ...speaker,
+        headshotAssetId: assetId,
+        version: nextSpeakerVersion,
+        updatedAt: uploadedAt,
+      }
+      : speaker),
+    readiness: {
+      tasksTotal,
+      tasksDone,
+      outstandingTaskIds,
+      nextTaskId: outstandingTaskIds[0] ?? null,
+      state: tasksTotal === 0 || tasksDone === tasksTotal
+        ? "ready"
+        : tasksDone === 0
+          ? "not_started"
+          : "in_progress",
+    },
+  };
+
+  const requestId = id("portal_request");
+  const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
+    db.insert(assets).values(assetRecord),
+  ];
+  if (input.purpose === "headshot") {
+    statements.push(
+      db.update(speakers)
+        .set({
+          headshotAssetId: assetId,
+          version: nextSpeakerVersion,
+          updatedAt: uploadedAt,
+        })
+        .where(and(
+          eq(speakers.eventId, event.id),
+          eq(speakers.id, speaker.id),
+          eq(speakers.version, input.expectedVersion),
+        )),
+      db.insert(domainChanges).values(writeChange(
+        event.id,
+        "speaker",
+        speaker.id,
+        nextSpeakerVersion,
+        "speaker.versionClaim",
+        { version: nextSpeakerVersion },
+        actor,
+        uploadedAt,
+        requestId,
+        idempotency.id,
+      )),
+      db.insert(domainChanges).values(writeChange(
+        event.id,
+        "speaker",
+        speaker.id,
+        nextSpeakerVersion,
+        "portal.headshot.replaced",
+        { speakerId: speaker.id, assetId },
+        actor,
+        uploadedAt,
+        requestId,
+        idempotency.id,
+      )),
     );
   }
-  const outputSpeaker = speakerView(persistedSpeaker);
+  if (task && completion && completionAggregateId) {
+    statements.push(
+      db.insert(taskCompletions)
+        .values(completion)
+        .onConflictDoUpdate({
+          target: [
+            taskCompletions.eventId,
+            taskCompletions.taskId,
+            taskCompletions.speakerId,
+          ],
+          set: {
+            completedAt: uploadedAt,
+            data: completion.data,
+            version: completionVersion,
+            updatedAt: uploadedAt,
+          },
+        }),
+      db.insert(domainChanges).values(writeChange(
+        event.id,
+        "taskCompletion",
+        completionAggregateId,
+        completionVersion,
+        "taskCompletion.versionClaim",
+        { version: completionVersion },
+        actor,
+        uploadedAt,
+        requestId,
+        idempotency.id,
+      )),
+      db.insert(domainChanges).values(writeChange(
+        event.id,
+        "taskCompletion",
+        completionAggregateId,
+        completionVersion,
+        "portal.task.completion.changed",
+        { speakerId: speaker.id, taskId: task.id, completed: true, assetId },
+        actor,
+        uploadedAt,
+        requestId,
+        idempotency.id,
+      )),
+    );
+  }
+  statements.push(
+    db.insert(domainChanges).values(writeChange(
+      event.id,
+      "asset",
+      assetId,
+      1,
+      "portal.asset.uploaded",
+      { speakerId: speaker.id, taskId: task?.id ?? null, purpose: input.purpose },
+      actor,
+      uploadedAt,
+      requestId,
+      idempotency.id,
+    )),
+    db.insert(auditLog).values({
+      id: id("audit"),
+      eventId: event.id,
+      requestId,
+      actorUserId: actor.actorUserId,
+      actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.asset.uploaded",
+      resourceType: "asset",
+      resourceId: assetId,
+      before: null,
+      after: result,
+      metadata: null,
+      occurredAt: uploadedAt,
+    }),
+    db.update(idempotencyRecords)
+      .set({
+        status: "completed",
+        responseStatus: 201,
+        responseBody: result,
+        completedAt: uploadedAt,
+      })
+      .where(eq(idempotencyRecords.id, idempotency.id)),
+  );
+  yield* database(() => db.batch(statements)).pipe(
+    Effect.catchAll((error) =>
+      Effect.all([
+        deleteFile(key).pipe(Effect.catchAll(() => Effect.void)),
+        database(() =>
+          db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, idempotency.id)),
+        ).pipe(Effect.catchAll(() => Effect.void)),
+      ], { concurrency: 1 }).pipe(
+        Effect.flatMap(() => Effect.fail(error)),
+      )),
+  );
+
+  const completionData = existingCompletion?.data;
+  const oldTaskAssetId = typeof completionData === "object" &&
+      completionData !== null &&
+      !Array.isArray(completionData) &&
+      typeof Reflect.get(completionData, "assetId") === "string"
+    ? Reflect.get(completionData, "assetId") as string
+    : null;
+  const oldAssetId = input.purpose === "headshot"
+    ? speaker.headshotAssetId
+    : oldTaskAssetId;
+  if (oldAssetId && oldAssetId !== assetId) {
+    const [[currentSpeaker], completionReferences] = yield* Effect.all([
+      database(() => db
+        .select({ headshotAssetId: speakers.headshotAssetId })
+        .from(speakers)
+        .where(and(eq(speakers.eventId, event.id), eq(speakers.id, speaker.id)))
+        .limit(1)),
+      database(() => db
+        .select({ data: taskCompletions.data })
+        .from(taskCompletions)
+        .where(and(
+          eq(taskCompletions.eventId, event.id),
+          eq(taskCompletions.speakerId, speaker.id),
+        ))),
+    ], { concurrency: 1 });
+    const referencedByCompletion = completionReferences.some(({ data: value }) =>
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Reflect.get(value, "assetId") === oldAssetId);
+    if (currentSpeaker?.headshotAssetId !== oldAssetId && !referencedByCompletion) {
+      yield* deleteFile(assetKey(event.id, oldAssetId)).pipe(
+        Effect.tap(() =>
+          database(() =>
+            db.delete(assets).where(and(
+              eq(assets.eventId, event.id),
+              eq(assets.id, oldAssetId),
+            )),
+          )),
+        Effect.catchAll((error) =>
+          Effect.logWarning("Replaced portal asset cleanup failed", {
+            assetId: oldAssetId,
+            error,
+          })),
+      );
+    }
+  }
   if (taskResult) {
     const { broadcast } = yield* Rooms;
     yield* broadcast(event.id, {
@@ -701,11 +1542,11 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
       speakerId: speaker.id,
       taskId: taskResult.id,
       completed: true,
-      tasksDone: progress.readiness.tasksDone,
-      tasksTotal: progress.readiness.tasksTotal,
+      tasksDone: result.readiness.tasksDone,
+      tasksTotal: result.readiness.tasksTotal,
     }).pipe(Effect.catchAll(() => Effect.void));
   }
-  return { asset: assetView({ id: assetId, eventId: event.id, uploaderUserId: actor.userId, filename: input.filename, contentType: input.contentType, size: data.byteLength, version: 1, createdAt: uploadedAt, updatedAt: uploadedAt }, input.purpose), task: taskResult, speaker: outputSpeaker, readiness: progress.readiness };
+  return result;
 });
 
 export const listPortalTasks = (input: { readonly eventId: string }): Effect.Effect<readonly PortalTaskDefinition[], AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
@@ -1047,7 +1888,20 @@ export const updateSpeakerPublication = (input: UpdateSpeakerPublicationInput): 
     actor,
     updatedAt,
   );
-  const [, updatedRows] = yield* database(() => db.batch([
+  const versionClaim = writeChange(
+    input.eventId,
+    "speaker",
+    input.speakerId,
+    version,
+    "speaker.versionClaim",
+    { version },
+    actor,
+    updatedAt,
+  );
+  const [, , updatedRows] = yield* database(() => db.batch([
+    db.insert(domainChanges).select(
+      db.select(changeSelection(versionClaim)).from(speakers).where(guard),
+    ),
     db.insert(domainChanges).select(
       db.select(changeSelection(change)).from(speakers).where(guard),
     ),

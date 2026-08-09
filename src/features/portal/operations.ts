@@ -225,8 +225,8 @@ const setTaskCompletionOperation = {
   output: PortalTask,
   authorize: browserSessionAuthorization,
   invoke: setTaskCompletion,
-  rest: { method: "put", path: "/events/:eventId/portal/tasks/:taskId/completion", input: { path: ["eventId", "taskId"], body: ["completed", "data"] }, summary: "Set the exact speaker's task completion", successStatus: 200 },
-  idempotency: "none",
+  rest: { method: "put", path: "/events/:eventId/portal/tasks/:taskId/completion", input: { path: ["eventId", "taskId"], body: ["completed", "data", "idempotencyKey"] }, summary: "Set the exact speaker's task completion", successStatus: 200 },
+  idempotency: "required",
   concurrency: "none",
   emits: ["portal.task.completion.changed"],
 } as const satisfies AnyOperationDef;
@@ -238,8 +238,8 @@ const updateProfileOperation = {
   output: SpeakerProfile,
   authorize: browserSessionAuthorization,
   invoke: updateSpeakerProfile,
-  rest: { method: "put", path: "/events/:eventId/portal/profile", input: { path: ["eventId"], body: ["expectedVersion", "displayName", "title", "company", "bio", "links"] }, summary: "Update the exact speaker profile", successStatus: 200 },
-  idempotency: "none",
+  rest: { method: "put", path: "/events/:eventId/portal/profile", input: { path: ["eventId"], body: ["expectedVersion", "idempotencyKey", "displayName", "title", "company", "bio", "links"] }, summary: "Update the exact speaker profile", successStatus: 200 },
+  idempotency: "required",
   concurrency: "required",
   emits: ["portal.profile.updated"],
 } as const satisfies AnyOperationDef;
@@ -293,9 +293,9 @@ const uploadAssetOperation = {
   output: UploadPortalAssetOutput,
   authorize: browserSessionAuthorization,
   invoke: uploadPortalAsset,
-  rest: { method: "post", path: "/events/:eventId/portal/assets", input: { path: ["eventId"], body: ["taskId", "purpose", "filename", "contentType", "contentBase64"] }, summary: "Upload a validated R2-backed portal asset", successStatus: 201 },
-  idempotency: "none",
-  concurrency: "none",
+  rest: { method: "post", path: "/events/:eventId/portal/assets", input: { path: ["eventId"], body: ["taskId", "purpose", "filename", "contentType", "contentBase64", "expectedVersion", "idempotencyKey"] }, summary: "Upload a validated R2-backed portal asset", successStatus: 201 },
+  idempotency: "required",
+  concurrency: "required",
   emits: ["portal.asset.uploaded", "portal.task.completion.changed"],
 } as const satisfies AnyOperationDef;
 

@@ -44,6 +44,8 @@ const embedHosts: Record<string, true> = {
   "youtube-nocookie.com": true,
   "youtube.com": true,
 };
+export const PORTAL_UPLOAD_MAX_BYTES = 10 * 1_024 * 1_024;
+
 
 export function allowlistedEmbedUrl(value: string | null): string | null {
   if (!value) return null;
@@ -63,6 +65,9 @@ export function formatPortalDate(value: number, timezone: string): string {
 }
 
 export async function fileAsBase64(file: File): Promise<string> {
+  if (file.size > PORTAL_UPLOAD_MAX_BYTES) {
+    throw new Error("File exceeds 10 MiB with the current upload transport");
+  }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const chunks: string[] = [];
   const binaryChunkBytes = 32_768;
@@ -78,6 +83,7 @@ function profileInput(profile: SpeakerProfile, form: HTMLFormElement): UpdatePro
   const urls = values.getAll("linkUrl").map(String);
   return {
     eventId: profile.eventId,
+    idempotencyKey: crypto.randomUUID(),
     expectedVersion: profile.version,
     displayName: String(values.get("displayName") ?? "").trim(),
     title: String(values.get("title") ?? "").trim() || null,
@@ -141,6 +147,7 @@ export default function SpeakerPortalRoute() {
               eventId: state.data.event.id,
               taskId: task.id,
               completed,
+              idempotencyKey: crypto.randomUUID(),
             }),
           )
         }
@@ -208,6 +215,7 @@ export function SpeakerPortalContent({
           />
           <UploadWorkspace
             eventId={snapshot.event.id}
+            speaker={snapshot.speaker}
             assets={snapshot.assets}
             tasks={snapshot.tasks}
             loading={busyAction === "Upload"}
@@ -232,7 +240,7 @@ export function SpeakerPortalContent({
                   items={snapshot.tasks.map((task) => ({
                     id: task.id,
                     label: task.name,
-                    description: task.description ?? undefined,
+                    description: task.prerequisite.message ?? task.description ?? undefined,
                     state: task.completed ? "complete" : "pending",
                     timestamp: task.completedAt ? formatPortalDate(task.completedAt, snapshot.event.timezone) : undefined,
                   }))}
@@ -243,9 +251,9 @@ export function SpeakerPortalContent({
                   items={snapshot.tasks.map((task) => ({
                     id: task.id,
                     label: task.name,
-                    description: task.description ?? undefined,
+                    description: task.prerequisite.message ?? task.description ?? undefined,
                     completed: task.completed,
-                    disabled: busyAction !== null,
+                    disabled: busyAction !== null || (!task.completed && !task.prerequisite.satisfied),
                   }))}
                   onToggle={(taskId, completed) => {
                     const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
@@ -305,30 +313,39 @@ function ProfileEditor({
         <Button type="button" variant="ghost" size="sm" onClick={() => setLinkCount((count) => count + 1)}>Add another link</Button>
       </fieldset>
       <Button type="submit" loading={loading}>Save profile</Button>
+      {profile.pendingSyncFields.length > 0 && (
+        <p className="text-sm text-ink-secondary">
+          Pending organizer sync: {profile.pendingSyncFields.join(", ")}
+        </p>
+      )}
     </form>
   );
 }
 
 function UploadWorkspace({
   eventId,
+  speaker,
   assets,
   tasks,
   loading,
   onUpload,
 }: {
   readonly eventId: string;
+  readonly speaker: SpeakerProfile;
   readonly assets: PortalSnapshot["assets"];
   readonly tasks: readonly PortalTask[];
   readonly loading: boolean;
   readonly onUpload: (input: UploadPortalAssetInput) => void;
 }) {
   const [purpose, setPurpose] = useState<UploadPortalAssetInput["purpose"]>("slides");
-  const uploadTask = tasks.find((task) => task.kind === "upload" && !task.completed);
+  const uploadTask = tasks.find((task) => task.kind === "upload");
   return (
     <section className="space-y-4" aria-labelledby="uploads-heading">
       <div>
         <h2 id="uploads-heading" className="text-lg font-semibold text-ink">Production files</h2>
-        <p className="mt-1 text-sm text-ink-secondary">Upload the final files the event team should use.</p>
+        <p className="mt-1 text-sm text-ink-secondary">
+          Upload the final files the event team should use. Up to 10 MiB with the current upload transport.
+        </p>
       </div>
       <Select label="File purpose" value={purpose} disabled={loading} onChange={(event) => setPurpose(event.currentTarget.value as UploadPortalAssetInput["purpose"])}>
         <option value="slides">Slides</option>
@@ -338,7 +355,11 @@ function UploadWorkspace({
       <Dropzone
         multiple={false}
         disabled={loading}
-        accept={purpose === "headshot" ? "image/*" : undefined}
+        accept={purpose === "headshot"
+          ? ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+          : purpose === "slides"
+            ? ".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            : ".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
         hint={loading ? "Uploading…" : "Choose one production-ready file."}
         onFiles={(files) => {
           const file = files[0];
@@ -351,6 +372,10 @@ function UploadWorkspace({
                 purpose,
                 filename: file.name,
                 contentType: file.type || "application/octet-stream",
+                expectedVersion: purpose === "headshot"
+                  ? speaker.version
+                  : uploadTask?.completionVersion ?? 0,
+                idempotencyKey: crypto.randomUUID(),
                 contentBase64,
               }),
             (error: unknown) => toast(error instanceof Error ? error.message : "File could not be read", { tone: "danger" }),

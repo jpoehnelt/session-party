@@ -2,16 +2,23 @@ import { env, applyD1Migrations, type D1Migration } from "cloudflare:test";
 import type { AppError } from "contracts/errors";
 import type { BrowserSessionPrincipal } from "contracts/principal";
 import {
+  airtableOutbox,
+  airtablePendingEdits,
   assets,
   domainChanges,
+  idempotencyRecords,
+  integrations,
   pages,
+  speakers,
+  submissionSpeakers,
+  submissions,
   taskCompletions,
   tasks,
 } from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   type Authorizer,
   AppLayer,
@@ -30,6 +37,7 @@ import {
   getPortalSnapshot,
   getSpeakerDirectory,
   getPublicSpeakers,
+  updateSpeakerProfile,
   provisionSpeaker,
   setTaskCompletion,
   updatePortalResource,
@@ -86,6 +94,15 @@ const expectFailure = async (
   expect(result._tag).toBe("Left");
   if (result._tag === "Left") expect(result.left._tag).toBe(tag);
 };
+const base64Payload = (size: number): string => {
+  const bytes = new Uint8Array(size);
+  const chunks: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 32_768)));
+  }
+  return btoa(chunks.join(""));
+};
+
 
 const fixture = async () => {
   sequence += 1;
@@ -188,10 +205,10 @@ describe("portal service", () => {
 
   it("persists completion and transitions readiness after provisioning", async () => {
     const setup = await fixture();
-    const task = await runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Profile", description: null, kind: "profile", formId: null, dueAt: null, order: 1 }));
+    const task = await runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Confirm", description: null, kind: "confirm", formId: null, dueAt: null, order: 1 }));
     await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
     expect((await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }))).readiness.state).toBe("not_started");
-    const completed = await runAs(speakerUser, setTaskCompletion({ eventId: setup.eventId, taskId: task.id, completed: true, data: { source: "portal" } }));
+    const completed = await runAs(speakerUser, setTaskCompletion({ eventId: setup.eventId, taskId: task.id, completed: true, data: { source: "portal" }, idempotencyKey: `complete-${task.id}` }));
     expect(completed.completed).toBe(true);
     const db = drizzle(env.DB);
     expect(await db.select().from(taskCompletions).where(and(eq(taskCompletions.eventId, setup.eventId), eq(taskCompletions.taskId, task.id)))).toHaveLength(1);
@@ -200,6 +217,7 @@ describe("portal service", () => {
       eventId: setup.eventId,
       taskId: task.id,
       completed: false,
+      idempotencyKey: `uncomplete-${task.id}`,
     }));
     expect(uncompleted.completed).toBe(false);
     expect((await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }))).readiness.state).toBe("not_started");
@@ -208,6 +226,7 @@ describe("portal service", () => {
       taskId: task.id,
       completed: true,
       data: { source: "portal-retry" },
+      idempotencyKey: `recomplete-${task.id}`,
     }));
     expect(recompleted.completed).toBe(true);
     expect((await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }))).readiness.state).toBe("ready");
@@ -217,6 +236,7 @@ describe("portal service", () => {
       .where(and(
         eq(domainChanges.eventId, setup.eventId),
         eq(domainChanges.aggregateId, `${task.id}:${setup.speakerId}`),
+        eq(domainChanges.eventType, "portal.task.completion.changed"),
       ));
     expect(completionChanges.map(({ aggregateVersion }) => aggregateVersion)).toEqual([1, 2, 3]);
   });
@@ -225,8 +245,11 @@ describe("portal service", () => {
     const setup = await fixture();
     const task = await runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Headshot", description: null, kind: "upload", formId: null, dueAt: null, order: 1 }));
     await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
-    const result = await runAs(speakerUser, uploadPortalAsset({ eventId: setup.eventId, taskId: task.id, purpose: "headshot", filename: "headshot.png", contentType: "image/png", contentBase64: "iVBORw0KGgo=" }));
+    const firstInput = { eventId: setup.eventId, taskId: task.id, purpose: "headshot", filename: "headshot.png", contentType: "image/png", contentBase64: "iVBORw0KGgo=", expectedVersion: 1, idempotencyKey: `headshot-${task.id}` } as const;
+    const result = await runAs(speakerUser, uploadPortalAsset(firstInput));
     expect(result.speaker.headshotAssetId).toBe(result.asset.id);
+    const replay = await runAs(speakerUser, uploadPortalAsset(firstInput));
+    expect(replay.asset.id).toBe(result.asset.id);
     expect(result.task?.completed).toBe(true);
     const stored = await env.FILES.get(`portal/${setup.eventId}/${result.asset.id}`);
     expect(stored).not.toBeNull();
@@ -241,14 +264,250 @@ describe("portal service", () => {
     });
     const replacement = await runAs(speakerUser, uploadPortalAsset({
       eventId: setup.eventId,
+      taskId: task.id,
       purpose: "headshot",
       filename: "replacement.png",
       contentType: "image/png",
       contentBase64: "iVBORw0KGgo=",
+      expectedVersion: result.speaker.version,
+      idempotencyKey: `headshot-replacement-${task.id}`,
     }));
     const snapshot = await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }));
     expect(snapshot.speaker.headshotAssetId).toBe(replacement.asset.id);
-    expect(snapshot.assets.filter(({ purpose }) => purpose === "headshot")).toHaveLength(2);
+    expect(snapshot.assets.filter(({ purpose }) => purpose === "headshot")).toHaveLength(1);
+    expect(await env.FILES.get(`portal/${setup.eventId}/${result.asset.id}`)).toBeNull();
+    expect(await drizzle(env.DB).select().from(assets).where(eq(assets.id, result.asset.id))).toHaveLength(0);
+    const [completion] = await drizzle(env.DB)
+      .select()
+      .from(taskCompletions)
+      .where(eq(taskCompletions.taskId, task.id));
+    expect(completion).toMatchObject({
+      data: { assetId: replacement.asset.id, purpose: "headshot" },
+      version: 2,
+    });
+    expect(await drizzle(env.DB).select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, setup.eventId))).toHaveLength(2);
+  });
+
+  it("enforces the decoded 10 MiB transport limit for every asset kind", async () => {
+    const setup = await fixture();
+    const uploadTasks = await Promise.all([
+      runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Headshot", description: null, kind: "upload", formId: null, dueAt: null, order: 1 })),
+      runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Slides", description: null, kind: "upload", formId: null, dueAt: null, order: 2 })),
+      runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Document", description: null, kind: "upload", formId: null, dueAt: null, order: 3 })),
+    ]);
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const put = vi.spyOn(env.FILES, "put").mockResolvedValue({} as R2Object);
+    const contentBase64 = base64Payload(10 * 1_024 * 1_024);
+    const cases = [
+      {
+        purpose: "headshot" as const,
+        filename: "speaker.webp",
+        contentType: "image/webp",
+        taskId: uploadTasks[0]!.id,
+        expectedVersion: 1,
+      },
+      {
+        purpose: "slides" as const,
+        filename: "session.pptx",
+        contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        taskId: uploadTasks[1]!.id,
+        expectedVersion: 0,
+      },
+      {
+        purpose: "document" as const,
+        filename: "brief.docx",
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        taskId: uploadTasks[2]!.id,
+        expectedVersion: 0,
+      },
+    ];
+    try {
+      for (const [index, upload] of cases.entries()) {
+        const result = await runAs(speakerUser, uploadPortalAsset({
+          eventId: setup.eventId,
+          ...upload,
+          contentBase64,
+          idempotencyKey: `max-upload-${setup.eventId}-${index}`,
+        }));
+        expect(result.asset.size).toBe(10 * 1_024 * 1_024);
+        expect(result.task?.completed).toBe(true);
+      }
+      expect(put).toHaveBeenCalledTimes(3);
+      expect(await drizzle(env.DB).select().from(assets).where(eq(assets.eventId, setup.eventId))).toHaveLength(3);
+      expect(await drizzle(env.DB).select().from(taskCompletions).where(eq(taskCompletions.eventId, setup.eventId))).toHaveLength(3);
+    } finally {
+      put.mockRestore();
+    }
+  });
+
+  it("rejects 10 MiB plus one before Files.put without durable side effects", async () => {
+    const setup = await fixture();
+    const task = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Upload",
+      description: null,
+      kind: "upload",
+      formId: null,
+      dueAt: null,
+      order: 1,
+    }));
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const put = vi.spyOn(env.FILES, "put").mockResolvedValue({} as R2Object);
+    const contentBase64 = base64Payload(10 * 1_024 * 1_024 + 1);
+    const cases = [
+      { purpose: "headshot" as const, filename: "speaker.jpg", contentType: "image/jpeg", expectedVersion: 1 },
+      { purpose: "slides" as const, filename: "session.pdf", contentType: "application/pdf", expectedVersion: 0 },
+      { purpose: "document" as const, filename: "brief.doc", contentType: "application/msword", expectedVersion: 0 },
+    ];
+    try {
+      for (const [index, upload] of cases.entries()) {
+        await expectFailure(speakerUser, uploadPortalAsset({
+          eventId: setup.eventId,
+          taskId: task.id,
+          ...upload,
+          contentBase64,
+          idempotencyKey: `oversize-upload-${setup.eventId}-${index}`,
+        }), "Validation");
+      }
+      expect(put).not.toHaveBeenCalled();
+      const db = drizzle(env.DB);
+      expect(await db.select().from(assets).where(eq(assets.eventId, setup.eventId))).toHaveLength(0);
+      expect(await db.select().from(taskCompletions).where(eq(taskCompletions.eventId, setup.eventId))).toHaveLength(0);
+      expect(await db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, setup.eventId))).toHaveLength(0);
+    } finally {
+      put.mockRestore();
+    }
+  });
+
+  it("queues Airtable-authoritative profile fields idempotently and enforces prerequisites", async () => {
+    const setup = await fixture();
+    const profileTask = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Profile",
+      description: null,
+      kind: "profile",
+      formId: null,
+      dueAt: null,
+      order: 1,
+    }));
+    const formTask = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Travel form",
+      description: null,
+      kind: "form",
+      formId: setup.formId,
+      dueAt: null,
+      order: 2,
+    }));
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    await expectFailure(speakerUser, setTaskCompletion({
+      eventId: setup.eventId,
+      taskId: profileTask.id,
+      completed: true,
+      idempotencyKey: `profile-premature-${setup.eventId}`,
+    }), "Conflict");
+    await expectFailure(speakerUser, setTaskCompletion({
+      eventId: setup.eventId,
+      taskId: formTask.id,
+      completed: true,
+      idempotencyKey: `form-premature-${setup.eventId}`,
+    }), "Conflict");
+
+    const db = drizzle(env.DB);
+    const createdAt = new Date();
+    await db.insert(integrations).values({
+      id: `airtable-${setup.eventId}`,
+      eventId: setup.eventId,
+      kind: "airtable",
+      secretRef: "secret://airtable/test",
+      config: {},
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const profileInput = {
+      eventId: setup.eventId,
+      expectedVersion: 1,
+      idempotencyKey: `profile-save-${setup.eventId}`,
+      displayName: "Exact speaker",
+      title: "Principal Engineer",
+      company: null,
+      bio: "A durable speaker biography.",
+      links: [{ label: "Website", url: "https://speaker.example.com" }],
+    } as const;
+    const updated = await runAs(speakerUser, updateSpeakerProfile(profileInput));
+    const replay = await runAs(speakerUser, updateSpeakerProfile(profileInput));
+    expect(replay).toEqual(updated);
+    expect(updated.pendingSyncFields).toEqual(["title", "bio"]);
+    const [stored] = await db.select().from(speakers).where(eq(speakers.id, setup.speakerId));
+    expect(stored).toMatchObject({
+      title: null,
+      bio: null,
+      links: [{ label: "Website", url: "https://speaker.example.com" }],
+      version: 2,
+    });
+    expect((await db.select().from(airtablePendingEdits).where(eq(airtablePendingEdits.entityId, setup.speakerId))).map(({ fieldKey }) => fieldKey).sort()).toEqual(["bio", "title"]);
+    expect(await db.select().from(airtableOutbox).where(eq(airtableOutbox.entityId, setup.speakerId))).toHaveLength(2);
+
+    const completedProfile = await runAs(speakerUser, setTaskCompletion({
+      eventId: setup.eventId,
+      taskId: profileTask.id,
+      completed: true,
+      idempotencyKey: `profile-complete-${setup.eventId}`,
+    }));
+    const replayedProfile = await runAs(speakerUser, setTaskCompletion({
+      eventId: setup.eventId,
+      taskId: profileTask.id,
+      completed: true,
+      idempotencyKey: `profile-complete-${setup.eventId}`,
+    }));
+    expect(replayedProfile).toEqual(completedProfile);
+
+    const submittedAt = new Date(Date.now() + 1_000);
+    const taskSubmissionId = `task-submission-${setup.eventId}`;
+    await db.batch([
+      db.insert(submissions).values({
+        id: taskSubmissionId,
+        eventId: setup.eventId,
+        formId: setup.formId,
+        formVersionId: setup.formVersionId,
+        title: "Travel response",
+        status: "submitted",
+        submittedAt,
+        version: 1,
+        createdAt: submittedAt,
+        updatedAt: submittedAt,
+      }),
+      db.insert(submissionSpeakers).values({
+        id: `task-association-${setup.eventId}`,
+        eventId: setup.eventId,
+        submissionId: taskSubmissionId,
+        speakerId: setup.speakerId,
+        isPrimary: true,
+        createdAt: submittedAt,
+      }),
+    ]);
+    await expect(runAs(speakerUser, setTaskCompletion({
+      eventId: setup.eventId,
+      taskId: formTask.id,
+      completed: true,
+      idempotencyKey: `form-complete-${setup.eventId}`,
+    }))).resolves.toMatchObject({ completed: true });
+    expect(await db.select().from(taskCompletions).where(eq(taskCompletions.eventId, setup.eventId))).toHaveLength(2);
   });
 
   it("performs organizer task and resource CRUD with optimistic versions and iframe policy", async () => {

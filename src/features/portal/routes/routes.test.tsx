@@ -32,7 +32,14 @@ import { path as resourcesPath, OrganizerResourcesContent } from "./organizer-re
 import { path as speakersPath, OrganizerSpeakersContent } from "./organizer-speakers";
 import { path as tasksPath, OrganizerTasksContent } from "./organizer-tasks";
 import { layout as embedLayout, path as embedPath, PublicSpeakerEmbedContent } from "./public-speakers";
-import { allowlistedEmbedUrl, layout as portalLayout, path as portalPath, SpeakerPortalContent } from "./speaker-portal";
+import {
+  allowlistedEmbedUrl,
+  fileAsBase64,
+  layout as portalLayout,
+  path as portalPath,
+  PORTAL_UPLOAD_MAX_BYTES,
+  SpeakerPortalContent,
+} from "./speaker-portal";
 
 const event: PortalEvent = {
   id: "event-production",
@@ -82,6 +89,7 @@ const profile = {
   links: [{ label: "Website", url: "https://example.com/river" }],
   visible: true,
   version: 5,
+  pendingSyncFields: [],
 } as const;
 
 const snapshot: PortalSnapshot = {
@@ -89,7 +97,14 @@ const snapshot: PortalSnapshot = {
   speaker: profile,
   submission: { id: "submission-stage", title: "The calm show call", category: "Operations", version: 2 },
   provisioningStatus: "provisioned",
-  tasks: [{ ...task, completed: false, completedAt: null, completionData: null }],
+  tasks: [{
+    ...task,
+    completed: false,
+    completedAt: null,
+    completionData: null,
+    completionVersion: 0,
+    prerequisite: { satisfied: false, message: "Add your bio before completing this task." },
+  }],
   resources: [resource],
   assets: [{ id: "asset-slides", eventId: event.id, filename: "final-slides.pdf", contentType: "application/pdf", size: 2048, purpose: "slides", version: 1 }],
   readiness: { tasksTotal: 1, tasksDone: 0, outstandingTaskIds: [task.id], nextTaskId: task.id, state: "not_started" },
@@ -203,6 +218,7 @@ describe("speaker portal content", () => {
     expect(markup).toContain("Speaker production guide");
     expect(markup).toContain("sandbox=");
     expect(markup).toContain("Save profile");
+    expect(markup).toContain("Up to 10 MiB with the current upload transport");
   });
 
   it("allows only approved HTTPS resource embeds", () => {
@@ -218,6 +234,7 @@ describe("speaker portal content", () => {
     await updateSpeakerProfile(event.slug, {
       eventId: event.id,
       expectedVersion: profile.version,
+      idempotencyKey: "profile-route-save",
       displayName: profile.displayName,
       title: profile.title,
       company: profile.company,
@@ -228,6 +245,7 @@ describe("speaker portal content", () => {
     expect(request).toBe(`/api/v1/events/${event.slug}/portal/profile`);
     expect(JSON.parse(String(init?.body))).toEqual({
       expectedVersion: profile.version,
+      idempotencyKey: "profile-route-save",
       displayName: profile.displayName,
       title: profile.title,
       company: profile.company,
@@ -243,6 +261,7 @@ describe("speaker portal content", () => {
       eventId: event.id,
       taskId: task.id,
       completed: true,
+      idempotencyKey: "task-route-toggle",
     });
     await uploadSpeakerAsset(event.slug, {
       eventId: event.id,
@@ -251,20 +270,39 @@ describe("speaker portal content", () => {
       filename: "final.pdf",
       contentType: "application/pdf",
       contentBase64: "QQ==",
+      expectedVersion: 0,
+      idempotencyKey: "asset-route-upload",
     });
     expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
       [`/api/v1/events/${event.slug}/portal/tasks/${task.id}/completion`, "PUT"],
       [`/api/v1/events/${event.slug}/portal/assets`, "POST"],
     ]);
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ completed: true });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      completed: true,
+      idempotencyKey: "task-route-toggle",
+    });
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
       taskId: task.id,
+      expectedVersion: 0,
+      idempotencyKey: "asset-route-upload",
       purpose: "slides",
       filename: "final.pdf",
       contentType: "application/pdf",
       contentBase64: "QQ==",
     });
   });
+  it("rejects files over 10 MiB before reading or encoding them", async () => {
+    const arrayBuffer = vi.fn();
+    const file = {
+      size: PORTAL_UPLOAD_MAX_BYTES + 1,
+      arrayBuffer,
+    } as unknown as File;
+    await expect(fileAsBase64(file)).rejects.toThrow(
+      "File exceeds 10 MiB with the current upload transport",
+    );
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
 });
 
 describe("organizer content and workflows", () => {

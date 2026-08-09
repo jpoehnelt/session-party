@@ -6,6 +6,10 @@ const NonEmptyText = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(50
 const NullableText = Schema.NullOr(Schema.String);
 const Timestamp = Schema.Int.pipe(Schema.nonNegative());
 const JsonObject = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+const IdempotencyKey = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255));
+const VersionFromZero = Schema.Int.pipe(Schema.nonNegative());
+export const PortalProfileSyncField = Schema.Literal("displayName", "title", "company", "bio");
+export type PortalProfileSyncField = typeof PortalProfileSyncField.Type;
 
 export const PortalEventInput = Schema.Struct({ eventId: EntityId });
 export type PortalEventInput = typeof PortalEventInput.Type;
@@ -49,6 +53,11 @@ export const PortalTask = Schema.extend(
     completed: Schema.Boolean,
     completedAt: Schema.NullOr(Timestamp),
     completionData: Schema.NullOr(JsonObject),
+    completionVersion: VersionFromZero,
+    prerequisite: Schema.Struct({
+      satisfied: Schema.Boolean,
+      message: Schema.NullOr(Schema.String),
+    }),
   }),
 );
 export type PortalTask = typeof PortalTask.Type;
@@ -94,6 +103,7 @@ export const SpeakerProfile = Schema.Struct({
   links: SpeakerLinks,
   visible: Schema.Boolean,
   version: Schema.Int.pipe(Schema.positive()),
+  pendingSyncFields: Schema.Array(PortalProfileSyncField),
 });
 export type SpeakerProfile = typeof SpeakerProfile.Type;
 
@@ -159,6 +169,7 @@ export type PortalDashboard = typeof PortalDashboard.Type;
 export const UpdateProfileInput = Schema.Struct({
   eventId: EntityId,
   expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
   displayName: NonEmptyText,
   title: NullableText,
   company: NullableText,
@@ -172,6 +183,7 @@ export const SetTaskCompletionInput = Schema.Struct({
   taskId: EntityId,
   completed: Schema.Boolean,
   data: Schema.optional(JsonObject),
+  idempotencyKey: IdempotencyKey,
 });
 export type SetTaskCompletionInput = typeof SetTaskCompletionInput.Type;
 
@@ -182,6 +194,8 @@ export const UploadPortalAssetInput = Schema.Struct({
   filename: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255)),
   contentType: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255)),
   contentBase64: Schema.String.pipe(Schema.minLength(1), Schema.pattern(/^[A-Za-z0-9+/]+={0,2}$/)),
+  expectedVersion: VersionFromZero,
+  idempotencyKey: IdempotencyKey,
 });
 export type UploadPortalAssetInput = typeof UploadPortalAssetInput.Type;
 
