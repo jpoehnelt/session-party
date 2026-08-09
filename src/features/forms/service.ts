@@ -282,6 +282,7 @@ const validationProblem = (
       seenSemanticKeys.add(field.semanticKey);
     }
     if (field.label.length === 0) return "Every field needs a label";
+    if (field.type === "file") return `File upload field '${field.label}' is unavailable on public forms`;
     const optionSet = new Set(field.options);
     if (optionSet.size !== field.options.length) return `Field '${field.label}' has duplicate options`;
     if (OPTION_FIELD_TYPES[field.type] && field.options.length === 0) {

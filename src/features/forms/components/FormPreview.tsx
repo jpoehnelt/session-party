@@ -28,7 +28,6 @@ export function FormPreview({ form, now }: FormPreviewProps) {
     formState: { isSubmitSuccessful },
     handleSubmit,
     register,
-    setValue,
   } = useForm<PreviewAnswers>({
     defaultValues: {},
     resolver: effectTsResolver(PreviewAnswers),
@@ -121,6 +120,14 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                     </p>
                   );
                 }
+                if (field.type === "file") {
+                  return (
+                    <div key={field.id} className="border-2 border-[#171714] bg-[#ffd34e] px-3 py-3 text-sm font-semibold text-[#171714]">
+                      <p className="font-black">{field.label}</p>
+                      <p className="mt-1">File uploads are unavailable on public forms. Change this field type before publishing.</p>
+                    </div>
+                  );
+                }
                 if (field.type === "textarea") {
                   return (
                     <Textarea
@@ -208,20 +215,12 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                   <Input
                     key={field.id}
                     id={inputId}
-                    type={field.type === "file" ? "file" : field.type}
+                    type={field.type}
                     label={label}
                     hint={field.helpText ?? undefined}
                     className={PREVIEW_FIELD}
                     required={field.required}
-                    {...(field.type === "file"
-                      ? {
-                          onChange: (event) => setValue(
-                            fieldId,
-                            event.currentTarget.files !== null && event.currentTarget.files.length > 0,
-                            { shouldDirty: true, shouldValidate: true },
-                          ),
-                        }
-                      : register(fieldId, { required: field.required }))}
+                    {...register(fieldId, { required: field.required })}
                   />
                 );
               })}

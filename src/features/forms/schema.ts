@@ -268,6 +268,12 @@ export const validatePublishIntent = (form: FormDetail): readonly PublishValidat
         semanticFields.set(field.semanticKey, field);
       }
     }
+    if (field.type === "file") {
+      issues.push({
+        controlId: `builder-field-${field.id}-type`,
+        message: `${field.label || `Field ${field.order}`} uses file upload, which is unavailable on public forms.`,
+      });
+    }
     if (FORM_FIELD_OPTION_TYPES[field.type]) {
       if (field.options.length === 0) {
         issues.push({
@@ -362,13 +368,19 @@ export const updateConditionAt = (
 
 export const normalizeOptionDraft = (
   raw: string,
+  previousOptions: readonly string[],
   routing: Readonly<Record<string, string>>,
 ): { readonly options: readonly string[]; readonly routing: Readonly<Record<string, string>> } => {
   const options = raw.split(/\r?\n/).map((option) => option.trim()).filter(Boolean);
+  const preserveRenames = options.length === previousOptions.length;
   return {
     options,
     routing: Object.fromEntries(
-      Object.entries(routing).filter(([option]) => options.includes(option)),
+      options.flatMap((option, index) => {
+        const previousOption = previousOptions[index];
+        const category = routing[option] ?? (preserveRenames && previousOption ? routing[previousOption] : undefined);
+        return category === undefined ? [] : [[option, category]];
+      }),
     ),
   };
 };
