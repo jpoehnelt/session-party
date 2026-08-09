@@ -40,6 +40,8 @@ function LiveOrganizerDashboard({
   }, [eventSlug]);
   useEventRoom(dashboard.event.id, (message) => {
     if (message.t === "dashboard/progress") refresh();
+  }, {
+    onReconnect: refresh,
   });
   return <OrganizerDashboardContent dashboard={dashboard} />;
 }
