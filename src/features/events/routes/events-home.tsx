@@ -39,8 +39,11 @@ export default function EventsHome() {
         setLoadError(null);
       })
       .catch((error) => {
-        setLoadError(error instanceof ApiError && error.status === 401 ? "unauthenticated" : "failed");
-        toast(error instanceof Error ? error.message : "Could not load events", { tone: "danger" });
+        const unauthenticated = error instanceof ApiError && error.status === 401;
+        setLoadError(unauthenticated ? "unauthenticated" : "failed");
+        if (!unauthenticated) {
+          toast(error instanceof Error ? error.message : "Could not load events", { tone: "danger" });
+        }
       });
   }, []);
 
@@ -78,7 +81,7 @@ export default function EventsHome() {
         <EmptyState
           title="Sign in to start planning"
           description="Sign in, then create your first event to begin building the program."
-          action={<Button onClick={() => navigate("/login")}>Sign in</Button>}
+          action={<Button className="min-h-11" onClick={() => navigate("/login")}>Sign in</Button>}
         />
       ) : loadError === "failed" ? (
         <EmptyState

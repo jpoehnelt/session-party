@@ -1,0 +1,21 @@
+import type { ComponentType } from "react";
+
+export type RouteModule = {
+  path: string;
+  layout?: "app" | "bare";
+  default: ComponentType;
+};
+
+const routeModules = import.meta.glob(
+  [
+    "../features/*/routes/*.tsx",
+    "!../features/*/routes/*.test.tsx",
+    "!../features/*/routes/*.test.ts",
+  ],
+  {
+    eager: true,
+  },
+) as Record<string, RouteModule>;
+
+export const discoveredClientRoutePaths = Object.keys(routeModules);
+export const discoveredClientRouteModules = Object.values(routeModules);

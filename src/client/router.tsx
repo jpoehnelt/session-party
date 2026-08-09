@@ -3,18 +3,22 @@ import {
   Link,
   NavLink,
   createBrowserRouter,
+  useLocation,
   useNavigate,
   useParams,
 } from "react-router";
-import { AppShell, Button, EmptyState } from "@/ui";
-import LoginPage from "./auth";
+import { AppShell, Button, EmptyState, Sheet } from "@/ui";
 import { apiFetch } from "./api";
+import LoginPage from "./auth";
+import { availableEventNavItems } from "./event-nav";
+import {
+  discoveredClientRouteModules,
+  discoveredClientRoutePaths,
+  type RouteModule,
+} from "./route-discovery";
+import { loginPathForLocation } from "./return-to";
 
-type RouteModule = {
-  path: string;
-  layout?: "app" | "bare";
-  default: ComponentType;
-};
+export { discoveredClientRoutePaths };
 
 type AuthMeResponse = {
   email?: string;
@@ -26,32 +30,23 @@ type SessionState =
   | { status: "signed-out" }
   | { status: "signed-in"; email: string };
 
-const routeModules = import.meta.glob("../features/*/routes/*.tsx", {
-  eager: true,
-}) as Record<string, RouteModule>;
+const navItems = availableEventNavItems(
+  discoveredClientRouteModules.map(({ path }) => path),
+);
 
-const navItems = [
-  ["Overview", ""],
-  ["Forms", "forms"],
-  ["Submissions", "submissions"],
-  ["Review", "review"],
-  ["Agenda", "agenda"],
-  ["Speakers", "speakers"],
-  ["Comms", "comms"],
-  ["Dashboard", "dashboard"],
-  ["Settings", "settings"],
-] as const;
-
-function Sidebar() {
+function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) {
   const { eventSlug } = useParams();
+  const navClassName = mobile
+    ? "flex h-full flex-col gap-5 p-1"
+    : "flex h-full flex-col gap-5 p-4";
 
   if (!eventSlug) {
     return (
-      <nav className="flex h-full flex-col gap-5 p-4" aria-label="Main navigation">
-        <Link className="text-lg font-semibold tracking-tight" to="/">
+      <nav className={navClassName} aria-label="Main navigation">
+        <Link className="text-lg font-semibold tracking-tight" to="/" onClick={onNavigate}>
           Session Party
         </Link>
-        <Link className="text-sm font-medium" to="/">
+        <Link className="text-sm font-medium" to="/" onClick={onNavigate}>
           Events
         </Link>
       </nav>
@@ -60,23 +55,24 @@ function Sidebar() {
 
   const eventPath = `/e/${eventSlug}`;
   return (
-    <nav className="flex h-full flex-col gap-5 p-4" aria-label="Event navigation">
-      <Link className="text-lg font-semibold tracking-tight" to="/">
+    <nav className={navClassName} aria-label="Event navigation">
+      <Link className="text-lg font-semibold tracking-tight" to="/" onClick={onNavigate}>
         Session Party
       </Link>
       <div className="space-y-1">
-        {navItems.map(([label, segment]) => {
+        {navItems.map(({ label, segment }) => {
           const to = segment ? `${eventPath}/${segment}` : eventPath;
           return (
             <NavLink
               className={({ isActive }) =>
-                `block rounded-md px-3 py-2 text-sm font-medium ${
+                `${mobile ? "flex min-h-11 items-center" : "block"} rounded-md px-3 py-2 text-sm font-medium ${
                   isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"
                 }`
               }
               end={!segment}
               key={segment}
               to={to}
+              onClick={onNavigate}
             >
               {label}
             </NavLink>
@@ -87,7 +83,8 @@ function Sidebar() {
   );
 }
 
-function Topbar() {
+function Topbar({ onOpenNavigation }: { onOpenNavigation: () => void }) {
+  const location = useLocation();
   const navigate = useNavigate();
   const [session, setSession] = useState<SessionState>({ status: "loading" });
 
@@ -118,6 +115,14 @@ function Topbar() {
 
   return (
     <div className="flex items-center gap-3 px-4 py-2">
+      <Button
+        className="min-h-11 lg:hidden"
+        variant="secondary"
+        type="button"
+        onClick={onOpenNavigation}
+      >
+        Menu
+      </Button>
       <span className="text-sm text-muted-foreground">
         {session.status === "loading"
           ? "Checking session…"
@@ -126,11 +131,15 @@ function Topbar() {
             : "Not signed in"}
       </span>
       {session.status === "signed-in" ? (
-        <Button type="button" onClick={() => void logout()}>
+        <Button className="min-h-11" type="button" onClick={() => void logout()}>
           Log out
         </Button>
       ) : session.status === "signed-out" ? (
-        <Button type="button" onClick={() => navigate("/login")}>
+        <Button
+          className="min-h-11"
+          type="button"
+          onClick={() => navigate(loginPathForLocation(location))}
+        >
           Sign in
         </Button>
       ) : null}
@@ -139,10 +148,25 @@ function Topbar() {
 }
 
 function Layout({ children }: { children: ReactNode }) {
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+
   return (
-    <AppShell sidebar={<Sidebar />} topbar={<Topbar />}>
-      {children}
-    </AppShell>
+    <>
+      <AppShell
+        sidebar={<Sidebar />}
+        sidebarClassName="hidden lg:block"
+        topbar={<Topbar onOpenNavigation={() => setMobileNavigationOpen(true)} />}
+      >
+        {children}
+      </AppShell>
+      <Sheet
+        open={mobileNavigationOpen}
+        onClose={() => setMobileNavigationOpen(false)}
+        title="Navigation"
+      >
+        <Sidebar mobile onNavigate={() => setMobileNavigationOpen(false)} />
+      </Sheet>
+    </>
   );
 }
 
@@ -167,7 +191,7 @@ export const router = createBrowserRouter([
     path: "/login",
     element: <LoginPage />,
   },
-  ...Object.values(routeModules).map(({ path, layout, default: Component }) => ({
+  ...discoveredClientRouteModules.map(({ path, layout, default: Component }) => ({
     path,
     element: routeElement(Component, layout),
   })),
