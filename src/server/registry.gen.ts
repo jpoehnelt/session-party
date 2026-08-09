@@ -98,6 +98,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
     "input": {
       "body": [
         "expectedRevision",
+        "expectedWorkspaceVersion",
         "idempotencyKey"
       ],
       "path": [
@@ -1483,6 +1484,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
             "room"
           ],
           "type": "string"
+        },
+        "workspaceVersion": {
+          "$ref": "#/$defs/Int",
+          "description": "a non-negative number",
+          "minimum": 0,
+          "title": "nonNegative"
         }
       },
       "required": [
@@ -1491,6 +1498,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "eventSlug",
         "timezone",
         "view",
+        "workspaceVersion",
         "tracks",
         "rooms",
         "backlog",
@@ -1876,6 +1884,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "minimum": 0,
           "title": "nonNegative"
         },
+        "expectedWorkspaceVersion": {
+          "$ref": "#/$defs/Int",
+          "description": "a non-negative number",
+          "minimum": 0,
+          "title": "nonNegative"
+        },
         "idempotencyKey": {
           "description": "a string at most 200 character(s) long",
           "maxLength": 200,
@@ -1887,6 +1901,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
       "required": [
         "eventId",
         "expectedRevision",
+        "expectedWorkspaceVersion",
         "idempotencyKey"
       ],
       "type": "object"
@@ -3614,6 +3629,12 @@ export const openApi = {
                         "room"
                       ],
                       "type": "string"
+                    },
+                    "workspaceVersion": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative"
                     }
                   },
                   "required": [
@@ -3622,6 +3643,7 @@ export const openApi = {
                     "eventSlug",
                     "timezone",
                     "view",
+                    "workspaceVersion",
                     "tracks",
                     "rooms",
                     "backlog",
@@ -3691,6 +3713,12 @@ export const openApi = {
                     "minimum": 0,
                     "title": "nonNegative"
                   },
+                  "expectedWorkspaceVersion": {
+                    "$ref": "#/$defs/Int",
+                    "description": "a non-negative number",
+                    "minimum": 0,
+                    "title": "nonNegative"
+                  },
                   "idempotencyKey": {
                     "description": "a string at most 200 character(s) long",
                     "maxLength": 200,
@@ -3701,6 +3729,7 @@ export const openApi = {
                 },
                 "required": [
                   "expectedRevision",
+                  "expectedWorkspaceVersion",
                   "idempotencyKey"
                 ],
                 "type": "object"
