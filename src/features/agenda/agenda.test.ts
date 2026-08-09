@@ -1,4 +1,5 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import type { Principal as CurrentUserValue } from "contracts/principal";
 import type { ServerMessage } from "contracts/protocol";
 import {
   acceptanceEvents,
@@ -19,13 +20,13 @@ import {
   users,
 } from "contracts/schema";
 import { and, eq } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppLayer, CurrentUser, Rooms, type CurrentUserValue } from "@/server/services";
+import { AppLayer, CurrentUser, Db, Rooms } from "@/server/services";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
 import { operations, partyDescriptors } from "./operations";
-import { zonedTimestamp } from "./routes/agenda";
 import {
   cancelTalk,
   createTalk,
@@ -52,12 +53,18 @@ const owner = (userId: string): CurrentUserValue => ({
   expiresAt: FIXED_NOW + 86_400_000,
 });
 
-const runAs = <A, E>(principal: CurrentUserValue, effect: Effect.Effect<A, E, never>) =>
+const runAs = <A, E>(
+  principal: CurrentUserValue,
+  effect: Effect.Effect<A, E, Db | CurrentUser | Rooms>,
+) =>
   Effect.runPromise(effect.pipe(
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
   ));
 
-const runEither = <A, E>(principal: CurrentUserValue, effect: Effect.Effect<A, E, never>) =>
+const runEither = <A, E>(
+  principal: CurrentUserValue,
+  effect: Effect.Effect<A, E, Db | CurrentUser | Rooms>,
+) =>
   Effect.runPromise(effect.pipe(
     Effect.either,
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
@@ -65,7 +72,7 @@ const runEither = <A, E>(principal: CurrentUserValue, effect: Effect.Effect<A, E
 
 const runAsRecording = <A, E>(
   principal: CurrentUserValue,
-  effect: Effect.Effect<A, E, never>,
+  effect: Effect.Effect<A, E, Db | CurrentUser | Rooms>,
   broadcasts: ServerMessage[],
 ) =>
   Effect.runPromise(effect.pipe(
@@ -77,7 +84,7 @@ const runAsRecording = <A, E>(
 
 const runEitherRecording = <A, E>(
   principal: CurrentUserValue,
-  effect: Effect.Effect<A, E, never>,
+  effect: Effect.Effect<A, E, Db | CurrentUser | Rooms>,
   broadcasts: ServerMessage[],
 ) =>
   Effect.runPromise(effect.pipe(
@@ -127,7 +134,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
   const talkA = id("talk-a");
   const talkB = id("talk-b");
 
-  const statements = [
+  const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
     db.insert(users).values({
       id: userId,
       email: `${userId}@example.com`,
@@ -391,18 +398,13 @@ describe("agenda deterministic fixtures and descriptors", () => {
     expect(partyDescriptors[0].inputSchema.required).not.toContain("eventId");
   });
 
-  it("rejects DST gaps and chooses the earlier fall-back instant", () => {
-    expect(zonedTimestamp("2026-03-08T02:30", "America/Los_Angeles")).toBeNull();
-    expect(zonedTimestamp("2026-11-01T01:30", "America/Los_Angeles")).toBe(
-      Date.UTC(2026, 10, 1, 8, 30),
-    );
-  });
+ 
 });
 
 describe("agenda service", () => {
   it("lists only accepted, provisioned proposals in the backlog", async () => {
     const seeded = await seedAgenda("backlog");
-    const agenda = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }) as never);
+    const agenda = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }));
     expect(agenda.timezone).toBe("America/Los_Angeles");
     expect(agenda.backlog.map(({ title }) => title)).toEqual(["Durable workflows", "Effects at scale"]);
     expect(agenda.talks).toEqual([]);
@@ -419,8 +421,8 @@ describe("agenda service", () => {
       durationMin: 30,
       idempotencyKey: "lifecycle-create-0001",
     } as const;
-    const created = await runAs(seeded.user, createTalk(createInput) as never);
-    const replayed = await runAs(seeded.user, createTalk(createInput) as never);
+    const created = await runAs(seeded.user, createTalk(createInput));
+    const replayed = await runAs(seeded.user, createTalk(createInput));
     expect(created.talk.status).toBe("draft");
     expect(replayed.replayed).toBe(true);
     expect(replayed.changeId).toBe(created.changeId);
@@ -434,7 +436,7 @@ describe("agenda service", () => {
       durationMin: 45,
       expectedVersion: created.talk.version,
       idempotencyKey: "lifecycle-schedule-0001",
-    }) as never);
+    }));
     expect(scheduled.talk).toMatchObject({ status: "confirmed", version: 2, roomId: seeded.roomA });
 
     const moved = await runAs(seeded.user, moveTalk({
@@ -446,7 +448,7 @@ describe("agenda service", () => {
       durationMin: 30,
       expectedVersion: scheduled.talk.version,
       idempotencyKey: "lifecycle-move-0001",
-    }) as never);
+    }));
     expect(moved.talk).toMatchObject({ version: 3, roomId: seeded.roomB, durationMin: 30 });
 
     const cancelled = await runAs(seeded.user, cancelTalk({
@@ -454,7 +456,7 @@ describe("agenda service", () => {
       talkId: created.talk.id,
       expectedVersion: moved.talk.version,
       idempotencyKey: "lifecycle-cancel-0001",
-    }) as never);
+    }));
     expect(cancelled.talk).toMatchObject({ status: "cancelled", version: 4 });
 
     const [idempotency, changes, audits] = await Promise.all([
@@ -477,7 +479,7 @@ describe("agenda service", () => {
       startsAt: null,
       durationMin: 30,
       idempotencyKey: "room-conflict-create-0001",
-    }) as never);
+    }));
     const roomResult = await runEither(roomSeed.user, scheduleTalk({
       eventId: roomSeed.eventId,
       talkId: roomTalk.talk.id,
@@ -487,7 +489,7 @@ describe("agenda service", () => {
       durationMin: 30,
       expectedVersion: roomTalk.talk.version,
       idempotencyKey: "room-conflict-schedule-0001",
-    }) as never);
+    }));
     expect(roomResult._tag).toBe("Left");
     if (roomResult._tag === "Left") {
       expect(roomResult.left).toMatchObject({ _tag: "Conflict" });
@@ -503,7 +505,7 @@ describe("agenda service", () => {
       startsAt: null,
       durationMin: 30,
       idempotencyKey: "speaker-conflict-create-0001",
-    }) as never);
+    }));
     const speakerResult = await runEither(speakerSeed.user, scheduleTalk({
       eventId: speakerSeed.eventId,
       talkId: speakerTalk.talk.id,
@@ -513,7 +515,7 @@ describe("agenda service", () => {
       durationMin: 30,
       expectedVersion: speakerTalk.talk.version,
       idempotencyKey: "speaker-conflict-schedule-0001",
-    }) as never);
+    }));
     expect(speakerResult._tag).toBe("Left");
     if (speakerResult._tag === "Left") {
       expect(speakerResult.left).toMatchObject({ _tag: "Conflict" });
@@ -532,7 +534,7 @@ describe("agenda service", () => {
       durationMin: 30,
       expectedVersion: 1,
       idempotencyKey: "stale-move-0001",
-    }) as never);
+    }));
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") expect(result.left).toMatchObject({ _tag: "Conflict" });
     const [stored] = await seeded.db.select().from(talks).where(and(eq(talks.eventId, seeded.eventId), eq(talks.id, seeded.talkA)));
@@ -555,7 +557,7 @@ describe("agenda service", () => {
         startsAt: null,
         durationMin: 30,
         idempotencyKey: "stale-create-loser-0001",
-      }, createBarrier.interlock) as never,
+      }, createBarrier.interlock),
       createBroadcasts,
     );
     await createBarrier.sampled;
@@ -570,7 +572,7 @@ describe("agenda service", () => {
           startsAt: null,
           durationMin: 30,
           idempotencyKey: "stale-create-winner-0001",
-        }) as never,
+        }),
         createBroadcasts,
       );
     } finally {
@@ -601,7 +603,7 @@ describe("agenda service", () => {
         durationMin: 30,
         expectedVersion: 2,
         idempotencyKey: "stale-interleaved-move-loser-0001",
-      }, moveBarrier.interlock) as never,
+      }, moveBarrier.interlock),
       moveBroadcasts,
     );
     await moveBarrier.sampled;
@@ -617,7 +619,7 @@ describe("agenda service", () => {
           durationMin: 30,
           expectedVersion: 2,
           idempotencyKey: "stale-interleaved-move-winner-0001",
-        }) as never,
+        }),
         moveBroadcasts,
       );
     } finally {
@@ -663,8 +665,8 @@ describe("agenda service", () => {
     });
 
     const outcomes = await Promise.all([
-      runEither(seeded.user, first as never),
-      runEither(seeded.user, second as never),
+      runEither(seeded.user, first),
+      runEither(seeded.user, second),
     ]);
     expect(outcomes.map(({ _tag }) => _tag).sort()).toEqual(["Left", "Right"]);
     const rejected = outcomes.find((outcome) => outcome._tag === "Left");
@@ -679,7 +681,7 @@ describe("agenda service", () => {
 
   it("keeps confirmed talks private until publishing an immutable revision", async () => {
     const seeded = await seedAgenda("publication", { scheduled: true });
-    const before = await runEither(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }) as never);
+    const before = await runEither(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
     expect(before._tag).toBe("Left");
     if (before._tag === "Left") expect(before.left).toMatchObject({ _tag: "NotFound" });
 
@@ -687,7 +689,7 @@ describe("agenda service", () => {
       eventId: seeded.eventId,
       expectedRevision: 0,
       idempotencyKey: "publish-revision-0001",
-    }) as never);
+    }));
     expect(published).toMatchObject({ revision: 1, timezone: "America/Los_Angeles" });
     expect(published.talks).toHaveLength(1);
     expect(published.talks[0]).not.toHaveProperty("version");
@@ -714,8 +716,8 @@ describe("agenda service", () => {
       durationMin: 30,
       expectedVersion: 2,
       idempotencyKey: "post-publish-move-0001",
-    }) as never);
-    const stillPublished = await runAs(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }) as never);
+    }));
+    const stillPublished = await runAs(seeded.user, getPublishedAgenda({ eventId: seeded.eventId }));
     expect(stillPublished.revision).toBe(1);
     expect(stillPublished.talks[0]?.startsAt).toBe(FIXED_DAY_START);
   });

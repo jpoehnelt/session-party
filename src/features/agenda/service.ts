@@ -1,4 +1,5 @@
 import { Conflict, External, NotFound, Validation, type AppError } from "contracts/errors";
+import type { Principal as CurrentUserValue } from "contracts/principal";
 import {
   acceptanceEvents,
   auditLog,
@@ -19,7 +20,7 @@ import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 // BaselineGreen may rename these invocation seams; keep the shared import isolated here.
-import { CurrentUser, Db, Rooms, type CurrentUserValue } from "@/server/services";
+import { CurrentUser, Db, Rooms } from "@/server/services";
 import { PublishedAgenda as PublishedAgendaSchema } from "./schema";
 import type {
   AgendaConflict,
@@ -492,7 +493,7 @@ const rejectConflicts = (conflicts: readonly AgendaConflict[]) =>
     ? Effect.void
     : Effect.fail(new Conflict({ message: conflicts.map(({ explanation }) => explanation).join(" ") }));
 
-const broadcastMutation = (result: AgendaMutationResult, by: string) =>
+const broadcastMutation = (result: AgendaMutationResult, by: string, replyTo: string) =>
   Effect.gen(function* () {
     const { broadcast } = yield* Rooms;
     yield* broadcast(result.talk.eventId, {
@@ -508,6 +509,7 @@ const broadcastMutation = (result: AgendaMutationResult, by: string) =>
         speakerNames: [...result.talk.speakerNames],
       },
       by,
+      replyTo,
     }).pipe(Effect.catchAll(() => Effect.void));
   });
 
@@ -674,7 +676,7 @@ export const createTalk = (
       occurredAt: prepared.now,
     });
     yield* database(() => db.batch([talkInsert, ...speakerInserts, idempotencyInsertQuery, changeInsert, auditInsert]));
-    yield* broadcastMutation(result, principal.name);
+    yield* broadcastMutation(result, principal.name, prepared.requestId);
     return result;
   }));
 
@@ -763,7 +765,7 @@ const repositionTalk = (
       occurredAt: prepared.now,
     });
     yield* database(() => db.batch([update, idempotencyInsertQuery, changeInsert, auditInsert]));
-    yield* broadcastMutation(result, principal.name);
+    yield* broadcastMutation(result, principal.name, prepared.requestId);
     return result;
   }));
 
@@ -835,7 +837,7 @@ export const cancelTalk = (
         occurredAt: prepared.now,
       }),
     ]));
-    yield* broadcastMutation(result, principal.name);
+    yield* broadcastMutation(result, principal.name, prepared.requestId);
     return result;
   }));
 
