@@ -235,6 +235,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
         id: acceptanceA,
         eventId,
         submissionId: submissionA,
+        primarySubmissionSpeakerId: id("submission-speaker-a"),
         primarySpeakerId: speakerA,
         type: "accepted",
         submissionVersion: 2,
@@ -245,6 +246,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
         id: acceptanceB,
         eventId,
         submissionId: submissionB,
+        primarySubmissionSpeakerId: id("submission-speaker-b"),
         primarySpeakerId: options.sharedSpeaker ? speakerA : speakerB,
         type: "accepted",
         submissionVersion: 2,
@@ -660,13 +662,13 @@ describe("agenda service", () => {
       idempotencyKey: "contention-move-second-0001",
     });
 
-    const outcomes = await Promise.allSettled([
-      runAs(seeded.user, first as never),
-      runAs(seeded.user, second as never),
+    const outcomes = await Promise.all([
+      runEither(seeded.user, first as never),
+      runEither(seeded.user, second as never),
     ]);
-    expect(outcomes.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
-    const rejected = outcomes.find((outcome) => outcome.status === "rejected");
-    expect(rejected).toMatchObject({ reason: { _tag: "Conflict" } });
+    expect(outcomes.map(({ _tag }) => _tag).sort()).toEqual(["Left", "Right"]);
+    const rejected = outcomes.find((outcome) => outcome._tag === "Left");
+    expect(rejected).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
 
     const stored = await seeded.db.select().from(talks).where(eq(talks.eventId, seeded.eventId));
     expect(stored.reduce((total, talk) => total + talk.version, 0)).toBe(4);
