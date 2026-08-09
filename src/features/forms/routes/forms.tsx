@@ -760,7 +760,7 @@ export function FormsWorkspace({
                 key={`${selectedForm.id}:${selectedForm.version}`}
                 form={selectedForm}
                 busyAction={mutation.action}
-                onChange={() => undefined}
+                onChange={setSelectedForm}
                 onSave={(draft) => void handleSave(draft)}
                 onPublish={(draft) => void handlePublish(draft)}
                 onStatusChange={(status, draft) => void handleStatus(status, draft)}

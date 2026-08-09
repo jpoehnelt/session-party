@@ -22,7 +22,7 @@ const PREVIEW_BADGE =
   "rounded-none border-[#171714] bg-[#fffdf7] font-black uppercase tracking-[0.07em] text-[#171714]";
 
 export function FormPreview({ form, now }: FormPreviewProps) {
-  const fields: readonly PreviewField[] = form.publishedVersion?.fields ?? form.fields;
+  const fields: readonly PreviewField[] = form.fields;
   const {
     control,
     formState: { isSubmitSuccessful },
@@ -87,11 +87,11 @@ export function FormPreview({ form, now }: FormPreviewProps) {
                 </Badge>
               </div>
               <h2 className="text-2xl font-black leading-tight tracking-[-0.045em] text-[#171714]">
-                {form.publishedVersion?.name ?? form.name}
+                {form.name}
               </h2>
-              {(form.publishedVersion?.description ?? form.description) && (
+              {form.description && (
                 <p className="mt-2 border-l-[3px] border-[#ff714f] pl-3 text-sm font-semibold leading-relaxed text-[#665f52]">
-                  {form.publishedVersion?.description ?? form.description}
+                  {form.description}
                 </p>
               )}
             </div>
