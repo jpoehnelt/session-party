@@ -118,7 +118,8 @@ export function selectVisibleFallback(
 
 function LoadingWorkbench() {
   return (
-    <main className="space-y-4 p-3 sm:p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
+    <section className="space-y-4 p-3 sm:p-4 lg:p-6" aria-busy="true" aria-labelledby="review-workbench-heading">
+      <h1 id="review-workbench-heading" className="sr-only">Proposal review</h1>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Skeleton className="h-8 w-full max-w-72 motion-reduce:animate-none" />
         <Skeleton className="h-8 w-32 motion-reduce:animate-none sm:w-36" />
@@ -128,7 +129,7 @@ function LoadingWorkbench() {
         <Skeleton className="h-[38rem] motion-reduce:animate-none" />
       </div>
       <span className="sr-only">Loading submissions, rounds, and assignments.</span>
-    </main>
+    </section>
   );
 }
 
@@ -154,44 +155,42 @@ export function ReviewLoadFailure({
   readonly onRetry: () => void;
   readonly onSignIn: () => void;
 }) {
-  if (error.kind === "unauthenticated") {
-    return (
-      <main className="p-4 sm:p-6">
-        <EmptyState
-          title="Sign in to review proposals"
-          description="Sign in to continue to this event review workspace."
-          action={<Button className="min-h-11" onClick={onSignIn}>Sign in</Button>}
-        />
-      </main>
-    );
-  }
+  const content = error.kind === "unauthenticated"
+    ? {
+        title: "Sign in to review proposals",
+        description: "Sign in to continue to this event review workspace.",
+        action: <Button className="min-h-11" onClick={onSignIn}>Sign in</Button>,
+      }
+    : error.kind === "event-not-found"
+      ? {
+          title: "Event not found",
+          description: "This event may have moved or been removed.",
+          action: undefined,
+        }
+      : error.kind === "review-not-found"
+        ? {
+            title: "Review workspace unavailable",
+            description: "Review is not available for this event.",
+            action: undefined,
+          }
+        : {
+            title: "Review queue could not load",
+            description: error.message,
+            action: <Button className="min-h-11" onClick={onRetry}>Try again</Button>,
+          };
 
-  if (error.kind === "event-not-found") {
-    return (
-      <main className="p-4 sm:p-6">
-        <EmptyState title="Event not found" description="This event may have moved or been removed." />
-      </main>
-    );
-  }
-
-  if (error.kind === "review-not-found") {
-    return (
-      <main className="p-4 sm:p-6">
-        <EmptyState title="Review workspace unavailable" description="Review is not available for this event." />
-      </main>
-    );
-  }
+  const state = (
+    <div className="flex flex-col items-start py-10 text-left sm:items-center sm:text-center">
+      <h1 className="text-base font-semibold text-ink">{content.title}</h1>
+      <p className="mt-1 max-w-sm text-sm leading-relaxed text-ink-faint">{content.description}</p>
+      {content.action != null && <div className="mt-5">{content.action}</div>}
+    </div>
+  );
 
   return (
-    <main className="p-4 sm:p-6">
-      <Card>
-        <EmptyState
-          title="Review queue could not load"
-          description={error.message}
-          action={<Button className="min-h-11" onClick={onRetry}>Try again</Button>}
-        />
-      </Card>
-    </main>
+    <section className="p-4 sm:p-6">
+      {error.kind === "failed" ? <Card>{state}</Card> : state}
+    </section>
   );
 }
 
@@ -396,7 +395,7 @@ export function ReviewWorkbenchContent({
   };
 
   return (
-    <main
+    <div
       className="min-h-screen bg-canvas p-3 sm:p-4 lg:p-6"
       onKeyDown={(event) => {
         const target = event.target as HTMLElement;
@@ -460,6 +459,6 @@ export function ReviewWorkbenchContent({
           {selected ? <SubmissionReviewPane submission={selected} viewerRole={workbench.viewerRole} timezone={workbench.timezone} /> : <Card><EmptyState title={queue.length === 0 ? "No proposal detail in this round" : "Loading selected proposal"} description={queue.length === 0 ? "When a proposal enters this round, its abstract, rubric, assignments, and evidence will appear here." : "The authoritative proposal detail is loading."} /></Card>}
         </section>
       </div>
-    </main>
+    </div>
   );
 }

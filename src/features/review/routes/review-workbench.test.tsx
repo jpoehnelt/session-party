@@ -130,6 +130,9 @@ describe("review workbench route", () => {
     }));
 
     expect(markup).toContain("Sign in to review proposals");
+    expect(markup).not.toContain("<main");
+    expect(markup).toMatch(/<h1[^>]*>Sign in to review proposals<\/h1>/);
+    expect(markup.match(/<h1\b/g)).toHaveLength(1);
     expect(markup).toContain("Sign in");
     expect(markup).not.toContain("Authoritative proposal");
     expect(markup).not.toContain("Assign reviewer");

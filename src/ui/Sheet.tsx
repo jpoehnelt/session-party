@@ -9,6 +9,7 @@ export interface SheetProps {
   open: boolean;
   onClose: () => void;
   title: string;
+  id?: string;
   children?: ReactNode;
   footer?: ReactNode;
   /** Panel width. Defaults to "md" (~28rem). */
@@ -17,7 +18,7 @@ export interface SheetProps {
 
 const SIZES = { md: "max-w-md", lg: "max-w-xl" } as const;
 
-export function Sheet({ open, onClose, title, children, footer, size = "md" }: SheetProps) {
+export function Sheet({ open, onClose, title, id, children, footer, size = "md" }: SheetProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   useOverlay(open, onClose, panelRef);
   if (!open) return null;
@@ -31,6 +32,7 @@ export function Sheet({ open, onClose, title, children, footer, size = "md" }: S
       />
       <div
         ref={panelRef}
+        id={id}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -42,7 +44,7 @@ export function Sheet({ open, onClose, title, children, footer, size = "md" }: S
       >
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-5 py-4">
           <h2 className="text-base font-semibold text-ink">{title}</h2>
-          <IconButton aria-label="Close" size="sm" onClick={onClose} className="-mr-1.5">
+          <IconButton aria-label="Close" size="sm" onClick={onClose} className="-mr-1.5 min-h-11 min-w-11">
             <XIcon />
           </IconButton>
         </header>
