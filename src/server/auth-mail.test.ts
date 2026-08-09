@@ -451,6 +451,16 @@ describe("durable magic-link authentication", () => {
     const hostileResponse = await SELF.fetch(hostileLink, { redirect: "manual" });
     expect(hostileResponse.status).toBe(302);
     expect(hostileResponse.headers.get("location")).toBe("/");
+
+    const normalizedHostileEmail = `return-to-normalized-hostile-${crypto.randomUUID()}@example.com`;
+    expect((await requestLink(normalizedHostileEmail)).status).toBe(202);
+    const normalizedHostileLink = new URL(await magicLinkFor(normalizedHostileEmail));
+    normalizedHostileLink.searchParams.set("returnTo", "/..//attacker.example/collect");
+    const normalizedHostileResponse = await SELF.fetch(normalizedHostileLink, {
+      redirect: "manual",
+    });
+    expect(normalizedHostileResponse.status).toBe(302);
+    expect(normalizedHostileResponse.headers.get("location")).toBe("/");
   });
 
   it("atomically consumes a link once under concurrent verification", async () => {

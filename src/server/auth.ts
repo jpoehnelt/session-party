@@ -32,10 +32,13 @@ const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
 const RETURN_TO_ORIGIN = "https://return-to.invalid";
 const validatedReturnTo = (returnTo: string | undefined): string => {
   if (!returnTo?.startsWith("/") || returnTo.startsWith("//")) return "/";
-  const target = new URL(returnTo, RETURN_TO_ORIGIN);
-  return target.origin === RETURN_TO_ORIGIN
-    ? `${target.pathname}${target.search}${target.hash}`
-    : "/";
+  try {
+    const target = new URL(returnTo, RETURN_TO_ORIGIN);
+    if (target.origin !== RETURN_TO_ORIGIN || target.pathname.startsWith("//")) return "/";
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return "/";
+  }
 };
 
 const readBoundedJson = async (request: Request): Promise<unknown | typeof BODY_TOO_LARGE> => {

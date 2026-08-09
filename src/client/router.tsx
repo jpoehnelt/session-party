@@ -43,10 +43,10 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
   if (!eventSlug) {
     return (
       <nav className={navClassName} aria-label="Main navigation">
-        <Link className="text-lg font-semibold tracking-tight" to="/" onClick={onNavigate}>
+        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-lg font-semibold tracking-tight`} to="/" onClick={onNavigate}>
           Session Party
         </Link>
-        <Link className="text-sm font-medium" to="/" onClick={onNavigate}>
+        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-sm font-medium`} to="/" onClick={onNavigate}>
           Events
         </Link>
       </nav>
@@ -56,7 +56,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
   const eventPath = `/e/${eventSlug}`;
   return (
     <nav className={navClassName} aria-label="Event navigation">
-      <Link className="text-lg font-semibold tracking-tight" to="/" onClick={onNavigate}>
+      <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-lg font-semibold tracking-tight`} to="/" onClick={onNavigate}>
         Session Party
       </Link>
       <div className="space-y-1">
