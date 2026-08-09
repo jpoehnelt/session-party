@@ -1,22 +1,7 @@
 import { browserSessionAuthorization, authenticatedAuthorization } from "contracts/principal";
 import { Schema } from "effect";
-import { CreateEventInput, GetEventInput, UpdateEventInput, createEvent, getEvent, listEvents, updateEvent } from "./service";
-
-const EventOutput = Schema.Struct({
-  id: Schema.String,
-  slug: Schema.String,
-  name: Schema.String,
-  description: Schema.NullOr(Schema.String),
-  location: Schema.NullOr(Schema.String),
-  timezone: Schema.String,
-  startsAt: Schema.NullOr(Schema.DateFromString),
-  endsAt: Schema.NullOr(Schema.DateFromString),
-  bannerAssetId: Schema.NullOr(Schema.String),
-  accentColor: Schema.NullOr(Schema.String),
-  version: Schema.Number,
-  createdAt: Schema.DateFromString,
-  updatedAt: Schema.DateFromString,
-});
+import { CreateEventInput, GetEventInput, createEvent, getEvent, listEvents, updateEvent } from "./service";
+import { EventOutput, UpdateEventInput } from "./schema";
 
 const UpdateEventOperationInput = Schema.extend(GetEventInput, UpdateEventInput);
 
