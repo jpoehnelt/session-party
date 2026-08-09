@@ -9,7 +9,10 @@ import { Effect, Schema } from "effect";
 import { eq, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db } from "@/server/services";
-import { UpdateEventInput, type UpdateEventInput as UpdateEventInputType } from "./schema";
+import {
+  UpdateEventInput as UpdateEventInputSchema,
+  type UpdateEventInput as UpdateEventInputType,
+} from "./schema";
 
 const OptionalText = Schema.optional(Schema.Union(Schema.String, Schema.Null));
 const OptionalTimestamp = Schema.optional(Schema.Union(Schema.Number, Schema.Null));
@@ -47,7 +50,7 @@ export const CreateEventInput = Schema.Struct({
 });
 export type CreateEventInput = typeof CreateEventInput.Type;
 
-export { UpdateEventInput };
+export const UpdateEventInput = UpdateEventInputSchema;
 export type UpdateEventInput = UpdateEventInputType;
 
 export const GetEventInput = Schema.Struct({ idOrSlug: Schema.String.pipe(Schema.minLength(1)) });
