@@ -56,12 +56,12 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
   {
     "input": {
       "path": [
-        "eventId"
+        "eventSlug"
       ]
     },
     "method": "get",
     "operationId": "agenda.getPublished",
-    "path": "/events/:eventId/agenda/published",
+    "path": "/public/events/:eventSlug/agenda/published",
     "successStatus": 200
   },
   {
@@ -1366,22 +1366,22 @@ export const mcpTools: readonly McpToolDescriptor[] = [
     }
   },
   {
-    "description": "Read the latest explicit public agenda revision without private workflow fields.",
+    "description": "Read an event's latest explicit public agenda revision by its canonical slug.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
-        "eventId": {
-          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9_-]+$",
-          "title": "maxLength(128)",
+        "eventSlug": {
+          "description": "a string matching the pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 80,
+          "minLength": 2,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "title": "maxLength(80)",
           "type": "string"
         }
       },
       "required": [
-        "eventId"
+        "eventSlug"
       ],
       "type": "object"
     },
@@ -12433,184 +12433,6 @@ export const openApi = {
         ],
         "x-idempotency": "required",
         "x-operation-kind": "command"
-      }
-    },
-    "/events/{eventId}/agenda/published": {
-      "get": {
-        "operationId": "agenda.getPublished",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "eventId",
-            "required": true,
-            "schema": {
-              "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "maxLength(128)",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$defs": {
-                    "Int": {
-                      "description": "an integer",
-                      "title": "int",
-                      "type": "integer"
-                    }
-                  },
-                  "$schema": "https://json-schema.org/draft/2020-12/schema",
-                  "additionalProperties": false,
-                  "properties": {
-                    "eventId": {
-                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                      "maxLength": 128,
-                      "minLength": 1,
-                      "pattern": "^[A-Za-z0-9_-]+$",
-                      "title": "maxLength(128)",
-                      "type": "string"
-                    },
-                    "eventName": {
-                      "type": "string"
-                    },
-                    "eventSlug": {
-                      "type": "string"
-                    },
-                    "location": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "publishedAt": {
-                      "description": "a non-negative number",
-                      "minimum": 0,
-                      "title": "nonNegative",
-                      "type": "integer"
-                    },
-                    "revision": {
-                      "$ref": "#/$defs/Int",
-                      "description": "a positive number",
-                      "exclusiveMinimum": 0,
-                      "title": "positive"
-                    },
-                    "talks": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "description": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "durationMin": {
-                            "$ref": "#/$defs/Int",
-                            "description": "a positive number",
-                            "exclusiveMinimum": 0,
-                            "title": "positive"
-                          },
-                          "id": {
-                            "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                            "maxLength": 128,
-                            "minLength": 1,
-                            "pattern": "^[A-Za-z0-9_-]+$",
-                            "title": "maxLength(128)",
-                            "type": "string"
-                          },
-                          "room": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "speakerNames": {
-                            "items": {
-                              "type": "string"
-                            },
-                            "type": "array"
-                          },
-                          "startsAt": {
-                            "description": "a non-negative number",
-                            "minimum": 0,
-                            "title": "nonNegative",
-                            "type": "integer"
-                          },
-                          "title": {
-                            "type": "string"
-                          },
-                          "track": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "title",
-                          "description",
-                          "track",
-                          "room",
-                          "startsAt",
-                          "durationMin",
-                          "speakerNames"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    },
-                    "timezone": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "eventId",
-                    "eventName",
-                    "eventSlug",
-                    "timezone",
-                    "location",
-                    "revision",
-                    "publishedAt",
-                    "talks"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful operation"
-          }
-        },
-        "summary": "Get the published agenda projection",
-        "x-authorization": {
-          "kind": "public"
-        },
-        "x-concurrency": "none",
-        "x-emits": [],
-        "x-idempotency": "none",
-        "x-operation-kind": "query"
       }
     },
     "/events/{eventId}/agenda/talks": {
@@ -25311,6 +25133,184 @@ export const openApi = {
         "x-operation-kind": "command"
       }
     },
+    "/public/events/{eventSlug}/agenda/published": {
+      "get": {
+        "operationId": "agenda.getPublished",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "eventSlug",
+            "required": true,
+            "schema": {
+              "description": "a string matching the pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "maxLength": 80,
+              "minLength": 2,
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "title": "maxLength(80)",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "Int": {
+                      "description": "an integer",
+                      "title": "int",
+                      "type": "integer"
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "additionalProperties": false,
+                  "properties": {
+                    "eventId": {
+                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9_-]+$",
+                      "title": "maxLength(128)",
+                      "type": "string"
+                    },
+                    "eventName": {
+                      "type": "string"
+                    },
+                    "eventSlug": {
+                      "type": "string"
+                    },
+                    "location": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publishedAt": {
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative",
+                      "type": "integer"
+                    },
+                    "revision": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a positive number",
+                      "exclusiveMinimum": 0,
+                      "title": "positive"
+                    },
+                    "talks": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "durationMin": {
+                            "$ref": "#/$defs/Int",
+                            "description": "a positive number",
+                            "exclusiveMinimum": 0,
+                            "title": "positive"
+                          },
+                          "id": {
+                            "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9_-]+$",
+                            "title": "maxLength(128)",
+                            "type": "string"
+                          },
+                          "room": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "speakerNames": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "startsAt": {
+                            "description": "a non-negative number",
+                            "minimum": 0,
+                            "title": "nonNegative",
+                            "type": "integer"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "track": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "description",
+                          "track",
+                          "room",
+                          "startsAt",
+                          "durationMin",
+                          "speakerNames"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "timezone": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "eventId",
+                    "eventName",
+                    "eventSlug",
+                    "timezone",
+                    "location",
+                    "revision",
+                    "publishedAt",
+                    "talks"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful operation"
+          }
+        },
+        "summary": "Get the published agenda projection by event slug",
+        "x-authorization": {
+          "kind": "public"
+        },
+        "x-concurrency": "none",
+        "x-emits": [],
+        "x-idempotency": "none",
+        "x-operation-kind": "query"
+      }
+    },
     "/public/events/{eventSlug}/forms/{formId}": {
       "get": {
         "operationId": "submit.getPublicForm",
@@ -26489,7 +26489,7 @@ export const ownershipManifest = {
     {
       "method": "get",
       "operationId": "agenda.getPublished",
-      "path": "/events/:eventId/agenda/published"
+      "path": "/public/events/:eventSlug/agenda/published"
     },
     {
       "method": "get",
