@@ -25,8 +25,21 @@ const RequestLinkInput = Schema.Struct({
     Schema.pattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/),
   ),
   name: Schema.optional(Schema.String.pipe(Schema.maxLength(MAX_NAME_LENGTH))),
+  returnTo: Schema.optional(Schema.String),
 });
 const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
+
+const RETURN_TO_ORIGIN = "https://return-to.invalid";
+const validatedReturnTo = (returnTo: string | undefined): string => {
+  if (!returnTo?.startsWith("/") || returnTo.startsWith("//")) return "/";
+  try {
+    const target = new URL(returnTo, RETURN_TO_ORIGIN);
+    if (target.origin !== RETURN_TO_ORIGIN || target.pathname.startsWith("//")) return "/";
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return "/";
+  }
+};
 
 const readBoundedJson = async (request: Request): Promise<unknown | typeof BODY_TOO_LARGE> => {
   const declaredLength = Number(request.headers.get("content-length"));
@@ -94,6 +107,7 @@ export const hashBearerMaterial = async (env: Env, value: string): Promise<strin
   return bytesToHex(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
 };
 const notifyScheduler = async (env: Env, requestId: string): Promise<void> => {
+  if (isExplicitLocalEnvironment(env)) return;
   try {
     const schedulerId = env.SCHEDULER.idFromName("mail");
     const response = await env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
@@ -115,6 +129,7 @@ const authorizeRequestLink = async (
   email: string,
   requestId: string,
 ): Promise<boolean> => {
+  if (isExplicitLocalEnvironment(env)) return true;
   try {
     const source = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
     const [sourceHash, recipientHash] = await Promise.all([
@@ -270,6 +285,7 @@ auth.post("/request-link", async (c) => {
 
   const email = parsed.email.trim().toLowerCase();
   const name = parsed.name?.trim() || null;
+  const returnTo = validatedReturnTo(parsed.returnTo);
   if (!(await authorizeRequestLink(c.req.raw, c.env, email, requestId))) {
     return c.json({ ok: true }, 202);
   }
@@ -306,6 +322,7 @@ auth.post("/request-link", async (c) => {
     const deliveryIdempotencyKey = `auth-magic-link:${tokenId}`;
     const link = new URL("/api/v1/auth/verify", c.env.APP_URL);
     link.searchParams.set("token", token);
+    link.searchParams.set("returnTo", returnTo);
     const renderedHtml =
       `<p>Use this link to sign in. It expires in 15 minutes.</p><p><a href="${link.toString()}">Sign in to Session Party</a></p>`;
     const renderedText = `Sign in to Session Party: ${link.toString()}\n\nThis link expires in 15 minutes.`;
@@ -369,6 +386,7 @@ auth.get("/verify", async (c) => {
   const requestId = requestIdFor(c);
   try {
     const token = c.req.query("token");
+    const returnTo = validatedReturnTo(c.req.query("returnTo"));
     if (!token || token.length > 512) {
       return errorResponse(c, new Validation({ message: "Missing token" }), requestId);
     }
@@ -413,7 +431,7 @@ auth.get("/verify", async (c) => {
       path: "/",
       maxAge: 30 * 24 * 60 * 60,
     });
-    return c.redirect("/");
+    return c.redirect(returnTo);
   } catch (error) {
     return unexpectedResponse(c, "authentication", error, requestId);
   }

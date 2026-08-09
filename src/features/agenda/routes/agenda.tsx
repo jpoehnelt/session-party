@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, apiFetch } from "@/client/api";
 import { useEventRoom } from "@/client/socket";
+import { loginPathForLocation } from "@/client/return-to";
 import {
   Badge,
   Button,
@@ -124,6 +125,8 @@ function LoadingRegion({ label, className }: { readonly label: string; readonly 
 }
 
 export default function AgendaPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const { eventSlug = "" } = useParams();
   const [event, setEvent] = useState<EventIdentity | null | undefined>(undefined);
   const [eventError, setEventError] = useState<string | null>(null);
@@ -142,11 +145,12 @@ export default function AgendaPage() {
       })
       .catch((error) => {
         if (!active) return;
+        const unauthorized = error instanceof ApiError && error.status === 401;
         const notFound = error instanceof ApiError && error.status === 404;
         const message = error instanceof Error ? error.message : "Could not load event";
-        setEventError(notFound ? null : message);
+        setEventError(notFound ? null : unauthorized ? "unauthenticated" : message);
         setEvent(null);
-        if (!notFound) toast(message, { tone: "danger" });
+        if (!notFound && !unauthorized) toast(message, { tone: "danger" });
       });
     return () => { active = false; };
   }, [eventRequest, eventSlug]);
@@ -155,13 +159,39 @@ export default function AgendaPage() {
     return <LoadingRegion label="Loading event agenda" className="h-48" />;
   }
   if (event === null) {
+    if (eventError === "unauthenticated") {
+      return (
+        <>
+          <EmptyState
+            title="Sign in to view this event"
+            description="Sign in to continue to this event agenda."
+            action={
+              <Button
+                className="min-h-11"
+                onClick={() => navigate(loginPathForLocation(location))}
+              >
+                Sign in
+              </Button>
+            }
+          />
+          <Toaster />
+        </>
+      );
+    }
+
     const recoverable = eventError !== null;
     return (
       <>
         <EmptyState
           title={recoverable ? "Could not load event" : "Event not found"}
           description={eventError ?? "The event may have moved or been removed."}
-          action={recoverable ? <Button onClick={() => setEventRequest((request) => request + 1)}>Try again</Button> : undefined}
+          action={
+            recoverable ? (
+              <Button className="min-h-11" onClick={() => setEventRequest((request) => request + 1)}>
+                Try again
+              </Button>
+            ) : undefined
+          }
         />
         <Toaster />
       </>
