@@ -293,12 +293,42 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   }, [refreshAgenda, view]);
 
   useEventRoom(event.id, (message) => {
-    setIntent((current) => ({ ...current, connection: "connected" }));
     if (message.t === "agenda/talk_upserted" || message.t === "agenda/talk_deleted" || message.t === "agenda/conflicts") {
       void refreshAgenda(viewRef.current).catch(() => {
         setIntent((current) => ({ ...current, connection: "reconnecting", message: "Live refresh missed; reconnecting." }));
       });
     }
+  }, {
+    onConnectionChange(connection) {
+      setIntent((current) => ({
+        ...current,
+        connection,
+        message: connection === "offline"
+          ? "Live updates are unavailable. Saved state remains available."
+          : connection === "reconnecting"
+            ? "Live connection interrupted; reconnecting."
+            : null,
+      }));
+    },
+    onReconnect() {
+      setIntent((current) => ({
+        ...current,
+        connection: "reconnecting",
+        message: "Live connection restored; refreshing canonical state.",
+      }));
+      void refreshAgenda(viewRef.current).then((loaded) => {
+        if (loaded) {
+          setIntent((current) => ({ ...current, connection: "connected", message: null }));
+        }
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : "Could not refresh agenda";
+        setIntent((current) => ({
+          ...current,
+          connection: "reconnecting",
+          message: `Live connection restored, but refresh failed: ${message}`,
+        }));
+      });
+    },
   });
 
   useEffect(() => {
