@@ -154,6 +154,7 @@ export const submissionQueueFixture = Array.from({ length: 60 }, (_, index) => {
     submittedAt: fixtureClock - index * 3_600_000,
     version: index === 2 ? contentionFixture.currentVersion : index === 0 ? 5 : 2,
     reviewState,
+    assignedToMe: reviewState !== "unassigned",
     assignmentCount: reviewState === "unassigned" ? 0 : 2,
     completedReviewCount,
     averageScore: completedReviewCount === 0 ? null : Number((3.2 + (index % 5) * 0.3).toFixed(1)),
@@ -191,6 +192,22 @@ export const assignedSubmissionFixture = {
       updatedAt: fixtureClock - 30 * 60_000,
     },
   ],
+  comments: [
+    {
+      id: "review_comment_01",
+      authorUserId: "user_reviewer_dev",
+      authorName: "Dev Shah",
+      body: "The audience fit is strong. Does the walkthrough leave enough time for questions?",
+      createdAt: fixtureClock - 25 * 60_000,
+    },
+    {
+      id: "review_comment_02",
+      authorUserId: fixtureReviewerId,
+      authorName: "Ada Rivera",
+      body: "Yes if the accessibility checkpoint is part of the demo rather than a separate section.",
+      createdAt: fixtureClock - 20 * 60_000,
+    },
+  ],
   aiSuggestions: [aiSuggestionFixture],
   acceptance: null,
 } satisfies SubmissionReviewDetail;
@@ -221,6 +238,7 @@ export const acceptedSubmissionFixture = {
       updatedAt: fixtureClock - 2 * 86_400_000,
     },
   ],
+  comments: [],
   aiSuggestions: [],
   acceptance: acceptedProvisionedFixture,
 } satisfies SubmissionReviewDetail;
@@ -266,6 +284,7 @@ export function detailForFixtureSubmission(submissionId: string): SubmissionRevi
           updatedAt: fixtureClock - number * 60_000,
         }]
       : [],
+    comments: [],
     aiSuggestions: [],
     acceptance: null,
   };
@@ -279,6 +298,7 @@ export const emptyReviewFixture = {
   viewerUserId: "user_fixture_admin",
   reviewers: [{ userId: fixtureReviewerId, name: "Ada Rivera" }],
   rounds: [completedRoundFixture, activeRoundFixture, pendingRoundFixture],
+  order: "coverage",
   queue: [],
   selected: null,
   pagination: { page: 1, pageSize: 60, total: 0, pageCount: 0 },
@@ -293,6 +313,7 @@ export const reviewWorkbenchFixture = {
   viewerUserId: "user_fixture_admin",
   reviewers: [{ userId: fixtureReviewerId, name: "Ada Rivera" }],
   rounds: [completedRoundFixture, activeRoundFixture, pendingRoundFixture],
+  order: "coverage",
   queue: submissionQueueFixture,
   selected: assignedSubmissionFixture,
   pagination: { page: 1, pageSize: 60, total: 60, pageCount: 1 },

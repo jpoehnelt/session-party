@@ -33,6 +33,7 @@ import type {
   AgendaMutationResult,
   AgendaSnapshot,
   AgendaTalk,
+  AgendaWarnings,
   BacklogProposal,
   CancelTalkInput,
   CreateRoomInput,
@@ -544,6 +545,7 @@ export const listAgenda = (
         backlog,
         talks: agendaTalks,
         conflicts,
+        warnings: agendaWarnings(agendaTalks, conflicts),
         publication: {
           revision: published?.revision ?? 0,
           publishedAt: published?.publishedAt ?? null,
@@ -644,6 +646,21 @@ const rejectConflicts = (conflicts: readonly AgendaConflict[]) =>
   conflicts.length === 0
     ? Effect.void
     : Effect.fail(new Conflict({ message: conflicts.map(({ explanation }) => explanation).join(" ") }));
+
+const agendaWarnings = (
+  agendaTalks: readonly AgendaTalk[],
+  conflicts: readonly AgendaConflict[],
+): AgendaWarnings => {
+  const activeTalks = agendaTalks.filter(({ status }) => status !== "cancelled");
+  const roomConflictCount = conflicts.filter(({ kind }) => kind === "room_overlap").length;
+  return {
+    // Tracks are optional. A public placement needs both a room and a start.
+    unplacedTalkCount: activeTalks.filter(({ roomId, startsAt }) => roomId === null || startsAt === null).length,
+    conflictCount: conflicts.length,
+    roomConflictCount,
+    speakerConflictCount: conflicts.length - roomConflictCount,
+  };
+};
 
 const broadcastMutation = (result: AgendaMutationResult, by: string, replyTo: string) =>
   Effect.gen(function* () {
@@ -1123,11 +1140,16 @@ export const createTalk = (
     };
     const existing = yield* loadTalkRows(input.eventId);
     const conflicts = yield* loadConflicts(input.eventId, [...existing, candidate]);
-    yield* rejectConflicts(conflicts.filter(({ talkIds }) => talkIds.includes(candidate.id)));
 
     const changeId = nanoid();
     const auditId = nanoid();
-    const result: AgendaMutationResult = { talk: candidate, conflicts: [], changeId, auditId, replayed: false };
+    const result: AgendaMutationResult = {
+      talk: candidate,
+      conflicts: conflicts.filter(({ talkIds }) => talkIds.includes(candidate.id)),
+      changeId,
+      auditId,
+      replayed: false,
+    };
     const actor = actorColumns(principal);
     const talkInsert = db.insert(talks).values({
       id: talkId,
@@ -1213,31 +1235,37 @@ const repositionTalk = (
     if (before.status === "cancelled") {
       return yield* Effect.fail(new Conflict({ message: "Cancelled talks cannot be scheduled or moved" }));
     }
+    const status = input.roomId !== null && input.startsAt !== null ? "confirmed" as const : "draft" as const;
     const candidate: AgendaTalk = {
       ...before,
       trackId: input.trackId,
       roomId: input.roomId,
       startsAt: input.startsAt,
       durationMin: input.durationMin,
-      status: "confirmed",
+      status,
       version: before.version + 1,
     };
     const existing = yield* loadTalkRows(input.eventId);
     const conflicts = yield* loadConflicts(input.eventId, [...existing.filter(({ id }) => id !== candidate.id), candidate]);
-    yield* rejectConflicts(conflicts.filter(({ talkIds }) => talkIds.includes(candidate.id)));
 
     const changeId = nanoid();
     const auditId = nanoid();
-    const result: AgendaMutationResult = { talk: candidate, conflicts: [], changeId, auditId, replayed: false };
+    const result: AgendaMutationResult = {
+      talk: candidate,
+      conflicts: conflicts.filter(({ talkIds }) => talkIds.includes(candidate.id)),
+      changeId,
+      auditId,
+      replayed: false,
+    };
     const actor = actorColumns(principal);
     const update = db
       .update(talks)
       .set({
         trackId: input.trackId,
         roomId: input.roomId,
-        startsAt: new Date(input.startsAt),
+        startsAt: input.startsAt === null ? null : new Date(input.startsAt),
         durationMin: input.durationMin,
-        status: "confirmed",
+        status,
         version: candidate.version,
         updatedAt: prepared.now,
       })
@@ -1405,6 +1433,14 @@ export const publishAgenda = (
       ),
     ]);
     const conflicts = yield* loadConflicts(input.eventId, agendaTalks);
+    const incompleteTalks = agendaTalks.filter(({ status, roomId, startsAt }) =>
+      status !== "cancelled" && (status !== "confirmed" || roomId === null || startsAt === null)
+    );
+    if (incompleteTalks.length > 0) {
+      return yield* Effect.fail(new Validation({
+        message: `Agenda publication requires all active talks to be placed; ${incompleteTalks.length} ${incompleteTalks.length === 1 ? "talk is" : "talks are"} still TBD`,
+      }));
+    }
     yield* rejectConflicts(conflicts);
     const trackNames = new Map(trackRows.map(({ id, name }) => [id, name] as const));
     const roomNames = new Map(roomRows.map(({ id, name }) => [id, name] as const));

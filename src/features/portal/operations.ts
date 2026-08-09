@@ -5,10 +5,12 @@ import {
   CreateTaskInput,
   ClaimSpeakerInput,
   ClaimSpeakerOutput,
+  LogSpeakerContactInput,
   DeletePortalEntityOutput,
   DeleteResourceInput,
   DeleteTaskInput,
   PortalDashboard,
+  SpeakerContact,
   PortalEventInput,
   PortalResource,
   PortalResources,
@@ -49,6 +51,7 @@ import {
   updatePortalTask,
   listPortalResources,
   listPortalTasks,
+  logSpeakerContact,
   updateSpeakerProfile,
   updateSpeakerPublication,
   uploadPortalAsset,
@@ -270,6 +273,19 @@ const listTasksOperation = {
   emits: [],
 } as const satisfies AnyOperationDef;
 
+const logSpeakerContactOperation = {
+  id: "portal.logSpeakerContact",
+  kind: "command",
+  input: LogSpeakerContactInput,
+  output: SpeakerContact,
+  authorize: browserSessionAuthorization,
+  invoke: logSpeakerContact,
+  rest: { method: "post", path: "/events/:eventId/portal/speakers/:speakerId/contacts", input: { path: ["eventId", "speakerId"], body: ["medium", "note", "idempotencyKey"] }, summary: "Append an organizer-recorded completed speaker contact", successStatus: 201 },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["portal.speaker.contact.logged"],
+} as const satisfies AnyOperationDef;
+
 const provisionSpeakerOperation = {
   id: "portal.provisionSpeaker",
   kind: "command",
@@ -375,6 +391,7 @@ export const operations = [
   getSnapshotOperation,
   listResourcesOperation,
   listTasksOperation,
+  logSpeakerContactOperation,
   manageOnboardingOperation,
   provisionSpeakerOperation,
   setTaskCompletionOperation,

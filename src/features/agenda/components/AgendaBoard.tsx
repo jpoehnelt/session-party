@@ -210,6 +210,14 @@ export function AgendaBoard({
           <span>{scheduled.length} active</span>
           <span className="text-on-accent/35" aria-hidden="true">◆</span>
           <span>{agenda.backlog.length} waiting</span>
+          <span className="text-on-accent/35" aria-hidden="true">◆</span>
+          <span>{agenda.warnings.unplacedTalkCount} unplaced</span>
+          {agenda.warnings.conflictCount > 0 && (
+            <>
+              <span className="text-on-accent/35" aria-hidden="true">◆</span>
+              <span>{agenda.warnings.conflictCount} scheduling warnings</span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2" role="status" aria-live="polite">
           <Badge tone={connection.tone}>{connection.label}</Badge>
@@ -217,7 +225,7 @@ export function AgendaBoard({
         </div>
       </div>
 
-      <ConflictIndicator conflicts={agenda.conflicts} />
+      <ConflictIndicator conflicts={agenda.conflicts} blocking={false} />
 
       {(view === "day" || view === "room") && (
         <fieldset

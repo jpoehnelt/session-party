@@ -28,6 +28,7 @@ const workbench: ReviewWorkbench = {
     rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] },
     version: 1,
   }],
+  order: "coverage",
   queue: [{
     id: "submission_authoritative",
     title: "Authoritative proposal",
@@ -36,6 +37,7 @@ const workbench: ReviewWorkbench = {
     submittedAt: 1_700_000_000_000,
     version: 3,
     reviewState: "unassigned",
+    assignedToMe: false,
     assignmentCount: 0,
     completedReviewCount: 0,
     averageScore: null,
@@ -48,6 +50,7 @@ const workbench: ReviewWorkbench = {
     submittedAt: 1_700_000_000_000,
     version: 3,
     reviewState: "unassigned",
+    assignedToMe: false,
     assignmentCount: 0,
     completedReviewCount: 0,
     averageScore: null,
@@ -63,6 +66,7 @@ const workbench: ReviewWorkbench = {
     },
     assignments: [],
     reviews: [],
+    comments: [],
     aiSuggestions: [],
     acceptance: null,
   },
@@ -120,6 +124,8 @@ describe("review workbench route", () => {
 
     expect(markup).toContain("Search proposals");
     expect(markup).toContain("All statuses");
+    expect(markup).toContain("Coverage · fewest reviews");
+    expect(markup).toContain("Decision · highest score");
     expect(markup).toContain("Authoritative proposal");
     expect(markup).toContain("Loading selected proposal");
     expect(markup).not.toContain("Loading submissions, rounds, and assignments.");
@@ -168,10 +174,11 @@ describe("review workbench route", () => {
     expect(markup).toContain("Assign reviewer");
     expect(markup).toContain("Request AI suggestion");
     expect(markup).toContain("Accept &amp; provision primary speaker");
-    expect(markup).not.toContain("Save my review");
+    expect(markup).toContain("No email is sent");
+    expect(markup).toContain("Save my review");
   });
 
-  it("renders human scoring only for the assigned signed-in reviewer", () => {
+  it("renders scoring and the private committee conversation for an unassigned event reviewer", () => {
     const reviewerWorkbench: ReviewWorkbench = {
       ...workbench,
       viewerRole: "reviewer",
@@ -179,13 +186,26 @@ describe("review workbench route", () => {
       reviewers: [],
       selected: workbench.selected && {
         ...workbench.selected,
-        reviewState: "assigned",
-        assignmentCount: 1,
-        assignments: [{
-          id: "assignment_reviewer",
-          reviewerUserId: "user_reviewer",
-          reviewerName: "Grace Reviewer",
+        reviewState: "in_progress",
+        completedReviewCount: 1,
+        averageScore: 4,
+        assignments: [],
+        reviews: [{
+          id: "review_colleague",
+          reviewerUserId: "user_colleague",
+          reviewerName: "Colleague Reviewer",
+          score: 4,
+          scores: [{ criterionKey: "clarity", score: 4 }],
+          comment: "This is a strong opening; I would clarify the audience outcome.",
           version: 1,
+          updatedAt: 1_700_000_000_000,
+        }],
+        comments: [{
+          id: "comment_colleague",
+          authorUserId: "user_colleague",
+          authorName: "Colleague Reviewer",
+          body: "Would the speaker add a concrete production example?",
+          createdAt: 1_700_000_000_100,
         }],
       },
     };
@@ -198,6 +218,15 @@ describe("review workbench route", () => {
     expect(markup).toContain("Rubric scorecard");
     expect(markup).toContain("Save my review");
     expect(markup).toContain("Request AI suggestion");
+    expect(markup).toContain("Committee thread");
+    expect(markup).toContain("Score rationales");
+    expect(markup).toContain("Colleague Reviewer");
+    expect(markup).toContain("This is a strong opening; I would clarify the audience outcome.");
+    expect(markup).toContain("Would the speaker add a concrete production example?");
+    expect(markup).toContain("Add committee message");
+    expect(markup).toContain("Post message");
+    expect(markup).toContain("Speakers and API keys cannot author");
+    expect(markup).toContain("Assignments are optional workload markers");
     expect(markup).not.toContain("Assign reviewer");
     expect(markup).not.toContain("Accept &amp; provision primary speaker");
     expect(markup).not.toContain("Create round");

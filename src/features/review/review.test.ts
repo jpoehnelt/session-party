@@ -11,7 +11,10 @@ import {
   formVersionFields,
   formVersions,
   idempotencyRecords,
+  mailDeliveries,
+  mailDeliverySnapshots,
   reviewAssignments,
+  reviewComments,
   reviewRounds,
   reviews,
   speakers,
@@ -44,6 +47,7 @@ import { SaveScoreInput } from "./schema";
 import {
   acceptSubmission,
   advanceReviewRound,
+  appendReviewComment,
   assignReviewer,
   createReviewRound,
   getWorkbench,
@@ -396,6 +400,7 @@ describe("review and acceptance slice", () => {
     expect(ids).toEqual([
       "review.acceptSubmission",
       "review.advanceRound",
+      "review.appendComment",
       "review.assignReviewer",
       "review.createRound",
       "review.getWorkbench",
@@ -424,6 +429,12 @@ describe("review and acceptance slice", () => {
     const scoreAuthorization = operations.find((operation) => operation.id === "review.saveScore")!.authorize;
     expect(scoreAuthorization.kind).toBe("event");
     if (scoreAuthorization.kind === "event") expect(scoreAuthorization.apiKey.kind).toBe("deny");
+    const commentAuthorization = operations.find((operation) => operation.id === "review.appendComment")!.authorize;
+    expect(commentAuthorization.kind).toBe("event");
+    if (commentAuthorization.kind === "event") {
+      expect(commentAuthorization.browser).toEqual({ kind: "event-member", roles: ["owner", "admin", "reviewer"] });
+      expect(commentAuthorization.apiKey.kind).toBe("deny");
+    }
   });
 
   it("creates pending or active rounds with validated rubrics, authoritative counts, and replay", async () => {
@@ -597,9 +608,20 @@ describe("review and acceptance slice", () => {
   });
 
 
-  it("returns all 60 proposals to organizers but only assigned proposals and private review data to reviewers", async () => {
+  it("returns all event proposals and committee conversation to reviewers, with assignments as an optional filter", async () => {
     const organizerView = await runAs(owner, getWorkbench({ eventId: fixtureEventId, page: 1, pageSize: 60 }));
     expect(organizerView.queue).toHaveLength(60);
+    expect(organizerView.order).toBe("coverage");
+    expect(organizerView.queue[0]).toMatchObject({ id: "submission_60", completedReviewCount: 0 });
+
+    const decisionView = await runAs(owner, getWorkbench({
+      eventId: fixtureEventId,
+      order: "decision",
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(decisionView.order).toBe("decision");
+    expect(decisionView.queue[0]).toMatchObject({ id: "submission_05", averageScore: 2 });
 
     const reviewerView = await runAs(reviewer, getWorkbench({
       eventId: fixtureEventId,
@@ -607,21 +629,270 @@ describe("review and acceptance slice", () => {
       page: 1,
       pageSize: 60,
     }));
-    expect(reviewerView.queue).toHaveLength(12);
-    expect(reviewerView.selected?.assignments.map((assignment) => assignment.reviewerUserId)).toEqual([fixtureReviewerId]);
-    expect(reviewerView.selected?.reviews).toEqual([]);
-    expect(JSON.stringify(reviewerView)).not.toContain("Dev private comment");
-    const unassignedRound = await runAs(reviewer, getWorkbench({
+    expect(reviewerView.queue).toHaveLength(60);
+    expect(reviewerView.selected?.assignments.map((assignment) => assignment.reviewerUserId).sort()).toEqual([
+      "user_reviewer_dev",
+      fixtureReviewerId,
+    ].sort());
+    expect(reviewerView.selected?.reviews).toEqual([
+      expect.objectContaining({ reviewerUserId: "user_reviewer_dev", reviewerName: "Dev Shah", comment: "Dev private comment" }),
+    ]);
+    const assignedToMe = await runAs(reviewer, getWorkbench({
       eventId: fixtureEventId,
-      roundId: completedRoundFixture.id,
+      assignedToMe: true,
       page: 1,
       pageSize: 60,
     }));
-    expect(unassignedRound.queue).toEqual([]);
+    expect(assignedToMe.queue).toHaveLength(12);
+    expect(assignedToMe.queue.every((submission) => submission.assignedToMe)).toBe(true);
 
     const forbidden = await runEitherAs(speakerOnly, getWorkbench({ eventId: fixtureEventId, page: 1, pageSize: 60 }));
     expect(forbidden._tag).toBe("Left");
     if (forbidden._tag === "Left") expect(forbidden.left._tag).toBe("Forbidden");
+  });
+
+  it("appends multiple idempotent committee messages independently from scoring and broadcasts full-committee evidence", async () => {
+    const reviewRowsBefore = await db.select().from(reviews).where(and(
+      eq(reviews.eventId, fixtureEventId),
+      eq(reviews.submissionId, "submission_32"),
+    ));
+    const firstInput = {
+      eventId: fixtureEventId,
+      submissionId: "submission_32",
+      body: "Could this become a facilitated workshop?",
+      idempotencyKey: "comment-submission-32-first",
+      requestId: "request_comment_32_first",
+    } as const;
+    const firstResults = await Promise.all([
+      runAs(reviewer, appendReviewComment(firstInput)),
+      runAs(reviewer, appendReviewComment(firstInput)),
+    ]);
+    const first = firstResults.find((result) => !result.idempotent)!;
+    const replay = firstResults.find((result) => result.idempotent)!;
+    const second = await runAs(reviewer, appendReviewComment({
+      eventId: fixtureEventId,
+      submissionId: "submission_32",
+      body: "I would keep it as a talk and ask for one audience exercise.",
+      idempotencyKey: "comment-submission-32-second",
+      requestId: "request_comment_32_second",
+    }));
+
+    expect(first.idempotent).toBe(false);
+    expect(replay).toEqual({ ...first, idempotent: true });
+    expect(new Set(firstResults.map((result) => result.comment.id))).toEqual(new Set([first.comment.id]));
+    expect(second.comment.id).not.toBe(first.comment.id);
+    expect(first.comment).toMatchObject({
+      authorUserId: fixtureReviewerId,
+      authorName: "Ada Rivera",
+      body: firstInput.body,
+    });
+
+    const detail = await runAs(reviewer, getWorkbench({
+      eventId: fixtureEventId,
+      selectedSubmissionId: "submission_32",
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(detail.selected?.comments).toHaveLength(2);
+    expect(detail.selected?.comments.map((comment) => comment.body).sort()).toEqual([
+      firstInput.body,
+      "I would keep it as a talk and ask for one audience exercise.",
+    ].sort());
+    expect(await db.select().from(reviews).where(and(
+      eq(reviews.eventId, fixtureEventId),
+      eq(reviews.submissionId, "submission_32"),
+    ))).toEqual(reviewRowsBefore);
+
+    const commentRows = await db.select().from(reviewComments).where(and(
+      eq(reviewComments.eventId, fixtureEventId),
+      eq(reviewComments.submissionId, "submission_32"),
+    ));
+    expect(commentRows).toHaveLength(2);
+    const changes = (await db.select().from(domainChanges)).filter(
+      (change) => change.requestId === firstInput.requestId || change.requestId === "request_comment_32_second",
+    );
+    const audits = (await db.select().from(auditLog)).filter(
+      (audit) => audit.requestId === firstInput.requestId || audit.requestId === "request_comment_32_second",
+    );
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toMatchObject({ eventType: "review.comment.created", aggregateType: "reviewComment" });
+    expect(changes[0]?.audiences).toEqual([
+      { kind: "admins" },
+      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId, "user_reviewer_dev"] },
+    ]);
+    expect(audits).toHaveLength(2);
+    expect(audits[0]).toMatchObject({ action: "review.appendComment", actorUserId: fixtureReviewerId });
+
+    const reusedKey = await runEitherAs(reviewer, appendReviewComment({
+      ...firstInput,
+      body: "A different message must not reuse the same key.",
+      requestId: "request_comment_32_key_reuse",
+    }));
+    expect(reusedKey._tag).toBe("Left");
+    if (reusedKey._tag === "Left") expect(reusedKey.left._tag).toBe("Conflict");
+
+    const blank = await runEitherAs(reviewer, appendReviewComment({
+      eventId: fixtureEventId,
+      submissionId: "submission_32",
+      body: "   ",
+      idempotencyKey: "comment-blank-denied-32",
+      requestId: "request_comment_blank_denied_32",
+    }));
+    expect(blank._tag).toBe("Left");
+    if (blank._tag === "Left") expect(blank.left._tag).toBe("Validation");
+
+    const ownerComment = await runAs(owner, appendReviewComment({
+      eventId: fixtureEventId,
+      submissionId: "submission_33",
+      body: "Organizer note for the committee.",
+      idempotencyKey: "comment-owner-allowed-33",
+      requestId: "request_comment_owner_allowed_33",
+    }));
+    expect(ownerComment.comment).toMatchObject({ authorUserId: fixtureOwnerId, authorName: "Morgan Chen" });
+
+    const apiKeyAttempt = await runEitherAs(reviewApiKey, appendReviewComment({
+      eventId: fixtureEventId,
+      submissionId: "submission_32",
+      body: "Pretend this came from a reviewer.",
+      idempotencyKey: "comment-api-key-denied-32",
+      requestId: "request_comment_api_key_denied_32",
+    }));
+    expect(apiKeyAttempt._tag).toBe("Left");
+    if (apiKeyAttempt._tag === "Left") expect(apiKeyAttempt.left._tag).toBe("Forbidden");
+
+    const speakerAttempt = await runEitherAs(speakerOnly, appendReviewComment({
+      eventId: fixtureEventId,
+      submissionId: "submission_32",
+      body: "Pretend this came from the committee.",
+      idempotencyKey: "comment-speaker-denied-32",
+      requestId: "request_comment_speaker_denied_32",
+    }));
+    expect(speakerAttempt._tag).toBe("Left");
+    if (speakerAttempt._tag === "Left") expect(speakerAttempt.left._tag).toBe("Forbidden");
+    expect(await db.select().from(reviewComments).where(and(
+      eq(reviewComments.eventId, fixtureEventId),
+      eq(reviewComments.submissionId, "submission_32"),
+    ))).toHaveLength(2);
+  });
+
+  it("keeps committee comments inside their event boundary", async () => {
+    const eventId = "event_review_isolated";
+    const createdAt = new Date(fixtureClock);
+    await db.insert(events).values({
+      id: eventId,
+      slug: "review-isolated",
+      name: "Isolated review",
+      timezone: "UTC",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values({
+      id: "member_review_isolated",
+      eventId,
+      userId: fixtureReviewerId,
+      role: "reviewer",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(forms).values({
+      id: "form_review_isolated",
+      eventId,
+      kind: "cfp",
+      name: "Isolated CFP",
+      status: "closed",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(formVersions).values({
+      id: "form_version_review_isolated",
+      eventId,
+      formId: "form_review_isolated",
+      versionNumber: 1,
+      name: "Isolated CFP",
+      publishedAt: createdAt,
+      createdAt,
+    });
+    await db.insert(formVersionFields).values({
+      id: "field_review_isolated",
+      eventId,
+      formVersionId: "form_version_review_isolated",
+      order: 1,
+      type: "textarea",
+      label: "Abstract",
+      semanticKey: "submissionAbstract",
+      required: true,
+      createdAt,
+    });
+    await db.insert(submissions).values({
+      id: "submission_review_isolated",
+      eventId,
+      formId: "form_review_isolated",
+      formVersionId: "form_version_review_isolated",
+      title: "Isolated proposal",
+      status: "submitted",
+      submittedAt: createdAt,
+      version: 1,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(submissionAnswers).values({
+      id: "answer_review_isolated",
+      eventId,
+      submissionId: "submission_review_isolated",
+      formVersionId: "form_version_review_isolated",
+      formVersionFieldId: "field_review_isolated",
+      value: "Event-isolated abstract",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(reviewRounds).values({
+      id: "round_review_isolated",
+      eventId,
+      name: "Isolated round",
+      order: 1,
+      status: "active",
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] },
+      version: 1,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(reviews).values({
+      id: "review_isolated_comment",
+      eventId,
+      roundId: "round_review_isolated",
+      submissionId: "submission_review_isolated",
+      reviewerUserId: fixtureReviewerId,
+      ai: false,
+      score: 5,
+      scores: { clarity: 5 },
+      comment: "Only the isolated event committee may read this.",
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    await runAs(reviewer, appendReviewComment({
+      eventId,
+      submissionId: "submission_review_isolated",
+      body: "Only this event can load this committee thread message.",
+      idempotencyKey: "comment-isolated-event",
+      requestId: "request_comment_isolated_event",
+    }));
+
+    const isolated = await runAs(reviewer, getWorkbench({ eventId, page: 1, pageSize: 60 }));
+    const primary = await runAs(reviewer, getWorkbench({ eventId: fixtureEventId, page: 1, pageSize: 60 }));
+    expect(isolated.selected?.reviews[0]?.comment).toBe("Only the isolated event committee may read this.");
+    expect(isolated.selected?.comments[0]?.body).toBe("Only this event can load this committee thread message.");
+    expect(JSON.stringify(primary)).not.toContain("Only the isolated event committee may read this.");
+    expect(JSON.stringify(primary)).not.toContain("Only this event can load this committee thread message.");
+
+    const crossEventSelection = await runEitherAs(reviewer, getWorkbench({
+      eventId: fixtureEventId,
+      selectedSubmissionId: "submission_review_isolated",
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(crossEventSelection._tag).toBe("Left");
+    if (crossEventSelection._tag === "Left") expect(crossEventSelection.left._tag).toBe("NotFound");
   });
 
   it("excludes task-form submissions and rejects every review mutation for them", async () => {
@@ -794,11 +1065,11 @@ describe("review and acceptance slice", () => {
     if (completedAi._tag === "Left") expect(completedAi.left._tag).toBe("Conflict");
   });
 
-  it("enforces complete bounded 1–5 human scoring without changing submission status", async () => {
+  it("lets an event reviewer save complete bounded 1–5 scores without an assignment or status change", async () => {
     const decoded = Schema.decodeUnknownEither(SaveScoreInput)({
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
-      submissionId: "submission_05",
+      submissionId: "submission_30",
       expectedVersion: 0,
       scores: [
         { criterionKey: "relevance", score: 6 },
@@ -812,7 +1083,7 @@ describe("review and acceptance slice", () => {
     const saved = await runAs(reviewer, saveScore({
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
-      submissionId: "submission_05",
+      submissionId: "submission_30",
       expectedVersion: 0,
       scores: [
         { criterionKey: "relevance", score: 5 },
@@ -824,15 +1095,15 @@ describe("review and acceptance slice", () => {
     }));
     expect(saved.review.score).toBe(4);
     expect(saved.submissionStatus).not.toBe("accepted");
-    const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_05"));
-    expect(submission?.status).toBe("in_review");
+    const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_30"));
+    expect(submission?.status).toBe("submitted");
   });
 
   it("limits AI input, labels the suggestion, and never transitions submission status", async () => {
     const result = await runAs(reviewer, requestAiSuggestion({
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
-      submissionId: "submission_06",
+      submissionId: "submission_31",
       requestId: "request_ai_01",
     }));
     expect(result.suggestion.label).toContain("requires human confirmation");
@@ -842,7 +1113,7 @@ describe("review and acceptance slice", () => {
     expect(lastAiPrompt).toContain('"rubric"');
     expect(lastAiPrompt).not.toContain("email");
     expect(result.submissionStatus).not.toBe("accepted");
-    const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_06"));
+    const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_31"));
     expect(submission?.status).toBe("submitted");
   });
 
@@ -1076,6 +1347,29 @@ describe("review and acceptance slice", () => {
       { kind: "speaker", speakerIds: [fixturePrimarySpeakerId] },
     ]);
     expect(audit).toMatchObject({ action: "review.rejectSubmission" });
+  });
+
+  it("does not enqueue outbound email when proposal status changes", async () => {
+    const beforeSnapshots = await db.select().from(mailDeliverySnapshots);
+    const beforeDeliveries = await db.select().from(mailDeliveries);
+
+    await runAs(owner, acceptSubmission({
+      eventId: fixtureEventId,
+      submissionId: "submission_57",
+      expectedVersion: 2,
+      idempotencyKey: "accept-no-email-57",
+      requestId: "request_accept_no_email_57",
+    }));
+    await runAs(owner, rejectSubmission({
+      eventId: fixtureEventId,
+      submissionId: "submission_56",
+      expectedVersion: 2,
+      idempotencyKey: "reject-no-email-56",
+      requestId: "request_reject_no_email_56",
+    }));
+
+    expect(await db.select().from(mailDeliverySnapshots)).toHaveLength(beforeSnapshots.length);
+    expect(await db.select().from(mailDeliveries)).toHaveLength(beforeDeliveries.length);
   });
 
   it("collapses concurrent rejection retries into one decision", async () => {

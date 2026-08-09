@@ -23,6 +23,7 @@ import {
   getSpeakerDirectory,
   getSpeakerPortal,
   getSpeakerTaskForm,
+  logSpeakerContact,
   getTaskDefinitions,
   provisionSpeaker,
   setSpeakerTaskCompletion,
@@ -115,7 +116,25 @@ const snapshot: PortalSnapshot = {
   }],
   resources: [resource],
   assets: [{ id: "asset-slides", eventId: event.id, filename: "final-slides.pdf", contentType: "application/pdf", size: 2048, purpose: "slides", version: 1 }],
-  readiness: { tasksTotal: 1, tasksDone: 0, outstandingTaskIds: [task.id], nextTaskId: task.id, state: "not_started" },
+  readiness: {
+    tasksTotal: 1,
+    tasksDone: 0,
+    outstandingTaskIds: [task.id],
+    nextTaskId: task.id,
+    state: "not_started",
+    missingItems: [{
+      id: task.id,
+      name: task.name,
+      kind: task.kind,
+      dueAt: task.dueAt,
+      overdue: true,
+      blocker: "Overdue: Review speaker profile",
+      recommendedAction: "Complete the speaker profile",
+    }],
+    overdueCount: 1,
+    clearestBlocker: "Overdue: Review speaker profile",
+    recommendedNextAction: "Complete the speaker profile",
+  },
 };
 
 const formTask: PortalTask = {
@@ -176,13 +195,14 @@ const directory: SpeakerDirectory = {
     provisioningVersion: 2,
     provisionedAt: null,
     readiness: snapshot.readiness,
+    latestContact: null,
   }],
 };
 
 const dashboard: PortalDashboard = {
   event,
   speakers: directory.speakers,
-  totals: { speakers: 1, ready: 0, tasksDone: 0, tasksTotal: 1 },
+  totals: { speakers: 1, ready: 0, needsAttention: 1, overdue: 1, tasksDone: 0, tasksTotal: 1 },
 };
 
 const gallery: PublicSpeakerGallery = {
@@ -281,6 +301,25 @@ describe("portal API loading", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(getPublicSpeakerGallery(event.slug)).resolves.toEqual(gallery);
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/public/events/${event.slug}/speakers`, expect.objectContaining({ method: "GET" }));
+  });
+
+  it("posts explicit organizer contact evidence without a draft endpoint", async () => {
+    const fetchMock = vi.fn(async () => ok({ id: "contact-1", medium: "phone", note: null, contactedAt: 1 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await logSpeakerContact(event.id, {
+      eventId: event.id,
+      speakerId: profile.id,
+      medium: "phone",
+      note: null,
+      idempotencyKey: "explicit-contact-only",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/events/${event.id}/portal/speakers/${profile.id}/contacts`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ medium: "phone", note: null, idempotencyKey: "explicit-contact-only" }),
+      }),
+    );
   });
 
   it("loads linked fields publicly but submits answers through the speaker-session endpoint", async () => {
@@ -387,6 +426,18 @@ describe("speaker portal content", () => {
         outstandingTaskIds: [formTask.id],
         nextTaskId: formTask.id,
         state: "not_started",
+        missingItems: [{
+          id: formTask.id,
+          name: formTask.name,
+          kind: formTask.kind,
+          dueAt: formTask.dueAt,
+          overdue: true,
+          blocker: "Overdue: Travel details",
+          recommendedAction: "Submit Travel details",
+        }],
+        overdueCount: 1,
+        clearestBlocker: "Overdue: Travel details",
+        recommendedNextAction: "Submit Travel details",
       },
     };
     const markup = renderToStaticMarkup(createElement(SpeakerPortalContent, {
@@ -519,7 +570,11 @@ describe("organizer content and workflows", () => {
     const dashboardMarkup = renderToStaticMarkup(createElement(OrganizerDashboardContent, { dashboard }));
     expect(dashboardMarkup).toContain("Speaker readiness");
     expect(dashboardMarkup).toContain("0 / 1");
-    expect(dashboardMarkup).toContain("1 remaining");
+    expect(dashboardMarkup).toContain("Needs attention only");
+    expect(dashboardMarkup).toContain("Overdue: Review speaker profile");
+    expect(dashboardMarkup).toContain("Complete the speaker profile");
+    expect(dashboardMarkup).toContain("Last contact");
+    expect(dashboardMarkup).toContain("Log contact");
   });
 
   it("uses provisioning concurrency separately from speaker publication concurrency", async () => {

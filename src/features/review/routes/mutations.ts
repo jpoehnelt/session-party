@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import {
   AcceptSubmissionOutput,
   AdvanceReviewRoundOutput,
+  AppendReviewCommentOutput,
   AssignReviewerOutput,
   CreateReviewRoundOutput,
   RequestAiSuggestionOutput,
@@ -10,6 +11,7 @@ import {
   SaveScoreOutput,
   type AcceptSubmissionInput,
   type AdvanceReviewRoundInput,
+  type AppendReviewCommentInput,
   type AssignReviewerInput,
   type CreateReviewRoundInput,
   type RequestAiSuggestionInput,
@@ -128,6 +130,17 @@ export function saveScoreRequest(input: SaveScoreInput) {
         : { confirmedAiSuggestionId: input.confirmedAiSuggestionId }),
     },
     schema: SaveScoreOutput,
+  });
+}
+
+export function appendReviewCommentRequest(input: AppendReviewCommentInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/submissions/${segment(input.submissionId)}/comments`,
+    method: "POST",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: { body: input.body },
+    schema: AppendReviewCommentOutput,
   });
 }
 

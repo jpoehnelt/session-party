@@ -14,6 +14,7 @@ import {
   integrations,
   pages,
   speakerProvisioning,
+  speakerContacts,
   speakers,
   submissionAnswers,
   submissionSpeakers,
@@ -28,6 +29,7 @@ import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db, Files, Rooms } from "@/server/services";
 import {
   PortalTask as PortalTaskSchema,
+  SpeakerContact as SpeakerContactSchema,
   SpeakerProfile as SpeakerProfileSchema,
   UploadPortalAssetOutput as UploadPortalAssetOutputSchema,
   type CreateResourceInput,
@@ -50,6 +52,8 @@ import {
   type PublicSpeakerGallery,
   type PublicSpeakersInput,
   type ReadinessSummary,
+  type LogSpeakerContactInput,
+  type SpeakerContact,
   type SetTaskCompletionInput,
   type SpeakerDirectory,
   type SpeakerDirectoryItem,
@@ -245,6 +249,28 @@ const assetView = (asset: typeof assets.$inferSelect, purpose: PortalAsset["purp
   version: asset.version,
 });
 
+const contactView = (contact: typeof speakerContacts.$inferSelect): SpeakerContact => ({
+  id: contact.id,
+  medium: contact.medium,
+  note: contact.note,
+  contactedAt: contact.contactedAt.getTime(),
+});
+
+const withContactEscalation = (summary: ReadinessSummary, latestContact: SpeakerContact | null): ReadinessSummary => {
+  const missing = summary.missingItems[0];
+  if (!missing) return summary;
+  const action = latestContact === null
+    ? `Send a tool email about ${missing.name}`
+    : latestContact.medium === "toolEmail"
+      ? `Send a personal email about ${missing.name}`
+      : latestContact.medium === "personalEmail"
+        ? `Send a text about ${missing.name}`
+        : latestContact.medium === "text"
+          ? `Call about ${missing.name}`
+          : `Follow up by phone or coordinate manually about ${missing.name}`;
+  return { ...summary, recommendedNextAction: action };
+};
+
 const organizer = (
   eventId: string,
   scope: ApiScope,
@@ -263,6 +289,24 @@ const organizer = (
     return principal.kind === "api-key"
       ? { userId: principal.userId, actorUserId: null, actorApiKeyId: principal.apiKeyId }
       : { userId: principal.userId, actorUserId: principal.userId, actorApiKeyId: null };
+  });
+
+const organizerBrowser = (eventId: string): Effect.Effect<PrincipalActor, AppError, Db | CurrentUser | Authorizer> =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentUser;
+    if (principal.kind !== "browser-session") {
+      return yield* Effect.fail(new Forbidden({ reason: "Organizer contact logging requires a browser session" }));
+    }
+    const { authorize } = yield* Authorizer;
+    yield* authorize({
+      principal,
+      eventId,
+      policy: eventAuthorization(
+        { kind: "event-member", roles: ["owner", "admin"] },
+        { kind: "api-key", scopes: ["speakers:write"] },
+      ),
+    });
+    return { userId: principal.userId, actorUserId: principal.userId, actorApiKeyId: null };
   });
 
 const selfPrincipal = (): Effect.Effect<PrincipalActor, Forbidden, CurrentUser> =>
@@ -375,17 +419,43 @@ const readiness = (
   completions: readonly (typeof taskCompletions.$inferSelect)[],
 ): ReadinessSummary => {
   const completedTaskIds = new Set(completions.map((completion) => completion.taskId));
-  const outstandingTaskIds = definitions
-    .filter((task) => !completedTaskIds.has(task.id))
-    .map((task) => task.id);
+  const currentTime = Date.now();
+  const outstandingDefinitions = definitions.filter((task) => !completedTaskIds.has(task.id));
+  const outstandingTaskIds = outstandingDefinitions.map((task) => task.id);
   const tasksTotal = definitions.length;
   const tasksDone = tasksTotal - outstandingTaskIds.length;
+  const missingItems = outstandingDefinitions.map((task) => {
+    const dueAt = millis(task.dueAt);
+    const overdue = dueAt !== null && dueAt < currentTime;
+    const recommendedAction = task.kind === "profile"
+      ? "Complete the speaker profile"
+      : task.kind === "upload"
+        ? `Upload the requested file for ${task.name}`
+        : task.kind === "form"
+          ? `Submit ${task.name}`
+          : task.kind === "link"
+            ? "Add the requested speaker link"
+            : `Confirm ${task.name}`;
+    const blocker = overdue
+      ? `Overdue: ${task.name}`
+      : dueAt !== null
+        ? `Due: ${task.name}`
+        : `Missing: ${task.name}`;
+    return { id: task.id, name: task.name, kind: task.kind, dueAt, overdue, blocker, recommendedAction };
+  });
+  missingItems.sort((left, right) => Number(right.overdue) - Number(left.overdue)
+    || (left.dueAt ?? Number.MAX_SAFE_INTEGER) - (right.dueAt ?? Number.MAX_SAFE_INTEGER)
+    || left.id.localeCompare(right.id));
   return {
     tasksTotal,
     tasksDone,
-    outstandingTaskIds,
-    nextTaskId: outstandingTaskIds[0] ?? null,
+    outstandingTaskIds: missingItems.map((item) => item.id),
+    nextTaskId: missingItems[0]?.id ?? null,
     state: tasksTotal === 0 || tasksDone === tasksTotal ? "ready" : tasksDone === 0 ? "not_started" : "in_progress",
+    missingItems,
+    overdueCount: missingItems.filter((item) => item.overdue).length,
+    clearestBlocker: missingItems[0]?.blocker ?? null,
+    recommendedNextAction: missingItems[0]?.recommendedAction ?? null,
   };
 };
 
@@ -658,15 +728,26 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
   }
   const currentRows = [...currentBySpeaker.values()];
   const speakerIds = [...new Set(currentRows.map((row) => row.speaker.id))];
-  const [definitions, completions] = yield* Effect.all([
+  const [definitions, completions, contacts] = yield* Effect.all([
     database(() => db.select().from(tasks).where(eq(tasks.eventId, input.eventId)).orderBy(asc(tasks.order), asc(tasks.id))),
     speakerIds.length === 0 ? Effect.succeed([] as readonly (typeof taskCompletions.$inferSelect)[]) : database(() => db.select().from(taskCompletions).where(and(eq(taskCompletions.eventId, input.eventId), inArray(taskCompletions.speakerId, speakerIds)))),
+    speakerIds.length === 0 ? Effect.succeed([] as readonly (typeof speakerContacts.$inferSelect)[]) : database(() => db
+      .select()
+      .from(speakerContacts)
+      .where(and(eq(speakerContacts.eventId, input.eventId), inArray(speakerContacts.speakerId, speakerIds)))
+      .orderBy(desc(speakerContacts.contactedAt), desc(speakerContacts.id))),
   ]);
   const bySpeaker = new Map<string, (typeof taskCompletions.$inferSelect)[]>();
   for (const completion of completions) bySpeaker.set(completion.speakerId, [...(bySpeaker.get(completion.speakerId) ?? []), completion]);
-  return {
-    event: eventView(event),
-    speakers: currentRows.map((row): SpeakerDirectoryItem => ({
+  const latestContactBySpeaker = new Map<string, typeof speakerContacts.$inferSelect>();
+  for (const contact of contacts) {
+    if (!latestContactBySpeaker.has(contact.speakerId)) latestContactBySpeaker.set(contact.speakerId, contact);
+  }
+  const directoryItems = currentRows.map((row): SpeakerDirectoryItem => {
+    const latestContact = latestContactBySpeaker.has(row.speaker.id)
+      ? contactView(latestContactBySpeaker.get(row.speaker.id)!)
+      : null;
+    return {
       speaker: speakerView(row.speaker),
       submission: row.submission ? { id: row.submission.id, title: row.submission.title, category: row.submission.category, version: row.submission.version } : null,
       acceptanceEventId: row.acceptance.id,
@@ -674,8 +755,23 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
       provisioningVersion: row.provisioning.version,
       provisioningStatus: row.provisioning.status,
       provisionedAt: millis(row.provisioning.provisionedAt),
-      readiness: readiness(definitions, bySpeaker.get(row.speaker.id) ?? []),
-    })),
+      readiness: withContactEscalation(readiness(definitions, bySpeaker.get(row.speaker.id) ?? []), latestContact),
+      latestContact,
+    };
+  });
+  directoryItems.sort((left, right) => {
+    const attention = (item: SpeakerDirectoryItem) => item.readiness.missingItems.length > 0 ? 1 : 0;
+    const due = (item: SpeakerDirectoryItem) => item.readiness.missingItems.find((missing) => missing.overdue)?.dueAt ?? Number.MAX_SAFE_INTEGER;
+    return attention(right) - attention(left)
+      || right.readiness.overdueCount - left.readiness.overdueCount
+      || due(left) - due(right)
+      || right.readiness.missingItems.length - left.readiness.missingItems.length
+      || left.speaker.displayName.localeCompare(right.speaker.displayName)
+      || left.speaker.id.localeCompare(right.speaker.id);
+  });
+  return {
+    event: eventView(event),
+    speakers: directoryItems,
   };
 });
 
@@ -684,10 +780,96 @@ export const getPortalDashboard = (input: { readonly eventId: string }): Effect.
   const totals = directory.speakers.reduce((total, item) => ({
     speakers: total.speakers + 1,
     ready: total.ready + (item.readiness.state === "ready" ? 1 : 0),
+    needsAttention: total.needsAttention + (item.readiness.missingItems.length > 0 ? 1 : 0),
+    overdue: total.overdue + item.readiness.overdueCount,
     tasksDone: total.tasksDone + item.readiness.tasksDone,
     tasksTotal: total.tasksTotal + item.readiness.tasksTotal,
-  }), { speakers: 0, ready: 0, tasksDone: 0, tasksTotal: 0 });
+  }), { speakers: 0, ready: 0, needsAttention: 0, overdue: 0, tasksDone: 0, tasksTotal: 0 });
   return { event: directory.event, speakers: directory.speakers, totals };
+});
+
+/** Records only an organizer's completed outreach; creating a draft is deliberately not an operation. */
+export const logSpeakerContact = (input: LogSpeakerContactInput): Effect.Effect<SpeakerContact, AppError, Db | CurrentUser | Authorizer | Rooms> => Effect.gen(function* () {
+  const event = yield* resolveEvent(input.eventId);
+  const actor = yield* organizerBrowser(event.id);
+  const { db } = yield* Db;
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const replay = yield* findReplay(event.id, "portal.logSpeakerContact", actor.userId, keyHash, requestHash);
+  if (replay !== null) return yield* decodeReplay(SpeakerContactSchema, replay);
+
+  const directory = yield* getSpeakerDirectory({ eventId: event.id });
+  const speaker = directory.speakers.find((item) => item.speaker.id === input.speakerId);
+  if (!speaker) {
+    return yield* Effect.fail(new NotFound({ entity: "speaker", id: input.speakerId }));
+  }
+  const contactedAt = new Date(Math.max(now().getTime(), (speaker.latestContact?.contactedAt ?? 0) + 1));
+  const contact: SpeakerContact = {
+    id: id("speaker_contact"),
+    medium: input.medium,
+    note: input.note?.trim() || null,
+    contactedAt: contactedAt.getTime(),
+  };
+  const idempotency = idempotencyInsert(
+    event.id,
+    "portal.logSpeakerContact",
+    actor.userId,
+    keyHash,
+    requestHash,
+    contactedAt,
+  );
+  const requestId = id("portal_request");
+  yield* database(() => db.batch([
+    db.insert(idempotencyRecords).values(idempotency),
+    db.insert(speakerContacts).values({
+      id: contact.id,
+      eventId: event.id,
+      speakerId: input.speakerId,
+      actorUserId: actor.userId,
+      medium: contact.medium,
+      note: contact.note,
+      contactedAt,
+      createdAt: contactedAt,
+    }),
+    db.insert(domainChanges).values(writeChange(
+      event.id,
+      "speakerContact",
+      contact.id,
+      1,
+      "portal.speaker.contact.logged",
+      { speakerId: input.speakerId, medium: contact.medium, contactedAt: contact.contactedAt },
+      actor,
+      contactedAt,
+      requestId,
+      idempotency.id,
+    )),
+    db.insert(auditLog).values({
+      id: id("audit"),
+      eventId: event.id,
+      requestId,
+      actorUserId: actor.userId,
+      actorApiKeyId: null,
+      action: "portal.speaker.contact.logged",
+      resourceType: "speakerContact",
+      resourceId: contact.id,
+      before: null,
+      after: contact,
+      metadata: { speakerId: input.speakerId },
+      occurredAt: contactedAt,
+    }),
+    db.update(idempotencyRecords)
+      .set({ status: "completed", responseStatus: 201, responseBody: contact, completedAt: contactedAt })
+      .where(eq(idempotencyRecords.id, idempotency.id)),
+  ]));
+  const { broadcast } = yield* Rooms;
+  yield* broadcast(event.id, {
+    t: "dashboard/progress",
+    speakerId: input.speakerId,
+    taskId: "contact",
+    completed: false,
+    tasksDone: speaker.readiness.tasksDone,
+    tasksTotal: speaker.readiness.tasksTotal,
+  }).pipe(Effect.catchAll(() => Effect.void));
+  return contact;
 });
 
 const normalizedEmail = (value: string): string => value.trim().toLowerCase();
@@ -1769,13 +1951,10 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
       },
     )
     : null;
-  const outstandingTaskIds = before.definitions
-    .filter((definition) =>
-      definition.id !== task?.id &&
-      !before.completions.some((candidate) => candidate.taskId === definition.id))
-    .map((definition) => definition.id);
-  const tasksTotal = before.definitions.length;
-  const tasksDone = tasksTotal - outstandingTaskIds.length;
+  const updatedReadiness = readiness(
+    before.definitions,
+    completion ? [...before.completions.filter((candidate) => candidate.taskId !== completion.taskId), completion] : before.completions,
+  );
   const result: UploadPortalAssetOutput = {
     asset: assetView(assetRecord, input.purpose),
     task: taskResult,
@@ -1787,17 +1966,7 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
         updatedAt: uploadedAt,
       }
       : speaker),
-    readiness: {
-      tasksTotal,
-      tasksDone,
-      outstandingTaskIds,
-      nextTaskId: outstandingTaskIds[0] ?? null,
-      state: tasksTotal === 0 || tasksDone === tasksTotal
-        ? "ready"
-        : tasksDone === 0
-          ? "not_started"
-          : "in_progress",
-    },
+    readiness: updatedReadiness,
   };
 
   const requestId = id("portal_request");
@@ -2296,7 +2465,16 @@ export const provisionSpeaker = (input: ProvisionSpeakerInput): Effect.Effect<Sp
       new Conflict({ message: "Provisioning changed; reload before transitioning" }),
     );
   }
-  const progress = yield* currentTasks(input.eventId, row.speaker.id);
+  const [progress, latestContact] = yield* Effect.all([
+    currentTasks(input.eventId, row.speaker.id),
+    database(() => db
+      .select()
+      .from(speakerContacts)
+      .where(and(eq(speakerContacts.eventId, input.eventId), eq(speakerContacts.speakerId, row.speaker.id)))
+      .orderBy(desc(speakerContacts.contactedAt), desc(speakerContacts.id))
+      .limit(1)
+      .then((rows) => rows[0] ?? null)),
+  ], { concurrency: 1 });
   return {
     speaker: speakerView(row.speaker),
     submission: row.submission ? {
@@ -2311,6 +2489,7 @@ export const provisionSpeaker = (input: ProvisionSpeakerInput): Effect.Effect<Sp
     provisioningStatus: "provisioned",
     provisionedAt: provisionedAt.getTime(),
     readiness: progress.readiness,
+    latestContact: latestContact ? contactView(latestContact) : null,
   };
 });
 

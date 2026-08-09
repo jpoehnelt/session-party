@@ -23,7 +23,7 @@ import {
   users,
 } from "contracts/schema";
 import type { MergeContext } from "contracts/types";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db, MailQueue, type AppDatabase } from "@/server/services";
@@ -487,20 +487,24 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
         speakerId: speakers.id,
         speakerName: speakers.displayName,
         userId: speakers.userId,
-        email: users.email,
+        email: sql<string | null>`coalesce(${users.email}, ${speakers.contactEmail})`,
       })
         .from(acceptanceEvents)
         .innerJoin(submissions, and(eq(submissions.eventId, acceptanceEvents.eventId), eq(submissions.id, acceptanceEvents.submissionId)))
-        .innerJoin(submissionSpeakers, and(eq(submissionSpeakers.eventId, acceptanceEvents.eventId), eq(submissionSpeakers.id, acceptanceEvents.primarySubmissionSpeakerId)))
-        .innerJoin(speakers, and(eq(speakers.eventId, acceptanceEvents.eventId), eq(speakers.id, acceptanceEvents.primarySpeakerId)))
+        .innerJoin(submissionSpeakers, and(
+          eq(submissionSpeakers.eventId, acceptanceEvents.eventId),
+          eq(submissionSpeakers.submissionId, acceptanceEvents.submissionId),
+        ))
+        .innerJoin(speakers, and(eq(speakers.eventId, submissionSpeakers.eventId), eq(speakers.id, submissionSpeakers.speakerId)))
         .leftJoin(users, eq(users.id, speakers.userId))
         .where(eq(acceptanceEvents.eventId, eventId))
-        .orderBy(asc(acceptanceEvents.occurredAt), asc(acceptanceEvents.id)),
+        .orderBy(asc(acceptanceEvents.occurredAt), asc(acceptanceEvents.id), asc(speakers.id)),
     );
     const latestBySubmission = new Map<string, AudienceRow>();
     for (const row of rows) latestBySubmission.set(row.submissionId, row);
     const bySpeaker = new Map<string, AudienceRecipient>();
-    for (const row of latestBySubmission.values()) {
+    for (const row of rows) {
+      if (latestBySubmission.get(row.submissionId)?.acceptanceId !== row.acceptanceId) continue;
       if (row.acceptanceType !== "accepted" || row.submissionStatus !== "accepted") continue;
       const existing = bySpeaker.get(row.speakerId);
       if (existing) {

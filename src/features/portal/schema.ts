@@ -124,6 +124,17 @@ export const SpeakerProfile = Schema.Struct({
 });
 export type SpeakerProfile = typeof SpeakerProfile.Type;
 
+export const SpeakerContactMedium = Schema.Literal("toolEmail", "personalEmail", "text", "phone");
+export type SpeakerContactMedium = typeof SpeakerContactMedium.Type;
+
+export const SpeakerContact = Schema.Struct({
+  id: EntityId,
+  medium: SpeakerContactMedium,
+  note: NullableText,
+  contactedAt: Timestamp,
+});
+export type SpeakerContact = typeof SpeakerContact.Type;
+
 export const AcceptedSubmission = Schema.Struct({
   id: EntityId,
   title: Schema.String,
@@ -138,6 +149,18 @@ export const ReadinessSummary = Schema.Struct({
   outstandingTaskIds: Schema.Array(EntityId),
   nextTaskId: Schema.NullOr(EntityId),
   state: Schema.Literal("not_started", "in_progress", "ready"),
+  missingItems: Schema.Array(Schema.Struct({
+    id: EntityId,
+    name: Schema.String,
+    kind: PortalTaskKind,
+    dueAt: Schema.NullOr(Timestamp),
+    overdue: Schema.Boolean,
+    blocker: Schema.String,
+    recommendedAction: Schema.String,
+  })),
+  overdueCount: Schema.Int.pipe(Schema.nonNegative()),
+  clearestBlocker: Schema.NullOr(Schema.String),
+  recommendedNextAction: Schema.NullOr(Schema.String),
 });
 export type ReadinessSummary = typeof ReadinessSummary.Type;
 
@@ -162,6 +185,7 @@ export const SpeakerDirectoryItem = Schema.Struct({
   provisioningStatus: Schema.Literal("pending", "claimed", "provisioned", "retry", "failed", "revoked"),
   provisionedAt: Schema.NullOr(Timestamp),
   readiness: ReadinessSummary,
+  latestContact: Schema.NullOr(SpeakerContact),
 });
 export type SpeakerDirectoryItem = typeof SpeakerDirectoryItem.Type;
 
@@ -177,6 +201,8 @@ export const PortalDashboard = Schema.Struct({
   totals: Schema.Struct({
     speakers: Schema.Int.pipe(Schema.nonNegative()),
     ready: Schema.Int.pipe(Schema.nonNegative()),
+    needsAttention: Schema.Int.pipe(Schema.nonNegative()),
+    overdue: Schema.Int.pipe(Schema.nonNegative()),
     tasksDone: Schema.Int.pipe(Schema.nonNegative()),
     tasksTotal: Schema.Int.pipe(Schema.nonNegative()),
   }),
@@ -357,6 +383,15 @@ export const ManageSpeakerOnboardingOutput = Schema.Union(
   Schema.Struct({ action: Schema.Literal("setSpeakerPublication"), result: SpeakerProfile }),
 );
 export type ManageSpeakerOnboardingOutput = typeof ManageSpeakerOnboardingOutput.Type;
+
+export const LogSpeakerContactInput = Schema.Struct({
+  eventId: EntityId,
+  speakerId: EntityId,
+  medium: SpeakerContactMedium,
+  note: Schema.NullOr(Schema.String.pipe(Schema.maxLength(2_000))),
+  idempotencyKey: IdempotencyKey,
+});
+export type LogSpeakerContactInput = typeof LogSpeakerContactInput.Type;
 
 export const PublicPortalEvent = PortalEvent;
 export type PublicPortalEvent = typeof PublicPortalEvent.Type;

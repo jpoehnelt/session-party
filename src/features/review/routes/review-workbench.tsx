@@ -9,6 +9,7 @@ import type { ReviewWorkbench, SubmissionReviewSummary, SubmissionStatus } from 
 import { ReviewWorkbench as ReviewWorkbenchSchema } from "../schema";
 import { SubmissionReviewPane } from "../components/SubmissionReviewPane";
 import { ReviewRoundSetup } from "../components/ReviewRoundSetup";
+import { compareReviewQueue } from "../ordering";
 
 export const path = "/e/:eventSlug/review";
 
@@ -303,7 +304,8 @@ export function ReviewWorkbenchContent({
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
   const [status, setStatus] = useState<SubmissionStatus | "all">("all");
   const [category, setCategory] = useState("all");
-  const [assignment, setAssignment] = useState<"all" | "assigned" | "unassigned">("all");
+  const [assignment, setAssignment] = useState<"all" | "mine" | "assigned" | "unassigned">("all");
+  const [order, setOrder] = useState(workbench.order);
   const searchRef = useRef<HTMLInputElement>(null);
   const detailRef = useRef<HTMLElement>(null);
   const queueButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -322,15 +324,18 @@ export function ReviewWorkbenchContent({
     [queue],
   );
   const visibleQueue = useMemo(
-    () => queue.filter((submission) => {
-      if (status !== "all" && submission.status !== status) return false;
-      if (category !== "all" && submission.category !== category) return false;
-      if (assignment === "assigned" && submission.assignmentCount === 0) return false;
-      if (assignment === "unassigned" && submission.assignmentCount > 0) return false;
-      if (deferredQuery && !`${submission.title} ${submission.category ?? ""}`.toLocaleLowerCase().includes(deferredQuery)) return false;
-      return true;
-    }),
-    [assignment, category, deferredQuery, queue, status],
+    () => queue
+      .filter((submission) => {
+        if (status !== "all" && submission.status !== status) return false;
+        if (category !== "all" && submission.category !== category) return false;
+        if (assignment === "mine" && !submission.assignedToMe) return false;
+        if (assignment === "assigned" && submission.assignmentCount === 0) return false;
+        if (assignment === "unassigned" && submission.assignmentCount > 0) return false;
+        if (deferredQuery && !`${submission.title} ${submission.category ?? ""}`.toLocaleLowerCase().includes(deferredQuery)) return false;
+        return true;
+      })
+      .sort((left, right) => compareReviewQueue(order, left, right)),
+    [assignment, category, deferredQuery, order, queue, status],
   );
 
   useEffect(() => {
@@ -402,6 +407,7 @@ export function ReviewWorkbenchContent({
     setStatus("all");
     setCategory("all");
     setAssignment("all");
+    setOrder("coverage");
   };
 
   return (
@@ -442,7 +448,7 @@ export function ReviewWorkbenchContent({
       )}
 
       {queue.length > 0 && (
-        <section className="mb-6 grid gap-3 border-2 border-line-strong bg-surface p-4 shadow-[4px_4px_0_#171714] sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1.5fr)_repeat(3,minmax(9rem,0.7fr))]" aria-label="Queue filters">
+        <section className="mb-6 grid gap-3 border-2 border-line-strong bg-surface p-4 shadow-[4px_4px_0_#171714] sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1.5fr)_repeat(4,minmax(9rem,0.7fr))]" aria-label="Queue filters">
           <Input ref={searchRef} label="Search proposals" placeholder="Title or category" value={query} onChange={(event) => setQuery(event.target.value)} />
           <Select label="Status" value={status} onChange={(event) => setStatus(event.target.value as SubmissionStatus | "all")}>
             <option value="all">All statuses</option>
@@ -453,13 +459,23 @@ export function ReviewWorkbenchContent({
             {categories.map((value) => <option key={value} value={value}>{value}</option>)}
           </Select>
           <Select label="Assignment" value={assignment} onChange={(event) => setAssignment(event.target.value as typeof assignment)}>
-            <option value="all">All assignments</option><option value="assigned">Assigned</option><option value="unassigned">Unassigned</option>
+            <option value="all">All proposals</option><option value="mine">Assigned to me</option><option value="assigned">Any assignment</option><option value="unassigned">No assignment</option>
+          </Select>
+          <Select label="Order" value={order} onChange={(event) => setOrder(event.target.value as typeof order)}>
+            <option value="coverage">Coverage · fewest reviews</option><option value="decision">Decision · highest score</option>
           </Select>
         </section>
       )}
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(19rem,0.78fr)_minmax(0,1.7fr)]">
         <Card className="overflow-hidden shadow-[5px_5px_0_#171714] lg:sticky lg:top-4 [&>header]:bg-production-sky [&>header_h3]:text-ink" title={<span className="flex items-center justify-between gap-3"><span>Review queue</span><span className="font-mono text-[10px] font-black tabular-nums text-ink">{queue.length === 0 ? "Empty round" : `${visibleQueue.length} shown`}</span></span>}>
+          {queue.length > 0 && (
+            <p className="mb-3 border-b-2 border-line-strong pb-3 text-[10px] font-bold uppercase tracking-[0.06em] leading-5 text-ink-faint">
+              {order === "coverage"
+                ? "Coverage: fewest human reviews first; ties use oldest submission, then stable ID."
+                : "Decision: highest average human score first; ties use review count, oldest submission, then stable ID."}
+            </p>
+          )}
           {queue.length === 0 ? (
             <EmptyState title="No submissions in this round" description={`${loadedRound?.name ?? "This round"} has no assigned or eligible proposals yet. Add proposals to the round before triage.`} />
           ) : visibleQueue.length === 0 ? (
@@ -468,9 +484,68 @@ export function ReviewWorkbenchContent({
             <ol className="-mx-5 -my-4 max-h-[calc(100vh-15rem)] divide-y-2 divide-line-strong overflow-y-auto" aria-label="Submission review queue">
               {visibleQueue.map((submission, index) => {
                 const isSelected = submission.id === focusedId;
-                return <li key={submission.id}><button ref={(element) => { if (element) queueButtonRefs.current.set(submission.id, element); else queueButtonRefs.current.delete(submission.id); }} type="button" tabIndex={isSelected ? 0 : -1} className="group grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-3 px-3 py-3 text-left outline-none transition-colors hover:bg-production-sky/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent aria-[current=true]:bg-production-lime motion-reduce:transition-none" aria-current={isSelected ? "true" : undefined} onFocus={() => focusSubmission(submission.id)} onClick={() => openSubmission(submission.id)} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); moveQueueFocus(submission.id, 1); } else if (event.key === "ArrowUp") { event.preventDefault(); moveQueueFocus(submission.id, -1); } else if (event.key === "Home") { event.preventDefault(); const firstId = visibleQueue[0]!.id; focusSubmission(firstId); focusQueueItem(firstId); } else if (event.key === "End") { event.preventDefault(); const lastId = visibleQueue[visibleQueue.length - 1]!.id; focusSubmission(lastId); focusQueueItem(lastId); } else if (event.key === "Enter") { event.preventDefault(); openSubmission(submission.id); detailRef.current?.focus(); } }}>
-                  <span className="grid size-8 place-items-center border-2 border-line-strong bg-ink font-mono text-[10px] font-black tabular-nums text-production-lime">{String(index + 1).padStart(2, "0")}</span><span className="min-w-0"><span className="block truncate text-sm font-black text-ink">{submission.title}</span><span className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.06em] text-ink-faint"><span>{submission.category ?? "Uncategorized"}</span><span aria-hidden="true">·</span><span>{statusLabel[submission.status]}</span></span><span className="mt-1.5 block"><Badge tone={reviewStateTone[submission.reviewState]}>{reviewStateLabel[submission.reviewState]}</Badge></span></span><span className="pt-0.5 text-right font-mono text-base font-black tabular-nums text-ink">{submission.averageScore === null ? "—" : submission.averageScore.toFixed(1)}<span className="block text-[9px] font-black uppercase tracking-[0.08em] text-ink-faint">/ 5</span></span>
-                </button></li>;
+                return (
+                  <li key={submission.id}>
+                    <button
+                      ref={(element) => {
+                        if (element) queueButtonRefs.current.set(submission.id, element);
+                        else queueButtonRefs.current.delete(submission.id);
+                      }}
+                      type="button"
+                      tabIndex={isSelected ? 0 : -1}
+                      className="group grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-3 px-3 py-3 text-left outline-none transition-colors hover:bg-production-sky/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent aria-[current=true]:bg-production-lime motion-reduce:transition-none"
+                      aria-current={isSelected ? "true" : undefined}
+                      onFocus={() => focusSubmission(submission.id)}
+                      onClick={() => openSubmission(submission.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          moveQueueFocus(submission.id, 1);
+                        } else if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          moveQueueFocus(submission.id, -1);
+                        } else if (event.key === "Home") {
+                          event.preventDefault();
+                          const firstId = visibleQueue[0]!.id;
+                          focusSubmission(firstId);
+                          focusQueueItem(firstId);
+                        } else if (event.key === "End") {
+                          event.preventDefault();
+                          const lastId = visibleQueue[visibleQueue.length - 1]!.id;
+                          focusSubmission(lastId);
+                          focusQueueItem(lastId);
+                        } else if (event.key === "Enter") {
+                          event.preventDefault();
+                          openSubmission(submission.id);
+                          detailRef.current?.focus();
+                        }
+                      }}
+                    >
+                      <span className="grid size-8 place-items-center border-2 border-line-strong bg-ink font-mono text-[10px] font-black tabular-nums text-production-lime">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-black text-ink">{submission.title}</span>
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.06em] text-ink-faint">
+                          <span>{submission.category ?? "Uncategorized"}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{statusLabel[submission.status]}</span>
+                        </span>
+                        <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <Badge tone={reviewStateTone[submission.reviewState]}>{reviewStateLabel[submission.reviewState]}</Badge>
+                          <span className="text-[10px] font-bold uppercase tracking-[0.04em] text-ink-faint">
+                            {submission.completedReviewCount} human {submission.completedReviewCount === 1 ? "review" : "reviews"}
+                          </span>
+                          {submission.assignedToMe && <Badge tone="neutral">Assigned to me</Badge>}
+                        </span>
+                      </span>
+                      <span className="pt-0.5 text-right font-mono text-base font-black tabular-nums text-ink">
+                        {submission.averageScore === null ? "—" : submission.averageScore.toFixed(1)}
+                        <span className="block text-[9px] font-black uppercase tracking-[0.08em] text-ink-faint">/ 5</span>
+                      </span>
+                    </button>
+                  </li>
+                );
               })}
             </ol>
           )}

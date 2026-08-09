@@ -439,10 +439,6 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   };
 
   const moveTalk = async (talk: AgendaTalk, target: AgendaMoveTarget) => {
-    if (target.roomId === null || target.startsAt === null) {
-      selectTalk(talk, "Choose a room and start time in the move form.");
-      return;
-    }
     const clientId = clientIntentId();
     try {
       await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
@@ -471,33 +467,31 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const saveSchedule = async (submitEvent: FormEvent) => {
     submitEvent.preventDefault();
     if (!selectedTalk) return;
-    const startsAt = zonedTimestamp(form.startsAt, event.timezone);
+    const startsAt = form.startsAt === "" ? null : zonedTimestamp(form.startsAt, event.timezone);
     const durationMin = Number(form.durationMin);
-    if (!form.roomId || startsAt === null || !Number.isInteger(durationMin) || durationMin < 5 || durationMin > 480) {
-      toast("Choose a room, valid start time, and duration from 5 to 480 minutes", { tone: "danger" });
+    if ((form.startsAt !== "" && startsAt === null) || !Number.isInteger(durationMin) || durationMin < 5 || durationMin > 480) {
+      toast("Choose a valid start time or leave it TBD; duration must be 5 to 480 minutes", { tone: "danger" });
       return;
     }
     const clientId = clientIntentId();
-    const operation = selectedTalk.status === "draft" ? "schedule" : "position";
-    const method = selectedTalk.status === "draft" ? "PUT" : "PATCH";
     try {
       const result = await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
-        `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks/${encodeURIComponent(selectedTalk.id)}/${operation}`,
+        `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks/${encodeURIComponent(selectedTalk.id)}/position`,
         {
-          method,
+          method: "PATCH",
           body: {
             trackId: form.trackId || null,
-            roomId: form.roomId,
+            roomId: form.roomId || null,
             startsAt,
             durationMin,
             expectedVersion: selectedTalk.version,
-            idempotencyKey: idempotencyKey(selectedTalk.status === "draft" ? "schedule-talk" : "move-talk"),
+            idempotencyKey: idempotencyKey("move-talk"),
           },
           schema: AgendaMutationResult,
         },
       ));
       selectTalk(result.talk);
-      toast(selectedTalk.status === "draft" ? "Talk scheduled" : "Talk moved", { tone: "success" });
+      toast(result.talk.status === "confirmed" ? "Talk scheduled" : "Draft saved with TBD placement", { tone: "success" });
       await refreshAfterCommit();
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not save schedule", { tone: "danger" });
@@ -715,7 +709,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               Tracks & rooms
             </Button>
             <Button
-              disabled={busy || refresh.status !== "idle" || agenda.conflicts.length > 0}
+              disabled={busy || refresh.status !== "idle"}
               loading={busy && intent.acknowledgement === "pending"}
               onClick={() => void publish()}
             >
@@ -757,7 +751,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           onChange={(id) => setView(id as AgendaView)}
         />
         <p className="w-full max-w-md border-l-4 border-production-coral pl-3 text-xs font-bold text-ink-secondary md:w-auto">
-          Confirmed talks stay backstage until this run sheet is published.
+          Draft placement and warnings can be saved. Publication requires every active talk to be placed and conflict-free before confirmed talks leave backstage.
         </p>
       </div>
       {refresh.status !== "idle" && (
@@ -926,7 +920,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               <p className="mt-1 text-lg font-black tracking-[-0.025em] text-ink">{selectedTalk.speakerNames.join(", ")}</p>
               <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-secondary">Cue version {selectedTalk.version}</p>
             </div>
-            <ConflictIndicator conflicts={selectedConflicts} />
+            <ConflictIndicator conflicts={selectedConflicts} blocking={false} />
             <Select
               label="Track"
               value={form.trackId}
@@ -936,8 +930,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               {agenda.tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}
             </Select>
             <Select
-              required
-              label="Room"
+              label="Room (TBD allowed)"
               value={form.roomId}
               onChange={(event) => setForm((current) => ({ ...current, roomId: event.target.value }))}
             >
@@ -945,12 +938,11 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               {agenda.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
             </Select>
             <Input
-              required
               type="datetime-local"
-              label={`Start time (${agenda.timezone})`}
+              label={`Start time (${agenda.timezone}, TBD allowed)`}
               value={form.startsAt}
               onChange={(event) => setForm((current) => ({ ...current, startsAt: event.target.value }))}
-              hint="This wall time is interpreted in the event timezone, not your device timezone."
+              hint="This wall time is interpreted in the event timezone, not your device timezone. Leave it blank to keep the talk as a draft."
             />
             <Input
               required

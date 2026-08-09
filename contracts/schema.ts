@@ -343,6 +343,8 @@ export const speakers = sqliteTable(
     id: id(),
     eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
     userId: text("user_id").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
+    /** Event-scoped logistics address for speakers who do not yet have an account. Never public. */
+    contactEmail: text("contact_email"),
     displayName: text("display_name").notNull(),
     title: text("title"),
     company: text("company"),
@@ -372,6 +374,9 @@ export const submissionSpeakers = sqliteTable(
     submissionId: text("submission_id").notNull(),
     speakerId: text("speaker_id").notNull(),
     isPrimary: integer("is_primary", { mode: "boolean" }).notNull().default(false),
+    /** Immutable professional context captured when the submission-speaker link is created. */
+    titleAtTime: text("title_at_time"),
+    organizationAtTime: text("organization_at_time"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [
@@ -553,6 +558,28 @@ export const reviews = sqliteTable(
   ],
 );
 
+/** Append-only committee conversation, independent from rubric score revisions. */
+export const reviewComments = sqliteTable(
+  "review_comments",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    submissionId: text("submission_id").notNull(),
+    authorUserId: text("author_user_id").notNull(),
+    body: text("body").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("review_comments_event_id_unique").on(t.eventId, t.id),
+    index("review_comments_submission_time").on(t.eventId, t.submissionId, t.createdAt),
+    foreignKey({ columns: [t.eventId, t.submissionId], foreignColumns: [submissions.eventId, submissions.id], name: "review_comments_submission_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
+    foreignKey({ columns: [t.eventId, t.authorUserId], foreignColumns: [eventMembers.eventId, eventMembers.userId], name: "review_comments_member_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
+    check("review_comments_body_nonempty", sql`length(trim(${t.body})) > 0`),
+  ],
+);
+
 // ---------- agenda ----------
 
 export const tracks = sqliteTable("tracks", {
@@ -679,6 +706,27 @@ export const taskCompletions = sqliteTable(
     foreignKey({ columns: [t.eventId, t.speakerId], foreignColumns: [speakers.eventId, speakers.id], name: "task_completions_speaker_fk" })
       .onDelete("cascade").onUpdate("cascade"),
     check("task_completions_version_positive", sql`${t.version} > 0`),
+  ],
+);
+
+/** Organizer-recorded chase history. Draft generation alone is never treated as contact. */
+export const speakerContacts = sqliteTable(
+  "speaker_contacts",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    speakerId: text("speaker_id").notNull(),
+    actorUserId: text("actor_user_id").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    medium: text("medium", { enum: ["toolEmail", "personalEmail", "text", "phone"] }).notNull(),
+    note: text("note"),
+    contactedAt: integer("contacted_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("speaker_contacts_event_id_unique").on(t.eventId, t.id),
+    index("speaker_contacts_speaker_time").on(t.eventId, t.speakerId, t.contactedAt),
+    foreignKey({ columns: [t.eventId, t.speakerId], foreignColumns: [speakers.eventId, speakers.id], name: "speaker_contacts_speaker_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
   ],
 );
 

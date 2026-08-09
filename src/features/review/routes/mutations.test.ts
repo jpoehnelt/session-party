@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acceptSubmissionRequest,
   advanceReviewRoundRequest,
+  appendReviewCommentRequest,
   assignReviewerRequest,
   createReviewRoundRequest,
   rejectSubmissionRequest,
@@ -16,6 +17,42 @@ const jsonResponse = (payload: unknown, status = 200) => new Response(JSON.strin
 afterEach(() => vi.unstubAllGlobals());
 
 describe("review mutation client", () => {
+  it("posts append-only committee messages with required idempotency", async () => {
+    const output = {
+      comment: {
+        id: "review_comment_1",
+        authorUserId: "reviewer_ada",
+        authorName: "Ada Reviewer",
+        body: "Could we ask for a concrete example?",
+        createdAt: 1_700_000_000_000,
+      },
+      idempotent: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(output, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(appendReviewCommentRequest({
+      eventId: "event_one",
+      submissionId: "submission_one",
+      body: output.comment.body,
+      idempotencyKey: "comment-key-1",
+      requestId: "request-comment",
+    })).resolves.toEqual(output);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/events/event_one/review/submissions/submission_one/comments",
+      {
+        method: "POST",
+        headers: {
+          "x-request-id": "request-comment",
+          "idempotency-key": "comment-key-1",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ body: output.comment.body }),
+      },
+    );
+  });
+
   it("maps round creation and advancement to idempotent versioned REST requests", async () => {
     const round = {
       id: "round_one",

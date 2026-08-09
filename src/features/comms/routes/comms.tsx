@@ -107,6 +107,11 @@ export const buildEnqueueRequest = (
   return { ...input, scheduledFor };
 };
 
+export const buildMailtoDraft = (
+  preview: Pick<CommunicationPreviewValue, "recipientEmail" | "subject" | "text">,
+): string =>
+  `mailto:${encodeURIComponent(preview.recipientEmail)}?subject=${encodeURIComponent(preview.subject)}&body=${encodeURIComponent(preview.text)}`;
+
 interface ScheduleControlProps {
   readonly mode: SendMode;
   readonly scheduledWallTime: string;
@@ -234,6 +239,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
   const [replyToEmail, setReplyToEmail] = useState("");
   const [sendMode, setSendMode] = useState<SendMode>("now");
   const [scheduledWallTime, setScheduledWallTime] = useState("");
+  const [automatedDeliveryConfirmed, setAutomatedDeliveryConfirmed] = useState(false);
   const [busy, setBusy] = useState<"save" | "preview" | "enqueue" | `retry:${string}` | null>(null);
   const [queueResult, setQueueResult] = useState<EnqueueCommunicationResultValue | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -362,6 +368,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
       });
       setQueueResult(result);
       setSelectedSpeakers(new Set());
+      setAutomatedDeliveryConfirmed(false);
       setRefresh((value) => value + 1);
       toast(`${result.deliveries.length} ${result.deliveries.length === 1 ? "delivery" : "deliveries"} queued durably`, { tone: "success" });
     } catch (error) {
@@ -442,12 +449,13 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
             <span className="block">Speaker communications</span>
           </>
         )}
-        description={`Cue accepted-speaker messages for ${event.name}, confirm the exact audience, and inspect durable delivery evidence.`}
+        description={`Draft human outreach for ${event.name}, or explicitly authorize automated delivery after reviewing the exact audience.`}
         className="border-[3px] border-line-strong bg-ink p-5 text-on-accent shadow-[7px_7px_0_#7857ff] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-[0.88] [&_h1]:tracking-[-0.055em] [&_h1]:text-on-accent sm:[&_h1]:text-5xl [&_p]:mt-4 [&_p]:max-w-2xl [&_p]:font-semibold [&_p]:text-on-accent/70"
         actions={(
           <div className="border-2 border-line-strong bg-production-lime px-4 py-3 text-ink shadow-[4px_4px_0_#fffdf7]">
             <p className="text-3xl font-black leading-none tracking-[-0.06em]">{eligibleRecipients.length}</p>
             <p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em]">Speakers on comms</p>
+            <p className="mt-2 text-[9px] font-black uppercase tracking-[0.12em] opacity-70">{history.localCaptureCount} local captures</p>
           </div>
         )}
       />
@@ -591,6 +599,36 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                     <p className="px-4 py-3 font-black tracking-[-0.015em] text-ink">{preview.subject}</p>
                   </div>
                   <div className="whitespace-pre-wrap border-2 border-line-strong bg-surface p-5 text-sm font-medium leading-7 text-ink-secondary shadow-[4px_4px_0_#171714]">{preview.text}</div>
+                  {preview.mode === "acceptedSpeaker" && (
+                    <div className="space-y-3 border-2 border-line-strong bg-surface-muted p-4 shadow-[4px_4px_0_#171714]">
+                      <div>
+                        <p className="text-sm font-semibold text-ink">Assisted chase</p>
+                        <p className="mt-1 text-xs leading-relaxed text-ink-secondary">
+                          Open this personalized draft in your own mail app. Nothing is sent by Session Party.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          onClick={() => window.location.assign(buildMailtoDraft(preview))}
+                        >
+                          Open in my mail app
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(`Subject: ${preview.subject}\n\n${preview.text}`).then(
+                              () => toast("Draft copied", { tone: "success" }),
+                              () => toast("Draft could not be copied", { tone: "danger" }),
+                            );
+                          }}
+                        >
+                          Copy draft
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </Card>
             )}
@@ -641,8 +679,14 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
           </Card>
 
           <div className="space-y-6 xl:sticky xl:top-4 xl:self-start">
-            <Card className="rounded-none [&>header]:bg-accent" title="Dispatch console">
+            <Card className="rounded-none [&>header]:bg-accent" title="Automated delivery (opt in)">
               <div className="space-y-4">
+                <Alert tone="neutral">
+                  <AlertTitle>Decisions do not send messages</AlertTitle>
+                  <AlertDescription>
+                    Acceptance and rejection remain internal until an organizer deliberately authorizes this exact audience and template.
+                  </AlertDescription>
+                </Alert>
                 <Select label="Template" value={selectedTemplateId} onChange={(event_) => setSelectedTemplateId(event_.target.value)}>
                   <option value="">Select a template</option>
                   {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
@@ -674,10 +718,16 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                   </div>
                   <p className="grid min-w-20 place-items-center border-l-2 border-line-strong px-4 text-5xl font-black tracking-[-0.07em] text-ink">{selectedCount}</p>
                 </div>
+                <Checkbox
+                  checked={automatedDeliveryConfirmed}
+                  onChange={(event_) => setAutomatedDeliveryConfirmed(event_.target.checked)}
+                  label="Authorize Session Party to send"
+                  description="I reviewed the selected template, recipients, reply-to address, and delivery time."
+                />
                 <Button
                   className="w-full"
                   loading={busy === "enqueue"}
-                  disabled={!selectedTemplate || selectedCount === 0 || (sendMode === "scheduled" && scheduledWallTime === "")}
+                  disabled={!automatedDeliveryConfirmed || !selectedTemplate || selectedCount === 0 || (sendMode === "scheduled" && scheduledWallTime === "")}
                   onClick={() => void enqueue()}
                 >
                   {sendMode === "scheduled" ? "Schedule immutable deliveries" : "Queue immutable deliveries"}

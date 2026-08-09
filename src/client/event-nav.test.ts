@@ -31,6 +31,7 @@ describe("availableEventNavItems", () => {
       "/e/:eventSlug/agenda",
       "/e/:eventSlug/comms",
       "/e/:eventSlug/publication",
+      "/e/:eventSlug/exports",
       "/e/:eventSlug/integrations",
       "/e/:eventSlug/settings",
     ];
@@ -47,6 +48,7 @@ describe("availableEventNavItems", () => {
       "Agenda",
       "Communications",
       "Publication",
+      "Exports",
       "Integrations",
       "Settings",
     ]);

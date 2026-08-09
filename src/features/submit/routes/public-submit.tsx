@@ -17,6 +17,7 @@ import {
 import {
   CreatePublicSubmissionOutput,
   PublicSubmissionForm,
+  type PublicCoSpeaker,
   type PublicFormField,
   type PublicSubmissionForm as PublicSubmissionFormValue,
 } from "../schema";
@@ -46,6 +47,11 @@ export async function postPublicSubmission(
   idempotencyKey: string,
   answers: Readonly<Record<string, AnswerValue>>,
   turnstileToken: string,
+  speakerDetails: {
+    readonly primarySpeakerTitle: string;
+    readonly primarySpeakerOrganization: string;
+    readonly coSpeakers: readonly PublicCoSpeaker[];
+  } = { primarySpeakerTitle: "", primarySpeakerOrganization: "", coSpeakers: [] },
 ): Promise<typeof CreatePublicSubmissionOutput.Type> {
   const response = await fetch(
     `/api/v1/public/events/${encodeURIComponent(eventSlug)}/forms/${encodeURIComponent(formId)}/submissions`,
@@ -58,6 +64,13 @@ export async function postPublicSubmission(
     body: JSON.stringify({
       answers: Object.entries(answers).map(([fieldId, value]) => ({ fieldId, value })),
       turnstileToken,
+      ...(speakerDetails.primarySpeakerTitle.trim()
+        ? { primarySpeakerTitle: speakerDetails.primarySpeakerTitle }
+        : {}),
+      ...(speakerDetails.primarySpeakerOrganization.trim()
+        ? { primarySpeakerOrganization: speakerDetails.primarySpeakerOrganization }
+        : {}),
+      ...(speakerDetails.coSpeakers.length > 0 ? { coSpeakers: speakerDetails.coSpeakers } : {}),
     }),
     },
   );
@@ -247,6 +260,15 @@ function LoadingPage() {
   );
 }
 
+type CoSpeakerDraft = {
+  readonly name: string;
+  readonly email: string;
+  readonly title: string;
+  readonly organization: string;
+};
+
+const emptyCoSpeaker = (): CoSpeakerDraft => ({ name: "", email: "", title: "", organization: "" });
+
 type TurnstileApi = {
   render: (container: HTMLElement, options: {
     readonly sitekey: string;
@@ -316,6 +338,9 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   const [form, setForm] = useState<PublicSubmissionFormValue | null | undefined>(initialForm);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, AnswerValue>>({});
+  const [primarySpeakerTitle, setPrimarySpeakerTitle] = useState("");
+  const [primarySpeakerOrganization, setPrimarySpeakerOrganization] = useState("");
+  const [coSpeakers, setCoSpeakers] = useState<readonly CoSpeakerDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [draftStatus, setDraftStatus] = useState<"restored" | "saved" | null>(null);
@@ -386,6 +411,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
         idempotencyKey.current,
         Object.fromEntries(Object.entries(answers).filter(([fieldId]) => activeIds.has(fieldId))),
         turnstileToken,
+        { primarySpeakerTitle, primarySpeakerOrganization, coSpeakers },
       );
       window.localStorage.removeItem(draftStorageKey(eventSlug, formId, form.form.versionId));
       setSuccess(result);
@@ -529,6 +555,88 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                   />
                 </div>
               ))}
+              <section className="space-y-4 px-5 py-5 sm:px-6 sm:py-6" aria-labelledby="speaker-details-heading">
+                <div className="space-y-1">
+                  <p className="text-[9px] font-black uppercase tracking-[0.14em] text-ink-faint">Speaker team</p>
+                  <h2 id="speaker-details-heading" className="text-xl font-black tracking-[-0.03em] text-ink">Speaker details</h2>
+                  <p className="text-sm text-ink-secondary">Add professional details and any co-speakers. Accounts are not required.</p>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Input
+                    id="primary-speaker-title"
+                    label="Your title"
+                    disabled={!accepting || submitting}
+                    value={primarySpeakerTitle}
+                    onChange={(event) => setPrimarySpeakerTitle(event.currentTarget.value)}
+                  />
+                  <Input
+                    id="primary-speaker-organization"
+                    label="Your organization"
+                    disabled={!accepting || submitting}
+                    value={primarySpeakerOrganization}
+                    onChange={(event) => setPrimarySpeakerOrganization(event.currentTarget.value)}
+                  />
+                </div>
+                {coSpeakers.map((speaker, index) => (
+                  <section key={index} className="space-y-4 border-2 border-line-strong bg-surface-muted p-4" aria-label={`Co-speaker ${index + 1}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="font-black text-ink">Co-speaker {index + 1}</h3>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={!accepting || submitting}
+                        onClick={() => setCoSpeakers((current) => current.filter((_, currentIndex) => currentIndex !== index))}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Input
+                        id={`co-speaker-${index}-name`}
+                        label="Name"
+                        required
+                        disabled={!accepting || submitting}
+                        value={speaker.name}
+                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
+                          currentIndex === index ? { ...item, name: event.currentTarget.value } : item))}
+                      />
+                      <Input
+                        id={`co-speaker-${index}-email`}
+                        type="email"
+                        label="Email"
+                        disabled={!accepting || submitting}
+                        value={speaker.email}
+                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
+                          currentIndex === index ? { ...item, email: event.currentTarget.value } : item))}
+                      />
+                      <Input
+                        id={`co-speaker-${index}-title`}
+                        label="Title"
+                        disabled={!accepting || submitting}
+                        value={speaker.title}
+                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
+                          currentIndex === index ? { ...item, title: event.currentTarget.value } : item))}
+                      />
+                      <Input
+                        id={`co-speaker-${index}-organization`}
+                        label="Organization"
+                        disabled={!accepting || submitting}
+                        value={speaker.organization}
+                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
+                          currentIndex === index ? { ...item, organization: event.currentTarget.value } : item))}
+                      />
+                    </div>
+                  </section>
+                ))}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!accepting || submitting || coSpeakers.length >= 10}
+                  onClick={() => setCoSpeakers((current) => [...current, emptyCoSpeaker()])}
+                >
+                  Add co-speaker
+                </Button>
+              </section>
             </div>
             {accepting && (
               <div className="border-t-2 border-line-strong bg-surface-muted px-5 py-5 sm:px-6">

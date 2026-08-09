@@ -18,6 +18,7 @@ import {
   type ClaimSpeakerInput,
   type DeleteResourceInput,
   type DeleteTaskInput,
+  type LogSpeakerContactInput,
   type PortalEvent,
   type SetTaskCompletionInput,
   type UpdateProfileInput,
@@ -178,6 +179,14 @@ export function updateSpeakerPublication(eventId: string, input: UpdateSpeakerPu
   const body = requestBody(input, "eventId", "speakerId");
   return apiFetch<unknown>(`${api}/events/${segment(eventId)}/portal/speakers/${segment(input.speakerId)}/publication`, {
     method: "PUT",
+    body,
+  });
+}
+
+export function logSpeakerContact(eventId: string, input: LogSpeakerContactInput) {
+  const body = requestBody(input, "eventId", "speakerId");
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/speakers/${segment(input.speakerId)}/contacts`, {
+    method: "POST",
     body,
   });
 }

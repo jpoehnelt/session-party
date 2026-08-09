@@ -29,6 +29,34 @@
       "when": 1786285040073,
       "tag": "0003_thin_jackpot",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786308588943,
+      "tag": "0004_institutional_memory",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786308941149,
+      "tag": "0005_speaker_contact_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786309080295,
+      "tag": "0006_review_conversation_threads",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786309514847,
+      "tag": "0007_speaker_contact_email",
+      "breakpoints": true
     }
   ]
 }
