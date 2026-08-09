@@ -96,7 +96,7 @@ export function ReviewRoundSetup({
   };
 
   return (
-    <Card className="[&>header]:bg-production-coral [&>header_h3]:text-ink" title="Review rounds / handoff sequence">
+    <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Review rounds / handoff sequence">
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(18rem,0.8fr)]">
         <div>
           {ordered.length === 0 ? (

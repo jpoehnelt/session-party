@@ -483,7 +483,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
           <p className="inline-block -rotate-1 border-2 border-line-strong bg-production-coral px-3 py-2 text-[10px] font-black uppercase tracking-[0.15em] shadow-[4px_4px_0_#171714]">
             Call for speakers
           </p>
-          <p className="mt-8 text-xs font-black uppercase tracking-[0.16em] text-accent">{form.event.name}</p>
+          <p className="mt-8 text-xs font-black uppercase tracking-[0.16em] text-accent-deep">{form.event.name}</p>
           <h1 className="mt-3 text-5xl font-black leading-[0.88] tracking-[-0.065em] sm:text-7xl lg:text-[5.5rem]">
             {form.form.name}
           </h1>

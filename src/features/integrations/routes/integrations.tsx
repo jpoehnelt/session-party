@@ -88,9 +88,9 @@ function ProviderHeading({
 
 function MappingTable({ configuration }: { readonly configuration: AirtableConfig }) {
   const tables = [
-    { number: "01", entity: "Speakers", accent: "bg-production-lime", configuration: configuration.tables.speakers },
-    { number: "02", entity: "Submissions", accent: "bg-production-sky", configuration: configuration.tables.submissions },
-    { number: "03", entity: "Talks", accent: "bg-production-coral", configuration: configuration.tables.talks },
+    { number: "01", entity: "Speakers", accent: "bg-surface-muted", configuration: configuration.tables.speakers },
+    { number: "02", entity: "Submissions", accent: "bg-surface-muted", configuration: configuration.tables.submissions },
+    { number: "03", entity: "Talks", accent: "bg-surface-muted", configuration: configuration.tables.talks },
   ] as const;
 
   return (
@@ -299,9 +299,9 @@ function IntegrationsWorkspace({
 
         <dl className="mt-7 grid border-2 border-line-strong bg-surface shadow-[5px_5px_0_#171714] sm:grid-cols-3">
           {[
-            ["01", "Airtable map", truth.airtable ? "Validated" : "Not configured", "bg-production-sky"],
-            ["02", "Accelevents adapter", capability, "bg-production-coral"],
-            ["03", "Latest import", latest?.status ?? "No completed run", "bg-production-lime"],
+            ["01", "Airtable map", truth.airtable ? "Validated" : "Not configured", "bg-surface-muted"],
+            ["02", "Accelevents adapter", capability, "bg-surface-muted"],
+            ["03", "Latest import", latest?.status ?? "No completed run", "bg-surface-muted"],
           ].map(([number, label, value, color], index) => (
             <div className={`grid grid-cols-[3rem_1fr] ${color} ${index > 0 ? "border-t-2 border-line-strong sm:border-l-2 sm:border-t-0" : ""}`} key={label}>
               <dt className="grid place-items-center border-r-2 border-line-strong text-base font-black" aria-label={`Status ${number}`}>{number}</dt>
@@ -315,7 +315,7 @@ function IntegrationsWorkspace({
 
         <div className="mt-7 grid gap-7 lg:grid-cols-[minmax(0,1.08fr)_minmax(24rem,0.92fr)]">
           <Card
-            className="h-fit rounded-none shadow-[7px_7px_0_#171714] [&>div]:p-4 [&>header]:bg-production-sky [&>header]:px-4 [&>header]:py-3 [&>header_h3]:text-ink sm:[&>div]:p-5"
+            className="h-fit rounded-none shadow-[7px_7px_0_#171714] [&>div]:p-4 [&>header]:bg-surface-muted [&>header]:px-4 [&>header]:py-3 [&>header]:text-ink [&>header_h3]:text-ink sm:[&>div]:p-5"
             title={<ProviderHeading cue="A1" name="Airtable" configured={truth.airtable} />}
             footer={
               <div className="flex gap-3">
@@ -337,7 +337,7 @@ function IntegrationsWorkspace({
           </Card>
 
           <Card
-          className="h-fit rounded-none shadow-[7px_7px_0_#171714] [&>div]:p-4 [&>header]:bg-production-coral [&>header]:px-4 [&>header]:py-3 [&>header_h3]:text-ink sm:[&>div]:p-5"
+          className="h-fit rounded-none shadow-[7px_7px_0_#171714] [&>div]:p-4 [&>header]:bg-surface-muted [&>header]:px-4 [&>header]:py-3 [&>header]:text-ink [&>header_h3]:text-ink sm:[&>div]:p-5"
           title={<ProviderHeading cue="A2" name="Accelevents" configured={status.configured} />}
           footer={
             <div className="flex gap-3">

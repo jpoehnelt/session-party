@@ -220,7 +220,7 @@ export default function PublicationPage() {
 
       <div className="grid items-start gap-6 xl:grid-cols-[20rem_minmax(0,1fr)]">
         <div className="space-y-6">
-          <Card className="rounded-none [&>div]:p-0 [&>header]:bg-production-lime [&>header_h3]:text-ink" title="Broadcast manifest">
+          <Card className="rounded-none [&>div]:p-0 [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Broadcast manifest">
             <dl className="divide-y-2 divide-line-strong text-sm">
               <div className="px-4 py-4">
                 <dt className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-faint">Public revision</dt>
@@ -260,7 +260,7 @@ export default function PublicationPage() {
           </section>
         </div>
 
-        <Card className="min-w-0 rounded-none [&>div]:p-4 [&>header]:bg-accent sm:[&>div]:p-5" title="Audience preview / live revision">
+        <Card className="min-w-0 rounded-none [&>div]:p-4 [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink sm:[&>div]:p-5" title="Audience preview / live revision">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.16em] text-production-sky">Public output</p>

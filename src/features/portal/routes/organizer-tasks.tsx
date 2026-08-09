@@ -153,7 +153,7 @@ export function OrganizerTasksContent({
           <div className="grid gap-5 xl:grid-cols-2">
             {[...tasks].sort((left, right) => left.order - right.order).map((task) => (
               <Card
-                className={`${productionCardClass} [&>header]:bg-[#caff4a]`}
+                className={productionCardClass}
                 key={task.id}
                 title={`Cue ${String(task.order).padStart(2, "0")} / ${task.name}`}
               >
@@ -219,7 +219,7 @@ function TaskFields({
       </div>
       <Textarea name="description" label="Instructions" defaultValue={task?.description ?? ""} />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button className={`${productionButtonClass} bg-[#7857ff] text-white`} type="submit" loading={loading}>{submitLabel}</Button>
+        <Button className={`${productionButtonClass} bg-[#896aff] text-[#171714]`} type="submit" loading={loading}>{submitLabel}</Button>
         {deleteAction}
       </div>
     </form>

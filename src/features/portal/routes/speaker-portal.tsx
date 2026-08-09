@@ -251,8 +251,8 @@ export function SpeakerClaimPrompt({
 }) {
   return (
     <div className="mx-auto max-w-xl space-y-6 pt-6 sm:pt-12">
-      <div className="border-[3px] border-[#171714] bg-[#7857ff] px-5 py-4 text-white shadow-[7px_7px_0_#171714]">
-        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-white/65">Speaker entrance / Secure access</p>
+      <div className="border-[3px] border-[#171714] bg-[#896aff] px-5 py-4 text-[#171714] shadow-[7px_7px_0_#171714]">
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#171714]">Speaker entrance / Secure access</p>
         <h1 className="mt-2 text-3xl font-black tracking-[-0.05em]">Step up to the portal.</h1>
       </div>
       {error && (
@@ -393,7 +393,7 @@ export function SpeakerPortalContent({
           ) : (
             <>
               {incompleteFormTasks.length > 0 && (
-                <Card className={`${productionCardClass} [&>header]:bg-[#8fdcff]`} title="Forms to complete">
+                <Card className={productionCardClass} title="Forms to complete">
                   <ul className="space-y-4">
                     {incompleteFormTasks.map((task) => {
                       const open = task.id === activeFormTask?.id;
@@ -513,7 +513,7 @@ export function SpeakerTaskFormPanel({
 
   return (
     <section id={`speaker-task-form-${task.id}`} aria-labelledby={`speaker-task-form-title-${task.id}`}>
-      <Card className={`${productionCardClass} [&>header]:bg-[#8fdcff]`} title={`Open form / ${task.name}`}>
+      <Card className={productionCardClass} title={`Open form / ${task.name}`}>
         <div className="space-y-5">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -556,7 +556,7 @@ export function SpeakerTaskFormPanel({
                   <AlertDescription>{submitError}</AlertDescription>
                 </Alert>
               )}
-              {accepting && <Button className={`${productionButtonClass} bg-[#7857ff] text-white`} type="submit" loading={busy}>Submit form</Button>}
+              {accepting && <Button className={`${productionButtonClass} bg-[#896aff] text-[#171714]`} type="submit" loading={busy}>Submit form</Button>}
             </form>
           )}
         </div>
@@ -586,7 +586,7 @@ function ProfileEditor({
       aria-labelledby="profile-heading"
     >
       <div>
-        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7857ff]">Profile desk / Public identity</p>
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#3e268f]">Profile desk / Public identity</p>
         <h2 id="profile-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Speaker profile</h2>
         <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">This information is used by the event team and, when published, the speaker gallery.</p>
       </div>
@@ -613,7 +613,7 @@ function ProfileEditor({
         ))}
         <Button className={productionButtonClass} type="button" variant="ghost" size="sm" onClick={() => setLinkCount((count) => count + 1)}>Add another link</Button>
       </fieldset>
-      <Button className={`${productionButtonClass} bg-[#7857ff] text-white`} type="submit" loading={loading}>Save profile</Button>
+      <Button className={`${productionButtonClass} bg-[#896aff] text-[#171714]`} type="submit" loading={loading}>Save profile</Button>
       {profile.pendingSyncFields.length > 0 && (
         <p className="text-sm text-ink-secondary">
           Pending organizer sync: {profile.pendingSyncFields.join(", ")}
@@ -655,7 +655,7 @@ function UploadWorkspace({
         <option value="headshot">Headshot</option>
       </Select>
       <Dropzone
-        className="rounded-none border-2 border-[#171714] bg-[#ece8dc] [&>div]:rounded-none [&>div]:border-2 [&>div]:border-[#171714] [&>div]:bg-[#caff4a] [&>div]:text-[#171714] [&_button]:font-black [&_button]:text-[#7857ff]"
+        className="rounded-none border-2 border-[#171714] bg-[#ece8dc] [&>div]:rounded-none [&>div]:border-2 [&>div]:border-[#171714] [&>div]:bg-[#caff4a] [&>div]:text-[#171714] [&_button]:font-black [&_button]:text-[#3e268f]"
         multiple={false}
         disabled={loading}
         accept={purpose === "headshot"

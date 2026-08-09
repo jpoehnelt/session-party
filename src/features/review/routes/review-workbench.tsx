@@ -422,17 +422,17 @@ export function ReviewWorkbenchContent({
         }
       }}
     >
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-5 border-[3px] border-line-strong bg-accent p-5 text-on-accent shadow-[7px_7px_0_#171714] sm:p-6">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-5 border-[3px] border-line-strong bg-accent p-5 text-ink shadow-[7px_7px_0_#171714] sm:p-6">
         <div>
-          <p className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-white/65">Review desk / evidence queue</p>
+          <p className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-ink">Review desk / evidence queue</p>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-4xl font-black leading-none tracking-[-0.055em] text-white sm:text-5xl">Proposal review</h1>
+            <h1 className="text-4xl font-black leading-none tracking-[-0.055em] text-ink sm:text-5xl">Proposal review</h1>
             <Badge tone="neutral">{queue.length} in round</Badge>
             <Badge tone="accent">{loadedRound ? `${loadedRound.name} · ${loadedRound.status}` : "No review round"}</Badge>
           </div>
-          <p className="mt-3 text-sm font-semibold text-white/75">Evidence-first triage for {workbench.eventName}. Times shown in {workbench.timezone}.</p>
+          <p className="mt-3 text-sm font-semibold text-ink">Evidence-first triage for {workbench.eventName}. Times shown in {workbench.timezone}.</p>
         </div>
-        <div className="border-l-2 border-white/35 pl-4 text-left text-[10px] font-black uppercase tracking-[0.08em] text-white/65 sm:text-right">
+        <div className="border-l-2 border-ink/35 pl-4 text-left text-[10px] font-black uppercase tracking-[0.08em] text-ink sm:text-right">
           <p>Queue focus: ↑/↓ · Open detail: Enter · Search: /</p>
           <p>Last updated {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: workbench.timezone }).format(workbench.lastUpdatedAt)} {workbench.timezone}</p>
         </div>
@@ -469,7 +469,7 @@ export function ReviewWorkbenchContent({
       )}
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(19rem,0.78fr)_minmax(0,1.7fr)]">
-        <Card className="overflow-hidden shadow-[5px_5px_0_#171714] lg:sticky lg:top-4 [&>header]:bg-production-sky [&>header_h3]:text-ink" title={<span className="flex items-center justify-between gap-3"><span>Review queue</span><span className="font-mono text-[10px] font-black tabular-nums text-ink">{queue.length === 0 ? "Empty round" : `${visibleQueue.length} shown`}</span></span>}>
+        <Card className="overflow-hidden shadow-[5px_5px_0_#171714] lg:sticky lg:top-4 [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title={<span className="flex items-center justify-between gap-3"><span>Review queue</span><span className="font-mono text-[10px] font-black tabular-nums text-ink">{queue.length === 0 ? "Empty round" : `${visibleQueue.length} shown`}</span></span>}>
           {queue.length > 0 && (
             <p className="mb-3 border-b-2 border-line-strong pb-3 text-[10px] font-bold uppercase tracking-[0.06em] leading-5 text-ink-faint">
               {order === "coverage"

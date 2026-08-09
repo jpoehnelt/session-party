@@ -58,7 +58,7 @@ function ScoreRationales({
   readonly timezone: string;
 }) {
   return (
-    <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title="Score rationales">
+    <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Score rationales">
       <p className="text-sm leading-6 text-ink-secondary">
         Rationale attached to each reviewer’s rubric score. These remain distinct from the append-only committee thread.
       </p>
@@ -246,14 +246,14 @@ export function SubmissionReviewPane({
 
   return (
     <article className="space-y-4" aria-label={`Review ${submission.title}`}>
-      <header className="border-[3px] border-line-strong bg-accent p-5 text-on-accent shadow-[6px_6px_0_#171714]">
+      <header className="border-[3px] border-line-strong bg-accent p-5 text-ink shadow-[6px_6px_0_#171714]">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={statusTone[submission.status]}>{statusLabel[submission.status]}</Badge>
           <Badge tone="neutral">{submission.category ?? "Uncategorized"}</Badge>
-          <span className="text-[10px] font-black uppercase tracking-[0.08em] text-white/65">Version {submission.version}</span>
+          <span className="text-[10px] font-black uppercase tracking-[0.08em] text-ink">Version {submission.version}</span>
         </div>
-        <h2 id={`proposal-heading-${submission.id}`} className="mt-3 max-w-4xl text-3xl font-black leading-tight tracking-[-0.045em] text-white">{submission.title}</h2>
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm font-semibold text-white/70">
+        <h2 id={`proposal-heading-${submission.id}`} className="mt-3 max-w-4xl text-3xl font-black leading-tight tracking-[-0.045em] text-ink">{submission.title}</h2>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm font-semibold text-ink">
           <span>{submission.speakers.map((speaker) => `${speaker.displayName}${speaker.isPrimary ? " (primary)" : ""}`).join(", ")}</span>
           <span>Submitted {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(submission.submittedAt)} {timezone}</span>
         </div>
@@ -265,9 +265,9 @@ export function SubmissionReviewPane({
         </div>
       )}
 
-      <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title="Proposal brief"><p className="max-w-4xl whitespace-pre-wrap text-sm font-medium leading-6 text-ink-secondary">{submission.abstract}</p></Card>
+      <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Proposal brief"><p className="max-w-4xl whitespace-pre-wrap text-sm font-medium leading-6 text-ink-secondary">{submission.abstract}</p></Card>
 
-      <Card className="[&>header]:bg-production-coral [&>header_h3]:text-ink" title="Committee thread">
+      <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Committee thread">
         <p className="text-sm leading-6 text-ink-secondary">
           Append-only discussion private to this event’s owners, admins, and reviewers. Speakers and API keys cannot author as a human committee member.
         </p>
@@ -316,7 +316,7 @@ export function SubmissionReviewPane({
         </div>
       </Card>
 
-      <Card className="[&>header]:bg-production-coral [&>header_h3]:text-ink" title="Reviewer assignments">
+      <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Reviewer assignments">
         <p className="mb-3 text-sm text-ink-secondary">Assignments are optional workload markers. Every event reviewer can open and score this proposal.</p>
         {submission.assignments.length === 0 ? (
           <p className="text-sm text-ink-faint">No reviewers are assigned in this round.</p>

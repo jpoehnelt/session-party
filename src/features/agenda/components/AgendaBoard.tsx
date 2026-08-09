@@ -347,9 +347,7 @@ export function AgendaBoard({
                     onDragEnter={lane.target ? (event) => previewOnLane(event, lane) : undefined}
                     onDrop={lane.target ? (event) => dropOnLane(event, lane) : undefined}
                   >
-                    <header className={`sticky top-0 z-10 flex min-h-[4.5rem] items-center justify-between border-b-2 border-line-strong px-3 py-3 ${
-                      ["bg-production-sky", "bg-production-coral", "bg-production-lime", "bg-accent text-on-accent"][laneIndex % 4]
-                    }`}>
+                    <header className="sticky top-0 z-10 flex min-h-[4.5rem] items-center justify-between border-b-2 border-line-strong bg-surface-muted px-3 py-3 text-ink">
                       <div>
                         <p className="text-[9px] font-black uppercase tracking-[0.15em] opacity-65">Lane {String(laneIndex + 1).padStart(2, "0")}</p>
                         <h3 className="mt-0.5 text-base font-black leading-tight tracking-[-0.03em]">{lane.label}</h3>

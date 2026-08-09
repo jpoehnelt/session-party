@@ -467,7 +467,7 @@ export function EventSettingsForm({
 
   return (
     <div className="space-y-6">
-    <Card className="[&>header]:bg-accent" title="Event metadata">
+    <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Event metadata">
       <form className="space-y-6" onSubmit={handleSubmit} aria-describedby={saveError ? "event-settings-error" : undefined}>
         {saveError ? (
           <div id="event-settings-error" role="alert" className="rounded-control border-2 border-line-strong bg-danger-soft px-3 py-2 text-sm font-bold text-danger shadow-[3px_3px_0_#171714]">
@@ -517,7 +517,7 @@ export function EventSettingsForm({
         </div>
       </form>
     </Card>
-    <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title="Event members">
+    <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Event members">
       <p className="mb-4 text-sm text-ink-secondary">Add people who have already signed in. This does not send an invitation email.</p>
       <form className="grid gap-4 md:grid-cols-[minmax(0,1fr)_12rem_auto] md:items-end" onSubmit={handleMemberSubmit}>
         <Input

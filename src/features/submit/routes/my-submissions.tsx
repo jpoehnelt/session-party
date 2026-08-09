@@ -77,7 +77,7 @@ const statusLabel = {
 
 const statusPanel = {
   submitted: "[&>header]:bg-production-sky [&>header_h3]:text-ink",
-  in_review: "[&>header]:bg-accent [&>header_h3]:text-on-accent",
+  in_review: "[&>header]:bg-accent [&>header]:text-ink [&>header_h3]:text-ink",
   accepted: "[&>header]:bg-production-lime [&>header_h3]:text-ink",
   rejected: "[&>header]:bg-danger-soft [&>header_h3]:text-ink",
   waitlist: "[&>header]:bg-production-yellow [&>header_h3]:text-ink",
@@ -220,12 +220,12 @@ export default function MySubmissionsPage({ initialData }: MySubmissionsPageProp
   return (
     <ProposalPortalShell>
       <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-16 lg:px-8">
-        <header className="border-[3px] border-line-strong bg-accent p-6 text-on-accent shadow-[9px_9px_0_#171714] sm:p-8">
+        <header className="border-[3px] border-line-strong bg-accent p-6 text-ink shadow-[9px_9px_0_#171714] sm:p-8">
           <p className="inline-block border-2 border-white bg-production-lime px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.15em] text-ink shadow-[3px_3px_0_#171714]">
             {data.event.name}
           </p>
-          <h1 className="mt-7 text-5xl font-black leading-[0.86] tracking-[-0.065em] text-white sm:text-7xl">Your proposals</h1>
-          <p className="mt-5 max-w-2xl text-sm font-semibold leading-6 text-white/75">
+          <h1 className="mt-7 text-5xl font-black leading-[0.86] tracking-[-0.065em] text-ink sm:text-7xl">Your proposals</h1>
+          <p className="mt-5 max-w-2xl text-sm font-semibold leading-6 text-ink">
             Statuses and edits here are scoped to the email on your signed-in account.
           </p>
           <dl className="mt-8 grid max-w-2xl grid-cols-3 border-2 border-line-strong bg-surface text-ink shadow-[4px_4px_0_#171714]">

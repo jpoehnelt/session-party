@@ -218,7 +218,7 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
           ))}
         </section>
       )}
-      <Card className="mb-6 [&>header]:bg-accent" title="Queue controls">
+      <Card className="mb-6 [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Queue controls">
         <div className="grid gap-4 md:grid-cols-3 md:items-end">
           <Select
             label="State"

@@ -471,10 +471,10 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
 
       <dl className="-mt-3 mb-8 ml-3 grid max-w-4xl grid-cols-2 border-2 border-line-strong bg-surface shadow-[5px_5px_0_#171714] md:grid-cols-4" aria-label="Communications production totals">
         {[
-          [String(templates.length).padStart(2, "0"), "Message templates", "bg-production-sky"],
-          [String(eligibleRecipients.length).padStart(2, "0"), "Audience ready", "bg-production-lime"],
-          [String(history.deliveries.length).padStart(2, "0"), "Delivery records", "bg-production-coral"],
-          [String(retryCount).padStart(2, "0"), "Needs a retry", "bg-production-yellow"],
+          [String(templates.length).padStart(2, "0"), "Message templates", "bg-surface-muted"],
+          [String(eligibleRecipients.length).padStart(2, "0"), "Audience ready", "bg-surface-muted"],
+          [String(history.deliveries.length).padStart(2, "0"), "Delivery records", "bg-surface-muted"],
+          [String(retryCount).padStart(2, "0"), "Needs a retry", retryCount > 0 ? "bg-production-yellow" : "bg-surface-muted"],
         ].map(([value, label, color], index) => (
           <div className={`px-4 py-3 ${color} ${index % 2 > 0 ? "border-l-2 border-line-strong" : ""} ${index >= 2 ? "border-t-2 border-line-strong md:border-t-0" : ""} ${index === 2 ? "md:border-l-2" : ""}`} key={label}>
             <dd className="text-2xl font-black leading-none tracking-[-0.055em] sm:text-3xl">{value}</dd>
@@ -495,7 +495,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
       {activeTab === "templates" && (
         <div id="comms-templates" role="tabpanel" aria-labelledby="comms-templates-tab" className="grid gap-6 lg:grid-cols-[17rem_minmax(0,1fr)]">
           <Card
-            className="h-fit rounded-none [&>header]:bg-production-sky [&>header_h3]:text-ink"
+            className="h-fit rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink"
             title="Template roll"
             footer={<Button variant="secondary" className="w-full rounded-none bg-production-lime" onClick={() => { setDraft(emptyDraft); setPreview(null); }}>+ New template</Button>}
           >
@@ -508,14 +508,14 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                     key={template.id}
                     variant="ghost"
                     aria-current={draft.id === template.id ? "page" : undefined}
-                    className={`h-auto w-full justify-start whitespace-normal rounded-none border-2 border-line-strong px-3 py-3 text-left shadow-[3px_3px_0_#171714] ${draft.id === template.id ? "bg-accent text-on-accent hover:bg-accent-hover hover:text-on-accent" : "bg-canvas hover:bg-production-lime"}`}
+                    className={`h-auto w-full justify-start whitespace-normal rounded-none border-2 border-line-strong px-3 py-3 text-left shadow-[3px_3px_0_#171714] ${draft.id === template.id ? "bg-accent text-ink hover:bg-accent-hover hover:text-ink" : "bg-canvas hover:bg-production-lime"}`}
                     onClick={() => { setDraft(asDraft(template)); setPreview(null); }}
                   >
                     <span className="grid w-full grid-cols-[2rem_minmax(0,1fr)] gap-2">
-                      <span className={`text-[10px] font-black tracking-[0.1em] ${draft.id === template.id ? "text-production-lime" : "text-accent"}`}>{String(index + 1).padStart(2, "0")}</span>
+                      <span className={`text-[10px] font-black tracking-[0.1em] ${draft.id === template.id ? "text-ink" : "text-accent-deep"}`}>{String(index + 1).padStart(2, "0")}</span>
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-black tracking-[-0.015em]">{template.name}</span>
-                        <span className={`mt-1 block text-[10px] font-bold uppercase tracking-[0.08em] ${draft.id === template.id ? "text-on-accent/70" : "text-ink-faint"}`}>V{template.version}{template.attachIcs ? " · Calendar ready" : " · Message only"}</span>
+                        <span className={`mt-1 block text-[10px] font-bold uppercase tracking-[0.08em] ${draft.id === template.id ? "text-ink" : "text-ink-faint"}`}>V{template.version}{template.attachIcs ? " · Calendar ready" : " · Message only"}</span>
                       </span>
                     </span>
                   </Button>
@@ -525,7 +525,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
           </Card>
 
           <div className="space-y-6">
-            <Card className="rounded-none [&>header]:bg-accent" title={draft.id ? `Edit / ${draft.name || "template"}` : "New message master"}>
+            <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title={draft.id ? `Edit / ${draft.name || "template"}` : "New message master"}>
               <form className="space-y-4" onSubmit={(event_) => void saveTemplate(event_)}>
                 <div className="grid gap-4 md:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)]">
                   <Input label="Template name" value={draft.name} maxLength={120} onChange={(event_) => setDraft({ ...draft, name: event_.target.value })} required />
@@ -588,7 +588,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
             </Card>
 
             {preview && (
-              <Card className="rounded-none [&>header]:bg-production-coral [&>header_h3]:text-ink" title="Local proof / not sent" footer={<span className="text-xs font-semibold text-ink-faint">{preview.note}</span>}>
+              <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Local proof / not sent" footer={<span className="text-xs font-semibold text-ink-faint">{preview.note}</span>}>
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge tone="accent">Not sent</Badge>
@@ -647,7 +647,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
 
       {activeTab === "send" && (
         <div id="comms-send" role="tabpanel" aria-labelledby="comms-send-tab" className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <Card className="rounded-none [&>header]:bg-production-sky [&>header_h3]:text-ink" title="Audience manifest / accepted speakers">
+          <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Audience manifest / accepted speakers">
             {audience.recipients.length === 0 ? (
               <EmptyState title="No accepted speakers yet" description="Audience selection activates from the append-only acceptance contract." />
             ) : (
@@ -662,7 +662,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                 <div className="divide-y-2 divide-line-strong border-2 border-line-strong">
                 {audience.recipients.map((recipient, index) => (
                   <div key={recipient.speakerId} className="grid gap-3 bg-surface px-4 py-4 transition-colors hover:bg-production-sky/25 sm:grid-cols-[2.25rem_minmax(0,1fr)_minmax(8rem,0.6fr)] sm:items-start">
-                    <span className="text-xs font-black tracking-[0.12em] text-accent" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="text-xs font-black tracking-[0.12em] text-accent-deep" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
                     <Checkbox
                       checked={selectedSpeakers.has(recipient.speakerId)}
                       disabled={recipient.eligibility !== "eligible"}
@@ -688,7 +688,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
           </Card>
 
           <div className="space-y-6 xl:sticky xl:top-4 xl:self-start">
-            <Card className="rounded-none [&>header]:bg-accent" title="Automated delivery (opt in)">
+            <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Automated delivery (opt in)">
               <div className="space-y-4">
                 <Alert tone="neutral">
                   <AlertTitle>Decisions do not send messages</AlertTitle>
@@ -782,8 +782,8 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
           )}
           <dl className="grid grid-cols-3 border-2 border-line-strong bg-surface shadow-[4px_4px_0_#171714]" aria-label="Delivery status totals">
             {[
-              [String(sentCount).padStart(2, "0"), "Sent / captured", "bg-production-lime"],
-              [String(movingCount).padStart(2, "0"), "In motion", "bg-production-sky"],
+              [String(sentCount).padStart(2, "0"), "Sent / captured", "bg-surface-muted"],
+              [String(movingCount).padStart(2, "0"), "In motion", "bg-surface-muted"],
               [String(retryCount).padStart(2, "0"), "Action needed", "bg-production-coral"],
             ].map(([value, label, color], index) => (
               <div className={`p-4 ${color} ${index > 0 ? "border-l-2 border-line-strong" : ""}`} key={label}>

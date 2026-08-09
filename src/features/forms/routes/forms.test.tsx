@@ -235,6 +235,11 @@ describe("forms organizer route", () => {
     expect(markup).not.toContain("Internal category key");
     expect(markup).toContain("Close form");
     expect(markup).not.toContain("Delete draft");
+    expect(markup).toContain("[&amp;&gt;header]:bg-[#ece8dc]");
+    expect(markup).toContain("bg-[#896aff] p-5 text-[#171714]");
+    expect(markup).not.toContain("[&amp;&gt;header]:bg-[#caff4a]");
+    expect(markup).not.toContain("[&amp;&gt;header]:bg-[#8fdcff]");
+    expect(markup).not.toContain("[&amp;&gt;header]:bg-[#ff714f]");
   });
 
   it("marks legacy file fields unavailable instead of previewing a working upload", () => {

@@ -60,7 +60,7 @@ const SEMANTIC_KEY_LABELS: Record<FormSemanticKey, string> = {
 };
 
 const PRODUCTION_CARD =
-  "rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[5px_5px_0_#171714] [&>header]:border-b-2 [&>header]:border-[#171714] [&>header]:px-4 [&>header]:py-3 [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.08em] [&>div]:px-4 [&>div]:py-4";
+  "rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[5px_5px_0_#171714] [&>header]:border-b-2 [&>header]:border-[#171714] [&>header]:bg-[#ece8dc] [&>header]:px-4 [&>header]:py-3 [&>header]:text-[#171714] [&>header_h3]:font-black [&>header_h3]:uppercase [&>header_h3]:tracking-[0.08em] [&>header_h3]:text-[#171714] [&>div]:px-4 [&>div]:py-4";
 const PRODUCTION_FIELD =
   "rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-none focus:border-[#7857ff] focus:ring-[#7857ff]/25";
 const PRODUCTION_BADGE =
@@ -291,7 +291,7 @@ export function FormBuilder({
         </div>
       )}
       <Card
-        className={`${PRODUCTION_CARD} [&>header]:bg-[#caff4a]`}
+        className={PRODUCTION_CARD}
         title={
           <span className="flex flex-wrap items-center justify-between gap-2">
             <span>Form settings</span>
@@ -353,7 +353,7 @@ export function FormBuilder({
       </Card>
 
       <Card
-        className={`${PRODUCTION_CARD} [&>header]:bg-[#7857ff] [&>header_h3]:text-white`}
+        className={PRODUCTION_CARD}
         title={
           <span className="flex flex-wrap items-center justify-between gap-2">
             <span>Proposal routing map</span>
@@ -370,14 +370,14 @@ export function FormBuilder({
         ) : (
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(12rem,0.75fr)]">
             <div className="space-y-3">
-              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#7857ff]">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#3e268f]">
                 Answer to review category
               </p>
               {routingFields.length === 0 ? (
                 <p className="text-sm font-semibold text-[#665f52]">No track or category routing yet.</p>
               ) : routingFields.map((field) => (
                 <section key={field.id} className="overflow-hidden border-2 border-[#171714] bg-[#f3efe3]">
-                  <header className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-[#171714] bg-[#8fdcff] px-3 py-2">
+                  <header className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-[#171714] bg-[#ece8dc] px-3 py-2">
                     <h3 className="text-sm font-black text-[#171714]">{field.label}</h3>
                     <span className="text-[10px] font-black uppercase tracking-[0.08em] text-[#4f4a40]">{field.required ? "Required choice" : "Optional choice"}</span>
                   </header>
@@ -385,7 +385,7 @@ export function FormBuilder({
                     {field.options.map((option) => (
                       <li key={option} className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-3 py-2 text-sm">
                         <span className="truncate font-semibold text-[#4f4a40]">{option}</span>
-                        <span className="font-black text-[#7857ff]" aria-hidden="true">→</span>
+                        <span className="font-black text-[#3e268f]" aria-hidden="true">→</span>
                         <span className="truncate font-black text-[#171714]">{field.routing[option] || "Needs category"}</span>
                       </li>
                     ))}
@@ -394,7 +394,7 @@ export function FormBuilder({
               ))}
             </div>
             <div className="border-t-2 border-[#171714] pt-4 lg:border-l-2 lg:border-t-0 lg:pl-5 lg:pt-0">
-              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#7857ff]">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#3e268f]">
                 Conditional branches
               </p>
               {conditionalFields.length === 0 ? (
@@ -432,7 +432,7 @@ export function FormBuilder({
 
       <div className="flex flex-wrap items-end justify-between gap-3 border-b-[3px] border-[#171714] pb-3">
         <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7857ff]">Build the call sheet</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#3e268f]">Build the call sheet</p>
           <h2 className="mt-1 text-2xl font-black uppercase tracking-[-0.04em] text-[#171714]">Fields</h2>
           <p className="text-sm font-semibold text-[#665f52]">Order, validation, conditions, and category routing.</p>
         </div>
@@ -447,7 +447,7 @@ export function FormBuilder({
         return (
           <Card
             key={row.formKey}
-            className={`${PRODUCTION_CARD} ${index % 4 === 0 ? "[&>header]:bg-[#8fdcff]" : index % 4 === 1 ? "[&>header]:bg-[#ff714f]" : index % 4 === 2 ? "[&>header]:bg-[#caff4a]" : "[&>header]:bg-[#7857ff] [&>header_h3]:text-white"}`}
+            className={PRODUCTION_CARD}
             title={
               <span className="flex flex-wrap items-center justify-between gap-2">
                 <span><span className="mr-2 opacity-60">{String(index + 1).padStart(2, "0")}</span>{field.label || "Untitled field"}</span>
@@ -578,7 +578,7 @@ export function FormBuilder({
 
               {field.logic && (
                 <fieldset className="space-y-3 border-2 border-[#171714] bg-[#f3efe3] p-3 sm:col-span-2">
-                  <legend className="bg-[#7857ff] px-2 py-1 text-xs font-black uppercase tracking-[0.08em] text-white">Conditional rules</legend>
+                  <legend className="bg-[#ece8dc] px-2 py-1 text-xs font-black uppercase tracking-[0.08em] text-[#171714]">Conditional rules</legend>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Select
                       label="Action"
@@ -736,7 +736,7 @@ export function FormBuilder({
 
               {(field.type === "select" || field.type === "radio") && field.options.length > 0 && (
                 <fieldset className="grid gap-3 border-2 border-[#171714] bg-[#8fdcff]/30 p-3 sm:col-span-2 sm:grid-cols-2">
-                  <legend className="bg-[#8fdcff] px-2 py-1 text-xs font-black uppercase tracking-[0.08em] text-[#171714]">Category routing</legend>
+                  <legend className="bg-[#ece8dc] px-2 py-1 text-xs font-black uppercase tracking-[0.08em] text-[#171714]">Category routing</legend>
                   <p className="text-xs font-semibold text-[#665f52] sm:col-span-2">
                     Use clear review category names. Changes reach new submissions after you publish a new version; existing submissions keep their original category.
                   </p>
