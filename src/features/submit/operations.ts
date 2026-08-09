@@ -11,7 +11,7 @@ import {
 import { createPublicSubmission, getPublicSubmissionForm, listSubmissions } from "./service";
 
 const organizerReadAuthorization = eventAuthorization(
-  { kind: "event-member", roles: ["owner", "admin"] },
+  { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
   { kind: "api-key", scopes: ["submissions:read"] },
 );
 

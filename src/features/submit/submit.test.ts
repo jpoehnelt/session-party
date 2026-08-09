@@ -9,6 +9,8 @@ import {
   formVersions,
   forms,
   idempotencyRecords,
+  reviewAssignments,
+  reviewRounds,
   speakers,
   submissionAnswers,
   submissionSpeakers,
@@ -219,6 +221,24 @@ beforeAll(async () => {
       isPrimary: true,
       createdAt: now,
     }),
+    db.insert(reviewRounds).values({
+      id: "review-round-submit",
+      eventId: EVENT_ID,
+      name: "Submit review round",
+      order: 1,
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    }),
+    db.insert(reviewAssignments).values({
+      id: "review-assignment-submit",
+      eventId: EVENT_ID,
+      roundId: "review-round-submit",
+      submissionId: "submission-seeded-accepted",
+      reviewerUserId: reviewer.userId,
+      createdAt: now,
+      updatedAt: now,
+    }),
   ]);
 });
 
@@ -317,8 +337,8 @@ describe("public submission creation", () => {
 });
 
 describe("organizer submission privacy and listing", () => {
-  it("denies non-organizers and cross-event API keys", async () => {
-    for (const principal of [reviewer, outsider, {
+  it("denies non-members and cross-event API keys", async () => {
+    for (const principal of [outsider, {
       kind: "api-key" as const,
       apiKeyId: "key-submit-wrong-event",
       eventId: "another-event",
@@ -331,6 +351,23 @@ describe("organizer submission privacy and listing", () => {
       if (result._tag === "Left") expect(result.left).toMatchObject({ _tag: "Forbidden" });
     }
   });
+  it("lets reviewers list only their assigned submissions", async () => {
+    const page = await runAs(reviewer, listSubmissions({
+      eventId: EVENT_ID,
+      page: 1,
+      pageSize: 25,
+    }));
+    expect(page.pagination).toEqual({ page: 1, pageSize: 25, total: 1, pageCount: 1 });
+    expect(page.results.map((submission) => submission.id)).toEqual(["submission-seeded-accepted"]);
+    expect(page.results[0]).toMatchObject({
+      title: "Seeded accepted proposal",
+      status: "accepted",
+      primarySpeakerName: "Seeded Speaker",
+    });
+    expect("answers" in page.results[0]!).toBe(false);
+    expect("speakerEmail" in page.results[0]!).toBe(false);
+  });
+
 
   it("lists and filters real organizer-visible submission state without private answers", async () => {
     const page = await runAs(owner, listSubmissions({

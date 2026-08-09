@@ -1,20 +1,22 @@
-import { Conflict, External, NotFound, Validation, type AppError } from "contracts/errors";
-import { eventAuthorization, type AuthorizationPolicy } from "contracts/principal";
+import { Conflict, External, Forbidden, NotFound, Validation, type AppError } from "contracts/errors";
+import { eventAuthorization } from "contracts/principal";
 import {
   auditLog,
   domainChanges,
   events,
+  eventMembers,
   formVersionFields,
   formVersions,
   forms,
   idempotencyRecords,
+  reviewAssignments,
   speakers,
   submissionAnswers,
   submissionSpeakers,
   submissions,
 } from "contracts/schema";
 import type { AnswerValue } from "contracts/types";
-import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, isNull } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
@@ -30,7 +32,7 @@ import {
 
 const COMMAND_TTL_MS = 24 * 60 * 60 * 1_000;
 const organizerReadAuthorization = eventAuthorization(
-  { kind: "event-member", roles: ["owner", "admin"] },
+  { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
   { kind: "api-key", scopes: ["submissions:read"] },
 );
 
@@ -553,20 +555,52 @@ export const createPublicSubmission = (
     return output;
   });
 
-const authorize = (policy: AuthorizationPolicy, eventId: string) =>
+type QueueViewer = {
+  readonly role: "owner" | "admin" | "reviewer";
+  readonly userId: string;
+};
+
+const authorizeQueueViewer = (
+  eventId: string,
+): Effect.Effect<QueueViewer, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
     const principal = yield* CurrentUser;
     const authorizer = yield* Authorizer;
-    yield* authorizer.authorize({ principal, policy, eventId });
+    yield* authorizer.authorize({ principal, policy: organizerReadAuthorization, eventId });
+    if (principal.kind === "api-key") return { role: "admin", userId: principal.userId };
+    const { db } = yield* Db;
+    const [membership] = yield* database(() =>
+      db
+        .select({ role: eventMembers.role })
+        .from(eventMembers)
+        .where(and(eq(eventMembers.eventId, eventId), eq(eventMembers.userId, principal.userId)))
+        .limit(1),
+    );
+    if (!membership) {
+      return yield* Effect.fail(new Forbidden({ reason: "Event membership required" }));
+    }
+    return { role: membership.role, userId: principal.userId };
   });
 
 export const listSubmissions = (
   input: ListSubmissionsInput,
 ): Effect.Effect<SubmissionPage, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
-    yield* authorize(organizerReadAuthorization, input.eventId);
+    const viewer = yield* authorizeQueueViewer(input.eventId);
     const { db } = yield* Db;
     const filters = [eq(submissions.eventId, input.eventId)];
+    if (viewer.role === "reviewer") {
+      filters.push(exists(
+        db
+          .select({ id: reviewAssignments.id })
+          .from(reviewAssignments)
+          .where(and(
+            eq(reviewAssignments.eventId, input.eventId),
+            eq(reviewAssignments.reviewerUserId, viewer.userId),
+            eq(reviewAssignments.submissionId, submissions.id),
+          )),
+      ));
+    }
     if (input.status) filters.push(eq(submissions.status, input.status));
     if (input.formId) filters.push(eq(submissions.formId, input.formId));
     if (input.category) filters.push(eq(submissions.category, input.category));
