@@ -5,20 +5,32 @@ import type {
   BrowserSessionPrincipal,
   EventApiKeyPrincipal,
 } from "contracts/principal";
-import { eventMembers, events, integrations, users } from "contracts/schema";
-import type { AirtableConfig } from "contracts/types";
+import { apiKeys, eventMembers, events, integrations, users } from "contracts/schema";
+import type { AcceleventsImportRun, AirtableConfig } from "contracts/types";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  type AcceleventsImports,
   type Authorizer,
   type CurrentUser,
   AppLayer,
   CurrentUser as CurrentUserTag,
   type Db,
 } from "@/server/services";
-import { configurationTruth } from "./routes/integrations";
-import { listIntegrationConfigurations } from "./service";
+import {
+  getAcceleventsImportStatusOperation,
+  runAcceleventsImportOperation,
+} from "./operations";
+import {
+  acceleventsCapabilityLabel,
+  configurationTruth,
+} from "./presentation";
+import {
+  getAcceleventsImportStatus,
+  listIntegrationConfigurations,
+  runAcceleventsImport,
+} from "./service";
 
 interface TestEnv extends Cloudflare.Env {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -60,7 +72,7 @@ const admin = browserPrincipal("integrations-admin", "Admin");
 const reviewer = browserPrincipal("integrations-reviewer", "Reviewer");
 const outsider = browserPrincipal("integrations-outsider", "Outsider");
 
-type Requirements = Authorizer | CurrentUser | Db;
+type Requirements = AcceleventsImports | Authorizer | CurrentUser | Db;
 
 const runEitherAs = <A>(
   principal: BrowserSessionPrincipal | EventApiKeyPrincipal,
@@ -81,7 +93,7 @@ const runAs = async <A>(
 ): Promise<A> => {
   const result = await runEitherAs(principal, effect);
   if (result._tag === "Left") {
-    throw new Error(`Unexpected Effect failure: ${result.left._tag}`);
+    throw new Error(`Unexpected Effect failure: ${JSON.stringify(result.left)}`);
   }
   return result.right;
 };
@@ -175,40 +187,69 @@ beforeAll(async () => {
     { id: "integrations-member-reviewer", eventId: targetEventId, userId: reviewer.userId, role: "reviewer", createdAt: now, updatedAt: now },
     { id: "integrations-member-other-owner", eventId: otherEventId, userId: owner.userId, role: "owner", createdAt: now, updatedAt: now },
   ]).run();
-  await db.insert(integrations).values({
-    id: "integration-airtable-target",
+  await db.insert(apiKeys).values({
+    id: "accelevents-write",
     eventId: targetEventId,
-    kind: "airtable",
-    secretRef: "secret-ref-must-not-leak",
-    config: {
-      ...airtableConfiguration,
-      apiToken: "raw-config-secret-must-not-leak",
-    },
-    cursor: "cursor-must-not-leak",
-    lastError: "provider-error-must-not-leak",
+    name: "Accelevents import test key",
+    keyHash: "0".repeat(64),
+    scopes: ["integrations:write"],
+    expiresAt: new Date(expiresAt),
+    createdBy: owner.userId,
     createdAt: now,
     updatedAt: now,
   }).run();
+  await db.insert(integrations).values([
+    {
+      id: "integration-airtable-target",
+      eventId: targetEventId,
+      kind: "airtable",
+      secretRef: "secret-ref-must-not-leak",
+      config: {
+        ...airtableConfiguration,
+        apiToken: "raw-config-secret-must-not-leak",
+      },
+      cursor: "cursor-must-not-leak",
+      lastError: "provider-error-must-not-leak",
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "integration-accelevents-target",
+      eventId: targetEventId,
+      kind: "accelevents",
+      secretRef: "fixture-secret-not-resolved",
+      config: {
+        kind: "accelevents",
+        accelEventId: "fixture-event",
+        eventUrl: "fixture-event",
+      },
+      createdAt: now,
+      updatedAt: now,
+    },
+  ]).run();
 });
 
 describe("integrations configuration service", () => {
   it("resolves event IDs and slugs before enforcing organizer authorization", async () => {
-    await expect(runAs(owner, listIntegrationConfigurations(targetEventSlug))).resolves.toHaveLength(1);
-    await expect(runAs(admin, listIntegrationConfigurations(targetEventId))).resolves.toHaveLength(1);
+    await expect(runAs(owner, listIntegrationConfigurations(targetEventSlug))).resolves.toHaveLength(2);
+    await expect(runAs(admin, listIntegrationConfigurations(targetEventId))).resolves.toHaveLength(2);
     await expectFailure(reviewer, listIntegrationConfigurations(targetEventId), "Forbidden");
     await expectFailure(outsider, listIntegrationConfigurations(targetEventId), "Forbidden");
 
     const readKey = apiKeyPrincipal("integrations-read", targetEventId, ["integrations:read"]);
     const writeKey = apiKeyPrincipal("integrations-write", targetEventId, ["integrations:write"]);
     const crossEventKey = apiKeyPrincipal("integrations-other", otherEventId, ["integrations:read"]);
-    await expect(runAs(readKey, listIntegrationConfigurations(targetEventId))).resolves.toHaveLength(1);
+    await expect(runAs(readKey, listIntegrationConfigurations(targetEventId))).resolves.toHaveLength(2);
     await expectFailure(writeKey, listIntegrationConfigurations(targetEventId), "Forbidden");
     await expectFailure(crossEventKey, listIntegrationConfigurations(targetEventId), "Forbidden");
   });
 
   it("returns validated field maps without secret or runtime metadata", async () => {
     const result = await runAs(owner, listIntegrationConfigurations(targetEventId));
-    expect(result).toEqual([airtableConfiguration]);
+    expect(result).toEqual(expect.arrayContaining([
+      airtableConfiguration,
+      { kind: "accelevents", accelEventId: "fixture-event", eventUrl: "fixture-event" },
+    ]));
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain("secret-ref-must-not-leak");
     expect(serialized).not.toContain("raw-config-secret-must-not-leak");
@@ -224,7 +265,90 @@ describe("integrations configuration service", () => {
     });
     expect(configurationTruth([
       airtableConfiguration,
-      { kind: "accelevents", accelEventId: "accel-event" },
+      { kind: "accelevents", accelEventId: "accel-event", eventUrl: "accel-event" },
     ])).toEqual({ airtable: true, accelevents: true });
+  });
+});
+
+describe("Accelevents import service", () => {
+  it("authorizes status reads and reports the server-owned fixture capability", async () => {
+    const readKey = apiKeyPrincipal("accelevents-read", targetEventId, ["integrations:read"]);
+    const writeKey = apiKeyPrincipal("accelevents-write-only", targetEventId, ["integrations:write"]);
+
+    await expect(runAs(owner, getAcceleventsImportStatus(targetEventSlug))).resolves.toMatchObject({
+      configured: true,
+      config: { kind: "accelevents", accelEventId: "fixture-event", eventUrl: "fixture-event" },
+      capability: { mode: "fixture", state: "ready", reason: null },
+    });
+    await expect(runAs(readKey, getAcceleventsImportStatus(targetEventId))).resolves.toMatchObject({
+      configured: true,
+      capability: { mode: "fixture", state: "ready" },
+    });
+    await expectFailure(reviewer, getAcceleventsImportStatus(targetEventId), "Forbidden");
+    await expectFailure(outsider, getAcceleventsImportStatus(targetEventId), "Forbidden");
+    await expectFailure(writeKey, getAcceleventsImportStatus(targetEventId), "Forbidden");
+  });
+
+  it("requires write authorization and replays the same completed run idempotently", async () => {
+    const writeKey = apiKeyPrincipal("accelevents-write", targetEventId, ["integrations:write"]);
+    const readKey = apiKeyPrincipal("accelevents-read-only", targetEventId, ["integrations:read"]);
+    const idempotencyKey = "integrations-import-idempotency";
+
+    await expectFailure(reviewer, runAcceleventsImport(targetEventId, idempotencyKey), "Forbidden");
+    await expectFailure(readKey, runAcceleventsImport(targetEventId, idempotencyKey), "Forbidden");
+
+    const first = await runAs(writeKey, runAcceleventsImport(targetEventSlug, idempotencyKey));
+    const replay = await runAs(writeKey, runAcceleventsImport(targetEventId, idempotencyKey));
+    expect(first.status).toBe("succeeded");
+    expect(first.mode).toBe("fixture");
+    expect(first.counts).toEqual({
+      total: 4,
+      created: 4,
+      updated: 0,
+      unchanged: 0,
+      failed: 0,
+    });
+    expect(replay).toEqual(first);
+
+    const status = await runAs(owner, getAcceleventsImportStatus(targetEventId));
+    expect(status.latestRun).toEqual(first);
+  });
+});
+
+describe("Accelevents transport and route contracts", () => {
+  it("exposes status and idempotent import through REST and MCP metadata", () => {
+    expect(getAcceleventsImportStatusOperation.rest).toMatchObject({
+      method: "get",
+      path: "/events/:idOrSlug/integrations/accelevents/status",
+      input: { path: ["idOrSlug"] },
+    });
+    expect(getAcceleventsImportStatusOperation.mcp.name).toBe("get_accelevents_import_status");
+    expect(runAcceleventsImportOperation.rest).toMatchObject({
+      method: "post",
+      path: "/events/:idOrSlug/integrations/accelevents/imports",
+      input: { path: ["idOrSlug"], body: ["idempotencyKey"] },
+    });
+    expect(runAcceleventsImportOperation.mcp.name).toBe("run_accelevents_import");
+    expect(runAcceleventsImportOperation.idempotency).toBe("required");
+  });
+
+  it("labels only server-reported ready modes as live or fixture", () => {
+    const base = {
+      configured: true,
+      config: { kind: "accelevents" as const, accelEventId: "fixture-event", eventUrl: "fixture-event" },
+      latestRun: null as AcceleventsImportRun | null,
+    };
+    expect(acceleventsCapabilityLabel({
+      ...base,
+      capability: { mode: "live", state: "ready", reason: null },
+    })).toBe("Live");
+    expect(acceleventsCapabilityLabel({
+      ...base,
+      capability: { mode: "fixture", state: "ready", reason: null },
+    })).toBe("Fixture");
+    expect(acceleventsCapabilityLabel({
+      ...base,
+      capability: { mode: "live", state: "unavailable", reason: "credential_unavailable" },
+    })).toBe("Unavailable");
   });
 });

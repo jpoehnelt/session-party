@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { IntegrationConfig, type AirtableConfig, type IntegrationConfig as IntegrationConfigType } from "contracts/types";
+import {
+  AcceleventsImportRun,
+  AcceleventsImportStatus,
+  IntegrationConfig,
+  type AcceleventsImportRun as AcceleventsImportRunType,
+  type AcceleventsImportStatus as AcceleventsImportStatusType,
+  type AirtableConfig,
+  type IntegrationConfig as IntegrationConfigType,
+} from "contracts/types";
 import { Schema } from "effect";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
+import { acceleventsCapabilityLabel, configurationTruth } from "../presentation";
 import {
   Alert,
   AlertDescription,
@@ -20,12 +29,6 @@ import {
 } from "@/ui";
 
 export const path = "/e/:eventSlug/integrations";
-
-
-export const configurationTruth = (configurations: readonly IntegrationConfigType[]) => ({
-  airtable: configurations.some((configuration) => configuration.kind === "airtable"),
-  accelevents: configurations.some((configuration) => configuration.kind === "accelevents"),
-});
 
 
 function LoadingRegion({ label }: { readonly label: string }) {
@@ -109,33 +112,37 @@ function MappingTable({ configuration }: { readonly configuration: AirtableConfi
 
 function IntegrationsWorkspace({
   configurations,
+  status,
+  running,
+  runResult,
+  runError,
   onReload,
+  onRun,
 }: {
   readonly configurations: readonly IntegrationConfigType[];
+  readonly status: AcceleventsImportStatusType;
+  readonly running: boolean;
+  readonly runResult: AcceleventsImportRunType | null;
+  readonly runError: string | null;
   readonly onReload: () => void;
+  readonly onRun: () => void;
 }) {
   const truth = useMemo(() => configurationTruth(configurations), [configurations]);
   const airtable = configurations.find(
     (configuration): configuration is AirtableConfig => configuration.kind === "airtable",
   );
-  const accelevents = configurations.find(
-    (configuration) => configuration.kind === "accelevents",
-  );
+  const accelevents = status.config;
+  const capability = acceleventsCapabilityLabel(status);
+  const canRun = status.configured && status.capability.state === "ready";
+  const latest = runResult ?? status.latestRun;
 
   return (
     <>
       <PageHeader
         title="Integrations"
-        description="Saved provider configuration is shown without treating it as proof of live connectivity."
-        actions={<Button variant="secondary" onClick={onReload}>Reload configuration</Button>}
+        description="Provider configuration and server-observed import state for this event."
+        actions={<Button variant="secondary" onClick={onReload}>Reload status</Button>}
       />
-
-      <Alert tone="warning" className="mb-5">
-        <AlertTitle>Runtime sync status is not available</AlertTitle>
-        <AlertDescription>
-          The frozen runtime does not expose an Airtable or Accelevents adapter mode, sync lane, freshness result, or retry contract. This page therefore does not label fixtures as live or offer actions that cannot be confirmed.
-        </AlertDescription>
-      </Alert>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card
@@ -157,24 +164,77 @@ function IntegrationsWorkspace({
         </Card>
 
         <Card
-          title={<ProviderHeading name="Accelevents" configured={truth.accelevents} />}
+          title={<ProviderHeading name="Accelevents" configured={status.configured} />}
           footer={
             <p className="text-xs leading-relaxed text-ink-faint">
-              Adapter mode and connectivity are not inferred from saved event IDs.
+              Live, fixture, and unavailable states come from the server runtime—not saved IDs.
             </p>
           }
         >
           {accelevents ? (
-            <dl className="grid gap-3 text-sm">
-              <div>
-                <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Event ID</dt>
-                <dd className="mt-1 break-all font-mono text-xs text-ink">{accelevents.accelEventId}</dd>
+            <div className="space-y-5">
+              <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Event ID</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-ink">{accelevents.accelEventId}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Adapter</dt>
+                  <dd className="mt-1">
+                    <Badge tone={capability === "Live" ? "success" : capability === "Fixture" ? "warning" : "neutral"}>
+                      {capability}
+                    </Badge>
+                  </dd>
+                </div>
+              </dl>
+
+              {status.capability.state === "unavailable" && (
+                <Alert tone="warning">
+                  <AlertTitle>Import unavailable</AlertTitle>
+                  <AlertDescription>
+                    {status.capability.reason ?? "The server cannot run this integration."}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <div className="flex flex-wrap items-center gap-3">
+                <Button onClick={onRun} loading={running} disabled={!canRun}>
+                  Import now
+                </Button>
+                <span role="status" aria-live="polite" className="text-xs text-ink-secondary">
+                  {running ? "Import in progress…" : canRun ? "Ready to import" : "Import is not available"}
+                </span>
               </div>
-              <div>
-                <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">Connectivity</dt>
-                <dd className="mt-1 text-ink-secondary">Not observed</dd>
-              </div>
-            </dl>
+
+              {runError && (
+                <Alert tone="danger">
+                  <AlertTitle>Import failed</AlertTitle>
+                  <AlertDescription>{runError}</AlertDescription>
+                </Alert>
+              )}
+
+              {latest && (
+                <>
+                  <Separator />
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-sm font-semibold text-ink">Latest import</h4>
+                      <Badge tone={latest.status === "succeeded" ? "success" : latest.status === "partial" ? "warning" : "danger"}>
+                        {latest.status}
+                      </Badge>
+                    </div>
+                    <dl className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
+                      <div><dt className="text-ink-faint">Created</dt><dd className="mt-1 font-semibold text-ink">{latest.counts.created}</dd></div>
+                      <div><dt className="text-ink-faint">Updated</dt><dd className="mt-1 font-semibold text-ink">{latest.counts.updated}</dd></div>
+                      <div><dt className="text-ink-faint">Unchanged</dt><dd className="mt-1 font-semibold text-ink">{latest.counts.unchanged}</dd></div>
+                      <div><dt className="text-ink-faint">Failed</dt><dd className="mt-1 font-semibold text-ink">{latest.counts.failed}</dd></div>
+                      <div><dt className="text-ink-faint">Mode</dt><dd className="mt-1 font-semibold capitalize text-ink">{latest.mode}</dd></div>
+                    </dl>
+                    {latest.errorDetail && <p className="text-xs text-danger">{latest.errorDetail}</p>}
+                  </div>
+                </>
+              )}
+            </div>
           ) : (
             <EmptyState
               title="Accelevents is not configured"
@@ -193,21 +253,36 @@ export default function IntegrationsPage() {
   const navigate = useNavigate();
   const { eventSlug = "" } = useParams();
   const [configurations, setConfigurations] = useState<readonly IntegrationConfigType[] | null | undefined>(undefined);
+  const [status, setStatus] = useState<AcceleventsImportStatusType | null | undefined>(undefined);
+  const [runResult, setRunResult] = useState<AcceleventsImportRunType | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState(0);
-
   const reload = useCallback(() => setRequest((current) => current + 1), []);
 
   useEffect(() => {
     let active = true;
     setConfigurations(undefined);
+    setStatus(undefined);
+    setRunResult(null);
+    setRunError(null);
     setError(null);
-    void apiFetch<readonly IntegrationConfigType[]>(
-      `/api/v1/events/${encodeURIComponent(eventSlug)}/integrations/configurations`,
-      { schema: Schema.Array(IntegrationConfig) },
-    )
-      .then((loaded) => {
-        if (active) setConfigurations(loaded);
+    const eventPath = `/api/v1/events/${encodeURIComponent(eventSlug)}/integrations`;
+    void Promise.all([
+      apiFetch<readonly IntegrationConfigType[]>(
+        `${eventPath}/configurations`,
+        { schema: Schema.Array(IntegrationConfig) },
+      ),
+      apiFetch<AcceleventsImportStatusType>(
+        `${eventPath}/accelevents/status`,
+        { schema: AcceleventsImportStatus },
+      ),
+    ])
+      .then(([loadedConfigurations, loadedStatus]) => {
+        if (!active) return;
+        setConfigurations(loadedConfigurations);
+        setStatus(loadedStatus);
       })
       .catch((cause) => {
         if (!active) return;
@@ -216,6 +291,7 @@ export default function IntegrationsPage() {
         const message = cause instanceof Error ? cause.message : "Could not load integrations";
         setError(unauthenticated ? "unauthenticated" : notFound ? null : message);
         setConfigurations(null);
+        setStatus(null);
         if (!unauthenticated && !notFound) toast(message, { tone: "danger" });
       });
     return () => {
@@ -223,11 +299,41 @@ export default function IntegrationsPage() {
     };
   }, [eventSlug, request]);
 
-  if (configurations === undefined) {
+  const runImport = useCallback(() => {
+    if (running || !status?.configured || status.capability.state !== "ready") return;
+    setRunning(true);
+    setRunError(null);
+    void apiFetch<AcceleventsImportRunType>(
+      `/api/v1/events/${encodeURIComponent(eventSlug)}/integrations/accelevents/imports`,
+      {
+        method: "POST",
+        body: { idempotencyKey: crypto.randomUUID() },
+        schema: AcceleventsImportRun,
+      },
+    )
+      .then((result) => {
+        setRunResult(result);
+        if (result.status === "succeeded") {
+          toast("Accelevents import completed", { tone: "success" });
+        } else {
+          const message = result.errorDetail ?? "Accelevents import did not fully complete";
+          setRunError(message);
+          toast(message, { tone: result.status === "partial" ? "warning" : "danger" });
+        }
+      })
+      .catch((cause) => {
+        const message = cause instanceof Error ? cause.message : "Could not run Accelevents import";
+        setRunError(message);
+        toast(message, { tone: "danger" });
+      })
+      .finally(() => setRunning(false));
+  }, [eventSlug, running, status]);
+
+  if (configurations === undefined || status === undefined) {
     return <LoadingRegion label="Loading integration configuration" />;
   }
 
-  if (configurations === null) {
+  if (configurations === null || status === null) {
     if (error === "unauthenticated") {
       return (
         <>
@@ -254,9 +360,13 @@ export default function IntegrationsPage() {
 
   return (
     <IntegrationsWorkspace
-      key={`${eventSlug}-${request}`}
       configurations={configurations}
+      status={status}
+      running={running}
+      runResult={runResult}
+      runError={runError}
       onReload={reload}
+      onRun={runImport}
     />
   );
 }
