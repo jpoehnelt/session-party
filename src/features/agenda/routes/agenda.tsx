@@ -557,7 +557,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           active={view}
           onChange={(id) => setView(id as AgendaView)}
         />
-        <p className="hidden text-xs text-ink-faint md:block">Confirmed talks stay private until this revision is published.</p>
+        <p className="w-full text-xs text-ink-faint md:w-auto">Confirmed talks stay private until this revision is published.</p>
       </div>
       {refresh.status !== "idle" && (
         <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-ink-secondary" role="status" aria-live="polite">
