@@ -19,6 +19,19 @@ export const FORM_FIELD_TYPES = [
 export const FormFieldType = Schema.Literal(...FORM_FIELD_TYPES);
 export type FormFieldType = typeof FormFieldType.Type;
 
+const STRING_COMPATIBLE_FIELD_TYPES: Partial<Record<FormFieldType, true>> = {
+  text: true,
+  textarea: true,
+  select: true,
+  radio: true,
+  email: true,
+  url: true,
+  date: true,
+};
+
+const isStringCompatibleFieldType = (type: FormFieldType): boolean =>
+  STRING_COMPATIBLE_FIELD_TYPES[type] === true;
+
 export const FORM_SEMANTIC_KEYS = [
   "submissionTitle",
   "submissionAbstract",
@@ -281,18 +294,34 @@ export const validatePublishIntent = (form: FormDetail): readonly PublishValidat
     });
   }
   if (form.purpose === "primary-cfp") {
-    for (const requiredKey of ["submissionTitle", "submissionAbstract"] as const) {
-      const assignedField = form.fields.find((field) => field.semanticKey === requiredKey);
-      const count = form.fields.reduce(
-        (total, field) => total + (field.semanticKey === requiredKey ? 1 : 0),
-        0,
-      );
-      if (count !== 1) {
+    for (const requiredKey of ["submissionTitle", "submissionAbstract", "speakerName"] as const) {
+      const assignedFields = form.fields.filter((field) => field.semanticKey === requiredKey);
+      const assignedField = assignedFields[0];
+      if (assignedFields.length !== 1 || !assignedField) {
         issues.push({
           controlId: assignedField
             ? `builder-field-${assignedField.id}-semantic-key`
             : (form.fields[0] ? `builder-field-${form.fields[0].id}-semantic-key` : "builder-add-field"),
           message: `The primary CFP needs exactly one ${requiredKey} field.`,
+        });
+        continue;
+      }
+      if (!assignedField.required) {
+        issues.push({
+          controlId: `builder-field-${assignedField.id}-semantic-key`,
+          message: `The primary CFP ${requiredKey} field must be required.`,
+        });
+      }
+      if (assignedField.logic !== null) {
+        issues.push({
+          controlId: `builder-field-${assignedField.id}-semantic-key`,
+          message: `The primary CFP ${requiredKey} field cannot be conditional.`,
+        });
+      }
+      if (!isStringCompatibleFieldType(assignedField.type)) {
+        issues.push({
+          controlId: `builder-field-${assignedField.id}-type`,
+          message: `The primary CFP ${requiredKey} field must submit a text value.`,
         });
       }
     }
