@@ -44,6 +44,7 @@ export class MailQueue extends Context.Tag("session-party/MailQueue")<
   MailQueue,
   {
     readonly fromEmail: string;
+    readonly appOrigin: string;
     readonly wake: () => Effect.Effect<void>;
   }
 >() {}
@@ -132,6 +133,35 @@ export const mailFrom = (env: Env & SecretBindings): string => {
   throw new Error("Missing required production binding: MAIL_FROM");
 };
 
+const appOrigin = (env: Env): string => {
+  const configured = typeof env.APP_URL === "string" ? env.APP_URL.trim() : "";
+  if (!configured) {
+    throw new Error("Missing required binding: APP_URL");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(configured);
+  } catch {
+    throw new Error("Invalid required binding APP_URL: expected an absolute URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Invalid required binding APP_URL: expected HTTP or HTTPS");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Invalid required binding APP_URL: credentials are not allowed");
+  }
+  if (parsed.pathname !== "/") {
+    throw new Error("Invalid required binding APP_URL: pathname must be empty or /");
+  }
+  if (parsed.search || parsed.href.includes("?")) {
+    throw new Error("Invalid required binding APP_URL: query is not allowed");
+  }
+  if (parsed.hash || parsed.href.includes("#")) {
+    throw new Error("Invalid required binding APP_URL: hash is not allowed");
+  }
+  return parsed.origin;
+};
 
 export const requireMailConfiguration = (env: Env & SecretBindings): void => {
   mailFrom(env);
@@ -283,6 +313,7 @@ export const AppLayer = (env: Env) => {
       send: (payload) => externalEffect("cloudflare-email", () => sendMail(env, payload)),
     }),
     Layer.succeed(MailQueue, {
+      appOrigin: appOrigin(env),
       fromEmail: mailFrom(env),
       wake: () =>
         externalEffect("mail-scheduler", async () => {
