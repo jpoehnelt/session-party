@@ -63,6 +63,15 @@ const outsider: Principal = {
   sessionId: "session-submit-outsider",
   expiresAt: NOW + 86_400_000,
 };
+const wrongEventApiKey: Principal = {
+  kind: "api-key",
+  userId: "api-key:key-submit-wrong-event",
+  apiKeyId: "key-submit-wrong-event",
+  eventId: "another-event",
+  name: "Wrong event key",
+  scopes: ["submissions:read"],
+  expiresAt: NOW + 86_400_000,
+};
 
 const fieldIds = {
   title: "submit-field-title",
@@ -472,9 +481,9 @@ describe("public submission creation", () => {
       beforeCommit: async () => {
         hookRan = true;
         // This integration check must advance D1's SQLite clock; fake JS timers do not affect SQL `now`.
-        const { promise, resolve } = Promise.withResolvers<void>();
-        setTimeout(resolve, Math.max(0, closesAt.getTime() - Date.now() + 100));
-        await promise;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, Math.max(0, closesAt.getTime() - Date.now() + 100));
+        });
       },
     }).pipe(Effect.either));
 
@@ -557,14 +566,7 @@ describe("public submission creation", () => {
 
 describe("organizer submission privacy and listing", () => {
   it("denies non-members and cross-event API keys", async () => {
-    for (const principal of [outsider, {
-      kind: "api-key" as const,
-      apiKeyId: "key-submit-wrong-event",
-      eventId: "another-event",
-      name: "Wrong event key",
-      scopes: ["submissions:read" as const],
-      expiresAt: NOW + 86_400_000,
-    }]) {
+    for (const principal of [outsider, wrongEventApiKey]) {
       const result = await runAs(principal, listSubmissions({ eventId: EVENT_ID, page: 1, pageSize: 25 }).pipe(Effect.either));
       expect(result._tag).toBe("Left");
       if (result._tag === "Left") expect(result.left).toMatchObject({ _tag: "Forbidden" });

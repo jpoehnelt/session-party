@@ -58,8 +58,8 @@ const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
       }),
   });
 
-const decodeColumn = <A>(
-  schema: Schema.Schema<A, unknown, never>,
+const decodeColumn = <A, I>(
+  schema: Schema.Schema<A, I, never>,
   value: unknown,
   name: string,
   parseJson = false,
@@ -110,16 +110,18 @@ const availability = (
 const normalizeLogic = (
   logic: typeof ConditionalLogic.Type | null,
   immutableIdBySourceId: ReadonlyMap<string, string>,
-): typeof ConditionalLogic.Type | null =>
-  logic === null
-    ? null
-    : {
-        ...logic,
-        conditions: logic.conditions.map((condition) => ({
-          ...condition,
-          fieldId: immutableIdBySourceId.get(condition.fieldId) ?? condition.fieldId,
-        })) as typeof ConditionalLogic.Type["conditions"],
-      };
+): typeof ConditionalLogic.Type | null => {
+  if (logic === null) return null;
+  const remapCondition = (condition: typeof logic.conditions[number]) => ({
+    ...condition,
+    fieldId: immutableIdBySourceId.get(condition.fieldId) ?? condition.fieldId,
+  });
+  const [first, ...rest] = logic.conditions;
+  return {
+    ...logic,
+    conditions: [remapCondition(first), ...rest.map(remapCondition)],
+  };
+};
 
 const loadPublishedForm = (
   eventSlug: string,
