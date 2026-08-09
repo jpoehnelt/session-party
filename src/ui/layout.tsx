@@ -25,7 +25,7 @@ export function AppShell({ sidebar, sidebarClassName, topbar, children }: AppShe
             {topbar}
           </header>
         )}
-        <main className="production-grid min-w-0 flex-1 overflow-y-auto">
+        <main id="main-content" tabIndex={-1} className="production-grid min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
             {children}
           </div>

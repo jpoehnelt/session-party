@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { fetchEventIdentity, fetchFormSummaries, type EventIdentity } from "@/features/forms/routes/forms";
@@ -67,13 +67,18 @@ export async function fetchSubmissionQueue(
 }
 
 
-const columns: TableColumn<SubmissionSummary>[] = [
+const columns = (eventSlug: string): TableColumn<SubmissionSummary>[] => [
   {
     key: "title",
     header: "Submission",
     render: (row) => (
       <div>
-        <p className="font-black tracking-[-0.015em] text-ink">{row.title}</p>
+        <Link
+          className="font-black tracking-[-0.015em] text-ink underline decoration-2 underline-offset-4 hover:text-accent-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          to={`/e/${eventSlug}/review?selectedSubmissionId=${encodeURIComponent(row.id)}`}
+        >
+          {row.title}
+        </Link>
         <p className="mt-1 text-[10px] font-black uppercase tracking-[0.08em] text-ink-faint">{row.primarySpeakerName ?? "No primary speaker"}</p>
       </div>
     ),
@@ -176,7 +181,7 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
   const visibleRouted = page?.results.filter((submission) => submission.category != null).length ?? 0;
 
   if (event === undefined) {
-    return <><Skeleton className="h-24" /><Skeleton className="mt-5 h-[28rem]" /><Toaster /></>;
+    return <div role="status" aria-busy="true" aria-label="Loading submission board"><Skeleton className="h-24" /><Skeleton className="mt-5 h-[28rem]" /><Toaster /></div>;
   }
   if (event === null) {
     const unauthenticated = eventError === "unauthenticated";
@@ -256,7 +261,7 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
         </div>
       </Card>
       {page === undefined ? (
-        <Skeleton className="h-[28rem]" />
+        <div role="status" aria-busy="true" aria-label="Loading submissions"><Skeleton className="h-[28rem]" /></div>
       ) : page === null ? (
         <Card>
           <EmptyState
@@ -274,7 +279,7 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
             </p>
           </div>
           <Table
-            columns={columns}
+            columns={columns(eventSlug)}
             rows={[...page.results]}
             rowKey={(row) => row.id}
             empty="No submissions match these filters."

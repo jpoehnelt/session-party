@@ -5,8 +5,9 @@
   "compatibility_date": "2025-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/mcp", "/parties/*"]
+    "run_worker_first": ["/api/*", "/mcp", "/parties/*", "/event/*"]
   },
   "observability": { "enabled": true },
   "d1_databases": [

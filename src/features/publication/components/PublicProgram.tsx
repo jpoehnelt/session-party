@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
+import { copyText } from "@/client/clipboard";
 import type { PublicAgendaTalk, PublishedAgenda } from "@/features/agenda/schema";
 import type {
   PublicSpeaker,
@@ -639,6 +640,7 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
   const [widget, setWidget] = useState<Exclude<PublicProgramSurface, "widgets">>("sessions");
   const [format, setFormat] = useState("styled-html");
   const [accent, setAccent] = useState("#635BFF");
+  const [copyStatus, setCopyStatus] = useState("");
   const origin = typeof window === "undefined" ? "https://sessionparty.com" : window.location.origin;
   const publicUrl = `${origin}/event/${agenda.eventSlug}/${widget}`;
   const embedUrl = widget === "speakers" || widget === "gallery"
@@ -682,7 +684,16 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
             readOnly
             value={generated}
           />
-          <a className="inline-flex border-2 border-line-strong bg-production-lime px-3 py-2 text-[10px] font-black uppercase tracking-[0.1em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5" href={publicUrl}>Preview live {widget} →</a>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              onClick={() => void copyText(generated).then(() => setCopyStatus("Copied to clipboard."), (error: unknown) => setCopyStatus(error instanceof Error ? error.message : "Could not copy."))}
+            >
+              Copy generated code
+            </Button>
+            <a className="inline-flex border-2 border-line-strong bg-production-lime px-3 py-2 text-[10px] font-black uppercase tracking-[0.1em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5" href={publicUrl}>Preview live {widget} →</a>
+            <span className="text-xs font-bold text-ink-secondary" role="status" aria-live="polite">{copyStatus}</span>
+          </div>
         </div>
       </Card>
     </section>
@@ -708,7 +719,7 @@ export function PublicProgram({
   }).format(agenda.publishedAt);
 
   return (
-    <main className="production-grid min-h-dvh bg-canvas text-ink">
+    <main id="main-content" tabIndex={-1} className="production-grid min-h-dvh bg-canvas text-ink">
       <header className="border-b-2 border-line-strong bg-ink text-on-accent">
         <div className="mx-auto max-w-7xl px-4 pt-5 sm:px-6 sm:pt-6 lg:px-8">
           <div className="flex flex-wrap items-center justify-between gap-5 pb-5">
@@ -730,6 +741,7 @@ export function PublicProgram({
               <Badge tone="success">Published program · R{String(agenda.revision).padStart(2, "0")}</Badge>
             </div>
           </div>
+          <p className="border-t-2 border-on-accent bg-production-sky px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.12em] text-ink sm:hidden">Swipe horizontally for more sections →</p>
           <nav className="-mx-4 flex overflow-x-auto border-t-2 border-on-accent bg-surface text-ink sm:-mx-6 lg:-mx-8" aria-label="Public event navigation">
             {SURFACES.map((item) => (
               <Link
@@ -746,7 +758,7 @@ export function PublicProgram({
           </nav>
         </div>
       </header>
-      <div className="mx-auto max-w-7xl px-4 py-9 sm:px-6 sm:py-12 lg:px-8 lg:py-14">
+      <div id="public-program-content" tabIndex={-1} className="mx-auto max-w-7xl px-4 py-9 sm:px-6 sm:py-12 lg:px-8 lg:py-14">
         {surface === "sessions" ? <SessionsSurface agenda={agenda} gallery={gallery} onSelect={setSelectedTalk} /> : null}
         {surface === "speakers" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="list" onSelect={setSelectedSpeaker} /> : null}
         {surface === "agenda" ? <AgendaSurface agenda={agenda} onSelect={setSelectedTalk} /> : null}

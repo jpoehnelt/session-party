@@ -8,6 +8,15 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
   Badge,
   Button,
   Card,
@@ -724,14 +733,25 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                   label="Authorize Session Party to send"
                   description="I reviewed the selected template, recipients, reply-to address, and delivery time."
                 />
-                <Button
-                  className="w-full"
-                  loading={busy === "enqueue"}
-                  disabled={!automatedDeliveryConfirmed || !selectedTemplate || selectedCount === 0 || (sendMode === "scheduled" && scheduledWallTime === "")}
-                  onClick={() => void enqueue()}
-                >
-                  {sendMode === "scheduled" ? "Schedule immutable deliveries" : "Queue immutable deliveries"}
-                </Button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button className="w-full" loading={busy === "enqueue"} disabled={!automatedDeliveryConfirmed || !selectedTemplate || selectedCount === 0 || (sendMode === "scheduled" && scheduledWallTime === "")}>
+                      {sendMode === "scheduled" ? "Schedule immutable deliveries" : "Queue immutable deliveries"}
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>{sendMode === "scheduled" ? "Schedule" : "Queue"} {selectedCount} deliveries?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This creates immutable, personalized snapshots for {selectedCount} selected {selectedCount === 1 ? "recipient" : "recipients"} using “{selectedTemplate?.name}”. {sendMode === "scheduled" ? `Dispatch is scheduled for ${scheduledWallTime} in ${event.timezone}.` : "Scheduler dispatch is requested immediately after the outbox commit."}
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Review recipients</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => void enqueue()}>{sendMode === "scheduled" ? "Schedule deliveries" : "Queue deliveries"}</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
                 <p className="text-xs leading-relaxed text-ink-faint">
                   Queueing commits immutable snapshots and outbox rows, then requests canonical Scheduler dispatch. Status remains deferred until worker evidence is recorded.
                 </p>

@@ -120,7 +120,7 @@ export function selectVisibleFallback(
 
 function LoadingWorkbench() {
   return (
-    <main className="production-grid min-h-screen space-y-4 bg-canvas p-3 sm:p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
+    <div className="production-grid min-h-screen space-y-4 bg-canvas p-3 sm:p-4 lg:p-6" aria-busy="true" aria-label="Loading review workbench">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Skeleton className="h-8 w-full max-w-72 motion-reduce:animate-none" />
         <Skeleton className="h-8 w-32 motion-reduce:animate-none sm:w-36" />
@@ -130,7 +130,7 @@ function LoadingWorkbench() {
         <Skeleton className="h-[38rem] motion-reduce:animate-none" />
       </div>
       <span className="sr-only">Loading submissions, rounds, and assignments.</span>
-    </main>
+    </div>
   );
 }
 
@@ -158,34 +158,34 @@ export function ReviewLoadFailure({
 }) {
   if (error.kind === "unauthenticated") {
     return (
-      <main className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
+      <div className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
         <EmptyState
           title="Sign in to review proposals"
           description="Sign in to continue to this event review workspace."
           action={<Button className="min-h-11" onClick={onSignIn}>Sign in</Button>}
         />
-      </main>
+      </div>
     );
   }
 
   if (error.kind === "event-not-found") {
     return (
-      <main className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
+      <div className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
         <EmptyState title="Event not found" description="This event may have moved or been removed." />
-      </main>
+      </div>
     );
   }
 
   if (error.kind === "review-not-found") {
     return (
-      <main className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
+      <div className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
         <EmptyState title="Review workspace unavailable" description="Review is not available for this event." />
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
+    <div className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
       <Card>
         <EmptyState
           title="Review queue could not load"
@@ -193,7 +193,7 @@ export function ReviewLoadFailure({
           action={<Button className="min-h-11" onClick={onRetry}>Try again</Button>}
         />
       </Card>
-    </main>
+    </div>
   );
 }
 
@@ -217,7 +217,8 @@ export default function ReviewWorkbenchRoute() {
     setResult(undefined);
     setDetailRequest(undefined);
     setIsDetailLoading(false);
-    void loadReviewWorkbench(eventSlug)
+    const selectedSubmissionId = new URLSearchParams(location.search).get("selectedSubmissionId") ?? undefined;
+    void loadReviewWorkbench(eventSlug, selectedSubmissionId)
       .then((loaded) => {
         if (active) setResult(loaded);
       })
@@ -225,7 +226,7 @@ export default function ReviewWorkbenchRoute() {
         if (active) setLoadError(errorFrom(error));
       });
     return () => { active = false; };
-  }, [eventSlug, initialRequestVersion]);
+  }, [eventSlug, initialRequestVersion, location.search]);
 
   useEffect(() => {
     if (!detailRequest || detailRequest.eventSlug !== eventSlug) return;
@@ -411,7 +412,7 @@ export function ReviewWorkbenchContent({
   };
 
   return (
-    <main
+    <div
       className="production-grid min-h-screen bg-canvas p-3 sm:p-4 lg:p-6"
       onKeyDown={(event) => {
         const target = event.target as HTMLElement;
@@ -555,6 +556,6 @@ export function ReviewWorkbenchContent({
           {selected ? <SubmissionReviewPane eventId={workbench.eventId} submission={selected} viewerRole={workbench.viewerRole} viewerUserId={workbench.viewerUserId} reviewers={workbench.reviewers} timezone={workbench.timezone} onMutationCommitted={onMutationCommitted} /> : <Card><EmptyState title={queue.length === 0 ? "No proposal detail in this round" : "Loading selected proposal"} description={queue.length === 0 ? "When a proposal enters this round, its abstract, rubric, assignments, and evidence will appear here." : "The authoritative proposal detail is loading."} /></Card>}
         </section>
       </div>
-    </main>
+    </div>
   );
 }

@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode, useEffect, useState } from "react";
+import { type ComponentType, type ReactNode, useEffect, useRef, useState } from "react";
 import {
   Link,
   NavLink,
@@ -212,15 +212,67 @@ function NotFound() {
   );
 }
 
+function RouteCoordinator({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  const previousPath = useRef(location.pathname);
+
+  useEffect(() => {
+    const isNavigation = previousPath.current !== location.pathname;
+    previousPath.current = location.pathname;
+    let settled = false;
+    const apply = () => {
+      const heading = document.querySelector<HTMLElement>("h1");
+      if (!heading) return false;
+      const main = document.querySelector<HTMLElement>("main");
+      if (main) {
+        main.id ||= "main-content";
+        main.tabIndex = -1;
+      }
+      const name = heading.textContent?.replace(/\s+/g, " ").trim();
+      if (location.pathname === "/") document.title = "Session Party — Your whole program, ready on cue.";
+      else if (name) document.title = `${name} — Session Party`;
+      const canonicalUrl = `${window.location.origin}${location.pathname}`;
+      for (const selector of ['meta[property="og:title"]', 'meta[name="twitter:title"]']) {
+        document.querySelector<HTMLMetaElement>(selector)?.setAttribute("content", document.title);
+      }
+      document.querySelector<HTMLMetaElement>('meta[property="og:url"]')?.setAttribute("content", canonicalUrl);
+      let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+      if (!canonical) {
+        canonical = document.createElement("link");
+        canonical.rel = "canonical";
+        document.head.append(canonical);
+      }
+      canonical.href = canonicalUrl;
+      if (isNavigation && !settled) {
+        heading.tabIndex = -1;
+        heading.focus({ preventScroll: false });
+        settled = true;
+      }
+      return true;
+    };
+    if (apply()) return;
+    const observer = new MutationObserver(() => {
+      if (apply()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [location.pathname]);
+
+  return <>
+    <a className="fixed left-3 top-3 z-[100] -translate-y-24 border-2 border-line-strong bg-production-lime px-4 py-3 font-black text-ink shadow-card transition-transform focus:translate-y-0" href="#main-content">Skip to main content</a>
+    {children}
+  </>;
+}
+
 function routeElement(Component: ComponentType, layout?: RouteModule["layout"]) {
   const page = <Component />;
-  return layout === "bare" ? page : <Layout>{page}</Layout>;
+  return <RouteCoordinator>{layout === "bare" ? page : <Layout>{page}</Layout>}</RouteCoordinator>;
 }
 
 export const router = createBrowserRouter([
   {
     path: "/login",
-    element: <LoginPage />,
+    element: <RouteCoordinator><LoginPage /></RouteCoordinator>,
   },
   ...discoveredClientRouteModules.map(({ path, layout, default: Component }) => ({
     path,
