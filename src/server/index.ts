@@ -254,7 +254,7 @@ app.post("/__local/smoke", async (c) => {
   const object = await c.env.FILES.get(objectKey);
   await c.env.FILES.delete(objectKey);
 
-  const schedulerId = c.env.SCHEDULER.idFromName("local-smoke");
+  const schedulerId = c.env.SCHEDULER.idFromName("mail");
   const scheduler = await c.env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
     method: "POST",
     headers: { "x-session-party-internal": sessionSecret(c.env) },

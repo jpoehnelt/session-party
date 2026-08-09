@@ -15,6 +15,13 @@
       "when": 1786216452833,
       "tag": "0001_baseline_green_spine",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786255566984,
+      "tag": "0002_empty_hulk",
+      "breakpoints": true
     }
   ]
 }
