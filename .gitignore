@@ -9,6 +9,8 @@ screenshots-pages/
 .regconfig.pages.json
 playwright-report/
 test-results/
+.rubric/
+vitest-rubric.json
 .wrangler/
 .dev.vars
 *.tsbuildinfo
