@@ -51,7 +51,9 @@ function parseArgs(args: readonly string[]): { command: string; output: string; 
   let minScore: number | null = null;
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
-    if (arg === "--output") {
+    if (arg === "--") {
+      continue;
+    } else if (arg === "--output") {
       output = rest[index + 1] ?? "";
       index += 1;
       if (!output) throw new Error("--output requires a directory");

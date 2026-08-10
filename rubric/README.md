@@ -12,7 +12,7 @@ data as authoritative and makes that drift visible.
 ```bash
 pnpm rubric:validate
 pnpm rubric:run
-pnpm rubric:run -- --min-score 70
+pnpm rubric:run --min-score 70
 pnpm rubric:gate
 pnpm rubric:baseline
 ```

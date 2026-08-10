@@ -100,7 +100,7 @@ jobs:
       - name: Run non-decreasing rubric gate
         env:
           BASE_SCORE: ${{ steps.base.outputs.score }}
-        run: pnpm rubric:run -- --output .rubric/head --min-score "${BASE_SCORE}"
+        run: pnpm rubric:run --output .rubric/head --min-score "${BASE_SCORE}"
       - name: Verify persisted rubric grade
         shell: bash
         env:
