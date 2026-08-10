@@ -4,15 +4,28 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildEnqueueRequest,
   buildMailtoDraft,
+  campaignConfirmationIdentity,
+  createCampaignEnqueueCoordinator,
   ScheduleControl,
 } from "./comms";
-
 const baseRequest = {
   templateId: "template-1",
   recipientSpeakerIds: ["speaker-1"],
   replyToEmail: "team@example.com",
   idempotencyKey: "comms-enqueue-schedule-001",
 } as const;
+
+const campaignIdentity = (recipientSpeakerIds: readonly string[] = ["speaker-1"]) =>
+  campaignConfirmationIdentity({
+    eventId: "event-1",
+    templateId: "template-1",
+    templateVersion: 3,
+    recipientSpeakerIds,
+    replyToEmail: "team@example.com",
+    sendMode: "now",
+    scheduledWallTime: "",
+    timezone: "America/Los_Angeles",
+  });
 
 describe("communications scheduling control", () => {
   it("builds a human-controlled mail draft without dispatching it", () => {
@@ -77,5 +90,55 @@ describe("communications scheduling control", () => {
       "America/Los_Angeles",
       Date.parse("2026-03-08T08:00:00.000Z"),
     )).toThrow("does not exist in America/Los_Angeles because of a timezone transition.");
+  });
+
+  it("single-flights double activation and reuses the confirmed campaign key after an ambiguous failure", async () => {
+    const createKey = vi.fn()
+      .mockReturnValueOnce("enqueue-key-1")
+      .mockReturnValueOnce("enqueue-key-2");
+    const coordinator = createCampaignEnqueueCoordinator(createKey);
+    const request = buildEnqueueRequest({
+      templateId: "template-1",
+      recipientSpeakerIds: ["speaker-1"],
+      replyToEmail: "team@example.com",
+    }, "now", "", "America/Los_Angeles");
+    let rejectFirst!: (error: Error) => void;
+    const ambiguous = new Promise<{ deliveries: readonly unknown[] }>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const submit = vi.fn()
+      .mockReturnValueOnce(ambiguous)
+      .mockResolvedValue({ deliveries: [] });
+
+    const firstActivation = coordinator.run(campaignIdentity(), request, submit);
+    const doubleActivation = coordinator.run(campaignIdentity(), request, submit);
+
+    expect(doubleActivation).toBe(firstActivation);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({ idempotencyKey: "enqueue-key-1" });
+
+    rejectFirst(new Error("Response was lost after commit"));
+    await expect(firstActivation).rejects.toThrow("Response was lost after commit");
+
+    await coordinator.run(campaignIdentity(), request, submit);
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[1]?.[0]).toEqual(submit.mock.calls[0]?.[0]);
+    expect(createKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats recipient order as one confirmation and campaign changes as new confirmation identities", () => {
+    const original = campaignIdentity(["speaker-2", "speaker-1"]);
+
+    expect(campaignIdentity(["speaker-1", "speaker-2"])).toBe(original);
+    expect(campaignConfirmationIdentity({
+      eventId: "event-1",
+      templateId: "template-1",
+      templateVersion: 3,
+      recipientSpeakerIds: ["speaker-1", "speaker-2"],
+      replyToEmail: "other@example.com",
+      sendMode: "now",
+      scheduledWallTime: "",
+      timezone: "America/Los_Angeles",
+    })).not.toBe(original);
   });
 });

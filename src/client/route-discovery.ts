@@ -13,6 +13,7 @@ const routeModules = import.meta.glob(
     "../features/*/routes/*.tsx",
     "!../features/*/routes/*.test.tsx",
     "!../features/*/routes/*.test.ts",
+    "!../features/*/routes/*.browser.tsx",
   ],
   {
     eager: true,

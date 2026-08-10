@@ -18,35 +18,82 @@ export interface ApiFetchOptions<T> {
   signal?: AbortSignal;
 }
 
-const pendingGetRequests = new Map<string, Promise<unknown>>();
+interface PendingGetRequest {
+  readonly controller: AbortController;
+  readonly promise: Promise<unknown>;
+}
+
+let authGeneration = 0;
+const pendingGetRequests = new Map<string, PendingGetRequest>();
+let authenticatedPrincipal: string | null | undefined;
+
+export function invalidateAuthGeneration(): void {
+  authGeneration += 1;
+  const requests = [...pendingGetRequests.values()];
+  pendingGetRequests.clear();
+  for (const request of requests) request.controller.abort();
+}
+
+export function synchronizeAuthenticatedPrincipal(principal: string | null): void {
+  if (authenticatedPrincipal === undefined) {
+    authenticatedPrincipal = principal;
+    return;
+  }
+  if (authenticatedPrincipal === principal) return;
+  authenticatedPrincipal = principal;
+  invalidateAuthGeneration();
+}
 
 export async function apiFetch<T>(
   path: string,
   { method = "GET", body, schema, signal }: ApiFetchOptions<T> = {},
 ): Promise<T> {
+  const requestGeneration = authGeneration;
   const normalizedMethod = method.toUpperCase();
   const requestKey =
     normalizedMethod === "GET" && signal === undefined
-      ? `${path}\n${body === undefined ? "" : JSON.stringify(body)}`
+      ? `${requestGeneration}\n${path}\n${body === undefined ? "" : JSON.stringify(body)}`
       : undefined;
-  let request = requestKey ? pendingGetRequests.get(requestKey) : undefined;
+  let request: Promise<unknown>;
 
-  if (!request) {
-    request = fetchPayload(path, method, body, signal);
-    if (requestKey) {
-      pendingGetRequests.set(requestKey, request);
-      void request.then(
-        () => pendingGetRequests.delete(requestKey),
-        () => pendingGetRequests.delete(requestKey),
+  if (!requestKey) {
+    request = fetchPayload(path, method, body, signal, requestGeneration);
+  } else {
+    let pending = pendingGetRequests.get(requestKey);
+    if (!pending) {
+      const controller = new AbortController();
+      pending = {
+        controller,
+        promise: fetchPayload(path, method, body, controller.signal, requestGeneration),
+      };
+      pendingGetRequests.set(requestKey, pending);
+      const current = pending;
+      void current.promise.then(
+        () => {
+          if (pendingGetRequests.get(requestKey) === current) pendingGetRequests.delete(requestKey);
+        },
+        () => {
+          if (pendingGetRequests.get(requestKey) === current) pendingGetRequests.delete(requestKey);
+        },
       );
     }
+    request = pending.promise;
   }
 
   const payload = await request;
+  if (normalizedMethod === "GET" && requestGeneration !== authGeneration) {
+    throw new DOMException("The authenticated principal changed during the request.", "AbortError");
+  }
   return schema ? Schema.decodeUnknownSync(schema)(payload) : (payload as T);
 }
 
-async function fetchPayload(path: string, method: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
+async function fetchPayload(
+  path: string,
+  method: string,
+  body: unknown,
+  signal: AbortSignal | undefined,
+  requestGeneration: number,
+): Promise<unknown> {
   const response = await fetch(path, {
     method,
     signal,
@@ -56,7 +103,11 @@ async function fetchPayload(path: string, method: string, body: unknown, signal?
   });
 
   if (!response.ok) {
-    throw new ApiError(response.status, await responseMessage(response));
+    const message = await responseMessage(response);
+    if (response.status === 401 && requestGeneration === authGeneration) {
+      synchronizeAuthenticatedPrincipal(null);
+    }
+    throw new ApiError(response.status, message);
   }
 
   return response.status === 204 ? undefined : response.json();

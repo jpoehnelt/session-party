@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server.edge";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewWorkbench } from "../schema";
+import { decisionKeysForSubmission } from "../components/SubmissionReviewPane";
 import {
   errorFrom,
   decideQueueInteraction,
@@ -80,6 +81,25 @@ const workbench: ReviewWorkbench = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("review workbench route", () => {
+  it("keeps decision keys stable for retries and resets every key when the proposal changes", () => {
+    const proposalA = decisionKeysForSubmission("submission-a");
+    const proposalARetry = decisionKeysForSubmission("submission-a", proposalA);
+    const proposalB = decisionKeysForSubmission("submission-b", proposalARetry);
+    const proposalBAmbiguousRetry = decisionKeysForSubmission("submission-b", proposalB);
+    const proposalAAgain = decisionKeysForSubmission("submission-a", proposalBAmbiguousRetry);
+
+    expect(proposalARetry).toBe(proposalA);
+    expect(proposalBAmbiguousRetry).toBe(proposalB);
+    expect({
+      acceptance: proposalB.acceptance === proposalA.acceptance,
+      rejection: proposalB.rejection === proposalA.rejection,
+      revocation: proposalB.revocation === proposalA.revocation,
+    }).toEqual({ acceptance: false, rejection: false, revocation: false });
+    expect(proposalAAgain.acceptance).not.toBe(proposalA.acceptance);
+    expect(proposalAAgain.rejection).not.toBe(proposalA.rejection);
+    expect(proposalAAgain.revocation).not.toBe(proposalA.revocation);
+  });
+
   it("exports the review navigation route", () => {
     expect(path).toBe("/e/:eventSlug/review");
   });
