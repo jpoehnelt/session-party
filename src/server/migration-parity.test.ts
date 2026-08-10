@@ -1,10 +1,20 @@
+import { getArchiveOperation } from "@/features/exports/operations";
+import { InstitutionalArchive } from "@/features/exports/schema";
+import { getFormOperation } from "@/features/forms/operations";
+import { FormDetail } from "@/features/forms/schema";
+import { getPublicSubmissionFormOperation } from "@/features/submit/operations";
+import { PublicSubmissionForm } from "@/features/submit/schema";
+import type { Principal } from "contracts/principal";
 import {
   applyD1Migrations,
   env,
   SELF,
   type D1Migration,
 } from "cloudflare:test";
+import { Schema } from "effect";
+import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { runRestOperation, runTransportOperation, type AppHono } from "./adapt";
 import { apiKeyUserFromRequest, hashBearerMaterial, userFromRequest } from "./auth";
 
 type TestEnv = Cloudflare.Env & {
@@ -22,6 +32,13 @@ const testMigrations = (): readonly MigrationShape[] => {
     throw new Error("TEST_MIGRATIONS test binding is unavailable");
   }
   return (env as TestEnv).TEST_MIGRATIONS as readonly MigrationShape[];
+};
+
+const repairMigration = (migrations: readonly MigrationShape[]): MigrationShape => {
+  const migration = migrations.find(({ name }) =>
+    name.startsWith("0008_repair_legacy_form_version_ids"));
+  if (!migration) throw new Error("Legacy form-version ID repair migration is unavailable");
+  return migration;
 };
 
 const safeRows = async (db: D1Database, query: string): Promise<unknown> => {
@@ -155,7 +172,7 @@ const seedLegacyRows = async (db: D1Database): Promise<void> => {
     "INSERT INTO events (id, slug, name, timezone, created_at, updated_at) VALUES ('legacy-event', 'legacy-event', 'Legacy Event', 'UTC', 1700000000000, 1700000000000)",
     "INSERT INTO event_members (id, event_id, user_id, role, created_at, updated_at) VALUES ('legacy-member', 'legacy-event', 'legacy-user', 'owner', 1700000000000, 1700000000000)",
     "INSERT INTO forms (id, event_id, kind, name, status, created_at, updated_at) VALUES ('legacy-form', 'legacy-event', 'cfp', 'Legacy CFP', 'open', 1700000000000, 1700000000000)",
-    "INSERT INTO form_fields (id, form_id, `order`, type, label, required, created_at, updated_at) VALUES ('legacy-field', 'legacy-form', 0, 'textarea', 'Abstract', 1, 1700000000000, 1700000000000)",
+    "INSERT INTO form_fields (id, form_id, `order`, type, label, required, created_at, updated_at) VALUES ('legacy-field', 'legacy-form', 1, 'textarea', 'Abstract', 1, 1700000000000, 1700000000000)",
     "INSERT INTO submissions (id, event_id, form_id, title, status, submitted_at, created_at, updated_at) VALUES ('legacy-submission', 'legacy-event', 'legacy-form', 'Legacy Talk', 'accepted', 1700000000000, 1700000000000, 1700000000000)",
     "INSERT INTO submission_answers (id, submission_id, field_id, value) VALUES ('legacy-answer', 'legacy-submission', 'legacy-field', '\"Legacy abstract\"')",
     "INSERT INTO speakers (id, event_id, user_id, display_name, visible, created_at, updated_at) VALUES ('legacy-speaker', 'legacy-event', 'legacy-user', 'Legacy User', 1, 1700000000000, 1700000000000)",
@@ -170,9 +187,137 @@ const seedLegacyRows = async (db: D1Database): Promise<void> => {
   await db.batch(rows.map((query) => db.prepare(query)));
 };
 
+const legacyOwner: Principal = {
+  kind: "browser-session",
+  userId: "legacy-user",
+  email: "legacy@example.com",
+  name: "Legacy User",
+  sessionId: "migration-parity-legacy-owner",
+  expiresAt: 1_800_000_000_000,
+};
+
+const upgradedEnv = (db: D1Database): Env =>
+  Object.assign(Object.create(env), { DB: db, LOCAL_MODE: "1" }) as Env;
+
+const assertCanonicalFormVersionIds = async (db: D1Database): Promise<void> => {
+  const result = await db.prepare(`
+    SELECT count(*) AS invalid_count
+    FROM (
+      SELECT id AS value FROM form_versions
+      UNION ALL SELECT form_version_id FROM form_version_fields
+      UNION ALL SELECT form_version_id FROM submissions
+      UNION ALL SELECT form_version_id FROM submission_answers
+    )
+    WHERE length(value) = 0
+      OR length(value) > 128
+      OR value GLOB '*[^A-Za-z0-9_-]*'
+  `).first();
+  expect(result).toEqual({ invalid_count: 0 });
+};
+
+const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promise<void> => {
+  const historical = await db.prepare(`
+    SELECT
+      fv.id AS form_version_id,
+      fvf.form_version_id AS field_form_version_id,
+      s.id AS submission_id,
+      s.form_version_id AS submission_form_version_id,
+      a.id AS answer_id,
+      a.form_version_id AS answer_form_version_id,
+      a.form_version_field_id,
+      a.value AS answer_value
+    FROM form_versions fv
+    JOIN form_version_fields fvf
+      ON fvf.event_id = fv.event_id
+      AND fvf.form_version_id = fv.id
+    JOIN submissions s
+      ON s.event_id = fv.event_id
+      AND s.form_id = fv.form_id
+      AND s.form_version_id = fv.id
+    JOIN submission_answers a
+      ON a.event_id = s.event_id
+      AND a.submission_id = s.id
+      AND a.form_version_id = s.form_version_id
+      AND a.form_version_field_id = fvf.id
+    WHERE fv.event_id = 'legacy-event'
+      AND fv.form_id = 'legacy-form'
+  `).first();
+  expect(historical).toEqual({
+    form_version_id: "legacy-v1_legacy-form",
+    field_form_version_id: "legacy-v1_legacy-form",
+    submission_id: "legacy-submission",
+    submission_form_version_id: "legacy-v1_legacy-form",
+    answer_id: "legacy-answer",
+    answer_form_version_id: "legacy-v1_legacy-form",
+    form_version_field_id: "legacy-field",
+    answer_value: "\"Legacy abstract\"",
+  });
+  await assertCanonicalFormVersionIds(db);
+
+  const runtimeEnv = upgradedEnv(db);
+  const formWire = await runTransportOperation(
+    runtimeEnv,
+    legacyOwner,
+    getFormOperation,
+    { eventId: "legacy-event", formId: "legacy-form" },
+  );
+  expect(Schema.decodeUnknownSync(FormDetail)(formWire)).toMatchObject({
+    id: "legacy-form",
+    publishedVersion: {
+      id: "legacy-v1_legacy-form",
+      versionNumber: 1,
+      fields: [{ id: "legacy-field", sourceFieldId: "legacy-field" }],
+    },
+  });
+
+  const app = new Hono<AppHono>();
+  const rest = getPublicSubmissionFormOperation.rest;
+  app.get(`/api/v1${rest.path}`, (context) =>
+    runRestOperation(context, null, getPublicSubmissionFormOperation, rest.input));
+  const publicResponse = await app.request(
+    "/api/v1/public/events/legacy-event/forms/legacy-form",
+    {},
+    runtimeEnv,
+  );
+  expect(publicResponse.status, await publicResponse.clone().text()).toBe(200);
+  expect(Schema.decodeUnknownSync(PublicSubmissionForm)(await publicResponse.json())).toMatchObject({
+    event: { slug: "legacy-event" },
+    form: {
+      id: "legacy-form",
+      versionId: "legacy-v1_legacy-form",
+      versionNumber: 1,
+      availability: "open",
+      fields: [{ id: "legacy-field" }],
+    },
+  });
+
+  const archiveWire = await runTransportOperation(
+    runtimeEnv,
+    legacyOwner,
+    getArchiveOperation,
+    { eventId: "legacy-event" },
+  );
+  expect(Schema.decodeUnknownSync(InstitutionalArchive)(archiveWire)).toMatchObject({
+    submissions: [{
+      id: "legacy-submission",
+      formId: "legacy-form",
+      formVersionId: "legacy-v1_legacy-form",
+      answers: [{ id: "legacy-answer", fieldId: "legacy-field" }],
+    }],
+  });
+};
+
 describe("baseline migration parity", () => {
-  it("applies every migration to a blank database and serves authenticated events", async () => {
-    await applyOneByOne(env.DB, testMigrations());
+  it("treats the repair as an idempotent no-op without legacy rows", async () => {
+    const migrations = testMigrations();
+    expect(migrations).toHaveLength(9);
+    const repair = repairMigration(migrations);
+    await applyOneByOne(env.DB, migrations);
+    await assertCanonicalFormVersionIds(env.DB);
+    await applyD1Migrations(env.DB, [repair]);
+    expect(await env.DB.prepare(
+      "SELECT count(*) AS count FROM d1_migrations WHERE name = ?",
+    ).bind(repair.name).first()).toEqual({ count: 1 });
     await assertDatabaseIntegrity(env.DB);
     await proveAuthenticatedEventRoundTrip();
   });
@@ -180,10 +325,50 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(8);
+    expect(migrations).toHaveLength(9);
+    const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
-    await applyOneByOne(db, migrations.slice(1));
+    await applyOneByOne(db, migrations.slice(1, 2));
+    expect(await db.prepare(`
+      SELECT
+        (SELECT id FROM form_versions WHERE form_id = 'legacy-form') AS version_id,
+        (SELECT form_version_id FROM form_version_fields WHERE id = 'legacy-field') AS field_version_id,
+        (SELECT form_version_id FROM submissions WHERE id = 'legacy-submission') AS submission_version_id,
+        (SELECT form_version_id FROM submission_answers WHERE id = 'legacy-answer') AS answer_version_id
+    `).first()).toEqual({
+      version_id: "legacy-v1:legacy-form",
+      field_version_id: "legacy-v1:legacy-form",
+      submission_version_id: "legacy-v1:legacy-form",
+      answer_version_id: "legacy-v1:legacy-form",
+    });
+
+    await db.prepare(`
+      INSERT INTO form_versions
+        (id, event_id, form_id, version_number, name, published_at, created_at)
+      VALUES
+        ('legacy-v1_legacy-form', 'legacy-event', 'legacy-form', 2, 'Occupied target',
+         1700000000000, 1700000000000)
+    `).run();
+    await expect(applyD1Migrations(db, [repair])).rejects.toThrow(
+      /repair_legacy_form_version_ids_collision/,
+    );
+    expect(await db.prepare(`
+      SELECT
+        (SELECT count(*) FROM form_versions WHERE id = 'legacy-v1:legacy-form') AS source_count,
+        (SELECT count(*) FROM form_versions WHERE id = 'legacy-v1_legacy-form') AS target_count,
+        (SELECT form_version_id FROM submission_answers WHERE id = 'legacy-answer') AS answer_version_id,
+        (SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '__repair_legacy_form_version_ids_preflight') AS preflight_count
+    `).first()).toEqual({
+      source_count: 1,
+      target_count: 1,
+      answer_version_id: "legacy-v1:legacy-form",
+      preflight_count: 0,
+    });
+    expect((await db.prepare("PRAGMA foreign_key_check").all()).results).toEqual([]);
+    await db.prepare("DELETE FROM form_versions WHERE id = 'legacy-v1_legacy-form'").run();
+
+    await applyOneByOne(db, migrations.slice(2));
 
     await assertDatabaseIntegrity(db);
     const event = await db.prepare(
@@ -196,16 +381,10 @@ describe("baseline migration parity", () => {
       updated_at: 1_700_000_000_000,
     });
 
-    const answer = await db.prepare(
-      "SELECT id, event_id, form_version_id, form_version_field_id, value FROM submission_answers WHERE id = 'legacy-answer'",
-    ).first();
-    expect(answer).toMatchObject({
-      id: "legacy-answer",
-      event_id: "legacy-event",
-      form_version_id: "legacy-v1:legacy-form",
-      form_version_field_id: "legacy-field",
-      value: "\"Legacy abstract\"",
-    });
+    await assertHistoricalFormAndSubmissionRoundTrip(db);
+    await db.batch(repair.queries.map((query) => db.prepare(query)));
+    await assertDatabaseIntegrity(db);
+    await assertHistoricalFormAndSubmissionRoundTrip(db);
     const semantics = await db.prepare(
       "SELECT (SELECT semantic_key FROM form_fields WHERE id = 'legacy-field') AS draft_semantic_key, (SELECT semantic_key FROM form_version_fields WHERE id = 'legacy-field') AS version_semantic_key",
     ).first();
@@ -284,18 +463,18 @@ describe("baseline migration parity", () => {
       "SELECT (SELECT consumed_at IS NOT NULL FROM auth_tokens WHERE id = 'legacy-token') AS token_invalidated, (SELECT count(*) FROM api_keys WHERE id = 'legacy-api-key') AS legacy_api_key_count",
     ).first();
     expect(credentials).toEqual({ token_invalidated: 1, legacy_api_key_count: 0 });
-    const upgradedEnv = Object.assign(Object.create(env), { DB: db }) as Env;
+    const legacyAuthEnv = upgradedEnv(db);
     expect(await userFromRequest(
       new Request("https://example.test", {
         headers: { Cookie: "sp_session=legacy-token-material" },
       }),
-      upgradedEnv,
+      legacyAuthEnv,
     )).toBeNull();
     expect(await apiKeyUserFromRequest(
       new Request("https://example.test", {
         headers: { Authorization: "Bearer raw-legacy-key-material" },
       }),
-      upgradedEnv,
+      legacyAuthEnv,
     )).toBeNull();
 
     await expect(db.prepare(
@@ -303,10 +482,11 @@ describe("baseline migration parity", () => {
     ).bind("f".repeat(64)).run()).rejects.toThrow(/known scopes/);
   });
 
+
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(8);
+    expect(migrations).toHaveLength(9);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
