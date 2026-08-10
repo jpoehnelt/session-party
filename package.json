@@ -25,7 +25,7 @@
     "check:types": "tsc -b",
     "check": "pnpm check:registry && pnpm check:types && pnpm rubric:validate",
     "rubric:validate": "tsx scripts/rubric.ts validate",
-    "rubric:test": "tsx --test scripts/rubric/*.test.ts",
+    "rubric:test": "tsx --test scripts/rubric/*.node-test.ts",
     "rubric:run": "tsx scripts/rubric.ts run",
     "rubric:gate": "tsx scripts/rubric.ts gate",
     "rubric:baseline": "tsx scripts/rubric.ts baseline",
