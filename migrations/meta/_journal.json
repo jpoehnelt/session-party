@@ -57,6 +57,13 @@
       "when": 1786309514847,
       "tag": "0007_speaker_contact_email",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786343679042,
+      "tag": "0008_repair_legacy_form_version_ids",
+      "breakpoints": true
     }
   ]
 }
