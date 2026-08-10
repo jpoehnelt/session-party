@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "rubricRevision": "2b0f7956ab0c6f4868d41356e495b3a225badaab",
+  "overallScorePct": 65.1,
+  "overallEvidenceCoveragePct": 52.3,
+  "overallImplementationGapPct": 46.7,
+  "areas": {
+    "call-for-papers": 90.5,
+    "abstract-management": 32.1,
+    "speaker-management": 75,
+    "content-management": 46.8,
+    "ai-agenda": 86.1,
+    "public-widgets": 68.6
+  }
+}

@@ -1,0 +1,874 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://forge.smol.ai/swyx/killmysaas-evals",
+    "revision": "2b0f7956ab0c6f4868d41356e495b3a225badaab"
+  },
+  "areas": [
+    {
+      "area": "call-for-papers",
+      "title": "Call for Papers",
+      "prefix": "CFP",
+      "areaWeight": 20,
+      "optional": false,
+      "items": [
+        {
+          "id": "CFP-01",
+          "criterion": "Organizer can build a custom submission form — adding fields of at least 3 types (short text, long text, dropdown) with required/optional flags — and the changes render on the public form with required-field validation enforced",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "The added fields ('Key takeaway' required text, 'Audience level' dropdown with 3 options) appear on the public form with correct types and options, and attempting to submit with a required field empty is blocked with a visible validation error"
+        },
+        {
+          "id": "CFP-02",
+          "criterion": "Submission form supports conditional logic: a field configured to show only for a given session format (or track) appears and disappears based on the submitter's selection",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "A field configured to depend on the session format appears for the workshop-style format and disappears for the talk-style format — visibility follows the controlling answer in both directions. The app's own format vocabulary counts (e.g. 'Workshop' / 'Break Out'); the fixture's duration-labelled names are illustrative, not required"
+        },
+        {
+          "id": "CFP-03",
+          "criterion": "A public CFP portal is reachable without any login and shows event branding/name, the submission deadline, and the configured tracks and formats as selectable options",
+          "weight": 3,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "The portal URL loads in a logged-out context showing the event name, a visible deadline/close date, and a form (or entry point) whose track and format options match the fixture configuration"
+        },
+        {
+          "id": "CFP-04",
+          "criterion": "The portal enforces the configured submission window: once the close date is in the past, the public portal blocks new submissions with a closed state",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "After the organizer sets the close date to a past date, the logged-out portal shows a closed/'submissions closed' state with no way to start or submit a new proposal"
+        },
+        {
+          "id": "CFP-05",
+          "criterion": "A speaker can create a submitter account from the portal, complete and submit a proposal, see an on-screen confirmation, and find the submission listed with a status in their own dashboard",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Account creation succeeds, the 'Taming 40-Minute CI' fixture proposal submits, a confirmation state is shown, and the submitter dashboard lists the proposal with a status label (Submitted / Under Review / Pending or equivalent)"
+        },
+        {
+          "id": "CFP-06",
+          "criterion": "Submitted data round-trips to the organizer: the submission appears in the organizer's list with title, abstract, track, format, and custom-field values intact",
+          "weight": 3,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "The organizer's submissions list shows both fixture proposals, and the detail view of 'Taming 40-Minute CI' shows the same title, track 'Platform & Infra', format, audience level, and abstract text the speaker entered, with no lost or mangled fields"
+        },
+        {
+          "id": "CFP-07",
+          "criterion": "The public form supports saving an in-progress submission as a draft (with as little as a title) and resuming it on return",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "With only the title entered, a save-as-draft action succeeds, some draft indicator is shown, and on returning to the form the draft is offered for resume or the saved data is pre-filled"
+        },
+        {
+          "id": "CFP-08",
+          "criterion": "Submitting a proposal triggers an automated confirmation email to the submitter referencing the submission",
+          "weight": 1,
+          "type": "side-effect",
+          "testability": "manual",
+          "passCriteria": "A confirmation email arrives at the submitter's address within a few minutes of submitting, referencing the event and the submitted title; if the clone exposes an in-app email log/outbox, a logged message with correct recipient and title also passes",
+          "manualInstructions": "Submit a proposal using an inbox you can inspect (e.g. re-run the CFP-S2 submission with a real mailbox address, or use the clone's email log/outbox page if it has one). Within a few minutes, verify an email arrived that names the event and the submitted talk title. Capture a screenshot of the message showing recipient, subject, and title. Also note whether the CFP-S2 confirmation screen claimed an email was sent."
+        },
+        {
+          "id": "CFP-09",
+          "criterion": "A submitter can edit an existing submission while the CFP is open, and the edited content is what the organizer subsequently sees (inferred norm from Sessionize/EasyChair, confirmed by SessionBoard participant docs)",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "The appended abstract sentence ('Updated: now includes 2026 benchmark data.') persists across reload in the speaker's view and appears verbatim in the organizer's view of the same submission"
+        },
+        {
+          "id": "CFP-10",
+          "criterion": "Organizer can provision a reviewer (create/invite with usable credentials) and the reviewer role is separated from admin: signed in as the reviewer, a reviewer-facing dashboard is shown with no organizer/admin navigation or capability exposed. Exact assigned-queue scoping ('the queue contains exactly the assigned set, nothing else') is deliberately deferred to abstract-management's ABS-05 and not scored here.",
+          "weight": 2,
+          "type": "scoping",
+          "testability": "auto",
+          "passCriteria": "Sam Whitfield is created/invited with credentials the agent can use, signs in successfully, and lands on a reviewer-facing dashboard that exposes no admin navigation or organizer capability. Whether his queue contains exactly the assigned submissions is graded once, by ABS-05 — do not double-count it here."
+        },
+        {
+          "id": "CFP-11",
+          "criterion": "A reviewer can record a review on an assigned submission (a rating plus a text comment) and the recorded review is visible to the organizer, with completion state updating on the reviewer dashboard. Scorecard field-type depth (numeric/dropdown/free-text criteria editors) is graded by abstract-management's ABS-03, not here.",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "The rating of 4 and the fixture comment are accepted and persist; the reviewer dashboard marks the item reviewed/completed; the organizer's view of the submission shows the same rating and comment. No scorecard field-type variety is required here (see ABS-03)."
+        },
+        {
+          "id": "CFP-12",
+          "criterion": "Organizer can record accept and reject decisions on submissions, and the admin list reflects the distinct decision statuses",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "'Taming 40-Minute CI' is marked Accepted and 'Your AI Pair Programmer Is Lying to You' is marked Rejected; both statuses persist and are shown distinctly in the organizer's submissions list"
+        },
+        {
+          "id": "CFP-13",
+          "criterion": "Decision statuses propagate to the submitter: the speaker's own dashboard reflects Accepted/Rejected for the corresponding proposals",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "Signed in as Priya Raman after decisions were recorded, her dashboard shows the CI talk as Accepted and the AI talk as Rejected (or unambiguous equivalents of those statuses)"
+        },
+        {
+          "id": "CFP-14",
+          "criterion": "The platform can send (or queue) acceptance and rejection notification emails to decided submitters, with the UI confirming dispatch",
+          "weight": 2,
+          "type": "side-effect",
+          "testability": "auto-partial",
+          "passCriteria": "A notify/send-decisions action exists, accepts or provides accept/reject templates (merge-field support like {speaker_name}/{talk_title} is a plus, inferred), and after triggering it the UI reports the messages as sent/queued for the correct recipient sets; NOT auto-verified: actual delivery and body personalization",
+          "manualInstructions": "After decisions are recorded, trigger the decision notifications with submitter addresses that use a real, inspectable inbox. Verify one acceptance email and one rejection email arrive, each naming the correct talk title (and speaker name if templates support merge fields). Screenshot both messages."
+        },
+        {
+          "id": "CFP-15",
+          "criterion": "An accepted submission becomes available as a session in the sessions/agenda area with its metadata (title, speaker, track) intact, without re-entering the data",
+          "weight": 2,
+          "type": "handoff",
+          "testability": "auto",
+          "passCriteria": "After acceptance (plus an explicit convert/move action only if the UI requires one), the sessions/agenda area contains a session titled 'Taming 40-Minute CI: Incremental Builds at Monorepo Scale' with speaker Priya Raman and track 'Platform & Infra' carried over with no manual re-typing of those fields"
+        },
+        {
+          "id": "CFP-16",
+          "criterion": "Submission editing locks after the CFP close date: the speaker can no longer modify a submission once the call is closed",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "With the close date in the past, the speaker's submission opens read-only, hides its edit affordance, or shows an editing-closed message — and no edit can be saved"
+        },
+        {
+          "id": "CFP-17",
+          "criterion": "The app supports more than one event: an organizer can create a second event and both events coexist, each reachable via an events list or event switcher",
+          "weight": 2,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "A second event ('Forward Summit 2028') is created and both events appear together in an events list or switcher. A single-event app with no event-creation or switching UI anywhere fails this item — an agent observation naming the places checked is sufficient evidence of absence"
+        },
+        {
+          "id": "CFP-18",
+          "criterion": "Event data is scoped per event: submissions, sessions and speakers belonging to one event do not appear inside another event",
+          "weight": 2,
+          "type": "scoping",
+          "testability": "auto",
+          "passCriteria": "The second event's submissions/abstracts area is empty (or contains only its own records) rather than showing the first event's submissions. Cross-event leakage of records is a fail",
+          "manualInstructions": "Only if the agent could not create a second event but the app does support multiple events: create two events by hand, add a submission to one, and confirm it is not visible from the other."
+        }
+      ]
+    },
+    {
+      "area": "abstract-management",
+      "title": "Abstract Management (Review Depth & Disposition)",
+      "prefix": "ABS",
+      "areaWeight": 20,
+      "optional": false,
+      "items": [
+        {
+          "id": "ABS-01",
+          "criterion": "Organizer can configure an evaluation plan with two or more independent review rounds, each with its own name, open/close dates, and its own scorecard, and the configuration persists.",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "After saving and reloading, both rounds ('Initial Review' 2026-08-01..2026-10-15 and 'Final Review' 2026-10-16..2026-11-30) are listed with visibly distinct names, date ranges, and scorecards; a single global review setup with no round concept fails."
+        },
+        {
+          "id": "ABS-02",
+          "criterion": "Review rounds can each have their own reviewer pool, so a reviewer scoped to round 1 is not automatically a reviewer for round 2.",
+          "weight": 2,
+          "type": "scoping",
+          "testability": "auto",
+          "passCriteria": "The UI attaches reviewers (or a pool/committee) to a specific round rather than only globally, and Sam Whitfield could be added to the Round 1 pool while Round 2 shows a different (possibly empty) pool."
+        },
+        {
+          "id": "ABS-03",
+          "criterion": "The scorecard editor supports numeric rating, dropdown, and free-text criteria, and all three field types render on the reviewer side and store submitted values.",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Organizer could build the round-1 scorecard with numeric Originality/Relevance, a Recommendation dropdown (Accept/Maybe/Reject), and a Comments text area; the reviewer view rendered all three types; the submitted evaluation (values 4, 2, Accept, sample comment) is stored and visible after submission."
+        },
+        {
+          "id": "ABS-04",
+          "criterion": "Scoring criteria can carry weights and the per-submission aggregate reflects the weighting (inferred — SessionBoard marketing references weighted criteria only for AI personas; aggregation method unspecified).",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "Weight configuration exists in the scorecard editor and persists (Originality weight 2, Relevance weight 1); full credit if the displayed aggregate for 'Taming 40-Minute CI' matches the weighted math (approximately 3.33 rather than the plain 3.0 average) or is explicitly labeled as weighted; no weight concept anywhere fails. If an earlier-area review (CFP-S3's all-4s scorecard) is folded into the displayed aggregate, judge the arithmetic including it per the agent's recorded observation rather than failing the item."
+        },
+        {
+          "id": "ABS-05",
+          "criterion": "Organizer can assign specific submissions to a specific reviewer, and the reviewer's queue contains exactly the assigned submissions and nothing else.",
+          "weight": 3,
+          "type": "scoping",
+          "testability": "auto",
+          "passCriteria": "Sam Whitfield's queue lists 'Taming 40-Minute CI' and 'Your AI Pair Programmer' and does NOT list the unassigned 'Docs That Answer Back'; a portal that exposes all submissions to every reviewer fails."
+        },
+        {
+          "id": "ABS-06",
+          "criterion": "Assignment tooling works at scale — at least one of per-reviewer caps/limits, auto-distribution of submissions across reviewers, or track-filtered bulk assignment is present and functional.",
+          "weight": 2,
+          "type": "bulk",
+          "testability": "auto",
+          "passCriteria": "The assignment UI offers a per-reviewer limit, an auto-assign/distribute action, or track/bulk filtering, and the agent exercised it without error; assignment strictly one-submission-at-a-time with no caps, filters, or auto-distribution fails."
+        },
+        {
+          "id": "ABS-07",
+          "criterion": "With anonymization enabled on a round, the reviewer's view hides author and co-author identity while the organizer's view of the same submission shows it.",
+          "weight": 2,
+          "type": "scoping",
+          "testability": "auto-partial",
+          "passCriteria": "A per-round anonymization/blind setting exists (ABS-S2 step 4) and the blinded reviewer view of 'Taming 40-Minute CI' contains none of 'Priya Raman', 'Marcus Okafor', or 'Latticework Systems', while the organizer view (ABS-S3 step 10) shows them; author names leaking anywhere in the reviewer view fails.",
+          "manualInstructions": "Cross-reviewer isolation needs a second simultaneous account: invite a second reviewer you control to the same round, assign them 'Taming 40-Minute CI', log in as them in a separate browser, and confirm they cannot see Sam Whitfield's scores or comments before submitting their own."
+        },
+        {
+          "id": "ABS-08",
+          "criterion": "A review progress dashboard shows per-reviewer completion counts or percentages that match the actual review state in real time.",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "The dashboard showed Sam Whitfield at 2 assigned / 0 complete before any reviews (ABS-S2 step 8) and 2 of 2 complete (or 100%) after both evaluations were submitted (ABS-S3 step 11); stale or absent counts fail."
+        },
+        {
+          "id": "ABS-09",
+          "criterion": "Organizer can select reviewers with outstanding reviews and send them a bulk reminder from the progress or reviewer view.",
+          "weight": 1,
+          "type": "bulk",
+          "testability": "auto-partial",
+          "passCriteria": "A reminder/nudge action is available against the lagging reviewer (Sam at 0 of 2 complete), and triggering it reports success (confirmation toast, sent status, or log entry).",
+          "manualInstructions": "Check the sam.reviewer@sbek-test.example.com inbox (or the clone's outbound-mail log if it exposes one) and confirm a reminder email arrived referencing the pending reviews."
+        },
+        {
+          "id": "ABS-10",
+          "criterion": "Organizer sees an aggregate score per submission in a results table and can sort submissions by that score.",
+          "weight": 3,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "Both reviewed submissions display aggregates consistent with the entered scores ('Your AI Pair Programmer' at 5.0 outranking 'Taming 40-Minute CI' at ~3.0-3.33), and toggling the sort visibly reorders rows correctly in both directions; a list with raw per-review data but no aggregate or no working sort fails. If an earlier-area review is folded into the aggregate (per the agent's recorded arithmetic in step 8), judge consistency including that review rather than requiring the exact 3.0/3.33 values."
+        },
+        {
+          "id": "ABS-11",
+          "criterion": "Co-authors/co-presenters added at submission time persist with their role labels and are visible on the submission in organizer-side review and results views.",
+          "weight": 2,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Marcus Okafor appears alongside Priya Raman on 'Taming 40-Minute CI' with a role label in the speaker-side detail (ABS-S1) and in the organizer's review/results context (ABS-S3 step 10); no co-author support at all fails; partial credit if co-authors persist but without role labels."
+        },
+        {
+          "id": "ABS-12",
+          "criterion": "Reviewer can declare a conflict of interest / recuse themselves on an assigned submission (inferred — not documented in SessionBoard marketing; category norm from peer review tools).",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "A conflict-of-interest or recusal control is present in the reviewer's scoring view (screenshot with wording recorded); full credit if exercising it flags the submission or removes it from the reviewer's actionable queue."
+        },
+        {
+          "id": "ABS-13",
+          "criterion": "Review scores and statuses can be exported to a downloadable file (CSV/XLSX) from the results or reports area.",
+          "weight": 2,
+          "type": "side-effect",
+          "testability": "auto-partial",
+          "passCriteria": "An export/download control exists for review results and triggering it initiates a download or reports success without error.",
+          "manualInstructions": "Trigger the export yourself, open the downloaded file, and verify it contains one row per submission with title, per-criterion or aggregate scores, recommendation, and review status matching the on-screen results table (Taming 40-Minute CI with Originality 4 / Relevance 2 / Accept; Your AI Pair Programmer with 5 / 5 / Accept)."
+        },
+        {
+          "id": "ABS-14",
+          "criterion": "If the clone claims AI-assisted triage, an AI evaluator produces a first-pass numeric score with written reasoning on a submission, and a human override persists distinguishably.",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto-partial",
+          "passCriteria": "An AI evaluation feature exists and yields a numeric score plus rationale text attributed to the AI on 'Taming 40-Minute CI'; the results view distinguishes AI from human scores; an admin override to a different value persists after reload. Judge this item only if the clone claims AI review anywhere in its UI or marketing; otherwise score as not applicable per the agent's recorded observation of absence.",
+          "manualInstructions": "Read the AI-generated rationale and confirm it is substantive and specific to the abstract's actual content (mentions CI/builds/monorepo concepts) rather than generic boilerplate reusable on any submission."
+        }
+      ]
+    },
+    {
+      "area": "speaker-management",
+      "title": "Speaker Management",
+      "prefix": "SPK",
+      "areaWeight": 15,
+      "optional": false,
+      "items": [
+        {
+          "id": "SPK-01",
+          "criterion": "Organizer speaker roster lists all speakers with identity info and supports search or filtering",
+          "weight": 3,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "A dedicated speakers area renders the added speakers with name plus at least title/company, and a search or filter narrows the list to matching speakers and restores it when cleared. (No headshot thumbnail is expected here - none has been uploaded yet at this point in the flow.)"
+        },
+        {
+          "id": "SPK-02",
+          "criterion": "Organizer can add a speaker with profile fields and organizer edits persist",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Manual add-speaker flow accepts at least name, email and bio, and the saved record displays them; job title and company are accepted either on the same form OR on the speaker's profile/detail view afterwards (SessionBoard itself only captures them on the full profile, so requiring them on the quick-create form would penalise a faithful implementation); and an organizer bio edit (sentinel SBEK-ORG-EDIT-01) survives a page reload."
+        },
+        {
+          "id": "SPK-03",
+          "criterion": "Speakers can be bulk-imported from a CSV file",
+          "weight": 2,
+          "type": "bulk",
+          "testability": "auto",
+          "passCriteria": "An import control accepts the speakers.csv fixture (with or without a column-mapping step) and the roster afterward contains the CSV speakers. The fixture CSV repeats the two manually added speakers (Priya, Marcus) plus one new person (Dana Kowalski): Dana appearing as a new record is the pass signal, and merging or skipping the two existing rows by email (dedupe) is acceptable and must not be penalized; duplicate rows for Priya/Marcus are also acceptable for this item."
+        },
+        {
+          "id": "SPK-04",
+          "criterion": "Speakers carry a workflow status that can be changed, persists, and is filterable",
+          "weight": 2,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "A status control (e.g. Invited/Confirmed/Accepted or equivalent vocabulary) changes Priya's status, the new status survives reload, and a status filter (if the roster has filters) correctly narrows membership. Custom-status creation is a bonus, not required."
+        },
+        {
+          "id": "SPK-05",
+          "criterion": "Organizer can create general/action tasks with due dates and assign them to multiple speakers (file-request tasks, uploads, and the deliverables pipeline are owned by content-management's CNT-01/02/07)",
+          "weight": 2,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Task creation supports a title, a due date, and assignment to at least two speakers (multi-select or repeated assignment both acceptable). The three fixture general tasks appear in an organizer task list with due dates and assignees. No file-request/upload task type is required here — that capability is graded once, by CNT-01."
+        },
+        {
+          "id": "SPK-06",
+          "criterion": "Organizer can send a speaker a portal invitation or onboarding email",
+          "weight": 2,
+          "type": "side-effect",
+          "testability": "auto-partial",
+          "passCriteria": "An explicit invite/welcome-email control exists (per-speaker or bulk), reports success when triggered, and ideally logs the send in a communications or activity history. Email delivery itself is not agent-verifiable.",
+          "manualInstructions": "Re-run the invite against a speaker whose email is a real inbox you control. Confirm an invitation email arrives containing a portal link, and that the link opens the speaker portal (or a password-set page leading to it)."
+        },
+        {
+          "id": "SPK-07",
+          "criterion": "Each speaker gets a personalized portal scoped to only their own content",
+          "weight": 3,
+          "type": "scoping",
+          "testability": "auto-partial",
+          "passCriteria": "Logging in as Priya lands on a speaker-facing view (distinct from the organizer admin) that identifies her and lists her own tasks/sessions/profile, with no other speaker's name, tasks, or data visible anywhere in the portal. Any speaker-scoped access mechanism passes (invite link, magic link, or password login), but the agent can only exercise password sign-in/sign-up; if the clone's only portal access is a link delivered by email, the agent cannot reach the portal and this item falls to the manual half.",
+          "manualInstructions": "Only needed if the agent could not reach the portal because access requires an emailed link: re-run the portal invite for a speaker whose email is a real inbox you control, follow the emailed link, and confirm it opens a speaker-scoped portal identifying that speaker, with no other speaker's name, tasks, or data visible anywhere."
+        },
+        {
+          "id": "SPK-08",
+          "criterion": "Speaker can update bio, social links, and headshot from the portal, and the changes appear on the organizer's record",
+          "weight": 3,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "Portal profile editing saves the sentinel bio SBEK-PORTAL-BIO-01 and the uploaded headshot.png (image renders after save and survives reload), and the organizer's view of Priya's record later shows the same bio text and headshot without manual re-entry."
+        },
+        {
+          "id": "SPK-09",
+          "criterion": "Assigned general tasks appear in the speaker portal with due dates and can be marked complete with persistent status (the file-request upload flow is graded by content-management's CNT-02)",
+          "weight": 2,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "All three organizer-assigned general tasks show in Priya's portal with due dates and an incomplete state; marking two of them complete flips each to a completed state that survives a reload, while the untouched task stays incomplete. No upload-against-task flow is required here — that capability is graded once, by CNT-02."
+        },
+        {
+          "id": "SPK-10",
+          "criterion": "Organizer can see and download a speaker-uploaded deliverable with metadata",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto-partial",
+          "passCriteria": "The headshot file Priya uploaded via her portal profile edit is listed organizer-side (on her record or a files area) with its filename plus uploader and/or timestamp, and a download/view control responds without error. File content integrity is not agent-verifiable.",
+          "manualInstructions": "As the organizer, download the uploaded file and open it locally; confirm it is a valid image matching the headshot.png fixture rather than a corrupted or empty file."
+        },
+        {
+          "id": "SPK-11",
+          "criterion": "Session assignments are visible on the organizer's speaker record and in the speaker's portal",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "After the organizer links the \"Taming 40-Minute CI\" session to Priya, the speaker-session link shows on her organizer-side record (or the session shows her as speaker), and the same session title is visible inside her portal. Room/time display is a bonus; full scheduling and conflict detection belong to the agenda area."
+        },
+        {
+          "id": "SPK-12",
+          "criterion": "A progress view shows per-speaker completion of general tasks at list level and reflects portal completions (the deliverables dashboard tracking uploads with filtering depth is graded by content-management's CNT-07)",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "Without opening each record, the organizer can see which speakers completed which general tasks: Priya's two portal completions from SPK-S2 (\"Confirm participation\", \"Complete bio and profile\") show complete while her release form and all of Marcus's tasks show incomplete; a complete/incomplete filter (if present) narrows correctly. A roster-level completion indicator or a tasks dashboard both qualify. Upload/deliverables tracking depth is graded once, by CNT-07."
+        },
+        {
+          "id": "SPK-13",
+          "criterion": "Organizer can send a general bulk email (e.g. a welcome/announcement to all speakers) to a selected or filtered speaker group and the send is logged (deliverables-reminder emails to speakers with outstanding tasks are owned by content-management's CNT-08)",
+          "weight": 2,
+          "type": "bulk",
+          "testability": "auto-partial",
+          "passCriteria": "A compose flow lets the organizer choose recipients from the speaker list (filter or multi-select), accepts the fixture welcome subject (\"Welcome to DevFlow Conf 2027 speakers\") and a body, reports a successful send (or schedule), and a communications history records the message with recipients and timestamp. Inbox delivery is not agent-verifiable.",
+          "manualInstructions": "Include a speaker whose email is a real inbox you control in the recipient group, resend, and confirm the email arrives with the composed subject (\"Welcome to DevFlow Conf 2027 speakers\") and body."
+        },
+        {
+          "id": "SPK-14",
+          "criterion": "Email templates with merge fields personalize content per recipient",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "The compose flow offers saved or pre-built templates whose bodies contain personalization tokens (name, session, or portal link), and a preview or rendered output demonstrably resolves tokens to a real speaker's data (e.g. \"Priya\")."
+        },
+        {
+          "id": "SPK-15",
+          "criterion": "Speaker records can store travel-preference or custom logistics fields that persist",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "A travel/logistics field or a generic custom field on the speaker record accepts the sample logistics text, and the value survives save and reload. No flight or hotel booking UI is expected; SessionBoard itself scopes travel booking out (inferred CRM data fields only)."
+        },
+        {
+          "id": "SPK-16",
+          "criterion": "Automated reminder emails go to speakers with incomplete tasks based on due dates",
+          "weight": 1,
+          "type": "side-effect",
+          "testability": "manual",
+          "passCriteria": "Without any organizer manually sending a message, a speaker with an incomplete task due soon (or overdue) receives a reminder email referencing the task and its due date within the expected reminder window; the automated send also appears in the communications history if the clone has one.",
+          "manualInstructions": "Create or edit a speaker so their email is a real inbox you control. Assign them a task due within 24-48 hours (or set the due date in the past) and leave it incomplete. Wait through the reminder cycle (up to 24 hours past the due date). Confirm a reminder email arrives referencing the task name and due date, and check the app's communications history for the automated send. Note: in SessionBoard, after an organizer extends a deadline the speaker may keep seeing (and reminders may keep referencing) the original due date while late work is still accepted - do not penalize a clone for either behavior."
+        }
+      ]
+    },
+    {
+      "area": "content-management",
+      "title": "Content Management & Speaker Deliverables",
+      "prefix": "CNT",
+      "areaWeight": 15,
+      "optional": false,
+      "items": [
+        {
+          "id": "CNT-01",
+          "criterion": "Organizer can create a file-request task with instructions and a due date, assigned to speakers.",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Both fixture tasks (\"Upload Session Presentation\" due 2027-05-01, \"Upload Final Headshot (print quality)\" due 2027-04-14) exist after creation with correct names, due dates, and speaker assignment, shown as incomplete/pending."
+        },
+        {
+          "id": "CNT-02",
+          "criterion": "Speaker portal lists the speaker's assigned tasks with deadlines and accepts a file upload recorded against the task/session.",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Priya's portal shows both assigned tasks with due dates and status; uploading slides.pdf succeeds and the file appears attached to the presentation task/session with the task status updating to uploaded/complete."
+        },
+        {
+          "id": "CNT-03",
+          "criterion": "Speaker access is scoped to their own sessions and tasks, and organizer/admin views are blocked for speaker accounts.",
+          "weight": 3,
+          "type": "scoping",
+          "testability": "auto",
+          "passCriteria": "Priya's portal shows no sessions or tasks belonging to Marcus Okafor, and direct navigation to admin/organizer routes is denied, redirected, or shows no admin capability while signed in as the speaker."
+        },
+        {
+          "id": "CNT-04",
+          "criterion": "Re-uploading a deliverable creates a new file version, with the latest clearly marked and previous versions still accessible.",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "After the second slides.pdf upload, a version list shows two entries with timestamps, the latest is flagged as current, and the older version remains individually viewable/downloadable (a control exists) rather than being overwritten."
+        },
+        {
+          "id": "CNT-05",
+          "criterion": "Comments can be attached to an uploaded file, are logged with author name and timestamp, and are visible across roles.",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "The speaker's comment (\"Draft deck - final version coming Friday.\") appears with Priya's name and a timestamp, the organizer sees the same thread on the same file, and the organizer's reply is added to it. Do not require email notification of comments (SessionBoard itself sends none)."
+        },
+        {
+          "id": "CNT-06",
+          "criterion": "The upload UI communicates file constraints (accepted types and/or a maximum file size) to the speaker at the point of upload.",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "Some explicit constraint statement is visible in or around the upload control - e.g. accepted file types, a max size such as SessionBoard's 1.95 GB per-file limit, or a file-picker type filter the agent observed. Fail if no constraint is communicated anywhere in the upload flow."
+        },
+        {
+          "id": "CNT-07",
+          "criterion": "A deliverables dashboard tracks per-speaker per-task status with due dates, supports filtering, and reflects uploads.",
+          "weight": 3,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "The dashboard shows all speaker-task pairs as incomplete in S1, and in S3 accurately reflects the S2 state: Priya's presentation task complete/uploaded (either label passes - clones without an explicit mark-complete action must not be penalized), her headshot task incomplete, Marcus's tasks incomplete; applying a filter visibly changes the displayed set."
+        },
+        {
+          "id": "CNT-08",
+          "criterion": "Organizer can trigger bulk reminder emails to speakers with outstanding tasks and receives a send confirmation.",
+          "weight": 2,
+          "type": "bulk",
+          "testability": "auto-partial",
+          "passCriteria": "A bulk reminder action is available from the dashboard for incomplete/outstanding tasks (with or without a template picker) and the UI confirms the send (toast, dialog, or sent count). Actual delivery is verified manually.",
+          "manualInstructions": "Check the inboxes for the fixture speaker addresses (Priya Raman and Marcus Okafor at sbek-test.example.com) or, if those are not real mailboxes, the clone's outbound-mail log / mail-catcher. Confirm each speaker with outstanding tasks received a reminder naming the outstanding task (\"Upload Final Headshot (print quality)\" and, for Marcus, \"Upload Session Presentation\") and its due date."
+        },
+        {
+          "id": "CNT-09",
+          "criterion": "Organizer can edit a session's title and abstract from a central admin view and the changes persist.",
+          "weight": 2,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "After saving, navigating away, and reopening, the session shows the \"UPDATED: \" title prefix and the appended live-demo sentence in the abstract, and the session list reflects the new title. (The prefix is reverted in the scenario's final cleanup step — judge from the mid-scenario screenshots.)"
+        },
+        {
+          "id": "CNT-10",
+          "criterion": "Organizer can edit speaker profile content (bio text and headshot photo) from the admin area and the changes persist.",
+          "weight": 2,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Priya's bio shows the appended sentence and her record displays the newly uploaded headshot.png image after save and reload."
+        },
+        {
+          "id": "CNT-11",
+          "criterion": "Content edits are recorded in a version/change history with editor attribution and timestamps, and a prior version can be restored.",
+          "weight": 2,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "The history panel lists at least two distinct timestamped entries attributed to Jordan Alvarez, and restoring the earlier version removes the second edit's sentence while keeping the first edit."
+        },
+        {
+          "id": "CNT-12",
+          "criterion": "Sessions carry a content approval/review status the organizer can set, and unapproved content is excluded from the public agenda output. (This item grades the approval GATE, not the public widget rendering itself — that is graded by public-widgets EMB-06.)",
+          "weight": 3,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "A status control exists and persists (exact state names may vary - draft/in-review/approved is the inferred norm); the public agenda page shows the approved session (with its updated title) and omits the unapproved one. If no public agenda exists yet at area-04 time (it is built and published in a later area), the gate may be verified on any public sessions/preview surface, or judged from the agent's recorded observation together with the area-06 public-widget evidence."
+        },
+        {
+          "id": "CNT-13",
+          "criterion": "A central files library aggregates uploads across sessions with metadata (session/speaker, date, versions), optionally mirrored by a per-session files tab.",
+          "weight": 1,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "A files view lists the slides.pdf upload with its session and speaker association, upload date, and a version count of 2, consistent with actual uploads; a per-session Files tab, if present, shows the same file (its absence alone does not fail the item if the aggregate library exists)."
+        },
+        {
+          "id": "CNT-14",
+          "criterion": "Organizer can multi-select sessions/files and generate a bulk download (ZIP) of latest file versions, with grouping options if offered.",
+          "weight": 2,
+          "type": "bulk",
+          "testability": "auto-partial",
+          "passCriteria": "The UI supports selecting multiple sessions/files and starting an export, and confirms generation (queued/generating/ready state or download start). Grouping options and file deselection are positive evidence but optional. ZIP contents are verified manually.",
+          "manualInstructions": "Trigger the same export as an organizer, download the resulting ZIP (via the ready link or the email notification if the clone sends one), and verify it contains only the LATEST version of slides.pdf (the second upload), is organized according to the chosen grouping (e.g. one folder per session), and excludes any file deselected in the dialog."
+        }
+      ]
+    },
+    {
+      "area": "ai-agenda",
+      "title": "AI Agenda & Schedule Builder",
+      "prefix": "AIA",
+      "areaWeight": 10,
+      "optional": false,
+      "items": [
+        {
+          "id": "AIA-01",
+          "criterion": "An agenda/schedule builder view exists for a multi-day event, showing a time dimension plus rooms and/or tracks (grid, timeline, or per-day slot list) with day navigation.",
+          "weight": 3,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "The builder renders time slots and room/track structure and lets the organizer navigate between the three event days; sessions are represented as cards/entries positioned by day, time, and room or track."
+        },
+        {
+          "id": "AIA-02",
+          "criterion": "Rooms and tracks are configurable by the organizer, and a newly added room and track immediately become usable in the agenda builder.",
+          "weight": 2,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "Rooms and tracks can be created through the organizer UI -- the four fixture rooms (fresh in this area on a chained run) plus, where the fixture tracks already exist from an earlier area's setup or from pre-seeding, the extra track (and room, if rooms were pre-seeded too) added in step 4 -- and a newly added room appears as a schedulable location while a track can be assigned to or shown on a session. On a chained run, room-creation evidence plus confirmed availability of the pre-existing tracks satisfies this item; do not require re-creating tracks that already exist."
+        },
+        {
+          "id": "AIA-03",
+          "criterion": "An unscheduled session can be placed into a specific day/time/room slot, and the placement persists across a page reload.",
+          "weight": 3,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "The \"Taming 40-Minute CI\" session is placed at Day 1 10:00 in Room 2A via drag-and-drop or click-to-assign, its card renders in that slot with its title, and it is still there after the builder page is reloaded in step 11."
+        },
+        {
+          "id": "AIA-04",
+          "criterion": "Scheduling the same speaker into two time-overlapping sessions produces a visible speaker double-booking warning.",
+          "weight": 3,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "When the two Priya Raman sessions overlap at Day 1 10:00 (different rooms), a conflict indicator appears without requiring a manual page refresh (or at latest on save) and identifies the double-booked speaker or the clashing sessions; agent observations record its wording."
+        },
+        {
+          "id": "AIA-05",
+          "criterion": "Placing two sessions in the same room at overlapping times is blocked or visibly flagged as a room conflict.",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "The step-9 attempt to put a second session at Day 1 10:00 in Room 2A is either prevented at placement time (drop rejected, slot shown occupied) or accepted with a clearly visible room-overlap warning."
+        },
+        {
+          "id": "AIA-06",
+          "criterion": "A scheduled session can be moved to a different slot/room, the change takes effect, and previously flagged conflicts clear once the overlap is removed.",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "The step-10 moves succeed (sessions render in their new slots), the speaker and room conflict indicators from steps 8-9 are gone afterward, and the new positions survive the step-11 reload. Live (no-reload) clearing is ideal but clearing after save/refresh still passes this item."
+        },
+        {
+          "id": "AIA-07",
+          "criterion": "The agenda can be published: a publish/go-live action exists, reports success, and the scheduled session data becomes available to the public/attendee-facing surface as a handoff. (The public schedule rendering itself — layout and correctness of the day/time/room display — is graded by public-widgets EMB-06, not here.)",
+          "weight": 2,
+          "type": "handoff",
+          "testability": "auto",
+          "passCriteria": "A publish/go-live action exists and reports success (confirmation message, published status, or share link), and after publishing the sessions scheduled in AIA-S1/S2 are observable on some public/attendee-facing surface as a handoff check. Viewing while still logged in as organizer is acceptable if the page is the attendee-facing view. Do not grade the public rendering's quality or field-level correctness here — that is owned by EMB-06."
+        },
+        {
+          "id": "AIA-08",
+          "criterion": "Some assisted or automatic scheduling capability exists that places unscheduled sessions into slots in one action (\"AI\" auto-scheduling judged generously as any auto-place assist).",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "An auto-schedule/AI-assist control is present in the builder and, when triggered, places at least one previously unscheduled session into a slot/room. Judge generously -- any one-action assisted placement counts, and whether the result shows conflict flags is recorded but not gating. Fail if no such capability exists anywhere in the builder (the agent's explicit absence observation from step 3 counts as evidence) or if the control exists but performs no placement when triggered."
+        }
+      ]
+    },
+    {
+      "area": "public-widgets",
+      "title": "Public & Embeddable Widgets",
+      "prefix": "EMB",
+      "areaWeight": 20,
+      "optional": false,
+      "items": [
+        {
+          "id": "EMB-01",
+          "criterion": "The Sessions List widget renders a card per session showing title, truncated description with a Show more expansion, date/time, room, speaker names with job title and company, and Format/Track tags",
+          "weight": 3,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "At least 3 session cards each display title, description snippet, a date+time string, a room/location, at least one speaker with job title and company, and Format and Track values; clicking Show more (or equivalent) expands the description in place"
+        },
+        {
+          "id": "EMB-02",
+          "criterion": "Sessions List keyword search matches both session titles and speaker names, narrowing the visible cards and updating any result count",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "A title-word query leaves only matching session(s) and a speaker-surname query leaves only that speaker's session(s); any visible result count updates to match; partial credit if only title search works"
+        },
+        {
+          "id": "EMB-03",
+          "criterion": "Sessions List offers a faceted Filters control (at minimum Track, ideally also Format and Location) whose selections narrow the list to matching sessions",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "A filter panel/control exists with at least a Track facet; selecting one track leaves only cards carrying that track; full credit requires Format and Location/room facets too"
+        },
+        {
+          "id": "EMB-04",
+          "criterion": "The Speakers List widget shows a directory of speakers (ordered alphabetically by surname) with headshot, name, job title, and company per entry",
+          "weight": 3,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "A speaker directory distinct from raw session data exists; entries show photo, name, job title, and company; ordering across the first several entries is alphabetical by surname (ordering alone, if violated, costs partial credit rather than a fail)"
+        },
+        {
+          "id": "EMB-05",
+          "criterion": "Each Speakers List entry drills into a detail view with the speaker's bio and their sessions (title, date/time, room), and the directory supports search by speaker name",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "Opening a speaker shows a bio and a per-speaker session sublist where each session has title, date/time, and room; typing an exact speaker name in the directory search narrows to that speaker"
+        },
+        {
+          "id": "EMB-06",
+          "criterion": "The Agenda widget renders a per-day schedule organized by time — a grid with room/location columns and a time gutter, or an equivalent day/track/time-structured layout — with session blocks placed at their correct room and time showing at least title and track/format",
+          "weight": 3,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "An agenda view structured by day and time exists (grid with location columns preferred; a clearly time-slotted list is acceptable); one sampled session appears at the correct room/time position with title and a track or format label"
+        },
+        {
+          "id": "EMB-07",
+          "criterion": "Agenda day navigation (chevrons, tabs, or date picker) switches between event days and re-renders that day's sessions",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "Activating day navigation changes the visible day label AND the rendered sessions (at least one session differs between the two captured days)"
+        },
+        {
+          "id": "EMB-08",
+          "criterion": "Clicking an agenda session block opens a detail view with the full start-end time range, room, description, Format, and Track, and a Back/close control restores the agenda",
+          "weight": 2,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "Detail view shows title, full time range, room, description, and Format/Track values (a Subsessions section is bonus, per SessionBoard, not required); Back/close returns to the intact agenda"
+        },
+        {
+          "id": "EMB-09",
+          "criterion": "The Schedule Itinerary widget lists sessions chronologically within day tabs/sections, with cards showing track label, title, description, full date/time, room, and the complete speaker list with titles and companies",
+          "weight": 2,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "Day tabs or day sections exist for the multi-day event; sessions within a day appear in ascending time order (time-group headers are ideal); one sampled card shows track, title, description, date/time, room, and every listed speaker with job title and company"
+        },
+        {
+          "id": "EMB-10",
+          "criterion": "Personal schedule building (inferred from category norms; not visible in SessionBoard's live itinerary example): the attendee can add/star sessions from the itinerary and view a personal schedule containing exactly the chosen sessions",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "An add/star/bookmark control exists on itinerary cards; after adding two sessions, a personal-schedule view (My Schedule or equivalent filter) shows exactly those two sessions in time order; removing one updates the view. Requiring an attendee account to save a personal schedule is expected and must not cost credit"
+        },
+        {
+          "id": "EMB-11",
+          "criterion": "The personal schedule persists across a full page reload, and an export/add-to-calendar affordance is offered for the selection",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto-partial",
+          "passCriteria": "After a browser reload the previously added sessions are still marked/present in the personal view (via localStorage or an account); an export/iCal/add-to-calendar control exists and reports success when activated — the downloaded file's correctness is the manual half",
+          "manualInstructions": "In a normal browser, add 2 sessions to the personal schedule, trigger the export/add-to-calendar action, and download the .ics (or open the calendar link). Import it into a calendar app and confirm both sessions appear with the correct titles, dates (event days 2027-05-12..14), start/end times, and rooms/locations. Also revisit the widget the next day (or in a new tab of the same profile) to confirm longer-term persistence."
+        },
+        {
+          "id": "EMB-12",
+          "criterion": "The Speaker Gallery widget renders a visual photo grid of speaker cards (headshot, name, job title, company), alphabetized by surname, with a search-by-name box, degrading gracefully for speakers missing a photo or title",
+          "weight": 2,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "A grid layout visually distinct from the speakers list exists; cards show headshot, name, job title, company; name search narrows the grid to the matching speaker; a photo-less speaker (if any exists in the data) renders with a fallback rather than breaking the grid; surname ordering is partial credit"
+        },
+        {
+          "id": "EMB-13",
+          "criterion": "Clicking a gallery card opens a speaker detail (modal or panel) with photo, name, job title, bio with Show more, company, and a sessions list giving each session's title, date/time, and room; closing it returns to the intact grid",
+          "weight": 1,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "The detail shows photo, name, title, bio, company, and the speaker's sessions each with title, date/time, and room (a 'Sessions (N)' count is a plus); Back/Close restores the grid in its prior state"
+        },
+        {
+          "id": "EMB-14",
+          "criterion": "The five widget surfaces (sessions list, speakers list, agenda, schedule itinerary, speaker gallery) are distributable to non-admin viewers — each renders populated event content outside the organizer admin UI, on an attendee-facing site/portal or via a generated embed",
+          "weight": 3,
+          "type": "scoping",
+          "testability": "auto",
+          "passCriteria": "Every widget the clone implements renders populated content to a viewer holding NO organizer/admin rights, on a surface separate from the admin UI — an anonymous public page, an attendee-authenticated event site/portal, or a rendered/generated embed. Requiring an attendee login is fully acceptable and costs NO credit: the reference product requires at least one login method on its event site and offers no fully-public option, so do not penalise a login-gated event site. Anonymous login-free access is a bonus the judge may note but must not require. Deduct only where a widget is reachable ONLY inside the organizer admin UI, requires organizer/admin privileges to read, or renders empty/broken for a non-admin viewer despite content existing. Partial credit if some widgets are non-admin-visible and others are admin-only.\n"
+        },
+        {
+          "id": "EMB-15",
+          "criterion": "An organizer-side embed area lets the organizer generate a per-widget embeddable snippet or feed URL, with configuration such as output format, branding/colors, content filters, and field selection, and lists saved embeds with a retrievable code snippet",
+          "weight": 3,
+          "type": "handoff",
+          "testability": "auto-partial",
+          "passCriteria": "The agent finds an embeds/widgets/share area, sees widget-type choices covering most of the five, configures and saves an embed, and retrieves a generated snippet or feed URL via a Get Code / copy / share affordance — the snippet text must be captured, not merely asserted to exist. Full credit needs multiple output formats (styled HTML script, basic HTML, JSON/XML, iCal) plus filter/field/branding options, and a saved-embed list with per-embed management (naming, enable/disable). Partial credit if an embed area exists but yields only a plain share URL with no configuration, or offers configuration but no retrievable snippet. This item is the primary evidence that the widgets are genuinely embeddable; the snippet actually rendering inside a third-party page is the manual half.\n",
+          "manualInstructions": "Copy the generated styled-HTML snippet into a blank .html file on a different origin (e.g. a local file or codepen), open it, and confirm the widget renders with live event data, reflects any configured colors/filters/hidden fields, and remains interactive (search/detail). If JSON/XML/iCal formats are offered, fetch each endpoint and confirm the JSON/XML contains session/speaker data and the iCal imports the approved sessions into a calendar app. Also confirm the embed renders for a visitor who is NOT signed in to the organizer account."
+        },
+        {
+          "id": "EMB-16",
+          "criterion": "Widget data is consistent across surfaces and with the organizer-side source — the same session shows identical title, date/time, room, and track everywhere it appears, and matches the organizer's record without republishing",
+          "weight": 3,
+          "type": "roundtrip",
+          "testability": "auto-partial",
+          "passCriteria": "The consistency samples show no mismatches: one session's title/date/time/room/track identical across at least two widgets (EMB-S1), one speaker's name/title/company identical between speakers list and gallery (EMB-S1), and one session's attendee-facing rendering matching its organizer-side record (EMB-S3). Tolerance: a leftover 'UPDATED: ' title prefix from area 04's edit test (whose final revert step may have failed) is NOT a mismatch, provided the prefixed title is identical across surfaces. This point-in-time consistency is the auto half; propagation of organizer edits to an already-placed embed without republishing is the manual half",
+          "manualInstructions": "As the organizer, edit one session's title (or room) in the admin, then reload the attendee-facing widget or the placed embed — using any manual cache-refresh control the clone offers — and confirm the edit appears without regenerating, re-saving, or re-embedding the widget. If the clone documents an auto-refresh interval (SessionBoard's is ~60 min), optionally re-check after that interval to confirm the change also propagates with no manual refresh."
+        }
+      ]
+    },
+    {
+      "area": "speaker-crm",
+      "title": "Speaker CRM (Cross-Event Speaker Database)",
+      "prefix": "CRM",
+      "areaWeight": 10,
+      "optional": true,
+      "items": [
+        {
+          "id": "CRM-01",
+          "criterion": "An organization-level speaker directory exists outside any single event, listing contacts across events in a searchable table.",
+          "weight": 3,
+          "type": "exists",
+          "testability": "auto",
+          "passCriteria": "A cross-event contacts/speakers area is reachable at organization level (not nested inside one event's menu); it renders a table or list of contacts with at least name and email; typing a contact's name in a search box narrows the list to matches and clearing it restores the full list."
+        },
+        {
+          "id": "CRM-02",
+          "criterion": "A multi-criteria filter narrows the directory by attribute values such as company, job title, or tags, and filters are clearable.",
+          "weight": 2,
+          "type": "rule",
+          "testability": "auto",
+          "passCriteria": "A filter control beyond plain text search exists; applying an attribute filter visibly narrows the result set consistently with the criterion; filters can be cleared to restore the full list. Combining two filters (AND-style narrowing) is stronger evidence but a single working attribute filter passes."
+        },
+        {
+          "id": "CRM-03",
+          "criterion": "Contact profiles show identity fields plus persistent internal notes and some form of cross-event history (linked events/sessions and/or an activity log).",
+          "weight": 2,
+          "type": "roundtrip",
+          "testability": "auto",
+          "passCriteria": "Opening a contact shows identity data (name, email, company/title, and a bio or headshot area); an internal note can be added and still renders after a page reload; the profile exposes at least one history surface — a list of connected events/sessions or an activity/communications feed. Tab names need not match SessionBoard's Profile/Notes/Connections/Files/Activity."
+        },
+        {
+          "id": "CRM-04",
+          "criterion": "Contacts can be enriched with organizer-defined metadata — custom fields (e.g. a dropdown) or tags — that persist on the profile.",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "Either (a) a field-management UI creates a new field (e.g. dropdown \"Speaker Type\" with Internal/External) that then appears and holds a value on a contact profile after reload, or (b) tags can be added to a contact and persist. Full custom-field creation is stronger evidence than tags alone."
+        },
+        {
+          "id": "CRM-05",
+          "criterion": "Contacts can be bulk-imported from a CSV file, with the imported rows appearing in the directory afterward.",
+          "weight": 2,
+          "type": "bulk",
+          "testability": "auto",
+          "passCriteria": "An import entry point accepts the speakers.csv fixture upload and completes; the imported contacts subsequently appear as directory rows with correct name/email data. A column-mapping or validation step that flags problem rows is stronger evidence; silent-but-correct import still passes. No import UI at all fails this item."
+        },
+        {
+          "id": "CRM-06",
+          "criterion": "Near-duplicate contacts (same name, different email) are surfaced and can be merged into a single chosen primary record.",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "After a same-name/different-email contact is created, the system exposes a duplicate indicator or merge action; the merge flow lets the organizer pick a primary (field-level value selection is stronger evidence); afterward only one record remains in the directory carrying the merged data."
+        },
+        {
+          "id": "CRM-07",
+          "criterion": "A kanban sourcing pipeline with staged columns covering an open-to-won/lost lifecycle lets contacts be enrolled and moved between stages, with moves persisting across reload.",
+          "weight": 2,
+          "type": "crud",
+          "testability": "auto",
+          "passCriteria": "A board with at least 4-5 named stage columns exists, including terminal confirmed/declined-style stages (renamed equivalents acceptable); a directory contact can be enrolled via an add/enroll action; the card can be moved to another stage and remains there after a page reload. Score/rationale fields at enrollment are bonus evidence, not required."
+        },
+        {
+          "id": "CRM-08",
+          "criterion": "Pipeline cards open to a detail view with internal notes and a timestamped record of stage transitions.",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "The card detail exposes a notes composer whose note persists (still renders after a page reload), and a stage history or activity log listing the stage moves from the scenario with timestamps (a general activity feed that includes the moves is acceptable)."
+        },
+        {
+          "id": "CRM-09",
+          "criterion": "A filtered directory view can be saved as a named, reusable segment or list that reopens with its members.",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "A save-segment/save-list action exists after filtering; the saved \"AI Experts\" segment appears in a segments/lists area and reopens showing the matching contacts. Offering a dynamic (auto-updating) vs curated (static) type choice at creation is bonus evidence."
+        },
+        {
+          "id": "CRM-10",
+          "criterion": "A contact can be pushed from the org-level database into a specific event, appearing in that event's speakers/contacts module with profile data intact.",
+          "weight": 2,
+          "type": "handoff",
+          "testability": "auto",
+          "passCriteria": "An add-to-event or assign-to-event action exists from the directory or a pipeline card; an event picker targets \"DevFlow Conf 2027\"; the contact then appears inside that event's speaker/contact list with name and email (and ideally company/bio) carried over without re-entry."
+        },
+        {
+          "id": "CRM-11",
+          "criterion": "Bulk email can be composed to multiple selected contacts from the directory, ideally with template/merge-tag personalization and a preview, and the send is confirmed or logged in-app.",
+          "weight": 1,
+          "type": "bulk",
+          "testability": "auto-partial",
+          "passCriteria": "AUTO half — selecting 2+ contacts reveals a communicate/send-email action; a composer accepts subject and body; the send completes with an in-app success state or an entry in a sent-history log. Merge-tag resolution shown in a preview and campaign/per-recipient history rows are stronger evidence. The judge cannot verify real delivery from browser evidence alone.",
+          "manualInstructions": "Add a mailbox you control (e.g. a mailinator-style address) as a contact before the bulk send, include it in the recipient selection, then check that inbox: confirm the email arrived, the subject matches \"Speak at DevFlow Conf 2027?\", and any merge tags resolved to the contact's actual first name rather than rendering literally (no visible \"{{first_name}}\")."
+        },
+        {
+          "id": "CRM-12",
+          "criterion": "A CRM dashboard or overview page shows org-wide speaker-database metrics and at least one populated analytics widget.",
+          "weight": 1,
+          "type": "depth",
+          "testability": "auto",
+          "passCriteria": "A dashboard/landing view at CRM or org level displays KPI counts (total contacts plus at least one other, e.g. events or returning speakers) that are plausibly consistent with the directory contents, and at least one analytics widget (top companies, speaker source, region, areas of focus) renders with data. Widget click-through to a filtered contact list is bonus evidence."
+        }
+      ]
+    }
+  ]
+}
