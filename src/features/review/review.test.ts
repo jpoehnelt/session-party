@@ -45,7 +45,7 @@ import {
   submissionQueueFixture,
 } from "./fixtures";
 import { operations } from "./operations";
-import { SaveScoreInput } from "./schema";
+import { SaveScoreInput, type SubmissionStatus } from "./schema";
 import {
   acceptSubmission,
   advanceReviewRound,
@@ -129,6 +129,35 @@ const runEitherAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, 
       Effect.provide(Layer.mergeAll(dbLayer, aiLayer, Layer.succeed(CurrentUser, principal))),
     ) as Effect.Effect<Either.Either<A, E>, never, never>,
   );
+let transitionSubmissionSequence = 0;
+
+const seedTransitionSubmission = async (status: SubmissionStatus, version = 1) => {
+  transitionSubmissionSequence += 1;
+  const submissionId = `submission_transition_${transitionSubmissionSequence}`;
+  const createdAt = new Date(fixtureClock - transitionSubmissionSequence * 1_000);
+  await db.insert(submissions).values({
+    id: submissionId,
+    eventId: fixtureEventId,
+    formId: "form_cfp",
+    formVersionId: "form_version_01",
+    title: `Transition fixture ${transitionSubmissionSequence}`,
+    status,
+    submittedAt: createdAt,
+    acceptedAt: status === "accepted" ? createdAt : null,
+    version,
+    createdAt,
+    updatedAt: createdAt,
+  });
+  await db.insert(submissionSpeakers).values({
+    id: `submission_speaker_transition_${transitionSubmissionSequence}`,
+    eventId: fixtureEventId,
+    submissionId,
+    speakerId: fixturePrimarySpeakerId,
+    isPrimary: true,
+    createdAt,
+  });
+  return { submissionId, version };
+};
 
 
 
@@ -1235,7 +1264,7 @@ describe("review and acceptance slice", () => {
   });
 
   it("rethrows an unrelated acceptance batch failure when the submission CAS remains current", async () => {
-    const submissionId = "submission_27";
+    const { submissionId } = await seedTransitionSubmission("in_review", 2);
     const requestId = "request_unrelated_batch_27";
     await db.insert(domainChanges).values({
       id: "change_collision_27",
@@ -1270,12 +1299,161 @@ describe("review and acceptance slice", () => {
     const changes = await db.select().from(domainChanges).where(eq(domainChanges.requestId, requestId));
     const audits = await db.select().from(auditLog).where(eq(auditLog.requestId, requestId));
     const idempotencyAfter = await db.select().from(idempotencyRecords);
-    expect(submission).toMatchObject({ status: "rejected", version: 2 });
+    expect(submission).toMatchObject({ status: "in_review", version: 2 });
     expect(durableAcceptance).toEqual([]);
     expect(provisioning).toEqual([]);
     expect(changes).toEqual([]);
     expect(audits).toEqual([]);
     expect(idempotencyAfter).toHaveLength(idempotencyBefore.length);
+  });
+
+  it.each(["submitted", "in_review", "waitlist"] as const)(
+    "accepts a %s submission and replays the decision idempotently",
+    async (sourceStatus) => {
+      const { submissionId, version } = await seedTransitionSubmission(sourceStatus);
+      const input = {
+        eventId: fixtureEventId,
+        submissionId,
+        expectedVersion: version,
+        idempotencyKey: `accept-from-${sourceStatus}-${submissionId}`,
+        requestId: `request_accept_from_${sourceStatus}_${submissionId}`,
+      } as const;
+
+      const accepted = await runAs(owner, acceptSubmission(input));
+      const replayed = await runAs(owner, acceptSubmission(input));
+
+      expect(accepted).toMatchObject({ submissionId, submissionVersion: version + 1, status: "accepted", idempotent: false });
+      expect(replayed).toEqual({ ...accepted, idempotent: true });
+      const [submission] = await db.select().from(submissions).where(eq(submissions.id, submissionId));
+      expect(submission).toMatchObject({ status: "accepted", version: version + 1 });
+    },
+  );
+
+  it.each(["submitted", "in_review", "waitlist"] as const)(
+    "rejects a %s submission and replays the decision idempotently",
+    async (sourceStatus) => {
+      const { submissionId, version } = await seedTransitionSubmission(sourceStatus);
+      const input = {
+        eventId: fixtureEventId,
+        submissionId,
+        expectedVersion: version,
+        idempotencyKey: `reject-from-${sourceStatus}-${submissionId}`,
+        requestId: `request_reject_from_${sourceStatus}_${submissionId}`,
+      } as const;
+
+      const rejected = await runAs(owner, rejectSubmission(input));
+      const replayed = await runAs(owner, rejectSubmission(input));
+
+      expect(rejected).toEqual({
+        submissionId,
+        submissionVersion: version + 1,
+        status: "rejected",
+        idempotent: false,
+      });
+      expect(replayed).toEqual({ ...rejected, idempotent: true });
+      const [submission] = await db.select().from(submissions).where(eq(submissions.id, submissionId));
+      expect(submission).toMatchObject({ status: "rejected", version: version + 1 });
+    },
+  );
+
+  it.each(["accepted", "rejected", "withdrawn"] as const)(
+    "does not accept a %s submission",
+    async (sourceStatus) => {
+      const { submissionId, version } = await seedTransitionSubmission(sourceStatus);
+      const result = await runEitherAs(owner, acceptSubmission({
+        eventId: fixtureEventId,
+        submissionId,
+        expectedVersion: version,
+        idempotencyKey: `accept-denied-${sourceStatus}-${submissionId}`,
+        requestId: `request_accept_denied_${sourceStatus}_${submissionId}`,
+      }));
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") expect(result.left._tag).toBe("Conflict");
+      const [submission] = await db.select().from(submissions).where(eq(submissions.id, submissionId));
+      expect(submission).toMatchObject({ status: sourceStatus, version });
+      expect(await db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, submissionId))).toEqual([]);
+    },
+  );
+
+  it.each(["accepted", "rejected", "withdrawn"] as const)(
+    "does not reject a %s submission",
+    async (sourceStatus) => {
+      const { submissionId, version } = await seedTransitionSubmission(sourceStatus);
+      const result = await runEitherAs(owner, rejectSubmission({
+        eventId: fixtureEventId,
+        submissionId,
+        expectedVersion: version,
+        idempotencyKey: `reject-denied-${sourceStatus}-${submissionId}`,
+        requestId: `request_reject_denied_${sourceStatus}_${submissionId}`,
+      }));
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") expect(result.left._tag).toBe("Conflict");
+      const [submission] = await db.select().from(submissions).where(eq(submissions.id, submissionId));
+      expect(submission).toMatchObject({ status: sourceStatus, version });
+      expect(await db.select().from(domainChanges).where(eq(domainChanges.requestId, `request_reject_denied_${sourceStatus}_${submissionId}`))).toEqual([]);
+    },
+  );
+
+  it("rejects stale versions for both acceptance and rejection without changing status", async () => {
+    const acceptance = await seedTransitionSubmission("submitted", 2);
+    const rejection = await seedTransitionSubmission("waitlist", 2);
+
+    const [acceptResult, rejectResult] = await Promise.all([
+      runEitherAs(owner, acceptSubmission({
+        eventId: fixtureEventId,
+        submissionId: acceptance.submissionId,
+        expectedVersion: 1,
+        idempotencyKey: `accept-stale-${acceptance.submissionId}`,
+        requestId: `request_accept_stale_${acceptance.submissionId}`,
+      })),
+      runEitherAs(owner, rejectSubmission({
+        eventId: fixtureEventId,
+        submissionId: rejection.submissionId,
+        expectedVersion: 1,
+        idempotencyKey: `reject-stale-${rejection.submissionId}`,
+        requestId: `request_reject_stale_${rejection.submissionId}`,
+      })),
+    ]);
+
+    expect(acceptResult._tag).toBe("Left");
+    expect(rejectResult._tag).toBe("Left");
+    if (acceptResult._tag === "Left") expect(acceptResult.left._tag).toBe("Conflict");
+    if (rejectResult._tag === "Left") expect(rejectResult.left._tag).toBe("Conflict");
+    const [acceptedRow] = await db.select().from(submissions).where(eq(submissions.id, acceptance.submissionId));
+    const [rejectedRow] = await db.select().from(submissions).where(eq(submissions.id, rejection.submissionId));
+    expect(acceptedRow).toMatchObject({ status: "submitted", version: 2 });
+    expect(rejectedRow).toMatchObject({ status: "waitlist", version: 2 });
+  });
+
+  it("atomically resolves a same-version acceptance and rejection race", async () => {
+    const { submissionId, version } = await seedTransitionSubmission("in_review");
+    const results = await Promise.all([
+      runEitherAs(owner, acceptSubmission({
+        eventId: fixtureEventId,
+        submissionId,
+        expectedVersion: version,
+        idempotencyKey: `accept-race-${submissionId}`,
+        requestId: `request_accept_race_${submissionId}`,
+      })),
+      runEitherAs(owner, rejectSubmission({
+        eventId: fixtureEventId,
+        submissionId,
+        expectedVersion: version,
+        idempotencyKey: `reject-race-${submissionId}`,
+        requestId: `request_reject_race_${submissionId}`,
+      })),
+    ]);
+
+    expect(results.map((result) => result._tag).sort()).toEqual(["Left", "Right"]);
+    const failure = results.find((result) => result._tag === "Left");
+    if (failure?._tag === "Left") expect(failure.left._tag).toBe("Conflict");
+    const [submission] = await db.select().from(submissions).where(eq(submissions.id, submissionId));
+    expect(["accepted", "rejected"]).toContain(submission?.status);
+    expect(submission?.version).toBe(version + 1);
+    const acceptance = await db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, submissionId));
+    expect(acceptance).toHaveLength(submission?.status === "accepted" ? 1 : 0);
   });
 
   it("rejects stale acceptance and atomically creates one durable acceptance plus primary-speaker provisioning", async () => {
