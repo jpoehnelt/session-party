@@ -25,7 +25,7 @@ import * as contractSchema from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { recoverMailScheduler } from "@/server/index";
 import { MAIL_SCHEDULER_NAME } from "@/server/party/Scheduler";
 import { AppLayer, Authorizer, CurrentUser, Db, MailQueue, type AppDatabase } from "@/server/services";
@@ -311,6 +311,14 @@ const publishAgenda = async (
 beforeAll(async () => {
   if (!hasMigrations(env)) throw new Error("TEST_MIGRATIONS test binding is unavailable");
   await applyD1Migrations(env.DB, [...env.TEST_MIGRATIONS]);
+});
+
+afterAll(async () => {
+  const scheduler = env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
+  await runInDurableObject(scheduler, async (_instance, state) => {
+    await state.storage.deleteAlarm();
+    await state.storage.deleteAll();
+  });
 });
 
 describe("communications authorization and validation", () => {

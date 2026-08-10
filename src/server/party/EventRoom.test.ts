@@ -17,21 +17,6 @@ type TestEnv = Cloudflare.Env & {
 const EVENT_ID = "room-authority-event";
 const expiresAt = 4_102_444_800_000;
 
-const connect = async (credential: { cookie: string } | { bearer: string }): Promise<WebSocket> => {
-  const headers = new Headers({ Upgrade: "websocket" });
-  if ("cookie" in credential) headers.set("Cookie", `sp_session=${credential.cookie}`);
-  else headers.set("Authorization", `Bearer ${credential.bearer}`);
-  const response = await SELF.fetch(
-    `https://example.test/parties/event-room/${EVENT_ID}`,
-    { headers },
-  );
-  expect(response.status).toBe(101);
-  const socket = response.webSocket;
-  if (!socket) throw new Error("EventRoom upgrade did not return a WebSocket");
-  socket.accept();
-  return socket;
-};
-
 const waitForType = (
   socket: WebSocket,
   type: ServerMessage["t"],
@@ -52,6 +37,23 @@ const waitForMessage = (
     };
     socket.addEventListener("message", onMessage);
   });
+
+const connect = async (credential: { cookie: string } | { bearer: string }): Promise<WebSocket> => {
+  const headers = new Headers({ Upgrade: "websocket" });
+  if ("cookie" in credential) headers.set("Cookie", `sp_session=${credential.cookie}`);
+  else headers.set("Authorization", `Bearer ${credential.bearer}`);
+  const response = await SELF.fetch(
+    `https://example.test/parties/event-room/${EVENT_ID}`,
+    { headers },
+  );
+  expect(response.status).toBe(101);
+  const socket = response.webSocket;
+  if (!socket) throw new Error("EventRoom upgrade did not return a WebSocket");
+  const ready = "cookie" in credential ? waitForType(socket, "room/presence") : undefined;
+  socket.accept();
+  await ready;
+  return socket;
+};
 
 const broadcast = async (message: ServerMessage): Promise<void> => {
   const id = env.EVENT_ROOM.idFromName(EVENT_ID);
