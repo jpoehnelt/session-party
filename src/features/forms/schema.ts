@@ -41,6 +41,13 @@ export const FORM_SEMANTIC_KEYS = [
 
 export const FormSemanticKey = Schema.Literal(...FORM_SEMANTIC_KEYS);
 export type FormSemanticKey = typeof FormSemanticKey.Type;
+const PRIMARY_CFP_SEMANTIC_KEYS = [
+  "submissionTitle",
+  "submissionAbstract",
+  "speakerName",
+  "speakerEmail",
+] as const;
+
 
 export const FORM_FIELD_OPTION_TYPES: Readonly<Record<FormFieldType, boolean>> = {
   text: false,
@@ -241,6 +248,46 @@ export const projectActiveAnswers = (
   return { visibleFields, activeAnswers };
 };
 
+export const validatePrimaryCfpSemantics = (
+  purpose: FormDetail["purpose"],
+  fields: readonly FormField[],
+): readonly PublishValidationIssue[] => {
+  if (purpose !== "primary-cfp") return [];
+  const issues: PublishValidationIssue[] = [];
+  for (const requiredKey of PRIMARY_CFP_SEMANTIC_KEYS) {
+    const assignedFields = fields.filter((field) => field.semanticKey === requiredKey);
+    const assignedField = assignedFields[0];
+    if (assignedFields.length !== 1 || !assignedField) {
+      issues.push({
+        controlId: assignedField
+          ? `builder-field-${assignedField.id}-semantic-key`
+          : (fields[0] ? `builder-field-${fields[0].id}-semantic-key` : "builder-add-field"),
+        message: `The primary CFP needs exactly one ${requiredKey} field.`,
+      });
+      continue;
+    }
+    if (!assignedField.required) {
+      issues.push({
+        controlId: `builder-field-${assignedField.id}-semantic-key`,
+        message: `The primary CFP ${requiredKey} field must be required.`,
+      });
+    }
+    if (assignedField.logic !== null) {
+      issues.push({
+        controlId: `builder-field-${assignedField.id}-semantic-key`,
+        message: `The primary CFP ${requiredKey} field cannot be conditional.`,
+      });
+    }
+    if (!isStringCompatibleFieldType(assignedField.type)) {
+      issues.push({
+        controlId: `builder-field-${assignedField.id}-type`,
+        message: `The primary CFP ${requiredKey} field must submit a text value.`,
+      });
+    }
+  }
+  return issues;
+};
+
 export const validatePublishIntent = (form: FormDetail): readonly PublishValidationIssue[] => {
   const issues: PublishValidationIssue[] = [];
   if (form.name.trim().length === 0) {
@@ -299,39 +346,7 @@ export const validatePublishIntent = (form: FormDetail): readonly PublishValidat
       }
     });
   }
-  if (form.purpose === "primary-cfp") {
-    for (const requiredKey of ["submissionTitle", "submissionAbstract", "speakerName"] as const) {
-      const assignedFields = form.fields.filter((field) => field.semanticKey === requiredKey);
-      const assignedField = assignedFields[0];
-      if (assignedFields.length !== 1 || !assignedField) {
-        issues.push({
-          controlId: assignedField
-            ? `builder-field-${assignedField.id}-semantic-key`
-            : (form.fields[0] ? `builder-field-${form.fields[0].id}-semantic-key` : "builder-add-field"),
-          message: `The primary CFP needs exactly one ${requiredKey} field.`,
-        });
-        continue;
-      }
-      if (!assignedField.required) {
-        issues.push({
-          controlId: `builder-field-${assignedField.id}-semantic-key`,
-          message: `The primary CFP ${requiredKey} field must be required.`,
-        });
-      }
-      if (assignedField.logic !== null) {
-        issues.push({
-          controlId: `builder-field-${assignedField.id}-semantic-key`,
-          message: `The primary CFP ${requiredKey} field cannot be conditional.`,
-        });
-      }
-      if (!isStringCompatibleFieldType(assignedField.type)) {
-        issues.push({
-          controlId: `builder-field-${assignedField.id}-type`,
-          message: `The primary CFP ${requiredKey} field must submit a text value.`,
-        });
-      }
-    }
-  }
+  issues.push(...validatePrimaryCfpSemantics(form.purpose, form.fields));
   if (form.purpose === "primary-cfp") {
     const completeRouter = form.fields.find((field) =>
       (field.type === "select" || field.type === "radio") &&

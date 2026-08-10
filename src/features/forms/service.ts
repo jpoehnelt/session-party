@@ -22,6 +22,7 @@ import {
   FormDetail,
   DeleteFormOutput,
   Routing,
+  validatePrimaryCfpSemantics,
   type CreateFormInput,
   type DeleteFormInput,
   type DeleteFormOutput as DeleteFormOutputType,
@@ -337,20 +338,12 @@ const validateFields = (
   return problem ? Effect.fail(new Validation({ message: problem })) : Effect.void;
 };
 
-const validatePrimaryPublishSemantics = (
+const requirePrimaryPublishSemantics = (
   purposeValue: FormDetail["purpose"],
   fields: readonly FormField[],
 ): Effect.Effect<void, Validation> => {
-  if (purposeValue !== "primary-cfp") return Effect.void;
-  for (const semanticKey of ["submissionTitle", "submissionAbstract"] as const) {
-    const count = fields.filter((field) => field.semanticKey === semanticKey).length;
-    if (count !== 1) {
-      return Effect.fail(new Validation({
-        message: `The primary CFP needs exactly one '${semanticKey}' field`,
-      }));
-    }
-  }
-  return Effect.void;
+  const issue = validatePrimaryCfpSemantics(purposeValue, fields)[0];
+  return issue ? Effect.fail(new Validation({ message: issue.message })) : Effect.void;
 };
 
 const loadCommandReplay = (
@@ -929,7 +922,7 @@ export const publishForm = (
       return yield* Effect.fail(new Conflict({ message: `Expected form version ${input.expectedVersion}, found ${before.version}` }));
     }
     yield* validateFields(before.name, before.purpose, before.opensAt, before.closesAt, before.fields);
-    yield* validatePrimaryPublishSemantics(before.purpose, before.fields);
+    yield* requirePrimaryPublishSemantics(before.purpose, before.fields);
     const now = new Date();
     const versionId = nanoid();
     const versionNumber = (before.publishedVersion?.versionNumber ?? 0) + 1;
