@@ -43,7 +43,7 @@ const runAs = <A, E>(principal: Principal, effect: Effect.Effect<A, E, Db | Curr
   );
 
 const fixtureDraftFields = [
-  ...routedFormsFixture.forms[0]!.fields.map((field) => ({
+  ...routedFormsFixture.forms[0]!.fields.slice(0, 3).map((field) => ({
     id: field.id,
     type: field.type,
     label: field.label,
@@ -65,6 +65,18 @@ const fixtureDraftFields = [
     logic: null,
     routing: {},
   },
+  {
+    id: "field-speaker-email",
+    type: "email" as const,
+    label: "Speaker email",
+    semanticKey: "speakerEmail" as const,
+    helpText: null,
+    required: true,
+    options: [],
+    logic: null,
+    routing: {},
+  },
+
 ] as unknown as CreateFormInput["fields"];
 
 const prefixDraftFields = (prefix: string): CreateFormInput["fields"] =>
@@ -94,6 +106,19 @@ const primaryPublishFixture = () => {
         type: "text",
         label: "Speaker name",
         semanticKey: "speakerName",
+        helpText: null,
+        required: true,
+        options: [],
+        logic: null,
+        routing: {},
+        version: 1,
+      },
+      {
+        id: "field-speaker-email",
+        order: fixture.fields.length + 2,
+        type: "email",
+        label: "Speaker email",
+        semanticKey: "speakerEmail",
         helpText: null,
         required: true,
         options: [],
@@ -240,12 +265,22 @@ describe("forms organizer behavior", () => {
       message: "The primary CFP needs exactly one speakerName field.",
     }]);
 
+    const missingSpeakerEmail: typeof valid = {
+      ...valid,
+      fields: valid.fields.map((field) =>
+        field.semanticKey === "speakerEmail" ? { ...field, semanticKey: null } : field),
+    };
+    expect(validatePublishIntent(missingSpeakerEmail)).toEqual([{
+      controlId: "builder-field-field-session-title-semantic-key",
+      message: "The primary CFP needs exactly one speakerEmail field.",
+    }]);
+
     const missingPrimarySemantics: typeof valid = {
       ...valid,
       fields: valid.fields.map((field) => ({ ...field, semanticKey: null })),
     };
     expect(validatePublishIntent(missingPrimarySemantics).filter((issue) =>
-      issue.message.startsWith("The primary CFP needs exactly one"))).toHaveLength(3);
+      issue.message.startsWith("The primary CFP needs exactly one"))).toHaveLength(4);
     expect(validatePublishIntent(valid)).toEqual([]);
 
     const invalid: typeof valid = {
@@ -290,6 +325,7 @@ describe("forms organizer behavior", () => {
     "submissionTitle",
     "submissionAbstract",
     "speakerName",
+    "speakerEmail",
   ] as const)("rejects an optional %s field for the primary CFP", (semanticKey) => {
     const form = primaryPublishFixture();
     const assignedField = form.fields.find((field) => field.semanticKey === semanticKey)!;
@@ -305,13 +341,16 @@ describe("forms organizer behavior", () => {
     });
   });
 
-  it("rejects a conditional canonical field for the primary CFP", () => {
+  it.each([
+    "speakerName",
+    "speakerEmail",
+  ] as const)("rejects a conditional %s field for the primary CFP", (semanticKey) => {
     const form = primaryPublishFixture();
-    const speakerName = form.fields.find((field) => field.semanticKey === "speakerName")!;
+    const assignedField = form.fields.find((field) => field.semanticKey === semanticKey)!;
     const conditional = {
       ...form,
       fields: form.fields.map((field) =>
-        field.id === speakerName.id
+        field.id === assignedField.id
           ? {
               ...field,
               logic: {
@@ -327,31 +366,36 @@ describe("forms organizer behavior", () => {
     };
 
     expect(validatePublishIntent(conditional)).toContainEqual({
-      controlId: `builder-field-${speakerName.id}-semantic-key`,
-      message: "The primary CFP speakerName field cannot be conditional.",
+      controlId: `builder-field-${assignedField.id}-semantic-key`,
+      message: `The primary CFP ${semanticKey} field cannot be conditional.`,
     });
   });
 
   it.each([
-    "checkbox",
-    "multiselect",
-    "file",
-    "heading",
-    "html",
-  ] as const)("rejects a %s canonical field for the primary CFP", (type) => {
+    ["speakerName", "checkbox"],
+    ["speakerName", "multiselect"],
+    ["speakerName", "file"],
+    ["speakerName", "heading"],
+    ["speakerName", "html"],
+    ["speakerEmail", "checkbox"],
+    ["speakerEmail", "multiselect"],
+    ["speakerEmail", "file"],
+    ["speakerEmail", "heading"],
+    ["speakerEmail", "html"],
+  ] as const)("rejects a %s %s field for the primary CFP", (semanticKey, type) => {
     const form = primaryPublishFixture();
-    const speakerName = form.fields.find((field) => field.semanticKey === "speakerName")!;
+    const assignedField = form.fields.find((field) => field.semanticKey === semanticKey)!;
     const incompatible = {
       ...form,
       fields: form.fields.map((field) =>
-        field.id === speakerName.id
+        field.id === assignedField.id
           ? { ...field, type, options: type === "multiselect" ? ["One"] : [] }
           : field),
     };
 
     expect(validatePublishIntent(incompatible)).toContainEqual({
-      controlId: `builder-field-${speakerName.id}-type`,
-      message: "The primary CFP speakerName field must submit a text value.",
+      controlId: `builder-field-${assignedField.id}-type`,
+      message: `The primary CFP ${semanticKey} field must submit a text value.`,
     });
   });
 
@@ -595,6 +639,7 @@ describe("forms service", () => {
       "submissionTitle",
       "submissionAbstract",
       "speakerName",
+      "speakerEmail",
     ]);
 
     const published = await runAs(owner, publishForm({
@@ -789,11 +834,13 @@ describe("forms service", () => {
     const now = new Date(FORMS_FIXTURE_NOW);
     const duplicateEventId = "event-semantic-duplicates";
     const primaryEventId = "event-semantic-primary";
+    const invalidIdentityEventId = "event-semantic-invalid-identity";
     const additionalEventId = "event-semantic-additional";
     const legacyEventId = "event-semantic-legacy";
     await db.insert(events).values([
       { id: duplicateEventId, slug: "semantic-duplicates", name: "Semantic duplicates", createdAt: now, updatedAt: now },
       { id: primaryEventId, slug: "semantic-primary", name: "Semantic primary", createdAt: now, updatedAt: now },
+      { id: invalidIdentityEventId, slug: "semantic-invalid-identity", name: "Semantic invalid identity", createdAt: now, updatedAt: now },
       { id: additionalEventId, slug: "semantic-additional", name: "Semantic additional", createdAt: now, updatedAt: now },
       { id: legacyEventId, slug: "semantic-legacy", name: "Semantic legacy", createdAt: now, updatedAt: now },
     ]);
@@ -846,7 +893,34 @@ describe("forms service", () => {
     if (rejectedPublish._tag === "Left") {
       expect(rejectedPublish.left).toMatchObject({
         _tag: "Validation",
-        message: "The primary CFP needs exactly one 'submissionAbstract' field",
+        message: "The primary CFP needs exactly one submissionAbstract field.",
+      });
+    }
+
+    const optionalEmailFields = prefixDraftFields("semantic-invalid-identity").map((field) =>
+      field.semanticKey === "speakerEmail" ? { ...field, required: false } : field
+    ) as unknown as CreateFormInput["fields"];
+    const invalidIdentity = await runAs(owner, createForm({
+      eventId: invalidIdentityEventId,
+      purpose: "primary-cfp",
+      name: "Primary with optional speaker email",
+      description: null,
+      opensAt: null,
+      closesAt: null,
+      fields: optionalEmailFields,
+      idempotencyKey: "forms-semantic-invalid-identity-create-001",
+    }));
+    const rejectedIdentityPublish = await runAs(owner, publishForm({
+      eventId: invalidIdentityEventId,
+      formId: invalidIdentity.id,
+      expectedVersion: invalidIdentity.version,
+      idempotencyKey: "forms-semantic-invalid-identity-publish-001",
+    }).pipe(Effect.either));
+    expect(rejectedIdentityPublish._tag).toBe("Left");
+    if (rejectedIdentityPublish._tag === "Left") {
+      expect(rejectedIdentityPublish.left).toMatchObject({
+        _tag: "Validation",
+        message: "The primary CFP speakerEmail field must be required.",
       });
     }
 
