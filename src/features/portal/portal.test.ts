@@ -8,6 +8,7 @@ import {
   assets,
   auditLog,
   domainChanges,
+  eventMembers,
   idempotencyRecords,
   integrations,
   pages,
@@ -52,6 +53,7 @@ import {
   updateSpeakerPublication,
   uploadPortalAsset,
 } from "./service";
+import { listEventAccess } from "@/features/events/service";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
 type PortalRequirements = AirtableSync | Authorizer | CurrentUser | Db | Files | Rooms;
@@ -214,6 +216,8 @@ describe("portal service", () => {
       event: { id: setup.eventId, slug: setup.eventSlug },
       speaker: { id: setup.speakerId },
     });
+    expect((await runAs(speakerUser, listEventAccess())).find(({ event }) => event.id === setup.eventId))
+      .toMatchObject({ memberRole: null, speakerPortal: true });
   });
 
   it("claims the current accepted primary speaker by normalized immutable email and enables provisioning", async () => {
@@ -265,6 +269,50 @@ describe("portal service", () => {
       provisioningStatus: "provisioned",
       speaker: { id: setup.speakerId },
     });
+  });
+
+  it("preserves organizer membership while linking and provisioning the same user as a speaker", async () => {
+    const setup = await fixture({ linkedUserId: null });
+    const createdAt = new Date();
+    const db = drizzle(env.DB);
+    await db.insert(eventMembers).values({
+      id: `dual-role-member-${setup.eventId}`,
+      eventId: setup.eventId,
+      userId: speakerUser.userId,
+      role: "owner",
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    const claimed = await runAs(speakerUser, claimSpeaker({
+      eventId: setup.eventSlug,
+      idempotencyKey: `dual-role-claim-${setup.eventId}`,
+    }));
+
+    const [membershipAfterClaim] = await db.select().from(eventMembers).where(and(
+      eq(eventMembers.eventId, setup.eventId),
+      eq(eventMembers.userId, speakerUser.userId),
+    ));
+    expect(membershipAfterClaim).toMatchObject({ role: "owner", version: 1 });
+
+    await runAs(speakerUser, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: claimed.provisioningVersion,
+    }));
+
+    await expect(runAs(speakerUser, getPortalDashboard({ eventId: setup.eventId })))
+      .resolves.toMatchObject({ event: { id: setup.eventId } });
+    await expect(runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug })))
+      .resolves.toMatchObject({ event: { id: setup.eventId }, speaker: { id: setup.speakerId } });
+    expect((await runAs(speakerUser, listEventAccess())).find(({ event }) => event.id === setup.eventId))
+      .toMatchObject({ memberRole: "owner", speakerPortal: true });
+    const [membershipAfterProvisioning] = await db.select().from(eventMembers).where(and(
+      eq(eventMembers.eventId, setup.eventId),
+      eq(eventMembers.userId, speakerUser.userId),
+    ));
+    expect(membershipAfterProvisioning).toMatchObject({ role: "owner", version: 1 });
   });
 
   it("rejects mismatched, revoked, and other-user-linked speaker claims without evidence", async () => {

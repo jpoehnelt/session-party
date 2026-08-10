@@ -15,7 +15,8 @@ type DemoLoginResponse = { readonly returnTo: string };
 
 export default function LoginPage() {
   const { search } = useLocation();
-  const returnTo = validReturnTo(search) ?? "/events";
+  const requestedReturnTo = validReturnTo(search);
+  const returnTo = requestedReturnTo ?? "/events";
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string>();
@@ -28,7 +29,7 @@ export default function LoginPage() {
     try {
       const result = await apiFetch<DemoLoginResponse>("/api/v1/auth/demo", {
         method: "POST",
-        body: { persona, returnTo },
+        body: { persona, ...(requestedReturnTo ? { returnTo: requestedReturnTo } : {}) },
       });
       window.location.assign(result.returnTo);
     } catch (cause) {

@@ -25,6 +25,7 @@ import {
   createEvent,
   getEvent,
   listEventMembers,
+  listEventAccess,
   listEventApiKeys,
   listEvents,
   removeEventMember,
@@ -169,6 +170,11 @@ describe("events service", () => {
 
     expect(created.slug).toBe("effect-summit");
     await expect(runAs(owner, listEvents())).resolves.toEqual([created]);
+    await expect(runAs(owner, listEventAccess())).resolves.toEqual([{
+      event: created,
+      memberRole: "owner",
+      speakerPortal: false,
+    }]);
     await expect(runAs(owner, getEvent(created.id))).resolves.toEqual(created);
     await expect(runAs(owner, getEvent(created.slug))).resolves.toEqual(created);
   });

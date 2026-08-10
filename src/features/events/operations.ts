@@ -9,6 +9,7 @@ import {
   createEvent,
   getEvent,
   listEventMembers,
+  listEventAccess,
   listEventApiKeys,
   listEvents,
   removeEventMember,
@@ -22,6 +23,7 @@ import {
   CreateEventApiKeyInput,
   CreateEventApiKeyOutput,
   EventApiKey,
+  EventAccess,
   EventMember,
   EventOutput,
   ListEventMembersInput,
@@ -70,6 +72,12 @@ export const operations = [
     rest: { method: "patch", path: "/events/:idOrSlug", input: { path: ["idOrSlug"], body: ["name", "slug", "description", "location", "timezone", "startsAt", "endsAt", "accentColor"] }, successStatus: 200 },
     idempotency: "none", concurrency: "none", emits: [],
   },
+  {
+    id: "events.listAccess", kind: "query", input: Schema.Struct({}), output: Schema.Array(EventAccess),
+    authorize: browserSessionAuthorization, invoke: listEventAccess,
+    rest: { method: "get", path: "/me/events", input: {}, summary: "List event-scoped browser destinations for the signed-in user", successStatus: 200 },
+    idempotency: "none", concurrency: "none", emits: [],
+  } satisfies AnyOperationDef,
   {
     id: "events.addMember", kind: "command", input: AddEventMemberInput, output: AddEventMemberOutput,
     authorize: memberManagementAuthorization, invoke: addEventMember,

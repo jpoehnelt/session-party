@@ -65,6 +65,9 @@ SELECT
   (SELECT count(*) FROM tasks WHERE event_id = '${eventId}') AS tasks,
   (SELECT count(*) FROM pages WHERE event_id = '${eventId}') AS resources,
   (SELECT count(*) FROM assets WHERE event_id = '${eventId}') AS assets,
+  (SELECT count(*) FROM event_members m INNER JOIN users u ON u.id = m.user_id WHERE m.event_id = '${eventId}' AND m.role = 'owner' AND u.email = 'sbek-organizer@example.com') AS organizer_personas,
+  (SELECT count(*) FROM event_members m INNER JOIN users u ON u.id = m.user_id WHERE m.event_id = '${eventId}' AND m.role = 'reviewer' AND u.email = 'sbek-reviewer@example.com') AS reviewer_personas,
+  (SELECT count(*) FROM speakers s INNER JOIN users u ON u.id = s.user_id WHERE s.event_id = '${eventId}' AND s.display_name = 'Priya Raman' AND u.email = 'sbek-speaker@example.com') AS speaker_personas,
   (SELECT count(*) FROM mail_deliveries d INNER JOIN mail_delivery_snapshots s ON s.id = d.snapshot_id WHERE s.event_id = '${eventId}' AND d.status = 'sent') AS sent_mail,
   (SELECT count(*) FROM accelevents_import_runs WHERE event_id = '${eventId}' AND status = 'succeeded') AS completed_imports;
 `;
@@ -81,6 +84,9 @@ type Verification = {
   readonly tasks: number;
   readonly resources: number;
   readonly assets: number;
+  readonly organizer_personas: number;
+  readonly reviewer_personas: number;
+  readonly speaker_personas: number;
   readonly sent_mail: number;
   readonly completed_imports: number;
 };
@@ -135,6 +141,9 @@ const verifyDemo = (row: Record<string, unknown>, location: "local" | "productio
     tasks: 5,
     resources: 1,
     assets: 3,
+    organizer_personas: 1,
+    reviewer_personas: 1,
+    speaker_personas: 1,
     sent_mail: (value) => value >= 1,
     completed_imports: (value) => value >= 2,
   };

@@ -40,15 +40,20 @@ const DEMO_IDENTITIES: Readonly<Record<DemoPersona, { readonly email: string; re
   reviewer: { email: "sbek-reviewer@example.com", name: "Sam Whitfield" },
 };
 const DEMO_EVENT = {
-  name: "DevFlow Conf 2027",
-  slug: "devflow-conf-2027",
-  description: "A three-day conference for engineers building reliable developer platforms and AI systems.",
-  location: "Moscone West, San Francisco",
+  name: "AI Engineer Sandbox",
+  slug: "ai-engineer-sandbox",
+  description: "A deterministic end-to-end conference production workspace.",
+  location: "Pier 27, San Francisco",
   timezone: "America/Los_Angeles",
-  startsAt: Date.parse("2027-05-12T09:00:00-07:00"),
-  endsAt: Date.parse("2027-05-14T17:00:00-07:00"),
-  accentColor: "#7857ff",
+  startsAt: Date.parse("2026-09-17T09:00:00-07:00"),
+  endsAt: Date.parse("2026-09-19T16:00:00-07:00"),
+  accentColor: "#635BFF",
 } as const;
+const DEMO_DESTINATIONS: Readonly<Record<DemoPersona, string>> = {
+  organizer: `/e/${DEMO_EVENT.slug}/dashboard`,
+  speaker: `/e/${DEMO_EVENT.slug}/portal`,
+  reviewer: `/e/${DEMO_EVENT.slug}/review`,
+};
 const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
@@ -277,11 +282,21 @@ const ensureDemoSeed = async (
   ).bind(DEMO_EVENT.slug).first<{ id: string }>();
   if (!event) throw new Error("Demo event was not created");
 
-  await env.DB.prepare(
-    `INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)
-     VALUES (?, ?, ?, 'owner', 1, ?, ?)
-     ON CONFLICT(event_id, user_id) DO NOTHING`,
-  ).bind(nanoid(), event.id, demoUsers.organizer, nowMs, nowMs).run();
+  const memberships = [
+    { persona: "organizer", role: "owner" },
+    { persona: "reviewer", role: "reviewer" },
+  ] as const;
+  await env.DB.batch(memberships.map(({ persona, role }) =>
+    env.DB.prepare(
+      `INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?)
+       ON CONFLICT(event_id, user_id) DO UPDATE SET
+         role = excluded.role,
+         version = event_members.version + 1,
+         updated_at = excluded.updated_at
+       WHERE event_members.role <> excluded.role`,
+    ).bind(nanoid(), event.id, demoUsers[persona], role, nowMs, nowMs),
+  ));
 
   return { users: demoUsers, eventId: event.id };
 };
@@ -405,7 +420,9 @@ auth.post("/demo", async (c) => {
       email: identity.email,
       name: identity.name,
       event: { id: seed.eventId, slug: DEMO_EVENT.slug, name: DEMO_EVENT.name },
-      returnTo: validatedReturnTo(parsed.returnTo),
+      returnTo: parsed.returnTo === undefined || parsed.returnTo === "/events"
+        ? DEMO_DESTINATIONS[parsed.persona]
+        : validatedReturnTo(parsed.returnTo),
     });
   } catch (error) {
     return unexpectedResponse(c, "demo authentication", error, requestId);

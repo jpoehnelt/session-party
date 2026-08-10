@@ -115,7 +115,7 @@ describe("hackathon demo authentication", () => {
       persona,
       email,
       name,
-      event: { slug: "devflow-conf-2027", name: "DevFlow Conf 2027" },
+      event: { slug: "ai-engineer-sandbox", name: "AI Engineer Sandbox" },
       returnTo: "/events?from=demo#top",
     });
     const cookie = response.headers.get("set-cookie");
@@ -143,7 +143,22 @@ describe("hackathon demo authentication", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
-  it("seeds the eval event and identities without bypassing reviewer or speaker provisioning", async () => {
+  it.each([
+    ["organizer", "/e/ai-engineer-sandbox/dashboard"],
+    ["speaker", "/e/ai-engineer-sandbox/portal"],
+    ["reviewer", "/e/ai-engineer-sandbox/review"],
+  ])("routes the %s persona into its seeded workspace", async (persona, returnTo) => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona, returnTo: "/events" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ returnTo });
+  });
+
+  it("connects the demo personas to the canonical event with least-privilege roles", async () => {
     await SELF.fetch("https://example.test/api/v1/auth/demo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -153,31 +168,37 @@ describe("hackathon demo authentication", () => {
     const seed = await env.DB.prepare(
       `SELECT
         (SELECT count(*) FROM users WHERE email IN (?, ?, ?)) AS user_count,
-        (SELECT count(*) FROM events WHERE slug = 'devflow-conf-2027' AND name = 'DevFlow Conf 2027') AS event_count,
+        (SELECT count(*) FROM events WHERE slug = 'ai-engineer-sandbox' AND name = 'AI Engineer Sandbox') AS event_count,
         (SELECT count(*)
          FROM event_members m
          JOIN events e ON e.id = m.event_id
          JOIN users u ON u.id = m.user_id
-         WHERE e.slug = 'devflow-conf-2027' AND u.email = ? AND m.role = 'owner') AS owner_count,
+         WHERE e.slug = 'ai-engineer-sandbox' AND u.email = ? AND m.role = 'owner') AS owner_count,
         (SELECT count(*)
          FROM event_members m
          JOIN events e ON e.id = m.event_id
          JOIN users u ON u.id = m.user_id
-         WHERE e.slug = 'devflow-conf-2027' AND u.email IN (?, ?)) AS provisioned_non_owner_count`,
+         WHERE e.slug = 'ai-engineer-sandbox' AND u.email = ? AND m.role = 'reviewer') AS reviewer_count,
+        (SELECT count(*)
+         FROM event_members m
+         JOIN events e ON e.id = m.event_id
+         JOIN users u ON u.id = m.user_id
+         WHERE e.slug = 'ai-engineer-sandbox' AND u.email = ?) AS speaker_member_count`,
     ).bind(
       "sbek-organizer@example.com",
-      "sbek-speaker@example.com",
       "sbek-reviewer@example.com",
+      "sbek-speaker@example.com",
       "sbek-organizer@example.com",
-      "sbek-speaker@example.com",
       "sbek-reviewer@example.com",
+      "sbek-speaker@example.com",
     ).first();
 
     expect(seed).toEqual({
       user_count: 3,
       event_count: 1,
       owner_count: 1,
-      provisioned_non_owner_count: 0,
+      reviewer_count: 1,
+      speaker_member_count: 0,
     });
   });
 
