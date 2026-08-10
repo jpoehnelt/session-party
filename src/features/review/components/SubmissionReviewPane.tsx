@@ -111,7 +111,7 @@ function ScoreRationales({
                         {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(review.updatedAt)} {timezone} · version {review.version}
                       </p>
                     </div>
-                    <Badge tone="neutral">Human · {review.score.toFixed(1)} / 5</Badge>
+                    <Badge tone="neutral">Human · {review.score === null ? "Unscored" : `${review.score.toFixed(1)} / 5`}</Badge>
                   </header>
                   <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-ink-secondary">
                     {review.comment || "No written comment supplied."}
@@ -557,7 +557,9 @@ export function SubmissionReviewPane({
             )}
           </div>
           <p className="mt-3 text-sm leading-6 text-ink-secondary">{suggestion.comment}</p>
-          <p className="mt-2 text-xs text-ink-faint">Input limited to: title, abstract, rubric. Suggested average {suggestion.score.toFixed(1)} / 5.</p>
+          <p className="mt-2 text-xs text-ink-faint">
+            Input limited to: title, abstract, rubric. Suggested average {suggestion.score === null ? "unscored" : `${suggestion.score.toFixed(1)} / 5`}.
+          </p>
         </Card>
       ))}
 

@@ -467,7 +467,6 @@ export const updateTemplate = (
 
 interface AudienceRow {
   readonly submissionId: string;
-  readonly submissionStatus: string;
   readonly sessionTitle: string;
   readonly speakerId: string;
   readonly speakerName: string;
@@ -481,7 +480,6 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
     const rows: readonly AudienceRow[] = yield* database(() =>
       db.select({
         submissionId: submissions.id,
-        submissionStatus: submissions.status,
         sessionTitle: submissions.title,
         speakerId: speakers.id,
         speakerName: speakers.displayName,

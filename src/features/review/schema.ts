@@ -206,7 +206,7 @@ export const HumanReview = Schema.Struct({
   id: EntityId,
   reviewerUserId: EntityId,
   reviewerName: NonEmptyText,
-  score: Schema.Number.pipe(Schema.between(1, 5)),
+  score: Schema.NullOr(Schema.Number.pipe(Schema.between(1, 5))),
   scores: Schema.Array(CriterionScore),
   comment: Schema.NullOr(Schema.String.pipe(Schema.maxLength(5_000))),
   version: Schema.Int.pipe(Schema.positive()),
@@ -226,7 +226,7 @@ export type ReviewThreadComment = typeof ReviewThreadComment.Type;
 export const AiSuggestion = Schema.Struct({
   id: EntityId,
   label: Schema.Literal("AI suggestion — requires human confirmation"),
-  score: Schema.Number.pipe(Schema.between(1, 5)),
+  score: Schema.NullOr(Schema.Number.pipe(Schema.between(1, 5))),
   scores: Schema.Array(CriterionScore),
   comment: Schema.String.pipe(Schema.maxLength(5_000)),
   version: Schema.Int.pipe(Schema.positive()),

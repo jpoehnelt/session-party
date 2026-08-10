@@ -2371,6 +2371,10 @@ export const updatePortalTask = (input: UpdateTaskInput): Effect.Effect<PortalTa
     actor,
     updatedAt,
   );
+  const assignmentCommitMarker = and(
+    eq(domainChanges.eventId, input.eventId),
+    eq(domainChanges.id, change.id),
+  );
   const [, updatedRows] = yield* database(() => db.batch([
     db.insert(domainChanges).select(
       db.select(changeSelection(change)).from(tasks).where(guard),
@@ -2389,10 +2393,20 @@ export const updatePortalTask = (input: UpdateTaskInput): Effect.Effect<PortalTa
       })
       .where(guard)
       .returning(),
-    db.delete(taskAssignments).where(and(eq(taskAssignments.eventId, input.eventId), eq(taskAssignments.taskId, input.taskId))),
-    ...(speakerIds.length > 0 ? [db.insert(taskAssignments).values(speakerIds.map((speakerId) => ({
-      id: id("task_assignment"), eventId: input.eventId, taskId: input.taskId, speakerId, createdAt: updatedAt,
-    })))] : []),
+    db.delete(taskAssignments).where(and(
+      eq(taskAssignments.eventId, input.eventId),
+      eq(taskAssignments.taskId, input.taskId),
+      sql`exists (select 1 from domain_changes where event_id = ${input.eventId} and id = ${change.id})`,
+    )),
+    ...speakerIds.map((speakerId) => db.insert(taskAssignments).select(
+      db.select({
+        id: sql<string>`${id("task_assignment")}`.as("id"),
+        eventId: domainChanges.eventId,
+        taskId: sql<string>`${input.taskId}`.as("task_id"),
+        speakerId: sql<string>`${speakerId}`.as("speaker_id"),
+        createdAt: sql<Date>`${updatedAt.getTime()}`.as("created_at"),
+      }).from(domainChanges).where(assignmentCommitMarker),
+    )),
   ]));
   const updated = updatedRows[0];
   if (!updated) {

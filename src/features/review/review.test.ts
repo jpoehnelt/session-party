@@ -1585,6 +1585,43 @@ describe("review and acceptance slice", () => {
       { criterionKey: "recommendation", score: "decline" },
       { criterionKey: "notes", score: "Promising, but not ready." },
     ]);
+
+    await db.update(reviewRounds).set({
+      rubric: {
+        criteria: [
+          { key: "notes", label: "Notes", type: "text", weight: 0, required: true, max: 5 },
+        ],
+      },
+    }).where(eq(reviewRounds.id, "round_typed"));
+    const unscored = await runAs(reviewer, saveScore({
+      eventId,
+      roundId: "round_typed",
+      submissionId: "submission_typed",
+      expectedVersion: 1,
+      scores: [{ criterionKey: "notes", score: "Qualitative review only." }],
+      requestId: "request_text_only_score",
+    }));
+    expect(unscored.review.score).toBeNull();
+    const [persisted] = await db.select({ score: reviews.score }).from(reviews).where(eq(reviews.id, unscored.review.id));
+    expect(persisted?.score).toBe(0);
+
+    const workbench = await runAs(owner, getWorkbench({
+      eventId,
+      roundId: "round_typed",
+      selectedSubmissionId: "submission_typed",
+      order: "decision",
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(workbench.queue[0]).toMatchObject({ id: "submission_typed", completedReviewCount: 1, averageScore: null });
+    expect(workbench.selected?.reviews[0]?.score).toBeNull();
+
+    const exported = await runAs(owner, exportReviewResults({ eventId, roundId: "round_typed" }));
+    expect(exported.rows).toContainEqual(expect.objectContaining({
+      submissionId: "submission_typed",
+      aggregateScore: null,
+      responses: [{ criterionKey: "notes", score: "Qualitative review only." }],
+    }));
   });
 
   it("limits AI input, labels the suggestion, and never transitions submission status", async () => {

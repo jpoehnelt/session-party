@@ -17972,11 +17972,18 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                         "type": "string"
                       },
                       "score": {
-                        "description": "a number between 1 and 5",
-                        "maximum": 5,
-                        "minimum": 1,
-                        "title": "between(1, 5)",
-                        "type": "number"
+                        "anyOf": [
+                          {
+                            "description": "a number between 1 and 5",
+                            "maximum": 5,
+                            "minimum": 1,
+                            "title": "between(1, 5)",
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       "scores": {
                         "items": {
@@ -18346,11 +18353,18 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                         "type": "string"
                       },
                       "score": {
-                        "description": "a number between 1 and 5",
-                        "maximum": 5,
-                        "minimum": 1,
-                        "title": "between(1, 5)",
-                        "type": "number"
+                        "anyOf": [
+                          {
+                            "description": "a number between 1 and 5",
+                            "maximum": 5,
+                            "minimum": 1,
+                            "title": "between(1, 5)",
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       "scores": {
                         "items": {
@@ -18883,11 +18897,18 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "type": "string"
             },
             "score": {
-              "description": "a number between 1 and 5",
-              "maximum": 5,
-              "minimum": 1,
-              "title": "between(1, 5)",
-              "type": "number"
+              "anyOf": [
+                {
+                  "description": "a number between 1 and 5",
+                  "maximum": 5,
+                  "minimum": 1,
+                  "title": "between(1, 5)",
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "scores": {
               "items": {
@@ -20703,11 +20724,18 @@ export const partyIntents: readonly PartyIntentDescriptor[] = [
               "type": "string"
             },
             "score": {
-              "description": "a number between 1 and 5",
-              "maximum": 5,
-              "minimum": 1,
-              "title": "between(1, 5)",
-              "type": "number"
+              "anyOf": [
+                {
+                  "description": "a number between 1 and 5",
+                  "maximum": 5,
+                  "minimum": 1,
+                  "title": "between(1, 5)",
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "scores": {
               "items": {
@@ -20942,11 +20970,18 @@ export const partyIntents: readonly PartyIntentDescriptor[] = [
               "type": "string"
             },
             "score": {
-              "description": "a number between 1 and 5",
-              "maximum": 5,
-              "minimum": 1,
-              "title": "between(1, 5)",
-              "type": "number"
+              "anyOf": [
+                {
+                  "description": "a number between 1 and 5",
+                  "maximum": 5,
+                  "minimum": 1,
+                  "title": "between(1, 5)",
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "scores": {
               "items": {
@@ -43540,11 +43575,18 @@ export const openApi = {
                                     "type": "string"
                                   },
                                   "score": {
-                                    "description": "a number between 1 and 5",
-                                    "maximum": 5,
-                                    "minimum": 1,
-                                    "title": "between(1, 5)",
-                                    "type": "number"
+                                    "anyOf": [
+                                      {
+                                        "description": "a number between 1 and 5",
+                                        "maximum": 5,
+                                        "minimum": 1,
+                                        "title": "between(1, 5)",
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   },
                                   "scores": {
                                     "items": {
@@ -43914,11 +43956,18 @@ export const openApi = {
                                     "type": "string"
                                   },
                                   "score": {
-                                    "description": "a number between 1 and 5",
-                                    "maximum": 5,
-                                    "minimum": 1,
-                                    "title": "between(1, 5)",
-                                    "type": "number"
+                                    "anyOf": [
+                                      {
+                                        "description": "a number between 1 and 5",
+                                        "maximum": 5,
+                                        "minimum": 1,
+                                        "title": "between(1, 5)",
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   },
                                   "scores": {
                                     "items": {
@@ -46999,11 +47048,18 @@ export const openApi = {
                           "type": "string"
                         },
                         "score": {
-                          "description": "a number between 1 and 5",
-                          "maximum": 5,
-                          "minimum": 1,
-                          "title": "between(1, 5)",
-                          "type": "number"
+                          "anyOf": [
+                            {
+                              "description": "a number between 1 and 5",
+                              "maximum": 5,
+                              "minimum": 1,
+                              "title": "between(1, 5)",
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "scores": {
                           "items": {
@@ -47507,11 +47563,18 @@ export const openApi = {
                           "type": "string"
                         },
                         "score": {
-                          "description": "a number between 1 and 5",
-                          "maximum": 5,
-                          "minimum": 1,
-                          "title": "between(1, 5)",
-                          "type": "number"
+                          "anyOf": [
+                            {
+                              "description": "a number between 1 and 5",
+                              "maximum": 5,
+                              "minimum": 1,
+                              "title": "between(1, 5)",
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "scores": {
                           "items": {

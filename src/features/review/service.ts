@@ -328,8 +328,10 @@ const averageScore = (rubric: ReviewRubricType, scores: Readonly<Record<string, 
     weightedTotal += value * criterion.weight;
     weightTotal += criterion.weight;
   }
-  return weightTotal === 0 ? 1 : weightedTotal / weightTotal;
+  return weightTotal === 0 ? null : weightedTotal / weightTotal;
 };
+
+const visibleAggregateScore = (score: number) => score === 0 ? null : score;
 
 const orderedScores = (
   rubric: ReviewRubricType,
@@ -996,9 +998,10 @@ export const getWorkbench = (
       const humanReviews = visibleHumanReviews.filter(
         (review) => review.submissionId === submission.id && (!relevantRoundId || review.roundId === relevantRoundId),
       );
-      const score = humanReviews.length === 0
+      const scoredReviews = humanReviews.filter((review) => review.score !== 0);
+      const score = scoredReviews.length === 0
         ? null
-        : humanReviews.reduce((total, review) => total + review.score, 0) / humanReviews.length;
+        : scoredReviews.reduce((total, review) => total + review.score, 0) / scoredReviews.length;
       const reviewState = humanReviews.length > 0
         ? assignments.length > 0 && humanReviews.length >= assignments.length
           ? "complete"
@@ -1099,7 +1102,7 @@ export const getWorkbench = (
           id: review.id,
           reviewerUserId: review.reviewerUserId!,
           reviewerName: memberRows.find((member) => member.userId === review.reviewerUserId)?.name ?? "Former committee member",
-          score: review.score,
+          score: visibleAggregateScore(review.score),
           scores: selectedRound ? orderedScores(selectedRound.rubric, review.scores) : [],
           comment: review.comment,
           version: review.version,
@@ -1111,7 +1114,7 @@ export const getWorkbench = (
         .map((review) => ({
           id: review.id,
           label: "AI suggestion — requires human confirmation" as const,
-          score: review.score,
+          score: visibleAggregateScore(review.score),
           scores: selectedRound ? orderedScores(selectedRound.rubric, review.scores) : [],
           comment: review.comment ?? "",
           version: review.version,
@@ -1315,7 +1318,7 @@ export const exportReviewResults = (
         status: submission.status,
         reviewerUserId: review.reviewerUserId,
         reviewerName: review.reviewerName,
-        aggregateScore: review.score,
+        aggregateScore: visibleAggregateScore(review.score),
         responses: orderedScores(round.rubric, review.scores),
         comment: review.comment,
         completedAt: toMillis(review.updatedAt),
@@ -2077,6 +2080,7 @@ export const saveScore = (
     const reviewId = existing?.id ?? id("review");
     const version = (existing?.version ?? 0) + 1;
     const score = averageScore(round.rubric, scoreRecord);
+    const persistedScore = score ?? 0;
     const [reviewerName, committeeReviewers] = yield* Effect.all([
       database(() => db.select({ name: users.name }).from(users).where(eq(users.id, viewer.userId)).limit(1)),
       database(() => db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(
@@ -2095,8 +2099,8 @@ export const saveScore = (
       updatedAt: savedAt.getTime(),
     };
     const writeReview = existing
-      ? db.update(reviews).set({ score, scores: scoreRecord, comment: input.comment ?? null, version, updatedAt: savedAt }).where(and(eq(reviews.id, reviewId), eq(reviews.version, input.expectedVersion)))
-      : db.insert(reviews).values({ id: reviewId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: viewer.userId, ai: false, score, scores: scoreRecord, comment: input.comment ?? null, version, createdAt: savedAt, updatedAt: savedAt });
+      ? db.update(reviews).set({ score: persistedScore, scores: scoreRecord, comment: input.comment ?? null, version, updatedAt: savedAt }).where(and(eq(reviews.id, reviewId), eq(reviews.version, input.expectedVersion)))
+      : db.insert(reviews).values({ id: reviewId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: viewer.userId, ai: false, score: persistedScore, scores: scoreRecord, comment: input.comment ?? null, version, createdAt: savedAt, updatedAt: savedAt });
     yield* database(() =>
       db.batch([
         writeReview,
@@ -2347,6 +2351,7 @@ export const requestAiSuggestion = (
     const createdAt = now();
     const suggestionId = id("review_ai");
     const score = averageScore(round.rubric, scoreRecord);
+    const persistedScore = score ?? 0;
     const committeeReviewerIds = yield* database(() =>
       db.select({ reviewerUserId: eventMembers.userId }).from(eventMembers).where(and(
         eq(eventMembers.eventId, input.eventId),
@@ -2355,7 +2360,7 @@ export const requestAiSuggestion = (
     );
     yield* database(() =>
       db.batch([
-        db.insert(reviews).values({ id: suggestionId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: null, ai: true, score, scores: scoreRecord, comment: response.comment, version: 1, createdAt, updatedAt: createdAt }),
+        db.insert(reviews).values({ id: suggestionId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: null, ai: true, score: persistedScore, scores: scoreRecord, comment: response.comment, version: 1, createdAt, updatedAt: createdAt }),
         db.insert(domainChanges).values({
           id: id("change"), eventId: input.eventId, aggregateType: "reviewAiSuggestion", aggregateId: suggestionId,
           aggregateVersion: 1, eventType: "review.aiSuggestion.created",
