@@ -103,7 +103,7 @@ export function PublicSpeakerEmbedContent({
                     <div className="min-w-0 pt-1">
                       <h2 className={`text-xl leading-tight text-ink ${design.aesthetic === "editorial" ? "font-serif font-medium tracking-[-0.02em]" : "font-black tracking-[-0.04em]"}`}>{speaker.displayName}</h2>
                       {(speaker.title || speaker.company) && (
-                        <p className="mt-1 text-xs font-black uppercase tracking-[0.08em] text-ink-faint">
+                        <p className="mt-1 text-xs font-black uppercase tracking-[0.08em] text-ink-secondary">
                           {[speaker.title, speaker.company].filter(Boolean).join(" at ")}
                         </p>
                       )}

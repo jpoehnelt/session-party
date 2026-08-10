@@ -40,5 +40,5 @@ export function CommandItem({ className, ...props }: CommandItemProps) {
 
 export type CommandShortcutProps = ComponentPropsWithRef<"span">;
 export function CommandShortcut({ className, ...props }: CommandShortcutProps) {
-  return <span className={cx("ml-auto text-xs tracking-widest text-ink-faint", className)} {...props} />;
+  return <span className={cx("ml-auto text-xs tracking-widest text-ink-secondary", className)} {...props} />;
 }

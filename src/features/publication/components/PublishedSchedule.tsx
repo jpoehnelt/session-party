@@ -177,7 +177,7 @@ export function PublishedSchedule({
         }`}>
           <p className={`text-[10px] font-black uppercase tracking-[0.16em] ${aesthetic === "bold" ? "text-production-sky" : "text-accent-deep"}`}>Audience clock</p>
           <p className="text-sm font-black">{agenda.timezone}</p>
-          <p className={`text-[10px] font-bold uppercase tracking-[0.12em] ${aesthetic === "bold" ? "text-white/55" : "text-ink-faint"}`}>{sessionLabel} on air</p>
+          <p className={`text-[10px] font-bold uppercase tracking-[0.12em] ${aesthetic === "bold" ? "text-white/55" : "text-ink-secondary"}`}>{sessionLabel} on air</p>
         </div>
       </section>
       <div

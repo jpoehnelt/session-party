@@ -669,7 +669,7 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
         titleId="public-widgets-title"
         description="Generate a link or snippet backed by the currently published program."
       />
-      <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Widget builder / output patch bay">
+      <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h2]:text-ink" title="Widget builder / output patch bay" titleLevel={2}>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Select label="Widget type" value={widget} onChange={(event) => setWidget(event.currentTarget.value as Exclude<PublicProgramSurface, "widgets">)}>
             <option value="sessions">Sessions list</option>

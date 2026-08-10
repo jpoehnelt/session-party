@@ -6,7 +6,7 @@ export type ScrollAreaProps = ComponentPropsWithRef<typeof Primitive.Root>;
 export function ScrollArea({ className, children, ...props }: ScrollAreaProps) {
   return (
     <Primitive.Root className={cx("relative overflow-hidden", className)} {...props}>
-      <Primitive.Viewport className="size-full rounded-[inherit]">{children}</Primitive.Viewport>
+      <Primitive.Viewport className="size-full rounded-[inherit]" tabIndex={0}>{children}</Primitive.Viewport>
       <ScrollBar />
       <Primitive.Corner />
     </Primitive.Root>

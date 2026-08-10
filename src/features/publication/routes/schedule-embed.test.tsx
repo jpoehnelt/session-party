@@ -1,9 +1,11 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server.edge";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PublishedAgenda } from "@/features/agenda/schema";
 import { getPublicSchedule, PublicationApiError } from "../api";
 import {
+  default as ScheduleEmbedPage,
   layout,
   path,
   ScheduleEmbedContent,
@@ -98,6 +100,21 @@ describe("public schedule route", () => {
     expect(markup).toContain('data-embed-aesthetic="editorial"');
     expect(markup).toContain("--color-accent:#0A6B58");
     expect(markup).toContain("font-serif");
+  });
+
+  it("wires aesthetic query parameters from the public route into the embed", () => {
+    const markup = renderToStaticMarkup(createElement(
+      MemoryRouter,
+      { initialEntries: ["/embed/systems-summit/schedule?aesthetic=minimal&accent=%23005A9C"] },
+      createElement(
+        Routes,
+        null,
+        createElement(Route, { path, element: createElement(ScheduleEmbedPage) }),
+      ),
+    ));
+
+    expect(markup).toContain('data-embed-aesthetic="minimal"');
+    expect(markup).toContain("--color-accent:#005A9C");
   });
 
   it("rejects a projection whose revision does not match organizer publication state", async () => {
