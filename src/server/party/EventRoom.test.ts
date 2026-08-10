@@ -1,11 +1,12 @@
 import {
+  abortAllDurableObjects,
   applyD1Migrations,
   env,
   SELF,
   type D1Migration,
 } from "cloudflare:test";
 import type { ServerMessage } from "contracts/protocol";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { hashBearerMaterial } from "../auth";
 import { sessionSecret } from "../services";
 import { audiencesForServerMessage } from "./EventRoom";
@@ -111,6 +112,10 @@ beforeAll(async () => {
   ]);
 });
 
+afterEach(async () => {
+  await abortAllDurableObjects();
+});
+
 describe("EventRoom live authorization", () => {
   it("derives the fixed audience matrix from server-owned message types", () => {
     expect(audiencesForServerMessage({ t: "room/presence", users: [] })).toEqual(["members"]);
@@ -192,10 +197,6 @@ describe("EventRoom live authorization", () => {
     ];
     await broadcast({ t: "agenda/conflicts", conflicts: [] });
     expect((await Promise.all(agendaReceipts)).every(Boolean)).toBe(true);
-
-    owner.close();
-    reviewer.close();
-    agenda.close();
   });
 
   it("executes the canonical event operation without trusting a client event id", async () => {
@@ -215,7 +216,6 @@ describe("EventRoom live authorization", () => {
         slug: "room-operation",
       },
     });
-    owner.close();
   }, 30_000);
 
   it("coordinates agenda soft locks and ghost previews across clients", async () => {
@@ -258,7 +258,6 @@ describe("EventRoom live authorization", () => {
       message.t === "agenda/collaboration" && message.collaborators.length === 0);
     owner.close();
     expect(await released).toEqual({ t: "agenda/collaboration", collaborators: [] });
-    peer.close();
   });
 
   it("persists synchronized show state and routes room cues to matching surfaces", async () => {
@@ -326,9 +325,6 @@ describe("EventRoom live authorization", () => {
       message.t === "show/state" && message.state.status === "idle" && message.state.revision === 2);
     control.send(JSON.stringify({ t: "show/control", requestId: "reset-show", action: "reset" }));
     expect(await reset).toMatchObject({ t: "show/state", state: { status: "idle", revision: 2 } });
-    control.close();
-    roomDisplay.close();
-    lateControl.close();
   });
 
   it("denies show control to reviewers", async () => {
@@ -346,7 +342,6 @@ describe("EventRoom live authorization", () => {
       message: "Access denied",
       replyTo: "reviewer-cue",
     });
-    reviewer.close();
   });
 
   it("rejects malformed internal broadcasts before delivery", async () => {
@@ -423,7 +418,6 @@ describe("EventRoom live authorization", () => {
         expect.objectContaining({ userId: "room-expired" }),
       ]),
     });
-    observer.close();
   });
 
   it("refreshes a demoted role before privileged broadcast", async () => {
@@ -452,6 +446,5 @@ describe("EventRoom live authorization", () => {
       ]),
     });
     expect(messages.some(({ t }) => t === "dashboard/progress")).toBe(false);
-    demoted.close();
   });
 });

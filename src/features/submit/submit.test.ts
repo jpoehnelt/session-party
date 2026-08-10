@@ -13,6 +13,8 @@ import {
   forms,
   idempotencyRecords,
   integrations,
+  mailDeliveries,
+  mailDeliverySnapshots,
   reviewAssignments,
   reviewRounds,
   speakerProvisioning,
@@ -551,6 +553,21 @@ describe("public submission creation", () => {
     expect(audit).toMatchObject({ action: "submit.create", actorUserId: null, actorApiKeyId: null });
   });
 
+  it("queues one idempotent confirmation email after a successful submission", async () => {
+    const input = submissionInput("submit-confirmation-email-001", OPEN_FORM_ID, "Confirmation email proposal");
+    const created = await runPublic(createPublicSubmission(input));
+    await expect(runPublic(createPublicSubmission(input))).resolves.toEqual(created);
+    const db = drizzle(env.DB);
+    const snapshots = await db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.recipientEmail, "sam@example.com"));
+    const matching = snapshots.filter((snapshot) => snapshot.renderedText?.includes(created.submissionId));
+    expect(matching).toEqual([expect.objectContaining({
+      recipientName: "Sam Rivera",
+      subject: "Proposal received — Submit behavior tests",
+      renderedText: expect.stringContaining("Confirmation email proposal"),
+    })]);
+    expect(await db.select().from(mailDeliveries).where(eq(mailDeliveries.snapshotId, matching[0]!.id))).toHaveLength(1);
+  });
+
   it("creates trimmed primary and repeatable co-speaker snapshots atomically and replays without duplicates", async () => {
     const input: CreatePublicSubmissionInput = {
       ...submissionInput("submit-co-speakers-001", OPEN_FORM_ID, "A panel with co-speakers"),
@@ -700,7 +717,7 @@ describe("public submission creation", () => {
     if (unauthorized._tag === "Left") expect(unauthorized.left._tag).toBe("Forbidden");
   });
 
-  it("lets the exact accepted primary speaker edit while the CFP is closed and enforces version and terminal-state guards", async () => {
+  it("locks accepted, rejected, and withdrawn proposals after the CFP deadline", async () => {
     const db = drizzle(env.DB);
     const now = new Date();
     const submissionId = "submission-accepted-closed-edit";
@@ -810,23 +827,19 @@ describe("public submission creation", () => {
     expect(before.submissions.find((submission) => submission.id === submissionId)).toMatchObject({
       abstract: "Accepted abstract before the edit.",
       status: "accepted",
-      editable: true,
+      editable: false,
       version: 1,
     });
 
-    const updated = await runAs(submittingSpeaker, updateOwnSubmissionAbstract({
+    const acceptedAttempt = await runEitherAs(submittingSpeaker, updateOwnSubmissionAbstract({
       eventSlug: EVENT_SLUG,
       submissionId,
       abstract: "Accepted abstract after the closed-CFP edit.",
       expectedVersion: 1,
       idempotencyKey: "submit-accepted-closed-update-001",
     }));
-    expect(updated.submission).toMatchObject({
-      abstract: "Accepted abstract after the closed-CFP edit.",
-      status: "accepted",
-      editable: true,
-      version: 2,
-    });
+    expect(acceptedAttempt._tag).toBe("Left");
+    if (acceptedAttempt._tag === "Left") expect(acceptedAttempt.left._tag).toBe("Conflict");
 
     const [abstractAnswer, emailAnswer] = await Promise.all([
       db.select({ value: submissionAnswers.value, version: submissionAnswers.version })
@@ -838,7 +851,7 @@ describe("public submission creation", () => {
         .where(eq(submissionAnswers.id, "answer-accepted-closed-email"))
         .get(),
     ]);
-    expect(abstractAnswer).toEqual({ value: "Accepted abstract after the closed-CFP edit.", version: 2 });
+    expect(abstractAnswer).toEqual({ value: "Accepted abstract before the edit.", version: 1 });
     expect(emailAnswer).toEqual({ value: immutableSpeakerEmail, version: 1 });
 
     const sameEmailOutsider: Principal = { ...outsider, email: immutableSpeakerEmail };
@@ -848,21 +861,11 @@ describe("public submission creation", () => {
       eventSlug: EVENT_SLUG,
       submissionId,
       abstract: "An edit by a different browser identity with the immutable email.",
-      expectedVersion: 2,
+      expectedVersion: 1,
       idempotencyKey: "submit-accepted-closed-outsider-001",
     }));
     expect(outsiderAttempt._tag).toBe("Left");
     if (outsiderAttempt._tag === "Left") expect(outsiderAttempt.left._tag).toBe("Forbidden");
-
-    const staleAttempt = await runEitherAs(submittingSpeaker, updateOwnSubmissionAbstract({
-      eventSlug: EVENT_SLUG,
-      submissionId,
-      abstract: "An edit against a stale version.",
-      expectedVersion: 1,
-      idempotencyKey: "submit-accepted-closed-stale-001",
-    }));
-    expect(staleAttempt._tag).toBe("Left");
-    if (staleAttempt._tag === "Left") expect(staleAttempt.left._tag).toBe("Conflict");
 
     for (const status of ["rejected", "withdrawn"] as const) {
       await db.update(submissions).set({ status }).where(eq(submissions.id, submissionId));
@@ -870,7 +873,7 @@ describe("public submission creation", () => {
         eventSlug: EVENT_SLUG,
         submissionId,
         abstract: `An edit after ${status}.`,
-        expectedVersion: 2,
+        expectedVersion: 1,
         idempotencyKey: `submit-accepted-closed-${status}-001`,
       }));
       expect(denied._tag).toBe("Left");

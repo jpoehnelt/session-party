@@ -10,6 +10,8 @@ import {
   formVersions,
   forms,
   idempotencyRecords,
+  mailDeliveries,
+  mailDeliverySnapshots,
   reviewAssignments,
   speakerProvisioning,
   speakers,
@@ -21,7 +23,7 @@ import type { AnswerValue } from "contracts/types";
 import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
-import { AirtableSync, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import { AirtableSync, Authorizer, CurrentUser, Db, MailQueue, Rooms } from "@/server/services";
 import {
   prepareAirtableProjection,
   prepareAirtableSubmissionProjection,
@@ -99,6 +101,13 @@ const stableStringify = (value: unknown): string => {
   }
   return JSON.stringify(value);
 };
+
+const escapeHtml = (value: string): string => value
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
 
 const sha256 = (value: string): Effect.Effect<string, External> =>
   Effect.tryPromise({
@@ -538,7 +547,7 @@ export interface SubmitCommandTestHooks {
 export const createPublicSubmission = (
   input: CreatePublicSubmissionInput,
   testHooks?: SubmitCommandTestHooks,
-): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, AirtableSync | Db | Rooms | PublicSubmissionAbuse | PublicSubmissionRequest> =>
+): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, AirtableSync | Db | MailQueue | Rooms | PublicSubmissionAbuse | PublicSubmissionRequest> =>
   Effect.gen(function* () {
     const loaded = yield* loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId);
     if (loaded.formKind !== "cfp") {
@@ -562,7 +571,11 @@ export const createPublicSubmission = (
       keyHash,
       requestHash,
     );
-    if (replay) return replay;
+    const mailQueue = yield* MailQueue;
+    if (replay) {
+      yield* mailQueue.wake().pipe(Effect.catchAll(() => Effect.void));
+      return replay;
+    }
     const validated = yield* validateAnswers(loaded, input);
     const publicSpeakers = yield* normalizePublicSpeakers(input, validated.speakerEmail);
     const abuse = yield* PublicSubmissionAbuse;
@@ -586,6 +599,12 @@ export const createPublicSubmission = (
       status: "submitted" as const,
       submittedAt: now.getTime(),
     };
+    const confirmationEmail = validated.speakerEmail === null ? null : normalizePublicEmail(validated.speakerEmail);
+    const confirmationSnapshotId = confirmationEmail ? nanoid() : null;
+    const confirmationDeliveryId = confirmationEmail ? nanoid() : null;
+    const confirmationSubject = `Proposal received — ${loaded.publicForm.event.name}`;
+    const confirmationText = `Hi ${validated.speakerName},\n\nWe received “${validated.title}” for ${loaded.publicForm.event.name}.\n\nSubmission reference: ${submissionId}`;
+    const confirmationHtml = `<p>Hi ${escapeHtml(validated.speakerName)},</p><p>We received <strong>${escapeHtml(validated.title)}</strong> for ${escapeHtml(loaded.publicForm.event.name)}.</p><p>Submission reference: <code>${escapeHtml(submissionId)}</code></p>`;
     const versionId = loaded.publicForm.form.versionId;
     const nowMs = now.getTime();
     const commitNowMs = sql<Date>`CAST(unixepoch('subsec') * 1000 AS INTEGER)`;
@@ -851,6 +870,45 @@ export const createPublicSubmission = (
           .from(submissions)
           .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
       ),
+      ...(confirmationEmail && confirmationSnapshotId && confirmationDeliveryId ? [
+        db.insert(mailDeliverySnapshots).select(db.select({
+          id: sql<string>`${confirmationSnapshotId}`.as("id"),
+          eventId: submissions.eventId,
+          templateId: sql<string | null>`null`.as("template_id"),
+          recipientUserId: sql<string | null>`null`.as("recipient_user_id"),
+          recipientEmail: sql<string>`${confirmationEmail}`.as("recipient_email"),
+          recipientName: sql<string>`${validated.speakerName}`.as("recipient_name"),
+          fromEmail: sql<string>`${mailQueue.fromEmail}`.as("from_email"),
+          replyToEmail: sql<string | null>`null`.as("reply_to_email"),
+          subject: sql<string>`${confirmationSubject}`.as("subject"),
+          renderedHtml: sql<string>`${confirmationHtml}`.as("rendered_html"),
+          renderedText: sql<string>`${confirmationText}`.as("rendered_text"),
+          icsFilename: sql<string | null>`null`.as("ics_filename"),
+          icsContent: sql<string | null>`null`.as("ics_content"),
+          redactedAt: sql<Date | null>`null`.as("redacted_at"),
+          createdAt: sql<Date>`${nowMs}`.as("created_at"),
+        }).from(submissions).where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId)))),
+        db.insert(mailDeliveries).select(db.select({
+          id: sql<string>`${confirmationDeliveryId}`.as("id"),
+          snapshotId: mailDeliverySnapshots.id,
+          idempotencyKey: sql<string>`${`submit-confirmation:${idempotencyId}`}`.as("idempotency_key"),
+          status: sql<"pending">`'pending'`.as("status"),
+          scheduledFor: sql<Date>`${nowMs}`.as("scheduled_for"),
+          availableAt: sql<Date>`${nowMs}`.as("available_at"),
+          leaseOwner: sql<string | null>`null`.as("lease_owner"),
+          leaseExpiresAt: sql<Date | null>`null`.as("lease_expires_at"),
+          supersededAt: sql<Date | null>`null`.as("superseded_at"),
+          attemptCount: sql<number>`0`.as("attempt_count"),
+          maxAttempts: sql<number>`8`.as("max_attempts"),
+          provider: sql<string>`'cloudflare-email'`.as("provider"),
+          providerMessageId: sql<string | null>`null`.as("provider_message_id"),
+          providerResult: sql<unknown>`null`.as("provider_result"),
+          lastError: sql<string | null>`null`.as("last_error"),
+          sentAt: sql<Date | null>`null`.as("sent_at"),
+          deadLetteredAt: sql<Date | null>`null`.as("dead_lettered_at"),
+          createdAt: sql<Date>`${nowMs}`.as("created_at"),
+        }).from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.id, confirmationSnapshotId))),
+      ] : []),
       ...(airtableSpeaker ? [airtableSpeaker.statement] : []),
       ...(airtableSubmission ? [airtableSubmission.statement] : []),
     ];
@@ -897,6 +955,7 @@ export const createPublicSubmission = (
     }).pipe(Effect.catchAll(() => Effect.void));
     const airtableSync = yield* AirtableSync;
     yield* airtableSync.wakeEvent(loaded.eventId);
+    if (confirmationEmail) yield* mailQueue.wake().pipe(Effect.catchAll(() => Effect.void));
     return output;
   });
 
@@ -1529,10 +1588,9 @@ const ownSummary = (
     status: row.status,
     submittedAt: row.submittedAt.getTime(),
     version: row.version,
-    editable: row.status === "accepted" ||
-      (availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
-        && row.status !== "rejected"
-        && row.status !== "withdrawn"),
+    editable: availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
+      && row.status !== "rejected"
+      && row.status !== "withdrawn",
   };
 };
 
@@ -1627,41 +1685,14 @@ export const updateOwnSubmissionAbstract = (
         eq(submissions.eventId, event.id),
         eq(submissions.id, input.submissionId),
         eq(submissions.version, input.expectedVersion),
-        or(
-          inArray(submissions.status, ["submitted", "in_review", "waitlist"]),
-          and(
-            eq(submissions.status, "accepted"),
-            exists(
-              db.select({ id: submissionSpeakers.id })
-                .from(submissionSpeakers)
-                .innerJoin(
-                  speakers,
-                  and(
-                    eq(speakers.eventId, submissionSpeakers.eventId),
-                    eq(speakers.id, submissionSpeakers.speakerId),
-                  ),
-                )
-                .where(and(
-                  eq(submissionSpeakers.eventId, submissions.eventId),
-                  eq(submissionSpeakers.submissionId, submissions.id),
-                  eq(submissionSpeakers.isPrimary, true),
-                  eq(speakers.userId, owner.userId),
-                )),
-            ),
-          ),
-        ),
+        inArray(submissions.status, ["submitted", "in_review", "waitlist", "accepted"]),
         exists(db.select({ id: forms.id }).from(forms).where(and(
           eq(forms.eventId, submissions.eventId),
           eq(forms.id, submissions.formId),
           eq(forms.kind, "cfp"),
-          or(
-            eq(submissions.status, "accepted"),
-            and(
-              eq(forms.status, "open"),
-              or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
-              or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
-            ),
-          ),
+          eq(forms.status, "open"),
+          or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
+          or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
         ))),
       )),
       db.update(submissionAnswers).set({ value: abstract, version: abstractAnswer.version + 1, updatedAt: savedAt }).where(and(

@@ -28,6 +28,23 @@ export const layout = "bare" as const;
 export const draftStorageKey = (eventSlug: string, formId: string, versionId: string) =>
   `session-party:cfp-draft:${eventSlug}:${formId}:${versionId}`;
 
+export function restoreDraftAnswers(
+  raw: string,
+  fields: readonly PublicFormField[],
+): Record<string, AnswerValue> {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const allowedIds = new Set(fields.map((field) => field.id));
+  const restored: Record<string, AnswerValue> = {};
+  for (const [fieldId, value] of Object.entries(parsed)) {
+    const valid = typeof value === "string"
+      || (Array.isArray(value) && value.every((item) => typeof item === "string"))
+      || (value !== null && typeof value === "object" && "assetId" in value && typeof value.assetId === "string");
+    if (allowedIds.has(fieldId) && valid) restored[fieldId] = value as AnswerValue;
+  }
+  return restored;
+}
+
 export async function fetchPublicSubmissionForm(
   eventSlug: string,
   formId: string,
@@ -377,16 +394,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
     try {
       const raw = window.localStorage.getItem(key);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
-      const allowedIds = new Set(form.form.fields.map((field) => field.id));
-      const restored: Record<string, AnswerValue> = {};
-      for (const [fieldId, value] of Object.entries(parsed)) {
-        const valid = typeof value === "string"
-          || (Array.isArray(value) && value.every((item) => typeof item === "string"))
-          || (value !== null && typeof value === "object" && "assetId" in value && typeof value.assetId === "string");
-        if (allowedIds.has(fieldId) && valid) restored[fieldId] = value as AnswerValue;
-      }
+      const restored = restoreDraftAnswers(raw, form.form.fields);
       if (Object.keys(restored).length > 0) {
         setAnswers(restored);
         setDraftStatus("restored");
