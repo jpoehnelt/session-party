@@ -8,7 +8,6 @@ import {
 import type { JsonValue } from "contracts/domain";
 import { eventAuthorization, type AuthorizationPolicy, type Principal } from "contracts/principal";
 import {
-  acceptanceEvents,
   auditLog,
   domainChanges,
   mailCalendarEvents,
@@ -467,11 +466,7 @@ export const updateTemplate = (
   });
 
 interface AudienceRow {
-  readonly acceptanceId: string;
-  readonly acceptanceType: "accepted" | "revoked";
-  readonly occurredAt: Date;
   readonly submissionId: string;
-  readonly submissionStatus: string;
   readonly sessionTitle: string;
   readonly speakerId: string;
   readonly speakerName: string;
@@ -484,34 +479,25 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
     const { db } = yield* Db;
     const rows: readonly AudienceRow[] = yield* database(() =>
       db.select({
-        acceptanceId: acceptanceEvents.id,
-        acceptanceType: acceptanceEvents.type,
-        occurredAt: acceptanceEvents.occurredAt,
-        submissionId: acceptanceEvents.submissionId,
-        submissionStatus: submissions.status,
+        submissionId: submissions.id,
         sessionTitle: submissions.title,
         speakerId: speakers.id,
         speakerName: speakers.displayName,
         userId: speakers.userId,
         email: sql<string | null>`coalesce(${users.email}, ${speakers.contactEmail})`,
       })
-        .from(acceptanceEvents)
-        .innerJoin(submissions, and(eq(submissions.eventId, acceptanceEvents.eventId), eq(submissions.id, acceptanceEvents.submissionId)))
+        .from(submissions)
         .innerJoin(submissionSpeakers, and(
-          eq(submissionSpeakers.eventId, acceptanceEvents.eventId),
-          eq(submissionSpeakers.submissionId, acceptanceEvents.submissionId),
+          eq(submissionSpeakers.eventId, submissions.eventId),
+          eq(submissionSpeakers.submissionId, submissions.id),
         ))
         .innerJoin(speakers, and(eq(speakers.eventId, submissionSpeakers.eventId), eq(speakers.id, submissionSpeakers.speakerId)))
         .leftJoin(users, eq(users.id, speakers.userId))
-        .where(eq(acceptanceEvents.eventId, eventId))
-        .orderBy(asc(acceptanceEvents.occurredAt), asc(acceptanceEvents.id), asc(speakers.id)),
+        .where(and(eq(submissions.eventId, eventId), inArray(submissions.status, ["accepted", "rejected"])))
+        .orderBy(asc(submissions.submittedAt), asc(submissions.id), asc(speakers.id)),
     );
-    const latestBySubmission = new Map<string, AudienceRow>();
-    for (const row of rows) latestBySubmission.set(row.submissionId, row);
     const bySpeaker = new Map<string, AudienceRecipient>();
     for (const row of rows) {
-      if (latestBySubmission.get(row.submissionId)?.acceptanceId !== row.acceptanceId) continue;
-      if (row.acceptanceType !== "accepted" || row.submissionStatus !== "accepted") continue;
       const existing = bySpeaker.get(row.speakerId);
       if (existing) {
         bySpeaker.set(row.speakerId, { ...existing, sessionTitles: [...existing.sessionTitles, row.sessionTitle].sort() });
@@ -940,7 +926,7 @@ export const enqueueCommunication = (
     const audienceBySpeaker = new Map(audience.recipients.map((recipient) => [recipient.speakerId, recipient]));
     const selected = uniqueSpeakerIds.map((speakerId) => audienceBySpeaker.get(speakerId));
     if (selected.some((recipient) => !recipient || recipient.email === null)) {
-      return yield* Effect.fail(new Validation({ message: "Audience must contain only accepted speakers with email addresses" }));
+      return yield* Effect.fail(new Validation({ message: "Audience must contain only accepted or rejected applicants with email addresses" }));
     }
     const recipients = selected as readonly (AudienceRecipient & { readonly email: string })[];
     const published = yield* loadPublishedTalks(input.eventId, event.slug, uniqueSpeakerIds);

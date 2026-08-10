@@ -28,6 +28,7 @@ describe("client route discovery", () => {
       "/e/:eventSlug/resources": "standard",
       "/e/:eventSlug/agenda": "canvas",
       "/e/:eventSlug/comms": "canvas",
+      "/e/:eventSlug/content": "wide",
       "/e/:eventSlug/publication": "wide",
       "/e/:eventSlug/exports": "compact",
       "/e/:eventSlug/integrations": "wide",
