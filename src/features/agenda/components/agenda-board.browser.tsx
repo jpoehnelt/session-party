@@ -1,0 +1,58 @@
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { userEvent } from "vitest/browser";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FIXED_DAY_START, scheduledAgendaFixture } from "../fixtures";
+import { AgendaBoard } from "./AgendaBoard";
+
+describe("multi-day agenda builder", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("renders room lanes and switches the active day to a different session set", async () => {
+    const [first, second] = scheduledAgendaFixture.snapshot.talks;
+    const snapshot = {
+      ...scheduledAgendaFixture.snapshot,
+      talks: [first!, { ...second!, startsAt: FIXED_DAY_START + 86_400_000 }],
+    };
+    await act(async () => {
+      root.render(
+        <AgendaBoard
+          agenda={snapshot}
+          view="day"
+          intent={{
+            clientIntentId: null,
+            connection: "connected",
+            acknowledgement: "idle",
+            sentAt: null,
+            message: null,
+          }}
+          onCreateTalk={vi.fn()}
+          onSelectTalk={vi.fn()}
+          onMoveTalk={vi.fn()}
+        />,
+      );
+    });
+
+    await vi.waitFor(() => expect(container.textContent).toContain("Effects at scale"));
+    expect(container.textContent).not.toContain("Durable workflows without folklore");
+    expect(container.querySelectorAll('section[aria-label*="Harbor"]').length).toBeGreaterThan(0);
+    const dayButtons = [...container.querySelectorAll<HTMLButtonElement>('fieldset button')];
+    expect(dayButtons).toHaveLength(2);
+    await act(async () => userEvent.click(dayButtons[1]!));
+    expect(container.textContent).toContain("Durable workflows without folklore");
+    expect(container.textContent).not.toContain("Effects at scale");
+  });
+});

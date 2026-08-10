@@ -16,6 +16,9 @@ export default defineConfig({
       "src/features/review/routes/review-lifecycle.browser.tsx",
       "src/features/comms/routes/comms-lifecycle.browser.tsx",
       "src/features/portal/routes/organizer-content.browser.tsx",
+      "src/features/submit/routes/submit-draft.browser.tsx",
+      "src/features/publication/components/public-program.browser.tsx",
+      "src/features/agenda/components/agenda-board.browser.tsx",
     ],
     browser: {
       enabled: true,

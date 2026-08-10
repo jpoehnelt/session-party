@@ -48,6 +48,7 @@ import {
 } from "./operations";
 import type { AgendaMutationResult } from "./schema";
 import {
+  autoPlaceTalk,
   cancelTalk,
   createRoom,
   createTalk,
@@ -59,6 +60,7 @@ import {
   publishAgenda,
   scheduleTalk,
   updateRoom,
+  updateTalkContent,
   updateTrack,
   type AgendaMutationInterlock,
   type AgendaSnapshotInterlock,
@@ -827,6 +829,65 @@ describe("agenda service", () => {
       outboundRevision: 4,
       status: "pending",
     });
+  });
+
+  it("auto-places an unplaced talk into the first conflict-free event slot", async () => {
+    const seeded = await seedAgenda("auto-place", { scheduled: true });
+    const created = await runAs(seeded.user, createTalk({
+      eventId: seeded.eventId,
+      submissionId: seeded.submissionB,
+      trackId: seeded.trackId,
+      roomId: null,
+      startsAt: null,
+      durationMin: 30,
+      idempotencyKey: "auto-place-create-0001",
+    }));
+    const input = {
+      eventId: seeded.eventId,
+      talkId: created.talk.id,
+      expectedVersion: created.talk.version,
+      idempotencyKey: "auto-place-talk-0001",
+    } as const;
+    const placed = await runAs(seeded.user, autoPlaceTalk(input));
+    const replayed = await runAs(seeded.user, autoPlaceTalk(input));
+
+    expect(placed.talk).toMatchObject({
+      roomId: seeded.roomB,
+      startsAt: FIXED_DAY_START,
+      status: "confirmed",
+      version: 2,
+    });
+    expect(placed.conflicts).toEqual([]);
+    expect(replayed).toMatchObject({ replayed: true, changeId: placed.changeId });
+  });
+
+  it("edits the organizer session title and abstract with versioned evidence", async () => {
+    const seeded = await seedAgenda("content-edit", { scheduled: true });
+    const input = {
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: "Effects at global scale",
+      description: "A revised abstract owned by the organizer.",
+      expectedVersion: 2,
+      idempotencyKey: "content-edit-talk-0001",
+    } as const;
+    const updated = await runAs(seeded.user, updateTalkContent(input));
+    const replayed = await runAs(seeded.user, updateTalkContent(input));
+
+    expect(updated.talk).toMatchObject({
+      title: "Effects at global scale",
+      description: "A revised abstract owned by the organizer.",
+      version: 3,
+    });
+    expect(replayed).toMatchObject({ replayed: true, changeId: updated.changeId });
+    const [stored, change, audit] = await Promise.all([
+      seeded.db.select().from(talks).where(eq(talks.id, seeded.talkA)).get(),
+      seeded.db.select().from(domainChanges).where(eq(domainChanges.id, updated.changeId)).get(),
+      seeded.db.select().from(auditLog).where(eq(auditLog.id, updated.auditId)).get(),
+    ]);
+    expect(stored).toMatchObject({ title: "Effects at global scale", version: 3 });
+    expect(change?.payload).toMatchObject({ action: "content_updated" });
+    expect(audit?.action).toBe("agenda.talk_content_updated");
   });
 
   it("saves room and speaker overlaps as named non-blocking agenda warnings", async () => {
