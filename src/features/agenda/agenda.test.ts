@@ -13,6 +13,9 @@ import {
   forms,
   idempotencyRecords,
   integrations,
+  mailCalendarEvents,
+  mailDeliveries,
+  mailDeliverySnapshots,
   rooms,
   speakerProvisioning,
   speakers,
@@ -29,8 +32,10 @@ import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppLayer, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import { AirtableSync, AppLayer, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import { authorizeMailDispatch } from "@/server/party/Scheduler";
 import { updateEvent } from "@/features/events/service";
+import { updateSpeakerProfile, updateSpeakerPublication } from "@/features/portal/service";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
 import {
   createRoomOperation,
@@ -77,7 +82,7 @@ const owner = (userId: string): CurrentUserValue => ({
 
 const runAs = <A, E>(
   principal: CurrentUserValue,
-  effect: Effect.Effect<A, E, Db | CurrentUser | Rooms>,
+  effect: Effect.Effect<A, E, AirtableSync | Db | CurrentUser | Rooms>,
 ) =>
   Effect.runPromise(effect.pipe(
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
@@ -188,6 +193,7 @@ interface SeedOptions {
   readonly scheduled?: boolean;
   readonly secondTalk?: boolean;
   readonly sharedSpeaker?: boolean;
+  readonly linkedSpeaker?: boolean;
 }
 
 const seedAgenda = async (name: string, options: SeedOptions = {}) => {
@@ -324,6 +330,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
       {
         id: speakerA,
         eventId,
+        userId: options.linkedSpeaker ? userId : null,
         displayName: "Ada Rivera",
         visible: true,
         createdAt: now,
@@ -1104,7 +1111,7 @@ describe("agenda service", () => {
     });
   });
 
-  it("keeps confirmed talks private until publishing an immutable revision", async () => {
+  it("successfully publishes an unchanged speaker projection as an immutable revision", async () => {
     const seeded = await seedAgenda("publication", { scheduled: true });
     const before = await runEither(
       seeded.user,
@@ -1164,6 +1171,233 @@ describe("agenda service", () => {
     expect(stillPublished.talks[0]?.startsAt).toBe(FIXED_DAY_START);
   });
 
+  it("reissues changed published calendars once per prior recipient with stable identity", async () => {
+    const seeded = await seedAgenda("calendar-reissue", { scheduled: true });
+    const first = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-0001",
+    }));
+    const originalSnapshotId = "calendar-reissue-snapshot";
+    const originalDeliveryId = "calendar-reissue-delivery";
+    const originalUid = `${seeded.talkA}@${seeded.eventSlug}.session-party`;
+    await seeded.db.batch([
+      seeded.db.update(speakers).set({
+        contactEmail: "ada-calendar@example.com",
+      }).where(and(
+        eq(speakers.eventId, seeded.eventId),
+        eq(speakers.id, seeded.speakerA),
+      )),
+      seeded.db.insert(mailDeliverySnapshots).values({
+        id: originalSnapshotId,
+        eventId: seeded.eventId,
+        templateId: null,
+        recipientUserId: null,
+        recipientEmail: "ada-calendar@example.com",
+        recipientName: "Ada Rivera",
+        fromEmail: "Agenda <agenda@example.com>",
+        replyToEmail: "organizer@example.com",
+        subject: "Your agenda",
+        renderedHtml: "<p>Your agenda</p>",
+        renderedText: "Your agenda",
+        icsFilename: "calendar-reissue-ada-rivera-agenda.ics",
+        icsContent: [
+          "BEGIN:VCALENDAR",
+          "VERSION:2.0",
+          "METHOD:REQUEST",
+          "BEGIN:VEVENT",
+          `UID:${originalUid}`,
+          "DTSTAMP:20260810T000000Z",
+          "LAST-MODIFIED:20260810T000000Z",
+          "SEQUENCE:7",
+          "DTSTART:20260812T160000Z",
+          "DTEND:20260812T164500Z",
+          "SUMMARY:Effects at scale",
+          "LOCATION:Harbor",
+          "END:VEVENT",
+          "END:VCALENDAR",
+          "",
+        ].join("\r\n"),
+        createdAt: new Date(FIXED_NOW),
+      }),
+      seeded.db.insert(mailDeliveries).values({
+        id: originalDeliveryId,
+        snapshotId: originalSnapshotId,
+        idempotencyKey: "calendar-reissue-original",
+        status: "sent",
+        scheduledFor: new Date(FIXED_NOW),
+        availableAt: new Date(FIXED_NOW),
+        attemptCount: 1,
+        maxAttempts: 8,
+        provider: "cloudflare-email",
+        providerMessageId: "provider-calendar-reissue-original",
+        sentAt: new Date(FIXED_NOW),
+        createdAt: new Date(FIXED_NOW),
+      }),
+    ]);
+
+    await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: first.revision,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-unchanged-0002",
+    }));
+    await expect(seeded.db.select().from(mailCalendarEvents)
+      .where(eq(mailCalendarEvents.eventId, seeded.eventId))).resolves.toEqual([
+      expect.objectContaining({
+        snapshotId: originalSnapshotId,
+        calendarUid: originalUid,
+        sequence: 7,
+      }),
+    ]);
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(1);
+
+    await runAs(seeded.user, moveTalk({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      trackId: seeded.trackId,
+      roomId: seeded.roomB,
+      startsAt: FIXED_DAY_START + 7_200_000,
+      durationMin: 60,
+      expectedVersion: 2,
+      idempotencyKey: "calendar-reissue-draft-move-0001",
+    }));
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(1);
+
+    const changed = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 2,
+      expectedWorkspaceVersion: 1,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-changed-0003",
+    }));
+    expect(changed.revision).toBe(3);
+    const snapshotsAfterChange = await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId));
+    expect(snapshotsAfterChange).toHaveLength(2);
+    const updateSnapshot = snapshotsAfterChange.find(({ id }) => id !== originalSnapshotId)!;
+    expect(updateSnapshot.icsContent).toContain(`UID:${originalUid}`);
+    expect(updateSnapshot.icsContent).toContain("SEQUENCE:8");
+    expect(updateSnapshot.icsContent).toContain("DTSTART:20260812T180000Z");
+    expect(updateSnapshot.icsContent).toContain("DTEND:20260812T190000Z");
+    expect((await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.id, originalSnapshotId)))[0]?.icsContent).toContain("LOCATION:Harbor");
+    const [updateDelivery] = await seeded.db.select().from(mailDeliveries)
+      .where(eq(mailDeliveries.snapshotId, updateSnapshot.id));
+    expect(updateDelivery).toBeDefined();
+
+    await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 2,
+      expectedWorkspaceVersion: 1,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-changed-0003",
+    }));
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(2);
+
+    await runAs(seeded.user, cancelTalk({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      expectedVersion: 3,
+      idempotencyKey: "calendar-reissue-draft-cancel-0001",
+    }));
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(2);
+    const cancellationInput = {
+      eventId: seeded.eventId,
+      expectedRevision: 3,
+      expectedWorkspaceVersion: 2,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-cancelled-0004",
+    } as const;
+    const claimLease = "calendar-reissue-claim-lease";
+    const claimedRace = await runEither(seeded.user, publishAgenda(
+      cancellationInput,
+      () => Effect.promise(async () => {
+        await seeded.db.update(mailDeliveries).set({
+          status: "claimed",
+          attemptCount: 1,
+          leaseOwner: claimLease,
+          leaseExpiresAt: new Date(FIXED_NOW + 60_000),
+        }).where(eq(mailDeliveries.id, updateDelivery!.id));
+      }),
+    ));
+    expect(claimedRace).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+    const dispatchRace = await runEither(seeded.user, publishAgenda(
+      cancellationInput,
+      () => Effect.promise(async () => {
+        expect(await authorizeMailDispatch(seeded.db, updateDelivery!.id, claimLease)).toBe(true);
+      }),
+    ));
+    expect(dispatchRace).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(2);
+    const claimedLeaseExpiresAt = new Date(FIXED_NOW + 120_000);
+    await seeded.db.update(mailDeliveries).set({
+      status: "claimed",
+      leaseOwner: "calendar-reissue-claimed-lease",
+      leaseExpiresAt: claimedLeaseExpiresAt,
+    }).where(eq(mailDeliveries.id, updateDelivery!.id));
+    await runAs(seeded.user, publishAgenda(cancellationInput));
+    const finalSnapshots = await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId));
+    expect(finalSnapshots).toHaveLength(3);
+    const cancellation = finalSnapshots.find(({ id }) =>
+      id !== originalSnapshotId && id !== updateSnapshot.id
+    )!;
+    expect(cancellation.icsContent).toContain("METHOD:CANCEL");
+    expect(cancellation.icsContent).toContain("STATUS:CANCELLED");
+    expect(cancellation.icsContent).toContain(`UID:${originalUid}`);
+    expect(cancellation.icsContent).toContain("SEQUENCE:9");
+    expect(cancellation.icsContent).toContain("DTSTART:20260812T180000Z");
+    await expect(seeded.db.select({
+      status: mailDeliveries.status,
+      supersededAt: mailDeliveries.supersededAt,
+    }).from(mailDeliveries)
+      .where(eq(mailDeliveries.id, updateDelivery!.id))).resolves.toEqual([{
+        status: "claimed",
+        supersededAt: expect.any(Date),
+      }]);
+    await expect(seeded.db.select({
+      scheduledFor: mailDeliveries.scheduledFor,
+      availableAt: mailDeliveries.availableAt,
+    }).from(mailDeliveries)
+      .where(eq(mailDeliveries.snapshotId, cancellation.id))).resolves.toEqual([{
+        scheduledFor: claimedLeaseExpiresAt,
+        availableAt: claimedLeaseExpiresAt,
+      }]);
+    await seeded.db.update(mailDeliveries).set({
+      status: "dead_letter",
+      deadLetteredAt: new Date(FIXED_NOW),
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    }).where(eq(mailDeliveries.id, originalDeliveryId));
+    await seeded.db.update(mailDeliveries).set({
+      status: "dead_letter",
+      deadLetteredAt: new Date(FIXED_NOW),
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    }).where(eq(mailDeliveries.id, updateDelivery!.id));
+    await seeded.db.update(mailDeliveries).set({
+      status: "cancelled",
+    }).where(eq(mailDeliveries.snapshotId, cancellation.id));
+    await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 4,
+      expectedWorkspaceVersion: 2,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-terminal-lineage-0005",
+    }));
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(3);
+  });
+
   it.each([
     {
       name: "missing-start",
@@ -1221,6 +1455,102 @@ describe("agenda service", () => {
       eventStartsAt: FIXED_DAY_START,
       eventEndsAt: FIXED_DAY_START + 2 * 86_400_000,
     });
+  });
+
+  it.each([
+    {
+      name: "starts-exactly-at-event-start",
+      startsAt: FIXED_DAY_START,
+      durationMin: 45,
+      publishes: true,
+    },
+    {
+      name: "ends-exactly-at-event-end",
+      startsAt: FIXED_DAY_START + 2 * 86_400_000 - 45 * 60_000,
+      durationMin: 45,
+      publishes: true,
+    },
+    {
+      name: "starts-before-event",
+      startsAt: FIXED_DAY_START - 1,
+      durationMin: 45,
+      publishes: false,
+    },
+    {
+      name: "starts-after-event",
+      startsAt: FIXED_DAY_START + 2 * 86_400_000 + 1,
+      durationMin: 45,
+      publishes: false,
+    },
+    {
+      name: "starts-exactly-at-event-end",
+      startsAt: FIXED_DAY_START + 2 * 86_400_000,
+      durationMin: 45,
+      publishes: false,
+    },
+    {
+      name: "duration-overflow",
+      startsAt: FIXED_DAY_START + 2 * 86_400_000 - 30 * 60_000,
+      durationMin: 45,
+      publishes: false,
+    },
+  ])("$name is handled at publication without restricting draft storage", async ({ name, startsAt, durationMin, publishes }) => {
+    const seeded = await seedAgenda(`talk-bounds-${name}`, { scheduled: true });
+    await seeded.db
+      .update(talks)
+      .set({ startsAt: new Date(startsAt), durationMin })
+      .where(and(eq(talks.eventId, seeded.eventId), eq(talks.id, seeded.talkA)));
+
+    const result = await runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: `publish-talk-bounds-${name}-0001`,
+    }));
+
+    if (publishes) {
+      expect(result).toMatchObject({
+        _tag: "Right",
+        right: { revision: 1, talks: [{ startsAt, durationMin }] },
+      });
+      return;
+    }
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "Validation",
+        message: "Agenda publication requires confirmed talks to fit within the event interval; 1 talk falls outside it",
+      },
+    });
+    await expect(seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ))).resolves.toHaveLength(0);
+  });
+
+  it("keeps out-of-bounds draft scheduling permissive and rejects only publication", async () => {
+    const seeded = await seedAgenda("talk-bounds-draft", { scheduled: true });
+    const saved = await runAs(seeded.user, moveTalk({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      trackId: seeded.trackId,
+      roomId: seeded.roomA,
+      startsAt: FIXED_DAY_START - 1,
+      durationMin: 45,
+      expectedVersion: 2,
+      idempotencyKey: "talk-bounds-draft-move-0001",
+    }));
+    expect(saved.talk.startsAt).toBe(FIXED_DAY_START - 1);
+
+    const publication = await runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 1,
+      expectedEventVersion: 1,
+      idempotencyKey: "talk-bounds-draft-publish-0001",
+    }));
+    expect(publication).toMatchObject({ _tag: "Left", left: { _tag: "Validation" } });
   });
 
   it("keeps the internal delivery companion byte-for-byte immutable", async () => {
@@ -1462,5 +1792,225 @@ describe("agenda service", () => {
     await expect(seeded.db.select().from(domainChanges).where(eq(domainChanges.eventId, seeded.eventId))).resolves.toHaveLength(0);
     await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(0);
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(0);
+  });
+
+  it("rejects a hidden-to-visible race without partial publication evidence", async () => {
+    const seeded = await seedAgenda("publication-speaker-visible-race", { scheduled: true });
+    await seeded.db
+      .update(speakers)
+      .set({ visible: false })
+      .where(and(eq(speakers.eventId, seeded.eventId), eq(speakers.id, seeded.speakerA)));
+    const barrier = publicationBarrier();
+    const stalePublication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-speaker-visible-race-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+    try {
+      await runEventAs(seeded.user, updateSpeakerPublication({
+        eventId: seeded.eventId,
+        speakerId: seeded.speakerA,
+        expectedVersion: 1,
+        visible: true,
+      }));
+    } finally {
+      barrier.release();
+    }
+
+    await expect(stalePublication).resolves.toMatchObject({
+      _tag: "Left",
+      left: { _tag: "Conflict" },
+    });
+    await expect(seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-delivery"),
+    ))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, seeded.eventId),
+      eq(auditLog.action, "agenda.revision_published"),
+    ))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, seeded.eventId),
+      eq(idempotencyRecords.operationId, "agenda.publish"),
+    ))).resolves.toHaveLength(0);
+  });
+
+  it("rejects a visible-to-private race without publication evidence and permits a clean retry", async () => {
+    const seeded = await seedAgenda("publication-speaker-private-race", { scheduled: true });
+    const barrier = publicationBarrier();
+    const input = {
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-speaker-private-race-0001",
+    } as const;
+    const stalePublication = runEither(seeded.user, publishAgenda(input, barrier.interlock));
+    await barrier.sampled;
+    try {
+      await runEventAs(seeded.user, updateSpeakerPublication({
+        eventId: seeded.eventId,
+        speakerId: seeded.speakerA,
+        expectedVersion: 1,
+        visible: false,
+      }));
+    } finally {
+      barrier.release();
+    }
+
+    await expect(stalePublication).resolves.toMatchObject({
+      _tag: "Left",
+      left: { _tag: "Conflict" },
+    });
+    await expect(seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-delivery"),
+    ))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, seeded.eventId),
+      eq(auditLog.action, "agenda.revision_published"),
+    ))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, seeded.eventId),
+      eq(idempotencyRecords.operationId, "agenda.publish"),
+    ))).resolves.toHaveLength(0);
+
+    const retried = await runAs(seeded.user, publishAgenda(input));
+    expect(retried).toMatchObject({
+      revision: 1,
+      talks: [{ speakerNames: [] }],
+    });
+  });
+
+  it("rejects a visible display-name race before committing the immutable revision", async () => {
+    const seeded = await seedAgenda("publication-speaker-name-race", {
+      scheduled: true,
+      linkedSpeaker: true,
+    });
+    const barrier = publicationBarrier();
+    const stalePublication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-speaker-name-race-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+    try {
+      await runAs(seeded.user, updateSpeakerProfile({
+        eventId: seeded.eventId,
+        expectedVersion: 1,
+        idempotencyKey: "speaker-name-race-update-0001",
+        displayName: "Ada Private",
+        title: null,
+        company: null,
+        bio: null,
+        links: [],
+      }));
+    } finally {
+      barrier.release();
+    }
+
+    await expect(stalePublication).resolves.toMatchObject({
+      _tag: "Left",
+      left: { _tag: "Conflict" },
+    });
+    await expect(seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ))).resolves.toHaveLength(0);
+    const published = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-speaker-name-race-retry-0001",
+    }));
+    expect(published.talks[0]?.speakerNames).toEqual(["Ada Private"]);
+  });
+
+  it("rejects a contributing speaker version change even when the visible name is unchanged", async () => {
+    const seeded = await seedAgenda("publication-speaker-version-race", {
+      scheduled: true,
+      linkedSpeaker: true,
+    });
+    const barrier = publicationBarrier();
+    const stalePublication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-speaker-version-race-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+    try {
+      await runAs(seeded.user, updateSpeakerProfile({
+        eventId: seeded.eventId,
+        expectedVersion: 1,
+        idempotencyKey: "speaker-version-race-update-0001",
+        displayName: "Ada Rivera",
+        title: "Staff Engineer",
+        company: null,
+        bio: null,
+        links: [],
+      }));
+    } finally {
+      barrier.release();
+    }
+
+    await expect(stalePublication).resolves.toMatchObject({
+      _tag: "Left",
+      left: { _tag: "Conflict" },
+    });
+    await expect(seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, seeded.eventId),
+      eq(idempotencyRecords.operationId, "agenda.publish"),
+    ))).resolves.toHaveLength(0);
+  });
+
+  it("allows unrelated speaker publication changes while the projection is pending", async () => {
+    const seeded = await seedAgenda("publication-unrelated-speaker-race", { scheduled: true });
+    const barrier = publicationBarrier();
+    const publication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-unrelated-speaker-race-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+    try {
+      await runEventAs(seeded.user, updateSpeakerPublication({
+        eventId: seeded.eventId,
+        speakerId: seeded.speakerB,
+        expectedVersion: 1,
+        visible: false,
+      }));
+    } finally {
+      barrier.release();
+    }
+
+    await expect(publication).resolves.toMatchObject({
+      _tag: "Right",
+      right: {
+        revision: 1,
+        talks: [{ speakerNames: ["Ada Rivera"] }],
+      },
+    });
   });
 });

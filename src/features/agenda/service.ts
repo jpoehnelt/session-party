@@ -7,6 +7,9 @@ import {
   events,
   formVersionFields,
   idempotencyRecords,
+  mailCalendarEvents,
+  mailDeliveries,
+  mailDeliverySnapshots,
   rooms,
   speakerProvisioning,
   speakers,
@@ -16,14 +19,22 @@ import {
   talkSpeakers,
   talks,
   tracks,
+  users,
 } from "contracts/schema";
 import type { JsonValue } from "contracts/domain";
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 // BaselineGreen may rename these invocation seams; keep the shared import isolated here.
 import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
 import { prepareAirtableTalkProjection } from "@/server/sync/airtable-outbox";
+import {
+  parseCalendarEvents,
+  type CalendarMethod,
+  renderCalendar,
+  stableCalendarUid,
+  type CalendarEventSnapshot,
+} from "@/features/comms/calendar";
 import {
   AgendaDeliveryProjection as AgendaDeliveryProjectionSchema,
   PublishedAgenda as PublishedAgendaSchema,
@@ -1456,19 +1467,29 @@ export const publishAgenda = (
         message: "Agenda publication requires the event end time to be after the start time",
       }));
     }
-    const [agendaTalks, trackRows, roomRows, visibleSpeakerRows] = yield* Effect.all([
+    const [agendaTalks, trackRows, roomRows, speakerRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
       database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(eq(tracks.eventId, input.eventId))),
       database(() => db.select({ id: rooms.id, name: rooms.name }).from(rooms).where(eq(rooms.eventId, input.eventId))),
       database(() =>
         db
-          .select({ talkId: talkSpeakers.talkId, name: speakers.displayName })
+          .select({
+            talkId: talkSpeakers.talkId,
+            speakerId: speakers.id,
+            name: speakers.displayName,
+            visible: speakers.visible,
+            version: speakers.version,
+          })
           .from(talkSpeakers)
+          .innerJoin(
+            talks,
+            and(eq(talks.eventId, talkSpeakers.eventId), eq(talks.id, talkSpeakers.talkId)),
+          )
           .innerJoin(
             speakers,
             and(eq(speakers.eventId, talkSpeakers.eventId), eq(speakers.id, talkSpeakers.speakerId)),
           )
-          .where(and(eq(talkSpeakers.eventId, input.eventId), eq(speakers.visible, true)))
+          .where(and(eq(talkSpeakers.eventId, input.eventId), eq(talks.status, "confirmed")))
           .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id)),
       ),
     ]);
@@ -1485,7 +1506,8 @@ export const publishAgenda = (
     const trackNames = new Map(trackRows.map(({ id, name }) => [id, name] as const));
     const roomNames = new Map(roomRows.map(({ id, name }) => [id, name] as const));
     const visibleSpeakerNames = new Map<string, string[]>();
-    for (const row of visibleSpeakerRows) {
+    for (const row of speakerRows) {
+      if (!row.visible) continue;
       const names = visibleSpeakerNames.get(row.talkId) ?? [];
       names.push(row.name);
       visibleSpeakerNames.set(row.talkId, names);
@@ -1499,6 +1521,29 @@ export const publishAgenda = (
         left.title.localeCompare(right.title) ||
         left.id.localeCompare(right.id)
       );
+    const outOfBoundsTalks = confirmedTalks.filter((talk) =>
+      talk.startsAt < eventStartsAt ||
+      talk.startsAt > eventEndsAt ||
+      talk.startsAt + talk.durationMin * 60_000 > eventEndsAt
+    );
+    if (outOfBoundsTalks.length > 0) {
+      return yield* Effect.fail(new Validation({
+        message: `Agenda publication requires confirmed talks to fit within the event interval; ${outOfBoundsTalks.length} ${outOfBoundsTalks.length === 1 ? "talk falls" : "talks fall"} outside it`,
+      }));
+    }
+    const speakerProjection = JSON.stringify(
+      speakerRows
+        .map(({ talkId, speakerId, name, visible, version }) => ({
+          talkId,
+          speakerId,
+          publicDisplayName: visible ? name : null,
+          version,
+        }))
+        .sort((left, right) =>
+          left.talkId.localeCompare(right.talkId) ||
+          left.speakerId.localeCompare(right.speakerId)
+        ),
+    );
     const publicTalks: PublicAgendaTalk[] = confirmedTalks.map((talk) => ({
       id: talk.id,
       title: talk.title,
@@ -1533,6 +1578,552 @@ export const publishAgenda = (
         speakerIds: [...talk.speakerIds].sort(),
       })),
     });
+    const historicalChanges = current === null
+      ? []
+      : yield* database(() => db.select({
+          aggregateType: domainChanges.aggregateType,
+          aggregateVersion: domainChanges.aggregateVersion,
+          payload: domainChanges.payload,
+        }).from(domainChanges).where(and(
+          eq(domainChanges.eventId, input.eventId),
+          inArray(domainChanges.aggregateType, ["agenda-publication", "agenda-delivery"]),
+        )));
+    const historicalPublications = new Map<number, PublishedAgenda>();
+    const historicalDeliveries = new Map<number, AgendaDeliveryProjection>();
+    for (const change of historicalChanges) {
+      if (change.aggregateType === "agenda-publication") {
+        historicalPublications.set(
+          change.aggregateVersion,
+          yield* decodePublishedAgenda(change.payload),
+        );
+      } else {
+        historicalDeliveries.set(
+          change.aggregateVersion,
+          yield* decodeAgendaDeliveryProjection(change.payload),
+        );
+      }
+    }
+    type HistoricalFact = {
+      readonly speakerIds: readonly string[];
+      readonly title: string;
+      readonly startsAt: Date;
+      readonly durationMin: number;
+      readonly roomName: string;
+      readonly updatedAt: Date;
+    };
+    const historicalFacts = new Map<number, ReadonlyMap<string, HistoricalFact>>();
+    for (const [historicalRevision, historicalPublication] of historicalPublications) {
+      const historicalDelivery = historicalDeliveries.get(historicalRevision);
+      if (!historicalDelivery) continue;
+      const publishedTalks = new Map(
+        historicalPublication.talks.map((talk) => [talk.id, talk] as const),
+      );
+      const facts = new Map<string, HistoricalFact>();
+      for (const deliveryTalk of historicalDelivery.talks) {
+        const publicTalk = publishedTalks.get(deliveryTalk.talkId);
+        if (!publicTalk?.room) continue;
+        facts.set(deliveryTalk.talkId, {
+          speakerIds: deliveryTalk.speakerIds,
+          title: publicTalk.title,
+          startsAt: new Date(deliveryTalk.startsAt),
+          durationMin: deliveryTalk.durationMin,
+          roomName: publicTalk.room,
+          updatedAt: new Date(historicalPublication.publishedAt),
+        });
+      }
+      historicalFacts.set(historicalRevision, facts);
+    }
+    const calendarLineage = current === null
+      ? []
+      : yield* database(() => db
+          .select({
+            snapshotId: mailDeliverySnapshots.id,
+            recipientUserId: mailDeliverySnapshots.recipientUserId,
+            recipientEmail: mailDeliverySnapshots.recipientEmail,
+            recipientName: mailDeliverySnapshots.recipientName,
+            fromEmail: mailDeliverySnapshots.fromEmail,
+            replyToEmail: mailDeliverySnapshots.replyToEmail,
+            icsFilename: mailDeliverySnapshots.icsFilename,
+            deliveryId: mailDeliveries.id,
+            deliveryStatus: mailDeliveries.status,
+            scheduledFor: mailDeliveries.scheduledFor,
+            leaseExpiresAt: mailDeliveries.leaseExpiresAt,
+            speakerId: mailCalendarEvents.speakerId,
+            talkId: mailCalendarEvents.talkId,
+            calendarUid: mailCalendarEvents.calendarUid,
+            sequence: mailCalendarEvents.sequence,
+            publicationRevision: mailCalendarEvents.publicationRevision,
+            status: mailCalendarEvents.status,
+            createdAt: mailCalendarEvents.createdAt,
+          })
+          .from(mailCalendarEvents)
+          .innerJoin(
+            mailDeliverySnapshots,
+            eq(mailDeliverySnapshots.id, mailCalendarEvents.snapshotId),
+          )
+          .innerJoin(
+            mailDeliveries,
+            eq(mailDeliveries.snapshotId, mailDeliverySnapshots.id),
+          )
+          .where(eq(mailCalendarEvents.eventId, input.eventId))
+          .orderBy(asc(mailCalendarEvents.sequence), asc(mailCalendarEvents.createdAt)));
+    const [legacySnapshots, calendarSpeakers] = current === null
+      ? [[], []] as const
+      : yield* Effect.all([
+          database(() => db
+            .select({
+              snapshotId: mailDeliverySnapshots.id,
+              recipientUserId: mailDeliverySnapshots.recipientUserId,
+              recipientEmail: mailDeliverySnapshots.recipientEmail,
+              recipientName: mailDeliverySnapshots.recipientName,
+              fromEmail: mailDeliverySnapshots.fromEmail,
+              replyToEmail: mailDeliverySnapshots.replyToEmail,
+              icsFilename: mailDeliverySnapshots.icsFilename,
+              icsContent: mailDeliverySnapshots.icsContent,
+              createdAt: mailDeliverySnapshots.createdAt,
+              deliveryId: mailDeliveries.id,
+              deliveryStatus: mailDeliveries.status,
+              scheduledFor: mailDeliveries.scheduledFor,
+              leaseExpiresAt: mailDeliveries.leaseExpiresAt,
+            })
+            .from(mailDeliverySnapshots)
+            .innerJoin(
+              mailDeliveries,
+              eq(mailDeliveries.snapshotId, mailDeliverySnapshots.id),
+            )
+            .where(and(
+              eq(mailDeliverySnapshots.eventId, input.eventId),
+              isNotNull(mailDeliverySnapshots.icsContent),
+            ))),
+          database(() => db
+            .select({
+              speakerId: speakers.id,
+              userId: speakers.userId,
+              contactEmail: speakers.contactEmail,
+              userEmail: users.email,
+            })
+            .from(speakers)
+            .leftJoin(users, eq(users.id, speakers.userId))
+            .where(eq(speakers.eventId, input.eventId))),
+        ]);
+    const speakerIdByUser = new Map(
+      calendarSpeakers
+        .filter((speaker): speaker is typeof speaker & { userId: string } => speaker.userId !== null)
+        .map((speaker) => [speaker.userId, speaker.speakerId] as const),
+    );
+    const speakerIdByEmail = new Map<string, string>();
+    for (const speaker of calendarSpeakers) {
+      if (speaker.contactEmail) {
+        speakerIdByEmail.set(speaker.contactEmail.trim().toLowerCase(), speaker.speakerId);
+      }
+      if (speaker.userEmail) {
+        speakerIdByEmail.set(speaker.userEmail.trim().toLowerCase(), speaker.speakerId);
+      }
+    }
+    const historicalRevisions = [...historicalFacts.entries()]
+      .sort(([left], [right]) => right - left);
+    const lineageSnapshotIds = new Set(calendarLineage.map(({ snapshotId }) => snapshotId));
+    const legacyBackfill = legacySnapshots.flatMap((snapshot) => {
+      if (lineageSnapshotIds.has(snapshot.snapshotId) || snapshot.icsContent === null) return [];
+      const speakerId = (
+        snapshot.recipientUserId ? speakerIdByUser.get(snapshot.recipientUserId) : undefined
+      ) ?? speakerIdByEmail.get(snapshot.recipientEmail.trim().toLowerCase());
+      if (!speakerId) return [];
+      return parseCalendarEvents(snapshot.icsContent).map((calendarEvent) => {
+        const publicationRevision = historicalRevisions.find(([, facts]) => {
+          const fact = facts.get(calendarEvent.talkId);
+          return fact !== undefined &&
+            fact.title === calendarEvent.title &&
+            fact.startsAt.getTime() === calendarEvent.startsAt.getTime() &&
+            fact.durationMin === calendarEvent.durationMin &&
+            fact.roomName === calendarEvent.roomName;
+        })?.[0];
+        return {
+          snapshot,
+          speakerId,
+          calendarEvent,
+          publicationRevision,
+        };
+      });
+    });
+    const unresolvedLegacy = legacyBackfill.find(({ publicationRevision }) =>
+      publicationRevision === undefined
+    );
+    if (unresolvedLegacy) {
+      return yield* Effect.fail(new External({
+        service: "mail-calendar-lineage",
+        detail: `Legacy calendar snapshot '${unresolvedLegacy.snapshot.snapshotId}' does not match a published agenda revision`,
+      }));
+    }
+    type DeliveryStatus = typeof mailDeliveries.$inferSelect.status;
+    type HydratedLineage = {
+      readonly snapshotId: string;
+      readonly recipientUserId: string | null;
+      readonly recipientEmail: string;
+      readonly recipientName: string | null;
+      readonly fromEmail: string;
+      readonly replyToEmail: string | null;
+      readonly icsFilename: string | null;
+      readonly deliveryId: string;
+      readonly deliveryStatus: DeliveryStatus;
+      readonly scheduledFor: Date;
+      readonly leaseExpiresAt: Date | null;
+      readonly speakerId: string;
+      readonly talkId: string;
+      readonly calendarUid: string;
+      readonly sequence: number;
+      readonly publicationRevision: number;
+      readonly status: "confirmed" | "cancelled";
+      readonly createdAt: Date;
+      readonly event: CalendarEventSnapshot | null;
+    };
+    const hydratedLineage: HydratedLineage[] = [];
+    for (const row of calendarLineage) {
+      const fact = historicalFacts.get(row.publicationRevision)?.get(row.talkId);
+      if (row.status === "confirmed" && !fact) {
+        return yield* Effect.fail(new External({
+          service: "mail-calendar-lineage",
+          detail: `Calendar lineage '${row.snapshotId}:${row.talkId}' has no publication facts`,
+        }));
+      }
+      hydratedLineage.push({
+        ...row,
+        event: fact
+          ? {
+              talkId: row.talkId,
+              uid: row.calendarUid,
+              title: fact.title,
+              startsAt: fact.startsAt,
+              durationMin: fact.durationMin,
+              roomName: fact.roomName,
+              sequence: row.sequence,
+              updatedAt: fact.updatedAt,
+              status: row.status,
+            }
+          : null,
+      });
+    }
+    for (const { snapshot, speakerId, calendarEvent, publicationRevision } of legacyBackfill) {
+      hydratedLineage.push({
+        snapshotId: snapshot.snapshotId,
+        recipientUserId: snapshot.recipientUserId,
+        recipientEmail: snapshot.recipientEmail,
+        recipientName: snapshot.recipientName,
+        fromEmail: snapshot.fromEmail,
+        replyToEmail: snapshot.replyToEmail,
+        icsFilename: snapshot.icsFilename,
+        deliveryId: snapshot.deliveryId,
+        deliveryStatus: snapshot.deliveryStatus,
+        scheduledFor: snapshot.scheduledFor,
+        leaseExpiresAt: snapshot.leaseExpiresAt,
+        speakerId,
+        talkId: calendarEvent.talkId,
+        calendarUid: calendarEvent.uid,
+        sequence: calendarEvent.sequence,
+        publicationRevision: publicationRevision!,
+        status: calendarEvent.status,
+        createdAt: snapshot.createdAt,
+        event: calendarEvent,
+      });
+    }
+    type LineageEvent = {
+      readonly speakerId: string;
+      readonly publicationRevision: number;
+      readonly event: CalendarEventSnapshot | null;
+      readonly talkId: string;
+      readonly uid: string;
+      readonly sequence: number;
+      readonly status: "confirmed" | "cancelled";
+    };
+    type InFlightCalendar = {
+      readonly deliveryId: string;
+      readonly scheduledFor: Date;
+      readonly leaseExpiresAt: Date | null;
+      readonly status: "pending" | "retry" | "claimed" | "dispatching";
+      readonly byTalk: Map<string, LineageEvent>;
+    };
+    type RecipientLineage = {
+      recipientUserId: string | null;
+      recipientEmail: string;
+      recipientName: string;
+      fromEmail: string;
+      replyToEmail: string | null;
+      icsFilename: string | null;
+      sequence: number;
+      eligibleForUpdates: boolean;
+      readonly speakerIds: Set<string>;
+      readonly deliveredByTalk: Map<string, LineageEvent>;
+      readonly identitiesByTalk: Map<string, LineageEvent>;
+      readonly inFlight: Map<string, InFlightCalendar>;
+    };
+    const recipientsByEmail = new Map<string, RecipientLineage>();
+    for (const row of hydratedLineage) {
+      const key = row.recipientEmail.trim().toLowerCase();
+      let recipient = recipientsByEmail.get(key);
+      if (!recipient) {
+        recipient = {
+          recipientUserId: row.recipientUserId,
+          recipientEmail: row.recipientEmail,
+          recipientName: row.recipientName?.trim() || row.recipientEmail,
+          fromEmail: row.fromEmail,
+          replyToEmail: row.replyToEmail,
+          icsFilename: row.icsFilename,
+          sequence: row.sequence,
+          eligibleForUpdates: false,
+          speakerIds: new Set(),
+          deliveredByTalk: new Map(),
+          identitiesByTalk: new Map(),
+          inFlight: new Map(),
+        };
+        recipientsByEmail.set(key, recipient);
+      }
+      const eligibleForUpdates = row.deliveryStatus !== "cancelled" &&
+        row.deliveryStatus !== "dead_letter";
+      if (eligibleForUpdates) {
+        recipient.eligibleForUpdates = true;
+        recipient.speakerIds.add(row.speakerId);
+      }
+      const lineageEvent: LineageEvent = {
+        speakerId: row.speakerId,
+        publicationRevision: row.publicationRevision,
+        event: row.event,
+        talkId: row.talkId,
+        uid: row.calendarUid,
+        sequence: row.sequence,
+        status: row.status,
+      };
+      const identity = recipient.identitiesByTalk.get(row.talkId);
+      if (!identity || identity.sequence <= row.sequence) {
+        recipient.identitiesByTalk.set(row.talkId, lineageEvent);
+      }
+      if (row.deliveryStatus === "sent") {
+        const prior = recipient.deliveredByTalk.get(row.talkId);
+        if (!prior || prior.sequence <= row.sequence) {
+          recipient.deliveredByTalk.set(row.talkId, lineageEvent);
+        }
+      } else if (eligibleForUpdates) {
+        let inFlight = recipient.inFlight.get(row.deliveryId);
+        if (!inFlight) {
+          inFlight = {
+            deliveryId: row.deliveryId,
+            scheduledFor: row.scheduledFor,
+            leaseExpiresAt: row.leaseExpiresAt,
+            status: row.deliveryStatus,
+            byTalk: new Map(),
+          };
+          recipient.inFlight.set(row.deliveryId, inFlight);
+        }
+        inFlight.byTalk.set(row.talkId, lineageEvent);
+      }
+      if (recipient.sequence <= row.sequence) {
+        recipient.recipientUserId = row.recipientUserId;
+        recipient.recipientEmail = row.recipientEmail;
+        recipient.recipientName = row.recipientName?.trim() || row.recipientEmail;
+        recipient.fromEmail = row.fromEmail;
+        recipient.replyToEmail = row.replyToEmail;
+        recipient.icsFilename = row.icsFilename;
+        recipient.sequence = row.sequence;
+      }
+    }
+    const publicTalksById = new Map(published.talks.map((talk) => [talk.id, talk] as const));
+    const staleDeliveryIds = new Set<string>();
+    const supersededClaimedIds = new Set<string>();
+    const affectedDeliveryIds = new Set<string>();
+    const calendarUpdates: Array<{
+      readonly snapshot: typeof mailDeliverySnapshots.$inferInsert;
+      readonly delivery: typeof mailDeliveries.$inferInsert;
+      readonly events: readonly LineageEvent[];
+    }> = [];
+    const eventFactsEqual = (
+      left: CalendarEventSnapshot | null,
+      right: CalendarEventSnapshot,
+    ): boolean => left !== null
+      && left.status === right.status
+      && left.startsAt.getTime() === right.startsAt.getTime()
+      && left.durationMin === right.durationMin
+      && left.roomName === right.roomName
+      && left.title === right.title;
+    for (const [recipientKey, recipient] of recipientsByEmail) {
+      if (!recipient.eligibleForUpdates) continue;
+      const desiredByTalk = new Map<string, LineageEvent>();
+      for (const deliveryTalk of deliveryProjection.talks) {
+        const speakerId = deliveryTalk.speakerIds.find((id) => recipient.speakerIds.has(id));
+        if (!speakerId) continue;
+        const publicTalk = publicTalksById.get(deliveryTalk.talkId);
+        if (!publicTalk?.room) continue;
+        const identity = recipient.identitiesByTalk.get(deliveryTalk.talkId);
+        desiredByTalk.set(deliveryTalk.talkId, {
+          speakerId,
+          publicationRevision: published.revision,
+          talkId: deliveryTalk.talkId,
+          uid: identity?.uid ?? stableCalendarUid(input.eventId, deliveryTalk.talkId),
+          sequence: Math.max(published.revision, (identity?.sequence ?? 0) + 1),
+          status: "confirmed",
+          event: {
+            talkId: deliveryTalk.talkId,
+            uid: identity?.uid ?? stableCalendarUid(input.eventId, deliveryTalk.talkId),
+            title: publicTalk.title,
+            startsAt: new Date(deliveryTalk.startsAt),
+            durationMin: deliveryTalk.durationMin,
+            roomName: publicTalk.room,
+            sequence: Math.max(published.revision, (identity?.sequence ?? 0) + 1),
+            updatedAt: prepared.now,
+            status: "confirmed",
+          },
+        });
+      }
+      const affectedInFlight: InFlightCalendar[] = [];
+      for (const inFlight of recipient.inFlight.values()) {
+        const stale = [...inFlight.byTalk.values()].some((prior) => {
+          const desired = desiredByTalk.get(prior.talkId);
+          return prior.status === "confirmed"
+            ? !desired || !eventFactsEqual(prior.event, desired.event!)
+            : desired !== undefined;
+        }) || [...desiredByTalk.keys()].some((talkId) => !inFlight.byTalk.has(talkId));
+        if (!stale) continue;
+        affectedInFlight.push(inFlight);
+        affectedDeliveryIds.add(inFlight.deliveryId);
+        if (inFlight.status === "claimed") {
+          supersededClaimedIds.add(inFlight.deliveryId);
+        } else if (inFlight.status === "pending" || inFlight.status === "retry") {
+          staleDeliveryIds.add(inFlight.deliveryId);
+        }
+      }
+      const requests: LineageEvent[] = [];
+      const cancellations: LineageEvent[] = [];
+      for (const desired of desiredByTalk.values()) {
+        const prior = recipient.deliveredByTalk.get(desired.talkId);
+        if (!prior || prior.status !== "confirmed" || !eventFactsEqual(prior.event, desired.event!)) {
+          requests.push(desired);
+        }
+      }
+      for (const prior of recipient.deliveredByTalk.values()) {
+        if (prior.status !== "confirmed" || desiredByTalk.has(prior.talkId) || !prior.event) continue;
+        const sequence = Math.max(
+          published.revision,
+          (recipient.identitiesByTalk.get(prior.talkId)?.sequence ?? prior.sequence) + 1,
+        );
+        cancellations.push({
+          ...prior,
+          publicationRevision: published.revision,
+          sequence,
+          status: "cancelled",
+          event: {
+            ...prior.event,
+            sequence,
+            updatedAt: prepared.now,
+            status: "cancelled",
+          },
+        });
+      }
+      for (const inFlight of affectedInFlight) {
+        if (inFlight.status !== "claimed") continue;
+        for (const prior of inFlight.byTalk.values()) {
+          if (prior.status !== "confirmed" || desiredByTalk.has(prior.talkId) || !prior.event) continue;
+          const sequence = Math.max(
+            published.revision,
+            (recipient.identitiesByTalk.get(prior.talkId)?.sequence ?? prior.sequence) + 1,
+          );
+          const cancellation: LineageEvent = {
+            ...prior,
+            publicationRevision: published.revision,
+            sequence,
+            status: "cancelled",
+            event: {
+              ...prior.event,
+              sequence,
+              updatedAt: prepared.now,
+              status: "cancelled",
+            },
+          };
+          const existingIndex = cancellations.findIndex(({ talkId }) => talkId === prior.talkId);
+          if (existingIndex === -1) {
+            cancellations.push(cancellation);
+          } else if (cancellations[existingIndex]!.sequence <= sequence) {
+            cancellations[existingIndex] = cancellation;
+          }
+        }
+      }
+      const escapedEventName = event.name
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+      const filenameRecipient = recipient.recipientName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "speaker";
+      const appendDelivery = (
+        method: CalendarMethod,
+        lineageEvents: readonly LineageEvent[],
+        scheduledFor: Date,
+        keySuffix: string,
+      ): void => {
+        if (lineageEvents.length === 0) return;
+        const snapshotId = nanoid();
+        const deliveryId = nanoid();
+        const cancellation = method === "CANCEL";
+        calendarUpdates.push({
+          snapshot: {
+            id: snapshotId,
+            eventId: input.eventId,
+            templateId: null,
+            recipientUserId: recipient.recipientUserId,
+            recipientEmail: recipient.recipientEmail,
+            recipientName: recipient.recipientName,
+            fromEmail: recipient.fromEmail,
+            replyToEmail: recipient.replyToEmail,
+            subject: `${cancellation ? "Calendar cancellation" : "Calendar update"}: ${event.name}`,
+            renderedHtml: `<p>The published schedule for <strong>${escapedEventName}</strong> changed. This calendar attachment ${cancellation ? "cancels removed sessions" : "updates your agenda"}.</p>`,
+            renderedText: `The published schedule for ${event.name} changed. This calendar attachment ${cancellation ? "cancels removed sessions" : "updates your agenda"}.`,
+            icsFilename: recipient.icsFilename ?? `${event.slug}-${filenameRecipient}-agenda.ics`,
+            icsContent: renderCalendar(
+              event,
+              { name: recipient.recipientName, email: recipient.recipientEmail },
+              lineageEvents.map(({ event: calendarEvent }) => calendarEvent!),
+              method,
+              prepared.now,
+              recipient.fromEmail,
+            ),
+            createdAt: prepared.now,
+          },
+          delivery: {
+            id: deliveryId,
+            snapshotId,
+            idempotencyKey: `agenda-calendar-${keySuffix}:${prepared.id}:${recipientKey}`,
+            status: "pending",
+            scheduledFor,
+            availableAt: scheduledFor,
+            attemptCount: 0,
+            maxAttempts: 8,
+            createdAt: prepared.now,
+          },
+          events: lineageEvents,
+        });
+      };
+      const updateAvailableAt = affectedInFlight.reduce((latest, inFlight) => {
+        const deliveryBoundary = inFlight.status === "claimed" && inFlight.leaseExpiresAt
+          ? inFlight.leaseExpiresAt
+          : prepared.now;
+        return deliveryBoundary > latest ? deliveryBoundary : latest;
+      }, prepared.now);
+      if (recipient.deliveredByTalk.size > 0) {
+        appendDelivery("REQUEST", requests, updateAvailableAt, "request");
+        appendDelivery("CANCEL", cancellations, updateAvailableAt, "cancel");
+      } else if (affectedInFlight.length > 0) {
+        if (desiredByTalk.size > 0) {
+          appendDelivery(
+            "REQUEST",
+            [...desiredByTalk.values()],
+            updateAvailableAt,
+            "replacement",
+          );
+        } else {
+          appendDelivery("CANCEL", cancellations, updateAvailableAt, "cancel");
+        }
+      }
+    }
     if (interlock) {
       yield* interlock({
         eventId: input.eventId,
@@ -1541,6 +2132,32 @@ export const publishAgenda = (
         expectedEventVersion: input.expectedEventVersion,
       });
     }
+    const dispatchInterlock = affectedDeliveryIds.size === 0
+      ? sql`1 = 1`
+      : sql`not exists (
+          select 1
+          from ${mailDeliveries}
+          where ${inArray(mailDeliveries.id, [...affectedDeliveryIds])}
+            and ${mailDeliveries.status} = 'dispatching'
+        ) and ${
+          staleDeliveryIds.size === 0
+            ? sql`1 = 1`
+            : sql`not exists (
+                select 1
+                from ${mailDeliveries}
+                where ${inArray(mailDeliveries.id, [...staleDeliveryIds])}
+                  and ${mailDeliveries.status} not in ('pending', 'retry')
+              )`
+        } and ${
+          supersededClaimedIds.size === 0
+            ? sql`1 = 1`
+            : sql`not exists (
+                select 1
+                from ${mailDeliveries}
+                where ${inArray(mailDeliveries.id, [...supersededClaimedIds])}
+                  and ${mailDeliveries.status} not in ('claimed', 'sent')
+              )`
+        }`;
     const actor = actorColumns(principal);
     const changeId = nanoid();
     const deliveryChangeId = nanoid();
@@ -1567,6 +2184,53 @@ export const publishAgenda = (
             from ${events}
             where ${events.id} = ${input.eventId}
           ) = ${input.expectedEventVersion}
+          and ${dispatchInterlock}
+          and not exists (
+            with expected_speakers as (
+              select
+                json_extract(expected_speaker.value, '$.talkId') as talk_id,
+                json_extract(expected_speaker.value, '$.speakerId') as speaker_id,
+                json_extract(expected_speaker.value, '$.publicDisplayName') as public_name,
+                json_extract(expected_speaker.value, '$.version') as version
+              from json_each(${speakerProjection}) as expected_speaker
+            ),
+            current_speakers as (
+              select
+                publication_talk_speaker.talk_id,
+                publication_speaker.id as speaker_id,
+                case
+                  when publication_speaker.visible = 1 then publication_speaker.display_name
+                  else null
+                end as public_name,
+                publication_speaker.version
+              from talk_speakers as publication_talk_speaker
+              inner join talks as publication_talk
+                on publication_talk.event_id = publication_talk_speaker.event_id
+                and publication_talk.id = publication_talk_speaker.talk_id
+              inner join speakers as publication_speaker
+                on publication_speaker.event_id = publication_talk_speaker.event_id
+                and publication_speaker.id = publication_talk_speaker.speaker_id
+              where publication_talk_speaker.event_id = ${input.eventId}
+                and publication_talk.status = 'confirmed'
+            )
+            select 1
+            from expected_speakers as expected
+            left join current_speakers as current
+              on current.talk_id = expected.talk_id
+              and current.speaker_id = expected.speaker_id
+            where current.speaker_id is null
+              or current.public_name is not expected.public_name
+              or current.version is not expected.version
+            union all
+            select 1
+            from current_speakers as current
+            left join expected_speakers as expected
+              on expected.talk_id = current.talk_id
+              and expected.speaker_id = current.speaker_id
+            where expected.speaker_id is null
+              or current.public_name is not expected.public_name
+              or current.version is not expected.version
+          )
           then ${prepared.now.getTime()}
           else null
         end`,
@@ -1599,6 +2263,60 @@ export const publishAgenda = (
         idempotencyRecordId: prepared.id,
         occurredAt: prepared.now,
       }),
+      ...(
+        staleDeliveryIds.size > 0
+          ? [db.update(mailDeliveries).set({
+              status: "cancelled",
+              leaseOwner: null,
+              leaseExpiresAt: null,
+            }).where(and(
+              inArray(mailDeliveries.id, [...staleDeliveryIds]),
+              inArray(mailDeliveries.status, ["pending", "retry"]),
+            ))]
+          : []
+      ),
+      ...(
+        supersededClaimedIds.size > 0
+          ? [db.update(mailDeliveries).set({
+              supersededAt: prepared.now,
+            }).where(and(
+              inArray(mailDeliveries.id, [...supersededClaimedIds]),
+              eq(mailDeliveries.status, "claimed"),
+            ))]
+          : []
+      ),
+      ...legacyBackfill.map(({ snapshot, speakerId, calendarEvent, publicationRevision }) =>
+        db.insert(mailCalendarEvents).values({
+          id: nanoid(),
+          snapshotId: snapshot.snapshotId,
+          eventId: input.eventId,
+          speakerId,
+          talkId: calendarEvent.talkId,
+          calendarUid: calendarEvent.uid,
+          sequence: calendarEvent.sequence,
+          publicationRevision: publicationRevision!,
+          status: calendarEvent.status,
+          createdAt: snapshot.createdAt,
+        })
+      ),
+      ...calendarUpdates.flatMap((update) => [
+        db.insert(mailDeliverySnapshots).values(update.snapshot),
+        db.insert(mailDeliveries).values(update.delivery),
+        ...update.events.map((calendarEvent) =>
+          db.insert(mailCalendarEvents).values({
+            id: nanoid(),
+            snapshotId: update.snapshot.id,
+            eventId: input.eventId,
+            speakerId: calendarEvent.speakerId,
+            talkId: calendarEvent.talkId,
+            calendarUid: calendarEvent.uid,
+            sequence: calendarEvent.sequence,
+            publicationRevision: calendarEvent.publicationRevision,
+            status: calendarEvent.status,
+            createdAt: prepared.now,
+          })
+        ),
+      ]),
       db.insert(auditLog).values({
         id: auditId,
         eventId: input.eventId,
@@ -1609,7 +2327,11 @@ export const publishAgenda = (
         resourceId: input.eventId,
         before: current,
         after: published,
-        metadata: { idempotencyKeyHash: prepared.keyHash, talkCount: published.talks.length },
+        metadata: {
+          idempotencyKeyHash: prepared.keyHash,
+          talkCount: published.talks.length,
+          calendarUpdateDeliveryIds: calendarUpdates.map(({ delivery }) => delivery.id),
+        },
         occurredAt: prepared.now,
       }),
     ]));

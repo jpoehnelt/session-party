@@ -4257,6 +4257,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "enum": [
                   "pending",
                   "claimed",
+                  "dispatching",
                   "retry",
                   "sent",
                   "dead_letter",
@@ -20854,6 +20855,7 @@ export const openApi = {
                             "enum": [
                               "pending",
                               "claimed",
+                              "dispatching",
                               "retry",
                               "sent",
                               "dead_letter",

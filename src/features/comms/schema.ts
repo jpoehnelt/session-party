@@ -118,6 +118,7 @@ export type CommunicationPreview = typeof CommunicationPreview.Type;
 export const DeliveryStatus = Schema.Literal(
   "pending",
   "claimed",
+  "dispatching",
   "retry",
   "sent",
   "dead_letter",

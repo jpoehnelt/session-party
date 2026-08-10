@@ -5,8 +5,9 @@ import {
   type D1Migration,
 } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
+import worker, { recoverMailScheduler } from "../index";
 import { sendMail, sessionSecret } from "../services";
-import { reserveDispatchBudget } from "./Scheduler";
+import { MAIL_SCHEDULER_NAME, reserveDispatchBudget } from "./Scheduler";
 
 type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -129,6 +130,158 @@ describe("Scheduler durable delivery recovery", () => {
       ics_filename: null,
       ics_content: null,
     });
+  });
+  it("recovers a committed delivery through the canonical scheduled wake", async () => {
+    const now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO mail_delivery_snapshots
+          (id, event_id, recipient_email, from_email, subject, rendered_html, rendered_text, created_at)
+         VALUES ('scheduled-recovery-snapshot', NULL, 'recovery@example.com', 'Session Party <welcome@sessionparty.com>', 'Recovery', '<p>Recovery</p>', 'Recovery', ?)`,
+      ).bind(now),
+      env.DB.prepare(
+        `INSERT INTO mail_deliveries
+          (id, snapshot_id, idempotency_key, scheduled_for, available_at, provider, created_at)
+         VALUES ('scheduled-recovery-delivery', 'scheduled-recovery-snapshot', 'scheduled-recovery-delivery', ?, ?, 'cloudflare-email', ?)`,
+      ).bind(now, now, now),
+    ]);
+    expect(MAIL_SCHEDULER_NAME).toBe("mail");
+    const canonical = env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
+    const noncanonical = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail-recovery-wrong-name"));
+    await runInDurableObject(canonical, async (_instance, state) => state.storage.deleteAll());
+    await runInDurableObject(canonical, async (instance) => instance.alarm());
+    expect(await env.DB.prepare(
+      "SELECT status, attempt_count FROM mail_deliveries WHERE id = 'scheduled-recovery-delivery'",
+    ).first()).toEqual({ status: "pending", attempt_count: 0 });
+
+    const waits: Promise<unknown>[] = [];
+    worker.scheduled!(
+      { cron: "* * * * *", scheduledTime: now, noRetry() {} } as ScheduledController,
+      env,
+      { waitUntil(promise: Promise<unknown>) { waits.push(promise); } } as unknown as ExecutionContext,
+    );
+    await Promise.all(waits);
+    expect(await runInDurableObject(
+      canonical,
+      async (_instance, state) => state.storage.get("mail-scheduler-enabled"),
+    )).toBe(true);
+    expect(await runInDurableObject(
+      noncanonical,
+      async (_instance, state) => state.storage.get("mail-scheduler-enabled"),
+    )).toBeUndefined();
+    expect(await env.DB.prepare(
+      "SELECT status, attempt_count FROM mail_deliveries WHERE id = 'scheduled-recovery-delivery'",
+    ).first()).toEqual({ status: "sent", attempt_count: 1 });
+
+    await expect(recoverMailScheduler(env)).resolves.toBeUndefined();
+  });
+  it("cancels a superseded claimed delivery before sending its replacement", async () => {
+    const now = Date.now();
+    await env.DB.batch([
+      ...["original", "replacement"].map((suffix) => env.DB.prepare(
+        `INSERT INTO mail_delivery_snapshots
+          (id, event_id, recipient_email, from_email, subject, rendered_html, rendered_text, created_at)
+         VALUES (?, NULL, 'claimed@example.com', 'Session Party <welcome@sessionparty.com>', ?, '<p>Calendar</p>', 'Calendar', ?)`,
+      ).bind(`claimed-${suffix}-snapshot`, suffix, now)),
+      env.DB.prepare(
+        `INSERT INTO mail_deliveries
+          (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, lease_owner, lease_expires_at,
+           superseded_at, attempt_count, provider, created_at)
+         VALUES ('claimed-original-delivery', 'claimed-original-snapshot', 'claimed-original', 'claimed', ?, ?,
+           'expired-claim', ?, ?, 1, 'cloudflare-email', ?)`,
+      ).bind(now, now, now - 1, now - 1_000, now),
+      env.DB.prepare(
+        `INSERT INTO mail_deliveries
+          (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, provider, created_at)
+         VALUES ('claimed-replacement-delivery', 'claimed-replacement-snapshot', 'claimed-replacement', 'pending', ?, ?,
+           'cloudflare-email', ?)`,
+      ).bind(now, now, now),
+    ]);
+    const scheduler = env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
+    await runInDurableObject(scheduler, async (_instance, state) => state.storage.deleteAll());
+    await scheduler.fetch("https://scheduler/poke", {
+      method: "POST",
+      headers: { "x-session-party-internal": sessionSecret(env) },
+    });
+    await runInDurableObject(scheduler, async (instance) => instance.alarm());
+    expect(await env.DB.prepare(
+      `SELECT id, status, attempt_count FROM mail_deliveries
+       WHERE id IN ('claimed-original-delivery', 'claimed-replacement-delivery') ORDER BY id`,
+    ).all()).toMatchObject({
+      results: [
+        { id: "claimed-original-delivery", status: "cancelled", attempt_count: 1 },
+        { id: "claimed-replacement-delivery", status: "sent", attempt_count: 1 },
+      ],
+    });
+    expect(await env.DB.prepare(
+      "SELECT count(*) AS count FROM mail_delivery_attempts WHERE delivery_id = 'claimed-original-delivery'",
+    ).first()).toEqual({ count: 0 });
+  });
+
+
+  it("redacts only terminal campaign snapshots at the ninety-day boundary", async () => {
+    const now = Date.now();
+    const retentionMs = 90 * 24 * 60 * 60_000;
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at)
+         VALUES ('retention-event', 'retention-event', 'Retention event', 'UTC', 1, ?, ?)`,
+      ).bind(now, now),
+      ...[
+        ["before", now - retentionMs + 60_000, "sent"],
+        ["boundary", now - retentionMs, "sent"],
+        ["after", now - retentionMs - 1, "dead_letter"],
+        ["cancelled", now - retentionMs - 1, "cancelled"],
+        ["pending", now - retentionMs - 1, "pending"],
+      ].flatMap(([name, createdAt, status]) => [
+        env.DB.prepare(
+          `INSERT INTO mail_delivery_snapshots
+            (id, event_id, recipient_email, from_email, subject, rendered_html, rendered_text, ics_filename, ics_content, created_at)
+           VALUES (?, 'retention-event', ?, 'Agenda <agenda@example.com>', 'Retention', '<p>Retention</p>', 'Retention', 'retention.ics', 'BEGIN:VCALENDAR\r\nEND:VCALENDAR', ?)`,
+        ).bind(`retention-${name}-snapshot`, `${name}@example.com`, createdAt),
+        env.DB.prepare(
+          `INSERT INTO mail_deliveries
+            (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, attempt_count, max_attempts, provider, provider_message_id, sent_at, dead_lettered_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, 8, 'cloudflare-email', ?, ?, ?, ?)`,
+        ).bind(
+          `retention-${name}-delivery`,
+          `retention-${name}-snapshot`,
+          `comms:retention-${name}`,
+          status,
+          now + 86_400_000,
+          now + 86_400_000,
+          status === "sent" ? `provider-${name}` : null,
+          status === "sent" ? now : null,
+          status === "dead_letter" ? now : null,
+          createdAt,
+        ),
+      ]),
+    ]);
+    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
+    await runInDurableObject(stub, async (_instance, state) => state.storage.deleteAll());
+    await recoverMailScheduler(env);
+    await runInDurableObject(stub, async (instance) => instance.alarm());
+    const snapshots = await env.DB.prepare(
+      `SELECT substr(id, length('retention-') + 1, instr(substr(id, length('retention-') + 1), '-') - 1) AS name,
+              redacted_at IS NOT NULL AS redacted,
+              rendered_html,
+              rendered_text,
+              ics_filename,
+              ics_content
+       FROM mail_delivery_snapshots
+       WHERE id LIKE 'retention-%-snapshot'
+       ORDER BY id`,
+    ).all();
+    expect(snapshots.results).toEqual([
+      { name: "after", redacted: 1, rendered_html: null, rendered_text: null, ics_filename: null, ics_content: null },
+      { name: "before", redacted: 0, rendered_html: "<p>Retention</p>", rendered_text: "Retention", ics_filename: "retention.ics", ics_content: "BEGIN:VCALENDAR\r\nEND:VCALENDAR" },
+      { name: "boundary", redacted: 1, rendered_html: null, rendered_text: null, ics_filename: null, ics_content: null },
+      { name: "cancelled", redacted: 1, rendered_html: null, rendered_text: null, ics_filename: null, ics_content: null },
+      { name: "pending", redacted: 0, rendered_html: "<p>Retention</p>", rendered_text: "Retention", ics_filename: "retention.ics", ics_content: "BEGIN:VCALENDAR\r\nEND:VCALENDAR" },
+    ]);
+    expect(await env.DB.prepare(
+      "SELECT provider_message_id, sent_at IS NOT NULL AS sent FROM mail_deliveries WHERE id = 'retention-boundary-delivery'",
+    ).first()).toEqual({ provider_message_id: "provider-boundary", sent: 1 });
   });
   it("atomically reserves account capacity while preserving auth headroom", async () => {
     const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail"));

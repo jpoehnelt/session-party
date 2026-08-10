@@ -4,13 +4,14 @@ import {
   mailDeliverySnapshots,
 } from "contracts/schema";
 import { DurableObject } from "cloudflare:workers";
-import { and, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { sendMail, sessionSecret } from "../services";
 
 const INTERVAL_MS = 60_000;
 const LEASE_MS = 5 * 60_000;
 const MAX_BATCH = 100;
+const MAIL_SNAPSHOT_RETENTION_MS = 90 * 24 * 60 * 60_000;
 const AUTH_RATE_WINDOW_MS = 15 * 60_000;
 const AUTH_RATE_GLOBAL_LIMIT = 100;
 const AUTH_RATE_SOURCE_LIMIT = 10;
@@ -19,6 +20,8 @@ const AUTH_RATE_PREFIX = "auth-rate:";
 const CFP_RATE_PREFIX = "cfp-rate:";
 const CFP_RATE_SOURCE_LIMIT = 10;
 const CFP_RATE_RECIPIENT_LIMIT = 3;
+
+export const MAIL_SCHEDULER_NAME = "mail";
 const MAIL_SCHEDULER_ENABLED_KEY = "mail-scheduler-enabled";
 
 export const ACCOUNT_DAILY_EMAIL_LIMIT = 1_000;
@@ -128,12 +131,40 @@ const redactAuthSnapshot = async (
     }));
   }
 };
+export const authorizeMailDispatch = async (
+  db: DrizzleD1Database,
+  deliveryId: string,
+  leaseOwner: string,
+): Promise<boolean> => {
+  const [authorized] = await db
+    .update(mailDeliveries)
+    .set({ status: "dispatching" })
+    .where(and(
+      eq(mailDeliveries.id, deliveryId),
+      eq(mailDeliveries.status, "claimed"),
+      eq(mailDeliveries.leaseOwner, leaseOwner),
+      isNull(mailDeliveries.supersededAt),
+    ))
+    .returning({ id: mailDeliveries.id });
+  if (authorized !== undefined) return true;
+  await db
+    .update(mailDeliveries)
+    .set({ status: "cancelled", leaseOwner: null, leaseExpiresAt: null })
+    .where(and(
+      eq(mailDeliveries.id, deliveryId),
+      eq(mailDeliveries.status, "claimed"),
+      eq(mailDeliveries.leaseOwner, leaseOwner),
+      isNotNull(mailDeliveries.supersededAt),
+    ));
+  return false;
+};
+
 
 
 
 export class Scheduler extends DurableObject<Env> {
   private isCanonicalMailScheduler(): boolean {
-    return this.ctx.id.equals(this.env.SCHEDULER.idFromName("mail"));
+    return this.ctx.id.equals(this.env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
   }
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -317,6 +348,19 @@ export class Scheduler extends DurableObject<Env> {
                WHERE idempotency_key LIKE 'auth-magic-link:%' AND status IN ('cancelled', 'sent', 'dead_letter')
              )`,
         ).bind(nowMs),
+        this.env.DB.prepare(
+          `UPDATE mail_delivery_snapshots
+           SET rendered_html = NULL, rendered_text = NULL, ics_filename = NULL, ics_content = NULL, redacted_at = ?
+           WHERE event_id IS NOT NULL
+             AND redacted_at IS NULL
+             AND created_at <= ?
+             AND EXISTS (
+               SELECT 1 FROM mail_deliveries
+               WHERE mail_deliveries.snapshot_id = mail_delivery_snapshots.id
+                 AND mail_deliveries.idempotency_key NOT LIKE 'auth-magic-link:%'
+                 AND mail_deliveries.status IN ('cancelled', 'sent', 'dead_letter')
+             )`,
+        ).bind(nowMs, nowMs - MAIL_SNAPSHOT_RETENTION_MS),
       ]);
       const due = await db
         .select({
@@ -324,6 +368,7 @@ export class Scheduler extends DurableObject<Env> {
           snapshotId: mailDeliveries.snapshotId,
           eventId: mailDeliverySnapshots.eventId,
           idempotencyKey: mailDeliveries.idempotencyKey,
+          supersededAt: mailDeliveries.supersededAt,
           status: mailDeliveries.status,
           provider: mailDeliveries.provider,
           fromEmail: mailDeliverySnapshots.fromEmail,
@@ -354,29 +399,50 @@ export class Scheduler extends DurableObject<Env> {
                 ),
               ),
               and(
-                eq(mailDeliveries.status, "claimed"),
+                inArray(mailDeliveries.status, ["claimed", "dispatching"]),
                 lte(mailDeliveries.leaseExpiresAt, now),
               ),
             ),
           ),
         )
+        .orderBy(
+          asc(mailDeliveries.availableAt),
+          asc(mailDeliveries.createdAt),
+          asc(mailDeliveries.id),
+        )
         .limit(MAX_BATCH);
 
       for (const delivery of due) {
         if (delivery.html === null) continue;
+        if (delivery.supersededAt !== null && delivery.status !== "dispatching") {
+          await db
+            .update(mailDeliveries)
+            .set({ status: "cancelled", leaseOwner: null, leaseExpiresAt: null })
+            .where(and(
+              eq(mailDeliveries.id, delivery.id),
+              inArray(mailDeliveries.status, ["pending", "retry", "claimed"]),
+              isNotNull(mailDeliveries.supersededAt),
+            ));
+          continue;
+        }
         const leaseOwner = crypto.randomUUID();
-        const reclaim = delivery.status === "claimed";
+        const reclaim = delivery.status === "claimed" || delivery.status === "dispatching";
         const [claim] = reclaim
           ? await db
             .update(mailDeliveries)
             .set({
+              status: "dispatching",
               leaseOwner,
               leaseExpiresAt: new Date(now.getTime() + LEASE_MS),
             })
             .where(and(
               eq(mailDeliveries.id, delivery.id),
-              eq(mailDeliveries.status, "claimed"),
+              inArray(mailDeliveries.status, ["claimed", "dispatching"]),
               lte(mailDeliveries.leaseExpiresAt, now),
+              or(
+                eq(mailDeliveries.status, "dispatching"),
+                isNull(mailDeliveries.supersededAt),
+              ),
             ))
             .returning({
               attemptCount: mailDeliveries.attemptCount,
@@ -393,6 +459,7 @@ export class Scheduler extends DurableObject<Env> {
             .where(and(
               eq(mailDeliveries.id, delivery.id),
               inArray(mailDeliveries.status, ["pending", "retry"]),
+              isNull(mailDeliveries.supersededAt),
               lt(mailDeliveries.attemptCount, mailDeliveries.maxAttempts),
               lte(mailDeliveries.availableAt, now),
               or(
@@ -404,7 +471,17 @@ export class Scheduler extends DurableObject<Env> {
               attemptCount: mailDeliveries.attemptCount,
               maxAttempts: mailDeliveries.maxAttempts,
             });
-        if (!claim) continue;
+        if (!claim) {
+          await db
+            .update(mailDeliveries)
+            .set({ status: "cancelled", leaseOwner: null, leaseExpiresAt: null })
+            .where(and(
+              eq(mailDeliveries.id, delivery.id),
+              eq(mailDeliveries.status, "claimed"),
+              isNotNull(mailDeliveries.supersededAt),
+            ));
+          continue;
+        }
 
         let attemptId = crypto.randomUUID();
         const [existingAttempt] = reclaim
@@ -443,7 +520,7 @@ export class Scheduler extends DurableObject<Env> {
             })
             .where(and(
               eq(mailDeliveries.id, delivery.id),
-              eq(mailDeliveries.status, "claimed"),
+              eq(mailDeliveries.status, "dispatching"),
               eq(mailDeliveries.leaseOwner, leaseOwner),
             ))
             .returning({ id: mailDeliveries.id });
@@ -457,6 +534,7 @@ export class Scheduler extends DurableObject<Env> {
           }
           continue;
         }
+        if (!reclaim && !await authorizeMailDispatch(db, delivery.id, leaseOwner)) continue;
         if (existingAttempt) {
           attemptId = existingAttempt.id;
           await db
@@ -510,7 +588,7 @@ export class Scheduler extends DurableObject<Env> {
             })
             .where(and(
               eq(mailDeliveries.id, delivery.id),
-              eq(mailDeliveries.status, "claimed"),
+              eq(mailDeliveries.status, "dispatching"),
               eq(mailDeliveries.leaseOwner, leaseOwner),
             ));
           continue;
@@ -554,7 +632,7 @@ export class Scheduler extends DurableObject<Env> {
             .where(
               and(
                 eq(mailDeliveries.id, delivery.id),
-                eq(mailDeliveries.status, "claimed"),
+                eq(mailDeliveries.status, "dispatching"),
                 eq(mailDeliveries.leaseOwner, leaseOwner),
               ),
             )
@@ -592,7 +670,7 @@ export class Scheduler extends DurableObject<Env> {
             .where(
               and(
                 eq(mailDeliveries.id, delivery.id),
-                eq(mailDeliveries.status, "claimed"),
+                eq(mailDeliveries.status, "dispatching"),
                 eq(mailDeliveries.leaseOwner, leaseOwner),
               ),
             )

@@ -6,7 +6,7 @@ import { routePartykitRequest, type Connection, type ConnectionContext } from "p
 import auth, { apiKeyUserFromRequest, userFromRequest } from "./auth";
 import { runRestOperation, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
-import { Scheduler } from "./party/Scheduler";
+import { MAIL_SCHEDULER_NAME, Scheduler } from "./party/Scheduler";
 import { mcpToolsForPrincipal } from "./mcp";
 import { AirtableRateLimiter } from "./sync/AirtableRateLimiter";
 import { AirtableSyncLane } from "./sync/AirtableSyncLane";
@@ -323,6 +323,17 @@ async function fetchPublicProgram(request: Request, env: Env): Promise<Response>
     .transform(shell);
 }
 
+export const recoverMailScheduler = async (env: Env): Promise<void> => {
+  const schedulerId = env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME);
+  const response = await env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
+    method: "POST",
+    headers: { "x-session-party-internal": sessionSecret(env) },
+  });
+  if (!response.ok) {
+    throw new Error(`Mail scheduler recovery failed with status ${response.status}`);
+  }
+};
+
 export { AirtableRateLimiter, AirtableSyncLane, EventRoom, Scheduler };
 export default {
   fetch(request, env, ctx) {
@@ -332,5 +343,8 @@ export default {
       : pathname.startsWith("/event/")
         ? fetchPublicProgram(request, env)
       : app.fetch(request, env, ctx);
+  },
+  scheduled(_controller, env, ctx) {
+    ctx.waitUntil(recoverMailScheduler(env));
   },
 } satisfies ExportedHandler<Env>;
