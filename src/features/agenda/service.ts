@@ -1467,19 +1467,29 @@ export const publishAgenda = (
         message: "Agenda publication requires the event end time to be after the start time",
       }));
     }
-    const [agendaTalks, trackRows, roomRows, visibleSpeakerRows] = yield* Effect.all([
+    const [agendaTalks, trackRows, roomRows, speakerRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
       database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(eq(tracks.eventId, input.eventId))),
       database(() => db.select({ id: rooms.id, name: rooms.name }).from(rooms).where(eq(rooms.eventId, input.eventId))),
       database(() =>
         db
-          .select({ talkId: talkSpeakers.talkId, name: speakers.displayName })
+          .select({
+            talkId: talkSpeakers.talkId,
+            speakerId: speakers.id,
+            name: speakers.displayName,
+            visible: speakers.visible,
+            version: speakers.version,
+          })
           .from(talkSpeakers)
+          .innerJoin(
+            talks,
+            and(eq(talks.eventId, talkSpeakers.eventId), eq(talks.id, talkSpeakers.talkId)),
+          )
           .innerJoin(
             speakers,
             and(eq(speakers.eventId, talkSpeakers.eventId), eq(speakers.id, talkSpeakers.speakerId)),
           )
-          .where(and(eq(talkSpeakers.eventId, input.eventId), eq(speakers.visible, true)))
+          .where(and(eq(talkSpeakers.eventId, input.eventId), eq(talks.status, "confirmed")))
           .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id)),
       ),
     ]);
@@ -1496,7 +1506,8 @@ export const publishAgenda = (
     const trackNames = new Map(trackRows.map(({ id, name }) => [id, name] as const));
     const roomNames = new Map(roomRows.map(({ id, name }) => [id, name] as const));
     const visibleSpeakerNames = new Map<string, string[]>();
-    for (const row of visibleSpeakerRows) {
+    for (const row of speakerRows) {
+      if (!row.visible) continue;
       const names = visibleSpeakerNames.get(row.talkId) ?? [];
       names.push(row.name);
       visibleSpeakerNames.set(row.talkId, names);
@@ -1510,6 +1521,29 @@ export const publishAgenda = (
         left.title.localeCompare(right.title) ||
         left.id.localeCompare(right.id)
       );
+    const outOfBoundsTalks = confirmedTalks.filter((talk) =>
+      talk.startsAt < eventStartsAt ||
+      talk.startsAt > eventEndsAt ||
+      talk.startsAt + talk.durationMin * 60_000 > eventEndsAt
+    );
+    if (outOfBoundsTalks.length > 0) {
+      return yield* Effect.fail(new Validation({
+        message: `Agenda publication requires confirmed talks to fit within the event interval; ${outOfBoundsTalks.length} ${outOfBoundsTalks.length === 1 ? "talk falls" : "talks fall"} outside it`,
+      }));
+    }
+    const speakerProjection = JSON.stringify(
+      speakerRows
+        .map(({ talkId, speakerId, name, visible, version }) => ({
+          talkId,
+          speakerId,
+          publicDisplayName: visible ? name : null,
+          version,
+        }))
+        .sort((left, right) =>
+          left.talkId.localeCompare(right.talkId) ||
+          left.speakerId.localeCompare(right.speakerId)
+        ),
+    );
     const publicTalks: PublicAgendaTalk[] = confirmedTalks.map((talk) => ({
       id: talk.id,
       title: talk.title,
@@ -2151,6 +2185,52 @@ export const publishAgenda = (
             where ${events.id} = ${input.eventId}
           ) = ${input.expectedEventVersion}
           and ${dispatchInterlock}
+          and not exists (
+            with expected_speakers as (
+              select
+                json_extract(expected_speaker.value, '$.talkId') as talk_id,
+                json_extract(expected_speaker.value, '$.speakerId') as speaker_id,
+                json_extract(expected_speaker.value, '$.publicDisplayName') as public_name,
+                json_extract(expected_speaker.value, '$.version') as version
+              from json_each(${speakerProjection}) as expected_speaker
+            ),
+            current_speakers as (
+              select
+                publication_talk_speaker.talk_id,
+                publication_speaker.id as speaker_id,
+                case
+                  when publication_speaker.visible = 1 then publication_speaker.display_name
+                  else null
+                end as public_name,
+                publication_speaker.version
+              from talk_speakers as publication_talk_speaker
+              inner join talks as publication_talk
+                on publication_talk.event_id = publication_talk_speaker.event_id
+                and publication_talk.id = publication_talk_speaker.talk_id
+              inner join speakers as publication_speaker
+                on publication_speaker.event_id = publication_talk_speaker.event_id
+                and publication_speaker.id = publication_talk_speaker.speaker_id
+              where publication_talk_speaker.event_id = ${input.eventId}
+                and publication_talk.status = 'confirmed'
+            )
+            select 1
+            from expected_speakers as expected
+            left join current_speakers as current
+              on current.talk_id = expected.talk_id
+              and current.speaker_id = expected.speaker_id
+            where current.speaker_id is null
+              or current.public_name is not expected.public_name
+              or current.version is not expected.version
+            union all
+            select 1
+            from current_speakers as current
+            left join expected_speakers as expected
+              on expected.talk_id = current.talk_id
+              and expected.speaker_id = current.speaker_id
+            where expected.speaker_id is null
+              or current.public_name is not expected.public_name
+              or current.version is not expected.version
+          )
           then ${prepared.now.getTime()}
           else null
         end`,
