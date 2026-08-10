@@ -32,6 +32,7 @@ import {
 } from "../components/production-ui";
 
 export const path = "/e/:eventSlug/resources";
+export const contentWidth = "standard" as const;
 
 function nullable(values: FormData, key: string): string | null {
   return String(values.get(key) ?? "").trim() || null;

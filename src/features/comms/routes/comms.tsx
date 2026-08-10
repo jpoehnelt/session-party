@@ -50,6 +50,7 @@ import {
 } from "../schema";
 
 export const path = "/e/:eventSlug/comms";
+export const contentWidth = "canvas" as const;
 
 type EventIdentity = Readonly<{ id: string; name: string; slug: string; timezone: string }>;
 type WorkspaceTab = "templates" | "send" | "history";

@@ -21,6 +21,7 @@ import {
 } from "../schema";
 
 export const path = "/e/:eventSlug/settings";
+export const contentWidth = "compact" as const;
 
 export type EventLoadError =
   | { readonly kind: "unauthenticated" }

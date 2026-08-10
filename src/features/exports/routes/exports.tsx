@@ -6,6 +6,7 @@ import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from "@/ui";
 import { InstitutionalArchive, type InstitutionalArchive as InstitutionalArchiveValue } from "../schema";
 
 export const path = "/e/:eventSlug/exports";
+export const contentWidth = "compact" as const;
 
 type ExportState =
   | { readonly status: "loading" }

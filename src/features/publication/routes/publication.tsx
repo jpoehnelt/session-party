@@ -28,6 +28,7 @@ import { PublishedSchedule } from "../components/PublishedSchedule";
 import { getPublicSchedule } from "../api";
 
 export const path = "/e/:eventSlug/publication";
+export const contentWidth = "wide" as const;
 
 type PublicationLoadError =
   | { readonly kind: "unauthenticated" }

@@ -13,6 +13,7 @@ import {
 } from "../components/production-ui";
 
 export const path = "/e/:eventSlug/speakers";
+export const contentWidth = "wide" as const;
 
 const SPEAKERS_PER_PAGE = 25;
 

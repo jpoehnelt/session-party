@@ -32,6 +32,7 @@ import {
 } from "../components/production-ui";
 
 export const path = "/e/:eventSlug/tasks";
+export const contentWidth = "standard" as const;
 
 const taskKinds: readonly PortalTaskKind[] = ["profile", "upload", "form", "link", "confirm"];
 

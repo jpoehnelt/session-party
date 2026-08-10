@@ -42,6 +42,7 @@ import {
 } from "../schema";
 
 export const path = "/e/:eventSlug/agenda";
+export const contentWidth = "canvas" as const;
 
 interface EventIdentity {
   readonly id: string;

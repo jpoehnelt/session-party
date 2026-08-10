@@ -12,6 +12,7 @@ import { ReviewRoundSetup } from "../components/ReviewRoundSetup";
 import { compareReviewQueue } from "../ordering";
 
 export const path = "/e/:eventSlug/review";
+export const contentWidth = "canvas" as const;
 
 const EventIdentitySchema = Schema.Struct({
   id: EntityId,
