@@ -64,6 +64,13 @@
       "when": 1786343679042,
       "tag": "0008_repair_legacy_form_version_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786347789317,
+      "tag": "0009_small_stone_men",
+      "breakpoints": true
     }
   ]
 }

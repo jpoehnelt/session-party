@@ -1,4 +1,4 @@
-import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import { applyD1Migrations, env, runInDurableObject, type D1Migration } from "cloudflare:test";
 import type { Principal } from "contracts/principal";
 import {
   acceptanceEvents,
@@ -9,6 +9,7 @@ import {
   formVersions,
   forms,
   idempotencyRecords,
+  mailCalendarEvents,
   mailDeliveries,
   mailDeliveryAttempts,
   mailDeliverySnapshots,
@@ -25,6 +26,8 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
+import { recoverMailScheduler } from "@/server/index";
+import { MAIL_SCHEDULER_NAME } from "@/server/party/Scheduler";
 import { AppLayer, Authorizer, CurrentUser, Db, MailQueue, type AppDatabase } from "@/server/services";
 import {
   enqueueCommunication,
@@ -517,6 +520,36 @@ describe("communications immutable delivery workflow", () => {
     });
   });
 
+  it("does not roll back a committed outbox when the first wake fails", async () => {
+    const seeded = await seedCommunication("failed-wake");
+    const scheduler = env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
+    await runInDurableObject(scheduler, async (_instance, state) => state.storage.deleteAll());
+    const result = await runAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      recipientSpeakerIds: [seeded.speakerId],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-failed-wake-001",
+    }), {
+      appOrigin: "https://events.example.com",
+      fromEmail: "Events <configured@example.com>",
+      wake: () => Effect.die(new Error("simulated first wake failure")),
+    });
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.id, result.deliveries[0].snapshotId))).resolves.toHaveLength(1);
+    await expect(seeded.db.select().from(mailDeliveries)
+      .where(eq(mailDeliveries.id, result.deliveries[0].deliveryId))).resolves.toEqual([
+      expect.objectContaining({ status: "pending", attemptCount: 0 }),
+    ]);
+    await recoverMailScheduler(env);
+    await runInDurableObject(scheduler, async (instance) => instance.alarm());
+    await expect(seeded.db.select().from(mailDeliveries)
+      .where(eq(mailDeliveries.id, result.deliveries[0].deliveryId))).resolves.toEqual([
+      expect.objectContaining({ status: "sent", attemptCount: 1 }),
+    ]);
+  });
+
   it("persists exact-revision companion data despite mutable agenda changes", async () => {
     const seeded = await seedCommunication("calendar");
     await runAs(seeded.owner, updateTemplate({
@@ -569,7 +602,7 @@ describe("communications immutable delivery workflow", () => {
     });
     const invite = snapshot!.icsContent!.replace(/\r\n[ \t]/g, "");
     expect(invite).toContain("METHOD:REQUEST");
-    expect(invite).toContain("UID:talk-comms-calendar@comms-calendar.session-party");
+    expect(invite).toContain("UID:talk-comms-calendar@event-comms-calendar.session-party");
     expect(invite).toContain("DTSTART:20260812T183000Z");
     expect(invite).toContain("DTEND:20260812T190000Z");
     expect(invite).toContain("SEQUENCE:1");
@@ -585,6 +618,17 @@ describe("communications immutable delivery workflow", () => {
       status: "pending",
       provider: "cloudflare-email",
     });
+    await expect(seeded.db.select().from(mailCalendarEvents)
+      .where(eq(mailCalendarEvents.snapshotId, snapshot!.id))).resolves.toEqual([
+      expect.objectContaining({
+        eventId: seeded.eventId,
+        speakerId: seeded.speakerId,
+        talkId: seeded.talkId,
+        calendarUid: `talk-comms-calendar@${seeded.eventId}.session-party`,
+        sequence: 1,
+        status: "confirmed",
+      }),
+    ]);
 
     const rescheduledRoomId = `room-rescheduled-${seeded.eventId}`;
     await seeded.db.batch([
@@ -648,12 +692,41 @@ describe("communications immutable delivery workflow", () => {
       .where(eq(mailDeliverySnapshots.id, rescheduled.deliveries[0].snapshotId));
     expect(snapshot!.icsContent).toContain("DTSTART:20260812T183000Z");
     expect(snapshot!.icsContent).toContain("LOCATION:Main Stage");
-    expect(rescheduledSnapshot!.icsContent).toContain("UID:talk-comms-calendar@comms-calendar.session-party");
+    expect(rescheduledSnapshot!.icsContent).toContain("UID:talk-comms-calendar@event-comms-calendar.session-party");
     expect(rescheduledSnapshot!.icsContent).toContain("SEQUENCE:2");
     expect(rescheduledSnapshot!.icsContent).toContain("DTSTART:20260812T193000Z");
     expect(rescheduledSnapshot!.icsContent).toContain("DTEND:20260812T200000Z");
     expect(rescheduledSnapshot!.icsContent).toContain("LOCATION:Studio B");
     expect(rescheduledSnapshot!.icsContent).not.toContain("URL:");
+    await seeded.db.update(mailDeliveries).set({
+      status: "dead_letter",
+      deadLetteredAt: now,
+      lastError: "Provider rejected the calendar update",
+    }).where(eq(mailDeliveries.id, rescheduled.deliveries[0].deliveryId));
+    const retriedCalendar = await runAs(seeded.owner, retryDelivery({
+      eventId: seeded.eventId,
+      deliveryId: rescheduled.deliveries[0].deliveryId,
+      idempotencyKey: "comms-calendar-retry-001",
+    }), {
+      appOrigin: "https://agenda.example.com",
+      fromEmail: "Agenda <agenda@example.com>",
+      wake: () => Effect.void,
+    });
+    const sourceLineage = await seeded.db.select().from(mailCalendarEvents)
+      .where(eq(mailCalendarEvents.snapshotId, rescheduledSnapshot!.id));
+    const retryLineage = await seeded.db.select().from(mailCalendarEvents)
+      .where(eq(mailCalendarEvents.snapshotId, retriedCalendar.snapshotId));
+    expect(retryLineage).toEqual(sourceLineage.map((calendarEvent) =>
+      expect.objectContaining({
+        eventId: calendarEvent.eventId,
+        speakerId: calendarEvent.speakerId,
+        talkId: calendarEvent.talkId,
+        calendarUid: calendarEvent.calendarUid,
+        sequence: calendarEvent.sequence,
+        publicationRevision: calendarEvent.publicationRevision,
+        status: calendarEvent.status,
+      })
+    ));
 
     const longTitle = `Résumé — ${"é".repeat(60)}`;
     await publishAgenda(

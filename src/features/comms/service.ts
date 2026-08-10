@@ -11,6 +11,7 @@ import {
   acceptanceEvents,
   auditLog,
   domainChanges,
+  mailCalendarEvents,
   emailTemplates,
   events,
   idempotencyRecords,
@@ -35,6 +36,11 @@ import {
   getAgendaDeliveryProjection,
   getPublishedAgenda,
 } from "@/features/agenda/service";
+import {
+  renderCalendar,
+  stableCalendarUid,
+  type CalendarEventSnapshot,
+} from "./calendar";
 
 import {
   AudienceSnapshot,
@@ -540,6 +546,7 @@ export const listAudience = (
 type RenderContext = MergeContext;
 
 interface EventMergeData {
+  readonly id: string;
   readonly name: string;
   readonly slug: string;
   readonly location: string | null;
@@ -579,6 +586,7 @@ const eventIdentity = (eventId: string): Effect.Effect<EventMergeData, AppError,
   Effect.gen(function* () {
     const { db } = yield* Db;
     const [event] = yield* database(() => db.select({
+      id: events.id,
       name: events.name,
       slug: events.slug,
       location: events.location,
@@ -671,6 +679,7 @@ const publicationEventIdentity = (
 ): EventMergeData => publication === null || delivery === null
   ? current
   : {
+      id: publication.eventId,
       name: publication.eventName,
       slug: publication.eventSlug,
       location: publication.location,
@@ -780,50 +789,26 @@ const validateRenderedSubject = (
   return Effect.succeed(subject);
 };
 
-const calendarTimestamp = (date: Date): string =>
-  date.toISOString().replaceAll("-", "").replaceAll(":", "").replace(/\.\d{3}Z$/, "Z");
-
-const escapeCalendarText = (value: string): string => value
-  .replaceAll("\\", "\\\\")
-  .replaceAll("\r\n", "\\n")
-  .replaceAll("\n", "\\n")
-  .replaceAll(",", "\\,")
-  .replaceAll(";", "\\;");
-
-const mailboxAddress = (mailbox: string): string => {
-  const bracketed = /<([^<>]+)>$/.exec(mailbox);
-  return bracketed?.[1] ?? mailbox;
-};
-
-const escapeCalendarParameter = (value: string): string => value
-  .replaceAll("^", "^^")
-  .replaceAll("\r\n", "^n")
-  .replaceAll("\n", "^n")
-  .replaceAll('"', "^'");
-
-const foldCalendarLine = (line: string): string => {
-  let folded = "";
-  let physicalLine = "";
-  let octets = 0;
-  for (const character of line) {
-    const codePoint = character.codePointAt(0)!;
-    const characterOctets = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-    if (octets + characterOctets > 75 && physicalLine.length > 0) {
-      folded += `${physicalLine}\r\n`;
-      physicalLine = ` ${character}`;
-      octets = 1 + characterOctets;
-    } else {
-      physicalLine += character;
-      octets += characterOctets;
-    }
-  }
-  return folded + physicalLine;
-};
 
 const calendarFilename = (event: EventMergeData, recipient: AudienceRecipient): string => {
   const speaker = recipient.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "speaker";
   return `${event.slug}-${speaker}-agenda.ics`;
 };
+
+const calendarEventSnapshots = (
+  eventId: string,
+  confirmedTalks: readonly ConfirmedTalkData[],
+): readonly CalendarEventSnapshot[] => confirmedTalks.map((talk) => ({
+  talkId: talk.id,
+  uid: stableCalendarUid(eventId, talk.id),
+  title: talk.title,
+  startsAt: talk.startsAt,
+  durationMin: talk.durationMin,
+  roomName: talk.roomName,
+  sequence: talk.version,
+  updatedAt: talk.updatedAt,
+  status: "confirmed",
+}));
 
 const calendarContent = (
   event: EventMergeData,
@@ -831,35 +816,14 @@ const calendarContent = (
   confirmedTalks: readonly ConfirmedTalkData[],
   createdAt: Date,
   organizerMailbox: string,
-): string => {
-  const organizerAddress = mailboxAddress(organizerMailbox);
-  const attendee = `ATTENDEE;CN="${escapeCalendarParameter(recipient.name)}";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${recipient.email}`;
-  const lines = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//Session Party//Speaker Agenda//EN",
-    "CALSCALE:GREGORIAN",
-    "METHOD:REQUEST",
-    ...confirmedTalks.flatMap((talk) => [
-      "BEGIN:VEVENT",
-      `UID:${escapeCalendarText(`${talk.id}@${event.slug}.session-party`)}`,
-      `DTSTAMP:${calendarTimestamp(createdAt)}`,
-      `LAST-MODIFIED:${calendarTimestamp(talk.updatedAt)}`,
-      `SEQUENCE:${talk.version}`,
-      `DTSTART:${calendarTimestamp(talk.startsAt)}`,
-      `DTEND:${calendarTimestamp(new Date(talk.startsAt.getTime() + talk.durationMin * 60_000))}`,
-      `ORGANIZER:mailto:${organizerAddress}`,
-      attendee,
-      `SUMMARY:${escapeCalendarText(talk.title)}`,
-      `LOCATION:${escapeCalendarText(talk.roomName)}`,
-      `DESCRIPTION:${escapeCalendarText(`${recipient.name} — ${event.name}`)}`,
-      "END:VEVENT",
-    ]),
-    "END:VCALENDAR",
-    "",
-  ];
-  return lines.map(foldCalendarLine).join("\r\n");
-};
+): string => renderCalendar(
+  event,
+  recipient,
+  calendarEventSnapshots(event.id, confirmedTalks),
+  "REQUEST",
+  createdAt,
+  organizerMailbox,
+);
 
 const requestMailQueueWake = (wake: () => Effect.Effect<void>): Effect.Effect<void> =>
   wake().pipe(
@@ -1022,6 +986,7 @@ export const enqueueCommunication = (
         personalizedData.context,
       );
       return {
+        publicationRevision: published.publication?.revision,
         speakerId: recipient.speakerId,
         snapshot: {
           id: snapshotId,
@@ -1041,6 +1006,9 @@ export const enqueueCommunication = (
             : null,
           createdAt: prepared.now,
         },
+        calendarEvents: template.attachIcs
+          ? calendarEventSnapshots(eventAtPublication.id, personalizedData.talks)
+          : [],
         delivery: {
           id: deliveryId,
           snapshotId,
@@ -1078,6 +1046,20 @@ export const enqueueCommunication = (
       ...rows.flatMap((row) => [
         db.insert(mailDeliverySnapshots).values(row.snapshot),
         db.insert(mailDeliveries).values(row.delivery),
+        ...row.calendarEvents.map((calendarEvent) =>
+          db.insert(mailCalendarEvents).values({
+            id: id("mail_calendar_event"),
+            snapshotId: row.snapshot.id,
+            eventId: input.eventId,
+            speakerId: row.speakerId,
+            talkId: calendarEvent.talkId,
+            calendarUid: calendarEvent.uid,
+            sequence: calendarEvent.sequence,
+            publicationRevision: row.publicationRevision!,
+            status: calendarEvent.status,
+            createdAt: prepared.now,
+          })
+        ),
       ]),
       db.insert(domainChanges).values({
         id: id("change"), eventId: input.eventId, aggregateType: "communicationsCampaign", aggregateId: prepared.idempotencyId,
@@ -1279,6 +1261,9 @@ export const retryDelivery = (
     if (source.snapshot.redactedAt !== null || source.snapshot.renderedHtml === null) {
       return yield* Effect.fail(new Conflict({ message: "This delivery snapshot has been redacted and cannot be retried" }));
     }
+    const sourceCalendarEvents = yield* database(() => db.select()
+      .from(mailCalendarEvents)
+      .where(eq(mailCalendarEvents.snapshotId, source.snapshot.id)));
     const snapshotId = id("mail_snapshot");
     const deliveryId = id("mail_delivery");
     const output: RetryDeliveryResultValue = {
@@ -1322,6 +1307,14 @@ export const retryDelivery = (
         maxAttempts: 8,
         createdAt: prepared.now,
       }),
+      ...sourceCalendarEvents.map((calendarEvent) =>
+        db.insert(mailCalendarEvents).values({
+          ...calendarEvent,
+          id: id("mail_calendar_event"),
+          snapshotId,
+          createdAt: prepared.now,
+        })
+      ),
       db.insert(domainChanges).values({
         id: id("change"), eventId: input.eventId, aggregateType: "mailDelivery", aggregateId: deliveryId,
         aggregateVersion: 1, eventType: "comms.delivery.retryQueued", audiences: [{ kind: "admins" }],

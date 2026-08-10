@@ -13,6 +13,9 @@ import {
   forms,
   idempotencyRecords,
   integrations,
+  mailCalendarEvents,
+  mailDeliveries,
+  mailDeliverySnapshots,
   rooms,
   speakerProvisioning,
   speakers,
@@ -30,6 +33,7 @@ import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import { authorizeMailDispatch } from "@/server/party/Scheduler";
 import { updateEvent } from "@/features/events/service";
 import { agendaFixtures, FIXED_DAY_START, FIXED_NOW } from "./fixtures";
 import {
@@ -1162,6 +1166,233 @@ describe("agenda service", () => {
     );
     expect(stillPublished.revision).toBe(1);
     expect(stillPublished.talks[0]?.startsAt).toBe(FIXED_DAY_START);
+  });
+
+  it("reissues changed published calendars once per prior recipient with stable identity", async () => {
+    const seeded = await seedAgenda("calendar-reissue", { scheduled: true });
+    const first = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-0001",
+    }));
+    const originalSnapshotId = "calendar-reissue-snapshot";
+    const originalDeliveryId = "calendar-reissue-delivery";
+    const originalUid = `${seeded.talkA}@${seeded.eventSlug}.session-party`;
+    await seeded.db.batch([
+      seeded.db.update(speakers).set({
+        contactEmail: "ada-calendar@example.com",
+      }).where(and(
+        eq(speakers.eventId, seeded.eventId),
+        eq(speakers.id, seeded.speakerA),
+      )),
+      seeded.db.insert(mailDeliverySnapshots).values({
+        id: originalSnapshotId,
+        eventId: seeded.eventId,
+        templateId: null,
+        recipientUserId: null,
+        recipientEmail: "ada-calendar@example.com",
+        recipientName: "Ada Rivera",
+        fromEmail: "Agenda <agenda@example.com>",
+        replyToEmail: "organizer@example.com",
+        subject: "Your agenda",
+        renderedHtml: "<p>Your agenda</p>",
+        renderedText: "Your agenda",
+        icsFilename: "calendar-reissue-ada-rivera-agenda.ics",
+        icsContent: [
+          "BEGIN:VCALENDAR",
+          "VERSION:2.0",
+          "METHOD:REQUEST",
+          "BEGIN:VEVENT",
+          `UID:${originalUid}`,
+          "DTSTAMP:20260810T000000Z",
+          "LAST-MODIFIED:20260810T000000Z",
+          "SEQUENCE:7",
+          "DTSTART:20260812T160000Z",
+          "DTEND:20260812T164500Z",
+          "SUMMARY:Effects at scale",
+          "LOCATION:Harbor",
+          "END:VEVENT",
+          "END:VCALENDAR",
+          "",
+        ].join("\r\n"),
+        createdAt: new Date(FIXED_NOW),
+      }),
+      seeded.db.insert(mailDeliveries).values({
+        id: originalDeliveryId,
+        snapshotId: originalSnapshotId,
+        idempotencyKey: "calendar-reissue-original",
+        status: "sent",
+        scheduledFor: new Date(FIXED_NOW),
+        availableAt: new Date(FIXED_NOW),
+        attemptCount: 1,
+        maxAttempts: 8,
+        provider: "cloudflare-email",
+        providerMessageId: "provider-calendar-reissue-original",
+        sentAt: new Date(FIXED_NOW),
+        createdAt: new Date(FIXED_NOW),
+      }),
+    ]);
+
+    await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: first.revision,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-unchanged-0002",
+    }));
+    await expect(seeded.db.select().from(mailCalendarEvents)
+      .where(eq(mailCalendarEvents.eventId, seeded.eventId))).resolves.toEqual([
+      expect.objectContaining({
+        snapshotId: originalSnapshotId,
+        calendarUid: originalUid,
+        sequence: 7,
+      }),
+    ]);
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(1);
+
+    await runAs(seeded.user, moveTalk({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      trackId: seeded.trackId,
+      roomId: seeded.roomB,
+      startsAt: FIXED_DAY_START + 7_200_000,
+      durationMin: 60,
+      expectedVersion: 2,
+      idempotencyKey: "calendar-reissue-draft-move-0001",
+    }));
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(1);
+
+    const changed = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 2,
+      expectedWorkspaceVersion: 1,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-changed-0003",
+    }));
+    expect(changed.revision).toBe(3);
+    const snapshotsAfterChange = await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId));
+    expect(snapshotsAfterChange).toHaveLength(2);
+    const updateSnapshot = snapshotsAfterChange.find(({ id }) => id !== originalSnapshotId)!;
+    expect(updateSnapshot.icsContent).toContain(`UID:${originalUid}`);
+    expect(updateSnapshot.icsContent).toContain("SEQUENCE:8");
+    expect(updateSnapshot.icsContent).toContain("DTSTART:20260812T180000Z");
+    expect(updateSnapshot.icsContent).toContain("DTEND:20260812T190000Z");
+    expect((await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.id, originalSnapshotId)))[0]?.icsContent).toContain("LOCATION:Harbor");
+    const [updateDelivery] = await seeded.db.select().from(mailDeliveries)
+      .where(eq(mailDeliveries.snapshotId, updateSnapshot.id));
+    expect(updateDelivery).toBeDefined();
+
+    await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 2,
+      expectedWorkspaceVersion: 1,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-changed-0003",
+    }));
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(2);
+
+    await runAs(seeded.user, cancelTalk({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      expectedVersion: 3,
+      idempotencyKey: "calendar-reissue-draft-cancel-0001",
+    }));
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(2);
+    const cancellationInput = {
+      eventId: seeded.eventId,
+      expectedRevision: 3,
+      expectedWorkspaceVersion: 2,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-publish-cancelled-0004",
+    } as const;
+    const claimLease = "calendar-reissue-claim-lease";
+    const claimedRace = await runEither(seeded.user, publishAgenda(
+      cancellationInput,
+      () => Effect.promise(async () => {
+        await seeded.db.update(mailDeliveries).set({
+          status: "claimed",
+          attemptCount: 1,
+          leaseOwner: claimLease,
+          leaseExpiresAt: new Date(FIXED_NOW + 60_000),
+        }).where(eq(mailDeliveries.id, updateDelivery!.id));
+      }),
+    ));
+    expect(claimedRace).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+    const dispatchRace = await runEither(seeded.user, publishAgenda(
+      cancellationInput,
+      () => Effect.promise(async () => {
+        expect(await authorizeMailDispatch(seeded.db, updateDelivery!.id, claimLease)).toBe(true);
+      }),
+    ));
+    expect(dispatchRace).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(2);
+    const claimedLeaseExpiresAt = new Date(FIXED_NOW + 120_000);
+    await seeded.db.update(mailDeliveries).set({
+      status: "claimed",
+      leaseOwner: "calendar-reissue-claimed-lease",
+      leaseExpiresAt: claimedLeaseExpiresAt,
+    }).where(eq(mailDeliveries.id, updateDelivery!.id));
+    await runAs(seeded.user, publishAgenda(cancellationInput));
+    const finalSnapshots = await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId));
+    expect(finalSnapshots).toHaveLength(3);
+    const cancellation = finalSnapshots.find(({ id }) =>
+      id !== originalSnapshotId && id !== updateSnapshot.id
+    )!;
+    expect(cancellation.icsContent).toContain("METHOD:CANCEL");
+    expect(cancellation.icsContent).toContain("STATUS:CANCELLED");
+    expect(cancellation.icsContent).toContain(`UID:${originalUid}`);
+    expect(cancellation.icsContent).toContain("SEQUENCE:9");
+    expect(cancellation.icsContent).toContain("DTSTART:20260812T180000Z");
+    await expect(seeded.db.select({
+      status: mailDeliveries.status,
+      supersededAt: mailDeliveries.supersededAt,
+    }).from(mailDeliveries)
+      .where(eq(mailDeliveries.id, updateDelivery!.id))).resolves.toEqual([{
+        status: "claimed",
+        supersededAt: expect.any(Date),
+      }]);
+    await expect(seeded.db.select({
+      scheduledFor: mailDeliveries.scheduledFor,
+      availableAt: mailDeliveries.availableAt,
+    }).from(mailDeliveries)
+      .where(eq(mailDeliveries.snapshotId, cancellation.id))).resolves.toEqual([{
+        scheduledFor: claimedLeaseExpiresAt,
+        availableAt: claimedLeaseExpiresAt,
+      }]);
+    await seeded.db.update(mailDeliveries).set({
+      status: "dead_letter",
+      deadLetteredAt: new Date(FIXED_NOW),
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    }).where(eq(mailDeliveries.id, originalDeliveryId));
+    await seeded.db.update(mailDeliveries).set({
+      status: "dead_letter",
+      deadLetteredAt: new Date(FIXED_NOW),
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    }).where(eq(mailDeliveries.id, updateDelivery!.id));
+    await seeded.db.update(mailDeliveries).set({
+      status: "cancelled",
+    }).where(eq(mailDeliveries.snapshotId, cancellation.id));
+    await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 4,
+      expectedWorkspaceVersion: 2,
+      expectedEventVersion: 1,
+      idempotencyKey: "calendar-reissue-terminal-lineage-0005",
+    }));
+    await expect(seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(3);
   });
 
   it.each([
