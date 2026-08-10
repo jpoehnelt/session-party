@@ -79,8 +79,8 @@ export const getPortalResources = (eventSlug: string) =>
 export const getPublicSpeakerGallery = (eventSlug: string) =>
   apiFetch(`${api}/public/events/${segment(eventSlug)}/speakers`, { schema: PublicSpeakerGallery });
 
-export const getSpeakerTaskForm = (eventSlug: string, formId: string) =>
-  apiFetch(`${api}/public/events/${segment(eventSlug)}/forms/${segment(formId)}`, {
+export const getSpeakerTaskForm = (eventId: string, formId: string) =>
+  apiFetch(`${api}/events/${segment(eventId)}/portal/forms/${segment(formId)}`, {
     schema: PublicSubmissionForm,
   });
 

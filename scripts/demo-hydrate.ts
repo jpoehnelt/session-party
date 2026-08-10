@@ -547,7 +547,8 @@ for (const [purpose, filename, key, taskId] of [
 }
 
 const taskPublicForm = await request<{ readonly form: { readonly fields: readonly FormField[] } }>(
-  `/public/events/${eventSlug}/forms/${encode(publishedTaskForm.id)}`,
+  `/events/${eventId}/portal/forms/${encode(publishedTaskForm.id)}`,
+  { session: speakerSession },
 );
 await request(`/events/${eventId}/portal/forms/${encode(publishedTaskForm.id)}/submissions`, {
   method: "POST",

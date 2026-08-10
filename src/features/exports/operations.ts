@@ -5,7 +5,7 @@ import { getInstitutionalArchive } from "./service";
 
 const exportAuthorization = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
-  { kind: "api-key", scopes: ["event:read", "reviews:read"] },
+  { kind: "deny" },
 );
 
 export const getArchiveOperation = {
@@ -21,10 +21,6 @@ export const getArchiveOperation = {
     input: { path: ["eventId"] },
     summary: "Export the event's durable institutional record",
     description: "Returns stable event, speaker, submission, session, decision, review, and onboarding identifiers in one versioned JSON archive.",
-  },
-  mcp: {
-    name: "exports_get_archive",
-    description: "Export a versioned, organizer-authorized institutional archive with stable IDs and frozen submission-time speaker context.",
   },
   idempotency: "none",
   concurrency: "none",

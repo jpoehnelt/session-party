@@ -32,6 +32,7 @@ import {
   CreatePublicSubmissionOutput,
   type CreatePublicSubmissionInput,
   type CreateTaskSubmissionInput,
+  type GetTaskSubmissionFormInput,
   type GetOwnSubmissionsInput,
   type ListSubmissionsInput,
   type OwnSubmissionSummary,
@@ -236,9 +237,24 @@ export const getPublicSubmissionForm = (
   input: { readonly eventSlug: string; readonly formId: string },
 ): Effect.Effect<PublicSubmissionForm, AppError, Db | PublicSubmissionAbuse> =>
   Effect.gen(function* () {
-    const { publicForm } = yield* loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId);
+    const loaded = yield* loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId);
+    if (loaded.formKind !== "cfp") {
+      return yield* Effect.fail(new NotFound({ entity: "published CFP form", id: input.formId }));
+    }
     const abuse = yield* PublicSubmissionAbuse;
-    return { ...publicForm, turnstileSiteKey: abuse.turnstileSiteKey };
+    return { ...loaded.publicForm, turnstileSiteKey: abuse.turnstileSiteKey };
+  });
+
+export const getTaskSubmissionForm = (
+  input: GetTaskSubmissionFormInput,
+): Effect.Effect<PublicSubmissionForm, AppError, CurrentUser | Db> =>
+  Effect.gen(function* () {
+    yield* loadProvisionedSpeaker(input.eventId);
+    const loaded = yield* loadPublishedForm({ kind: "id", value: input.eventId }, input.formId);
+    if (loaded.formKind !== "task") {
+      return yield* Effect.fail(new NotFound({ entity: "published task form", id: input.formId }));
+    }
+    return loaded.publicForm;
   });
 
 const conditionMatches = (

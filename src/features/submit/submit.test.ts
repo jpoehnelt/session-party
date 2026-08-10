@@ -29,7 +29,12 @@ import { Effect, Either, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { runRestOperation, type AppHono } from "@/server/adapt";
 import { AppLayer, CurrentUser } from "@/server/services";
-import { createPublicSubmissionOperation, createTaskSubmissionOperation, operations } from "./operations";
+import {
+  createPublicSubmissionOperation,
+  createTaskSubmissionOperation,
+  getPublicSubmissionFormOperation,
+  operations,
+} from "./operations";
 import { localTestPublicSubmissionAbuse, PublicSubmissionAbuse, PublicSubmissionRequest, type PublicSubmissionAbuseAttempt } from "./abuse";
 import type { CreatePublicSubmissionInput, CreateTaskSubmissionInput } from "./schema";
 import {
@@ -37,6 +42,7 @@ import {
   createTaskSubmission,
   getOwnSubmissions,
   getPublicSubmissionForm,
+  getTaskSubmissionForm,
   listSubmissions,
   updateOwnSubmissionAbstract,
 } from "./service";
@@ -499,6 +505,7 @@ describe("submit operation descriptors", () => {
       "submit.createTask",
       "submit.getOwn",
       "submit.getPublicForm",
+      "submit.getTaskForm",
       "submit.list",
       "submit.updateOwnAbstract",
     ]);
@@ -507,6 +514,7 @@ describe("submit operation descriptors", () => {
       ["post", "/events/:eventId/portal/forms/:formId/submissions"],
       ["get", "/events/by-slug/:eventSlug/my-submissions"],
       ["get", "/public/events/:eventSlug/forms/:formId"],
+      ["get", "/events/:eventId/portal/forms/:formId"],
       ["get", "/events/:eventId/submissions"],
       ["put", "/events/by-slug/:eventSlug/my-submissions/:submissionId/abstract"],
     ]);
@@ -756,14 +764,20 @@ describe("public submission creation", () => {
     expect(rows).toEqual([]);
   });
 
-  it("rejects a published open non-CFP form before producer writes", async () => {
-    const form = await runPublic(getPublicSubmissionForm({ eventSlug: EVENT_SLUG, formId: TASK_FORM_ID }));
-    expect(form.form).toMatchObject({
-      versionId: TASK_VERSION_ID,
-      name: "Published portal follow-up",
+  it("returns only CFP forms publicly and rejects task-form reads before producer writes", async () => {
+    const cfp = await runPublic(getPublicSubmissionForm({ eventSlug: EVENT_SLUG, formId: OPEN_FORM_ID }));
+    expect(cfp.form).toMatchObject({
+      versionId: OPEN_VERSION_ID,
+      name: "Published open CFP",
       availability: "open",
     });
-
+    const taskRead = await runPublic(
+      getPublicSubmissionForm({ eventSlug: EVENT_SLUG, formId: TASK_FORM_ID }).pipe(Effect.either),
+    );
+    expect(taskRead._tag).toBe("Left");
+    if (taskRead._tag === "Left") {
+      expect(taskRead.left).toMatchObject({ _tag: "NotFound", entity: "published CFP form" });
+    }
     const db = drizzle(env.DB);
     const producerCounts = async () => {
       const [submissionRows, speakerRows, answerRows, speakerLinkRows, idempotencyRows, changeRows, auditRows] =
@@ -798,6 +812,24 @@ describe("public submission creation", () => {
     }
     expect(await producerCounts()).toEqual(before);
     expect(await db.select().from(submissions).where(eq(submissions.formId, TASK_FORM_ID))).toEqual([]);
+  });
+
+  it("maps anonymous task-form reads to not found over public HTTP", async () => {
+    const app = new Hono<AppHono>();
+    const rest = getPublicSubmissionFormOperation.rest;
+    app.get(`/api/v1${rest.path}`, (context) =>
+      runRestOperation(context, null, getPublicSubmissionFormOperation, rest.input));
+
+    const response = await app.request(
+      `/api/v1/public/events/${EVENT_SLUG}/forms/${TASK_FORM_ID}`,
+      undefined,
+      env,
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({
+      error: "NotFound",
+      requestId: expect.any(String),
+    });
   });
 
   it("maps the non-CFP producer validation to the public HTTP response", async () => {
@@ -984,6 +1016,49 @@ describe("public submission creation", () => {
 });
 
 describe("provisioned speaker task-form submission", () => {
+  it("loads a task form only for the exact currently provisioned speaker", async () => {
+    const form = await runAs(owner, getTaskSubmissionForm({ eventId: EVENT_ID, formId: TASK_FORM_ID }));
+    expect(form.form).toMatchObject({
+      id: TASK_FORM_ID,
+      versionId: TASK_VERSION_ID,
+      name: "Published portal follow-up",
+    });
+    expect(form.turnstileSiteKey).toBeNull();
+
+    const outsiderResult = await runEitherAs(
+      outsider,
+      getTaskSubmissionForm({ eventId: EVENT_ID, formId: TASK_FORM_ID }),
+    );
+    expect(outsiderResult).toMatchObject({ _tag: "Left", left: { _tag: "Forbidden" } });
+
+    const cfpResult = await runEitherAs(
+      owner,
+      getTaskSubmissionForm({ eventId: EVENT_ID, formId: OPEN_FORM_ID }),
+    );
+    expect(cfpResult).toMatchObject({
+      _tag: "Left",
+      left: { _tag: "NotFound", entity: "published task form" },
+    });
+
+    const db = drizzle(env.DB);
+    await db
+      .update(speakerProvisioning)
+      .set({ status: "revoked" })
+      .where(eq(speakerProvisioning.id, "provisioning-submit-seeded"));
+    try {
+      const revokedResult = await runEitherAs(
+        owner,
+        getTaskSubmissionForm({ eventId: EVENT_ID, formId: TASK_FORM_ID }),
+      );
+      expect(revokedResult).toMatchObject({ _tag: "Left", left: { _tag: "Forbidden" } });
+    } finally {
+      await db
+        .update(speakerProvisioning)
+        .set({ status: "provisioned" })
+        .where(eq(speakerProvisioning.id, "provisioning-submit-seeded"));
+    }
+  });
+
   it("stores immutable answers against the exact existing speaker with actor evidence", async () => {
     const db = drizzle(env.DB);
     const speakerCountBefore = (await db.select({ id: speakers.id }).from(speakers)).length;
