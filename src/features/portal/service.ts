@@ -1934,6 +1934,11 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
     id: assetId,
     eventId: event.id,
     uploaderUserId: actor.userId,
+    speakerId: speaker.id,
+    purpose: input.purpose,
+    supersedesAssetId: null,
+    restoredFromAssetId: null,
+    current: true,
     filename,
     contentType: input.contentType,
     size: data.byteLength,
@@ -2197,7 +2202,7 @@ export const createPortalTask = (input: CreateTaskInput): Effect.Effect<PortalTa
   yield* requireEvent(input.eventId);
   const { db } = yield* Db;
   const createdAt = now();
-  const task = { id: id("task"), eventId: input.eventId, name: input.name, description: input.description, kind: input.kind, formId: input.formId, dueAt: input.dueAt === null ? null : new Date(input.dueAt), order: input.order, version: 1, createdAt, updatedAt: createdAt } as const;
+  const task = { id: id("task"), eventId: input.eventId, name: input.name, description: input.description, kind: input.kind, formId: input.formId, dueAt: input.dueAt === null ? null : new Date(input.dueAt), order: input.order, targetMode: "all" as const, version: 1, createdAt, updatedAt: createdAt } as const;
   yield* database(() => db.batch([db.insert(tasks).values(task), db.insert(domainChanges).values(writeChange(input.eventId, "task", task.id, 1, "portal.task.created", { taskId: task.id }, actor, createdAt))]));
   return taskDefinitionView(task);
 });

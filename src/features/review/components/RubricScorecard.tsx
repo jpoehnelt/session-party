@@ -1,4 +1,4 @@
-import { Badge, Button } from "@/ui";
+import { Badge, Button, Select, Textarea } from "@/ui";
 import type { CriterionScore, ReviewRubric } from "../schema";
 
 const scoreMeaning = ["", "Weak", "Limited", "Solid", "Strong", "Exceptional"] as const;
@@ -19,13 +19,20 @@ export function RubricScorecard({
   sourceLabel = "Human review",
 }: RubricScorecardProps) {
   const byCriterion = new Map(scores.map((entry) => [entry.criterionKey, entry.score]));
-  const complete = rubric.criteria.every((criterion) => byCriterion.has(criterion.key));
-  const average = complete
-    ? rubric.criteria.reduce((total, criterion) => total + (byCriterion.get(criterion.key) ?? 0), 0) /
-      rubric.criteria.length
-    : null;
+  const complete = rubric.criteria.every((criterion) => !criterion.required || byCriterion.has(criterion.key));
+  const aggregate = rubric.criteria.reduce((result, criterion) => {
+    if (criterion.type === "text" || criterion.weight <= 0) return result;
+    const response = byCriterion.get(criterion.key);
+    const value = criterion.type === "numeric"
+      ? typeof response === "number" ? response : null
+      : criterion.options?.find((option) => option.value === response)?.score ?? null;
+    return value === null
+      ? result
+      : { weightedTotal: result.weightedTotal + value * criterion.weight, weightTotal: result.weightTotal + criterion.weight };
+  }, { weightedTotal: 0, weightTotal: 0 });
+  const average = complete && aggregate.weightTotal > 0 ? aggregate.weightedTotal / aggregate.weightTotal : null;
 
-  const update = (criterionKey: string, score: 1 | 2 | 3 | 4 | 5) => {
+  const update = (criterionKey: string, score: number | string | undefined) => {
     const next = rubric.criteria.flatMap((criterion) => {
       const value = criterion.key === criterionKey ? score : byCriterion.get(criterion.key);
       return value === undefined ? [] : [{ criterionKey: criterion.key, score: value }];
@@ -41,7 +48,7 @@ export function RubricScorecard({
             <h3 id="rubric-heading" className="text-sm font-black uppercase tracking-[0.08em] text-ink">Rubric scorecard</h3>
             <Badge tone={sourceLabel === "AI draft" ? "warning" : "neutral"}>{sourceLabel}</Badge>
           </div>
-          <p className="mt-1 text-xs text-ink-faint">Every criterion requires a whole-number score from 1 to 5.</p>
+          <p className="mt-1 text-xs text-ink-faint">Numeric and dropdown criteria contribute by weight; written rationale remains qualitative.</p>
         </div>
         <div className="border-2 border-line-strong bg-production-lime px-3 py-2 text-right shadow-[3px_3px_0_#171714]" aria-live="polite">
           <div className="font-mono text-xl font-black tabular-nums text-ink">
@@ -58,10 +65,13 @@ export function RubricScorecard({
         {rubric.criteria.map((criterion) => {
           const selected = byCriterion.get(criterion.key);
           return (
-            <fieldset key={criterion.key} className="grid gap-3 py-4 first:pt-0 sm:grid-cols-[minmax(11rem,1fr)_auto] sm:items-center">
+            <fieldset key={criterion.key} className="grid gap-3 py-4 first:pt-0 sm:grid-cols-[minmax(11rem,1fr)_minmax(16rem,auto)] sm:items-center">
               <legend className="contents">
                 <span>
                   <span className="block text-sm font-black text-ink">{criterion.label}</span>
+                  <span className="mt-1 block text-[10px] font-black uppercase tracking-[0.08em] text-accent-deep">
+                    {criterion.type}{criterion.type === "text" ? "" : ` · weight ${criterion.weight}`}{criterion.required ? " · required" : " · optional"}
+                  </span>
                   {criterion.description && (
                     <span className="mt-0.5 block max-w-xl text-xs leading-relaxed text-ink-faint">
                       {criterion.description}
@@ -69,25 +79,46 @@ export function RubricScorecard({
                   )}
                 </span>
               </legend>
-              <div className="flex gap-1" aria-label={`${criterion.label} score`}>
-                {([1, 2, 3, 4, 5] as const).map((score) => (
-                  <Button
-                    key={score}
-                    size="md"
-                    variant={selected === score ? "primary" : "secondary"}
-                    className="min-h-11 min-w-11 px-3 font-mono tabular-nums"
-                    aria-pressed={selected === score}
-                    aria-label={`${score} — ${scoreMeaning[score]}`}
-                    title={scoreMeaning[score]}
-                    disabled={disabled}
-                    onClick={() => update(criterion.key, score)}
-                  >
-                    {selected === score && <span aria-hidden="true">✓</span>}
-                    {score}
-                  </Button>
-                ))}
-              </div>
-              {selected !== undefined && (
+              {criterion.type === "numeric" ? (
+                <div className="flex gap-1" aria-label={`${criterion.label} score`}>
+                  {([1, 2, 3, 4, 5] as const).map((score) => (
+                    <Button
+                      key={score}
+                      size="md"
+                      variant={selected === score ? "primary" : "secondary"}
+                      className="min-h-11 min-w-11 px-3 font-mono tabular-nums"
+                      aria-pressed={selected === score}
+                      aria-label={`${score} — ${scoreMeaning[score]}`}
+                      title={scoreMeaning[score]}
+                      disabled={disabled}
+                      onClick={() => update(criterion.key, score)}
+                    >
+                      {selected === score && <span aria-hidden="true">✓</span>}
+                      {score}
+                    </Button>
+                  ))}
+                </div>
+              ) : criterion.type === "dropdown" ? (
+                <Select
+                  label={`${criterion.label} response`}
+                  value={typeof selected === "string" ? selected : ""}
+                  disabled={disabled}
+                  onChange={(event) => update(criterion.key, event.target.value || undefined)}
+                >
+                  <option value="">Select an option</option>
+                  {(criterion.options ?? []).map((option) => <option key={option.value} value={option.value}>{option.label} · {option.score}/5</option>)}
+                </Select>
+              ) : (
+                <Textarea
+                  label={`${criterion.label} response`}
+                  value={typeof selected === "string" ? selected : ""}
+                  maxLength={2_000}
+                  rows={4}
+                  disabled={disabled}
+                  onChange={(event) => update(criterion.key, event.target.value.trim() ? event.target.value : undefined)}
+                />
+              )}
+              {typeof selected === "number" && (
                 <p className="text-xs font-medium text-ink-secondary sm:col-start-2 sm:text-right">
                   {selected}: {scoreMeaning[selected]}
                 </p>

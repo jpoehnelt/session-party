@@ -89,6 +89,12 @@ export const assets = sqliteTable(
     id: id(),
     eventId: text("event_id").references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
     uploaderUserId: text("uploader_user_id").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** Portal ownership and immutable lineage; null for non-portal event assets. */
+    speakerId: text("speaker_id"),
+    purpose: text("purpose", { enum: ["headshot", "slides", "document"] }),
+    supersedesAssetId: text("supersedes_asset_id"),
+    restoredFromAssetId: text("restored_from_asset_id"),
+    current: integer("current", { mode: "boolean" }).notNull().default(true),
     filename: text("filename").notNull(),
     contentType: text("content_type").notNull(),
     size: integer("size").notNull(),
@@ -98,9 +104,14 @@ export const assets = sqliteTable(
   (t) => [
     uniqueIndex("assets_event_id_unique").on(t.eventId, t.id),
     index("assets_event").on(t.eventId),
+    index("assets_speaker_purpose").on(t.eventId, t.speakerId, t.purpose, t.current),
     index("assets_uploader").on(t.uploaderUserId),
     check("assets_size_nonnegative", sql`${t.size} >= 0`),
     check("assets_version_positive", sql`${t.version} > 0`),
+    foreignKey({ columns: [t.eventId, t.supersedesAssetId], foreignColumns: [t.eventId, t.id], name: "assets_supersedes_fk" })
+      .onDelete("restrict").onUpdate("cascade"),
+    foreignKey({ columns: [t.eventId, t.restoredFromAssetId], foreignColumns: [t.eventId, t.id], name: "assets_restored_from_fk" })
+      .onDelete("restrict").onUpdate("cascade"),
   ],
 );
 
@@ -349,6 +360,7 @@ export const speakers = sqliteTable(
     title: text("title"),
     company: text("company"),
     bio: text("bio"),
+    workflowStatus: text("workflow_status").notNull().default("Invited"),
     headshotAssetId: text("headshot_asset_id"),
     links: text("links", { mode: "json" }).$type<readonly { label: string; url: string }[]>(),
     visible: integer("visible", { mode: "boolean" }).notNull().default(true),
@@ -363,6 +375,24 @@ export const speakers = sqliteTable(
     foreignKey({ columns: [t.eventId, t.headshotAssetId], foreignColumns: [assets.eventId, assets.id], name: "speakers_headshot_fk" })
       .onDelete("restrict").onUpdate("cascade"),
     check("speakers_version_positive", sql`${t.version} > 0`),
+  ],
+);
+
+export const assetComments = sqliteTable(
+  "asset_comments",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    assetId: text("asset_id").notNull(),
+    actorUserId: text("actor_user_id").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    body: text("body").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("asset_comments_event_id_unique").on(t.eventId, t.id),
+    index("asset_comments_asset_time").on(t.eventId, t.assetId, t.createdAt),
+    foreignKey({ columns: [t.eventId, t.assetId], foreignColumns: [assets.eventId, assets.id], name: "asset_comments_asset_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
   ],
 );
 
@@ -490,6 +520,9 @@ export const reviewRounds = sqliteTable(
     name: text("name").notNull(),
     order: integer("order").notNull(),
     status: text("status", { enum: ["pending", "active", "complete"] }).notNull().default("pending"),
+    startsAt: integer("starts_at", { mode: "timestamp_ms" }),
+    endsAt: integer("ends_at", { mode: "timestamp_ms" }),
+    blind: integer("blind", { mode: "boolean" }).notNull().default(false),
     rubric: text("rubric", { mode: "json" }),
     version: version(),
     ...timestamps,
@@ -497,6 +530,7 @@ export const reviewRounds = sqliteTable(
   (t) => [
     uniqueIndex("review_rounds_event_id_unique").on(t.eventId, t.id),
     uniqueIndex("review_rounds_event_order_unique").on(t.eventId, t.order),
+    check("review_rounds_date_order", sql`${t.startsAt} is null or ${t.endsAt} is null or ${t.endsAt} > ${t.startsAt}`),
     check("review_rounds_version_positive", sql`${t.version} > 0`),
   ],
 );
@@ -547,7 +581,7 @@ export const reviews = sqliteTable(
     reviewerUserId: text("reviewer_user_id"),
     ai: integer("ai", { mode: "boolean" }).notNull().default(false),
     score: real("score").notNull(),
-    scores: text("scores", { mode: "json" }).$type<Record<string, number>>(),
+    scores: text("scores", { mode: "json" }).$type<Record<string, number | string>>(),
     comment: text("comment"),
     version: version(),
     ...timestamps,
@@ -587,6 +621,30 @@ export const reviewComments = sqliteTable(
     foreignKey({ columns: [t.eventId, t.authorUserId], foreignColumns: [eventMembers.eventId, eventMembers.userId], name: "review_comments_member_fk" })
       .onDelete("cascade").onUpdate("cascade"),
     check("review_comments_body_nonempty", sql`length(trim(${t.body})) > 0`),
+  ],
+);
+
+export const reviewRecusals = sqliteTable(
+  "review_recusals",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    roundId: text("round_id").notNull(),
+    submissionId: text("submission_id").notNull(),
+    reviewerUserId: text("reviewer_user_id").notNull(),
+    reason: text("reason"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("review_recusals_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("review_recusals_pair_unique").on(t.eventId, t.roundId, t.submissionId, t.reviewerUserId),
+    index("review_recusals_reviewer").on(t.eventId, t.roundId, t.reviewerUserId),
+    foreignKey({ columns: [t.eventId, t.roundId], foreignColumns: [reviewRounds.eventId, reviewRounds.id], name: "review_recusals_round_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
+    foreignKey({ columns: [t.eventId, t.submissionId], foreignColumns: [submissions.eventId, submissions.id], name: "review_recusals_submission_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
+    foreignKey({ columns: [t.eventId, t.reviewerUserId], foreignColumns: [eventMembers.eventId, eventMembers.userId], name: "review_recusals_member_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
   ],
 );
 
@@ -684,6 +742,7 @@ export const tasks = sqliteTable("tasks", {
   formId: text("form_id"),
   dueAt: integer("due_at", { mode: "timestamp_ms" }),
   order: integer("order").notNull().default(0),
+  targetMode: text("target_mode", { enum: ["all", "selected"] }).notNull().default("all"),
   version: version(),
   ...timestamps,
 }, (t) => [
@@ -694,6 +753,26 @@ export const tasks = sqliteTable("tasks", {
   check("tasks_form_kind", sql`(${t.kind} = 'form' and ${t.formId} is not null) or (${t.kind} <> 'form' and ${t.formId} is null)`),
   check("tasks_version_positive", sql`${t.version} > 0`),
 ]);
+
+export const taskAssignments = sqliteTable(
+  "task_assignments",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    taskId: text("task_id").notNull(),
+    speakerId: text("speaker_id").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("task_assignments_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("task_assignments_pair_unique").on(t.eventId, t.taskId, t.speakerId),
+    index("task_assignments_speaker").on(t.eventId, t.speakerId),
+    foreignKey({ columns: [t.eventId, t.taskId], foreignColumns: [tasks.eventId, tasks.id], name: "task_assignments_task_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
+    foreignKey({ columns: [t.eventId, t.speakerId], foreignColumns: [speakers.eventId, speakers.id], name: "task_assignments_speaker_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
+  ],
+);
 
 export const taskCompletions = sqliteTable(
   "task_completions",

@@ -9,11 +9,17 @@ const mutationMocks = vi.hoisted(() => ({
   advanceReviewRoundRequest: vi.fn(),
   appendReviewCommentRequest: vi.fn(),
   assignReviewerRequest: vi.fn(),
+  bulkAssignReviewersRequest: vi.fn(),
   createReviewRoundRequest: vi.fn(),
+  exportReviewResultsRequest: vi.fn(),
+  recuseAssignmentRequest: vi.fn(),
+  recuseReviewerRequest: vi.fn(),
   rejectSubmissionRequest: vi.fn(),
   requestAiSuggestionRequest: vi.fn(),
   revokeAcceptanceRequest: vi.fn(),
   saveScoreRequest: vi.fn(),
+  sendReviewRemindersRequest: vi.fn(),
+  updateReviewRoundRequest: vi.fn(),
 }));
 
 vi.mock("./mutations", () => mutationMocks);

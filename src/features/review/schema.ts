@@ -26,11 +26,25 @@ export type WorkbenchOrder = typeof WorkbenchOrder.Type;
 export const ScoreValue = Schema.Int.pipe(Schema.between(1, 5));
 export type ScoreValue = typeof ScoreValue.Type;
 
+export const ReviewCriterionType = Schema.Literal("numeric", "dropdown", "text");
+export type ReviewCriterionType = typeof ReviewCriterionType.Type;
+
+export const RubricOption = Schema.Struct({
+  value: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(80)),
+  label: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(120)),
+  score: ScoreValue,
+});
+export type RubricOption = typeof RubricOption.Type;
+
 export const RubricCriterion = Schema.Struct({
   key: EntityId,
   label: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(120)),
   description: Schema.optional(Schema.String.pipe(Schema.maxLength(500))),
-  max: Schema.Literal(5),
+  type: Schema.optionalWith(ReviewCriterionType, { default: () => "numeric" as const }),
+  weight: Schema.optionalWith(Schema.Number.pipe(Schema.between(0, 100)), { default: () => 1 }),
+  required: Schema.optionalWith(Schema.Boolean, { default: () => true }),
+  max: Schema.optionalWith(Schema.Literal(5), { default: () => 5 as const }),
+  options: Schema.optional(Schema.Array(RubricOption).pipe(Schema.maxItems(20))),
 });
 export type RubricCriterion = typeof RubricCriterion.Type;
 
@@ -41,7 +55,7 @@ export type ReviewRubric = typeof ReviewRubric.Type;
 
 export const CriterionScore = Schema.Struct({
   criterionKey: EntityId,
-  score: ScoreValue,
+  score: Schema.Union(ScoreValue, Schema.String.pipe(Schema.minLength(1), Schema.maxLength(2_000))),
 });
 export type CriterionScore = typeof CriterionScore.Type;
 
@@ -50,6 +64,9 @@ export const ReviewRound = Schema.Struct({
   name: NonEmptyText,
   order: Schema.Int.pipe(Schema.positive()),
   status: ReviewRoundStatus,
+  startsAt: Schema.NullOr(UnixTimestampMs),
+  endsAt: Schema.NullOr(UnixTimestampMs),
+  blind: Schema.Boolean,
   rubric: ReviewRubric,
   version: Schema.Int.pipe(Schema.positive()),
 });
@@ -61,6 +78,9 @@ export const CreateReviewRoundInput = Schema.Struct({
   eventId: EntityId,
   name: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(120)),
   initialStatus: Schema.Literal("pending", "active"),
+  startsAt: Schema.NullOr(UnixTimestampMs),
+  endsAt: Schema.NullOr(UnixTimestampMs),
+  blind: Schema.Boolean,
   rubric: ReviewRubric,
   expectedRoundCount: Schema.Int.pipe(Schema.nonNegative()),
   idempotencyKey: IdempotencyKey,
@@ -73,6 +93,26 @@ export const CreateReviewRoundOutput = Schema.Struct({
   idempotent: Schema.Boolean,
 });
 export type CreateReviewRoundOutput = typeof CreateReviewRoundOutput.Type;
+
+export const UpdateReviewRoundInput = Schema.Struct({
+  eventId: EntityId,
+  roundId: EntityId,
+  name: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(120)),
+  startsAt: Schema.NullOr(UnixTimestampMs),
+  endsAt: Schema.NullOr(UnixTimestampMs),
+  blind: Schema.Boolean,
+  rubric: ReviewRubric,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+  requestId: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+});
+export type UpdateReviewRoundInput = typeof UpdateReviewRoundInput.Type;
+
+export const UpdateReviewRoundOutput = Schema.Struct({
+  round: ReviewRound,
+  idempotent: Schema.Boolean,
+});
+export type UpdateReviewRoundOutput = typeof UpdateReviewRoundOutput.Type;
 
 export const AdvanceReviewRoundInput = Schema.Struct({
   eventId: EntityId,
@@ -141,11 +181,32 @@ export const ReviewRoundProgress = Schema.Struct({
 });
 export type ReviewRoundProgress = typeof ReviewRoundProgress.Type;
 
+export const ReviewerProgress = Schema.Struct({
+  reviewerUserId: EntityId,
+  reviewerName: NonEmptyText,
+  assignedCount: Schema.Int.pipe(Schema.nonNegative()),
+  completedCount: Schema.Int.pipe(Schema.nonNegative()),
+  outstandingCount: Schema.Int.pipe(Schema.nonNegative()),
+  completionPercent: Schema.Number.pipe(Schema.between(0, 100)),
+});
+export type ReviewerProgress = typeof ReviewerProgress.Type;
+
+export const ReviewRecusal = Schema.Struct({
+  id: EntityId,
+  roundId: EntityId,
+  submissionId: EntityId,
+  reviewerUserId: EntityId,
+  reviewerName: NonEmptyText,
+  reason: Schema.NullOr(Schema.String.pipe(Schema.maxLength(500))),
+  createdAt: UnixTimestampMs,
+});
+export type ReviewRecusal = typeof ReviewRecusal.Type;
+
 export const HumanReview = Schema.Struct({
   id: EntityId,
   reviewerUserId: EntityId,
   reviewerName: NonEmptyText,
-  score: Schema.Number.pipe(Schema.between(1, 5)),
+  score: Schema.NullOr(Schema.Number.pipe(Schema.between(1, 5))),
   scores: Schema.Array(CriterionScore),
   comment: Schema.NullOr(Schema.String.pipe(Schema.maxLength(5_000))),
   version: Schema.Int.pipe(Schema.positive()),
@@ -165,7 +226,7 @@ export type ReviewThreadComment = typeof ReviewThreadComment.Type;
 export const AiSuggestion = Schema.Struct({
   id: EntityId,
   label: Schema.Literal("AI suggestion — requires human confirmation"),
-  score: Schema.Number.pipe(Schema.between(1, 5)),
+  score: Schema.NullOr(Schema.Number.pipe(Schema.between(1, 5))),
   scores: Schema.Array(CriterionScore),
   comment: Schema.String.pipe(Schema.maxLength(5_000)),
   version: Schema.Int.pipe(Schema.positive()),
@@ -182,6 +243,7 @@ export const SpeakerSummary = Schema.Struct({
   id: EntityId,
   displayName: NonEmptyText,
   isPrimary: Schema.Boolean,
+  role: NonEmptyText,
 });
 export type SpeakerSummary = typeof SpeakerSummary.Type;
 
@@ -224,6 +286,8 @@ export const SubmissionReviewDetail = Schema.Struct({
   assignments: Schema.Array(ReviewerAssignment),
   reviews: Schema.Array(HumanReview),
   comments: Schema.Array(ReviewThreadComment),
+  recusals: Schema.Array(ReviewRecusal),
+  recusedByMe: Schema.Boolean,
   aiSuggestions: Schema.Array(AiSuggestion),
   acceptance: Schema.NullOr(AcceptanceSummary),
 });
@@ -265,6 +329,7 @@ export const ReviewWorkbench = Schema.Struct({
   viewerRole: Schema.Literal("owner", "admin", "reviewer"),
   viewerUserId: EntityId,
   reviewers: Schema.Array(ReviewMember),
+  reviewerProgress: Schema.Array(ReviewerProgress),
   rounds: Schema.Array(ReviewRound),
   progress: Schema.optional(Schema.NullOr(ReviewRoundProgress)),
   order: WorkbenchOrder,
@@ -309,6 +374,86 @@ export const RecuseAssignmentOutput = Schema.Struct({
   idempotent: Schema.Boolean,
 });
 export type RecuseAssignmentOutput = typeof RecuseAssignmentOutput.Type;
+
+export const BulkAssignReviewersInput = Schema.Struct({
+  eventId: EntityId,
+  roundId: EntityId,
+  submissionIds: Schema.NonEmptyArray(EntityId).pipe(Schema.maxItems(100)),
+  reviewerUserIds: Schema.NonEmptyArray(EntityId).pipe(Schema.maxItems(50)),
+  reviewsPerSubmission: Schema.Int.pipe(Schema.between(1, 50)),
+  strategy: Schema.Literal("all", "balanced"),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type BulkAssignReviewersInput = typeof BulkAssignReviewersInput.Type;
+
+export const BulkAssignReviewersOutput = Schema.Struct({
+  createdCount: Schema.Int.pipe(Schema.nonNegative()),
+  existingCount: Schema.Int.pipe(Schema.nonNegative()),
+  assignmentCount: Schema.Int.pipe(Schema.nonNegative()),
+  idempotent: Schema.Boolean,
+});
+export type BulkAssignReviewersOutput = typeof BulkAssignReviewersOutput.Type;
+
+export const RecuseReviewerInput = Schema.Struct({
+  eventId: EntityId,
+  roundId: EntityId,
+  submissionId: EntityId,
+  reason: Schema.NullOr(Schema.String.pipe(Schema.maxLength(500))),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type RecuseReviewerInput = typeof RecuseReviewerInput.Type;
+
+export const RecuseReviewerOutput = Schema.Struct({
+  recusal: ReviewRecusal,
+  idempotent: Schema.Boolean,
+});
+export type RecuseReviewerOutput = typeof RecuseReviewerOutput.Type;
+
+export const SendReviewRemindersInput = Schema.Struct({
+  eventId: EntityId,
+  roundId: EntityId,
+  reviewerUserIds: Schema.Array(EntityId).pipe(Schema.maxItems(50)),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type SendReviewRemindersInput = typeof SendReviewRemindersInput.Type;
+
+export const SendReviewRemindersOutput = Schema.Struct({
+  queuedCount: Schema.Int.pipe(Schema.nonNegative()),
+  skippedCount: Schema.Int.pipe(Schema.nonNegative()),
+  reviewerUserIds: Schema.Array(EntityId),
+  idempotent: Schema.Boolean,
+});
+export type SendReviewRemindersOutput = typeof SendReviewRemindersOutput.Type;
+
+export const ReviewExportRow = Schema.Struct({
+  submissionId: EntityId,
+  title: NonEmptyText,
+  category: Schema.NullOr(Schema.String),
+  status: SubmissionStatus,
+  reviewerUserId: Schema.NullOr(EntityId),
+  reviewerName: Schema.NullOr(NonEmptyText),
+  aggregateScore: Schema.NullOr(Schema.Number.pipe(Schema.between(1, 5))),
+  responses: Schema.Array(CriterionScore),
+  comment: Schema.NullOr(Schema.String),
+  completedAt: Schema.NullOr(UnixTimestampMs),
+});
+export type ReviewExportRow = typeof ReviewExportRow.Type;
+
+export const ExportReviewResultsInput = Schema.Struct({
+  eventId: EntityId,
+  roundId: EntityId,
+});
+export type ExportReviewResultsInput = typeof ExportReviewResultsInput.Type;
+
+export const ExportReviewResultsOutput = Schema.Struct({
+  eventName: NonEmptyText,
+  round: ReviewRound,
+  rows: Schema.Array(ReviewExportRow),
+});
+export type ExportReviewResultsOutput = typeof ExportReviewResultsOutput.Type;
 
 export const SaveScoreInput = Schema.Struct({
   eventId: EntityId,
