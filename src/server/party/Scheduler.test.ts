@@ -4,7 +4,7 @@ import {
   runInDurableObject,
   type D1Migration,
 } from "cloudflare:test";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import worker, { recoverMailScheduler } from "../index";
 import { sendMail, sessionSecret } from "../services";
 import { MAIL_SCHEDULER_NAME, reserveDispatchBudget } from "./Scheduler";
@@ -18,6 +18,21 @@ beforeAll(async () => {
     throw new Error("TEST_MIGRATIONS test binding is unavailable");
   }
   await applyD1Migrations(env.DB, [...(env as TestEnv).TEST_MIGRATIONS]);
+});
+
+afterAll(async () => {
+  for (const name of [
+    MAIL_SCHEDULER_NAME,
+    "mail-recovery-wrong-name",
+    "auth-rate-limit-proof",
+    "cfp-rate-limit-proof",
+  ]) {
+    const scheduler = env.SCHEDULER.get(env.SCHEDULER.idFromName(name));
+    await runInDurableObject(scheduler, async (_instance, state) => {
+      await state.storage.deleteAlarm();
+      await state.storage.deleteAll();
+    });
+  }
 });
 
 describe("Scheduler durable delivery recovery", () => {
