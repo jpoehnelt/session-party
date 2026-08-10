@@ -28,6 +28,8 @@ The bucket must allow public reads through the configured custom domain. Storybo
 
 When storage is not configured, capture and artifact upload still run, while comparison and publication are skipped. GitHub statuses and sticky pull-request comments are informational; they are not configured as branch-protection requirements.
 
+When a comparison needs review, its sticky pull-request comment includes an **Approve screenshots** checkbox. Checking it approves only the SHA embedded in that comment, and only collaborators with write, maintain, or admin access may approve. A new push creates a new SHA-bound checkbox, so earlier approvals cannot carry forward.
+
 ## First baseline
 
 The first pull request may report a missing baseline. Once this workflow lands, its `main` run publishes complete baselines under that commit SHA. Subsequent pull requests compare their merge result with the baseline stored for the current base SHA.
