@@ -134,7 +134,13 @@ describe("public program", () => {
     expect(markup).toContain("Speakers list");
     expect(markup).toContain("Schedule itinerary");
     expect(markup).toContain("Speaker gallery");
+    expect(markup).toContain("Design aesthetic");
+    expect(markup).toContain("Bold &amp; energetic");
+    expect(markup).toContain("Clean &amp; minimal");
+    expect(markup).toContain("Editorial");
     expect(markup).toContain("Generated share URL or code");
     expect(markup).toContain("/embed/devflow-conf-2027/schedule");
+    expect(markup).toContain("aesthetic=bold&amp;accent=%23635BFF");
+    expect(markup).toContain("Preview live embed");
   });
 });

@@ -18,6 +18,12 @@ import {
   SpeakerGallery,
   Tabs,
 } from "@/ui";
+import {
+  DEFAULT_EMBED_DESIGN,
+  embedDesignSearch,
+  normalizeEmbedAccent,
+  type EmbedAesthetic,
+} from "../embed-design";
 
 export type PublicProgramSurface =
   | "sessions"
@@ -639,18 +645,21 @@ function ScheduleSurface({
 function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
   const [widget, setWidget] = useState<Exclude<PublicProgramSurface, "widgets">>("sessions");
   const [format, setFormat] = useState("styled-html");
-  const [accent, setAccent] = useState("#635BFF");
+  const [aesthetic, setAesthetic] = useState<EmbedAesthetic>(DEFAULT_EMBED_DESIGN.aesthetic);
+  const [accent, setAccent] = useState(DEFAULT_EMBED_DESIGN.accent);
   const [copyStatus, setCopyStatus] = useState("");
   const origin = typeof window === "undefined" ? "https://sessionparty.com" : window.location.origin;
   const publicUrl = `${origin}/event/${agenda.eventSlug}/${widget}`;
-  const embedUrl = widget === "speakers" || widget === "gallery"
+  const embedBaseUrl = widget === "speakers" || widget === "gallery"
     ? `${origin}/embed/${agenda.eventSlug}/speakers`
     : `${origin}/embed/${agenda.eventSlug}/schedule`;
+  const safeAccent = normalizeEmbedAccent(accent);
+  const embedUrl = `${embedBaseUrl}?${embedDesignSearch({ aesthetic, accent: safeAccent })}`;
   const generated = format === "json"
     ? `${origin}/api/v1/public/events/${agenda.eventSlug}/${widget === "speakers" || widget === "gallery" ? "speakers" : "agenda/published"}`
     : format === "plain-html"
       ? `<a href="${publicUrl}">${agenda.eventName} ${widget}</a>`
-      : `<iframe title="${agenda.eventName} ${widget}" src="${embedUrl}" style="width:100%;min-height:720px;border:0;border-top:4px solid ${accent}"></iframe>`;
+      : `<iframe title="${agenda.eventName} ${widget}" src="${embedUrl}" style="width:100%;min-height:720px;border:0;border-top:4px solid ${safeAccent}"></iframe>`;
 
   return (
     <section className="space-y-6" aria-labelledby="public-widgets-title">
@@ -661,7 +670,7 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
         description="Generate a link or snippet backed by the currently published program."
       />
       <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Widget builder / output patch bay">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Select label="Widget type" value={widget} onChange={(event) => setWidget(event.currentTarget.value as Exclude<PublicProgramSurface, "widgets">)}>
             <option value="sessions">Sessions list</option>
             <option value="speakers">Speakers list</option>
@@ -673,6 +682,11 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
             <option value="styled-html">Styled HTML</option>
             <option value="plain-html">Plain HTML</option>
             <option value="json">JSON</option>
+          </Select>
+          <Select label="Design aesthetic" value={aesthetic} onChange={(event) => setAesthetic(event.currentTarget.value as EmbedAesthetic)}>
+            <option value="bold">Bold &amp; energetic</option>
+            <option value="minimal">Clean &amp; minimal</option>
+            <option value="editorial">Editorial</option>
           </Select>
           <Input label="Brand color" type="color" value={accent} onChange={(event) => setAccent(event.currentTarget.value)} />
         </div>
@@ -691,7 +705,7 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
             >
               Copy generated code
             </Button>
-            <a className="inline-flex border-2 border-line-strong bg-production-lime px-3 py-2 text-[10px] font-black uppercase tracking-[0.1em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5" href={publicUrl}>Preview live {widget} →</a>
+            <a className="inline-flex border-2 border-line-strong bg-production-lime px-3 py-2 text-[10px] font-black uppercase tracking-[0.1em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5" href={embedUrl}>Preview live embed →</a>
             <span className="text-xs font-bold text-ink-secondary" role="status" aria-live="polite">{copyStatus}</span>
           </div>
         </div>

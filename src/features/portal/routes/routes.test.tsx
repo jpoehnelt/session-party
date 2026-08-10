@@ -706,9 +706,14 @@ describe("organizer content and workflows", () => {
 
 describe("public embed privacy", () => {
   it("projects the public speaker lineup without private portal fields", () => {
-    const markup = renderToStaticMarkup(createElement(PublicSpeakerEmbedContent, { gallery }));
+    const markup = renderToStaticMarkup(createElement(PublicSpeakerEmbedContent, {
+      gallery,
+      design: { aesthetic: "minimal", accent: "#0057B8" },
+    }));
     expect(markup).toContain("Production Summit speakers");
     expect(markup).toContain("River Okafor");
+    expect(markup).toContain('data-embed-aesthetic="minimal"');
+    expect(markup).toContain("--color-accent:#0057B8");
     expect(markup).not.toContain("userId");
     expect(markup).not.toContain("email");
     expect(markup).not.toContain("acceptanceEventId");

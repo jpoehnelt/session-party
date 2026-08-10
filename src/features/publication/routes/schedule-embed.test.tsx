@@ -87,6 +87,19 @@ describe("public schedule route", () => {
     expect(markup).toContain("Schedule revision 3");
   });
 
+  it("renders the selected aesthetic and brand color inside the embed", () => {
+    const markup = render({
+      agenda,
+      error: null,
+      onRetry: noop,
+      design: { aesthetic: "editorial", accent: "#0A6B58" },
+    });
+
+    expect(markup).toContain('data-embed-aesthetic="editorial"');
+    expect(markup).toContain("--color-accent:#0A6B58");
+    expect(markup).toContain("font-serif");
+  });
+
   it("rejects a projection whose revision does not match organizer publication state", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => response(agenda)));
 
