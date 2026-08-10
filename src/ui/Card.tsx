@@ -3,12 +3,14 @@ import { cx } from "./cx";
 
 export interface CardProps {
   title?: ReactNode;
+  titleLevel?: 2 | 3;
   footer?: ReactNode;
   children?: ReactNode;
   className?: string;
 }
 
-export function Card({ title, footer, children, className }: CardProps) {
+export function Card({ title, titleLevel = 3, footer, children, className }: CardProps) {
+  const Title = titleLevel === 2 ? "h2" : "h3";
   return (
     <section
       className={cx(
@@ -18,7 +20,7 @@ export function Card({ title, footer, children, className }: CardProps) {
     >
       {title != null && (
         <header className="border-b-2 border-line-strong bg-ink px-5 py-3.5 text-on-accent">
-          <h3 className="text-xs font-black uppercase tracking-[0.12em] text-on-accent">{title}</h3>
+          <Title className="text-xs font-black uppercase tracking-[0.12em] text-on-accent">{title}</Title>
         </header>
       )}
       <div className="px-5 py-4">{children}</div>

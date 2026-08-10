@@ -1,11 +1,19 @@
 import path from "node:path";
 import { argosVitestPlugin } from "@argos-ci/storybook/vitest-plugin";
 import { storybookTest } from "@storybook/addon-vitest/vitest-plugin";
+import tailwindcss from "@tailwindcss/vite";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": path.resolve(import.meta.dirname, "src"),
+      contracts: path.resolve(import.meta.dirname, "contracts"),
+    },
+  },
   plugins: [
+    tailwindcss(),
     storybookTest({
       configDir: path.resolve(import.meta.dirname, ".storybook"),
     }),
