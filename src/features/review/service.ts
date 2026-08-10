@@ -19,7 +19,7 @@ import {
   submissions,
   users,
 } from "contracts/schema";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { AiService, CurrentUser, Db } from "@/server/services";
@@ -52,6 +52,7 @@ import {
   type SaveScoreOutput,
   type SubmissionReviewDetail,
   type SubmissionReviewSummary,
+  type SubmissionStatus,
 } from "./schema";
 import { compareReviewQueue } from "./ordering";
 
@@ -68,6 +69,11 @@ const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
 const now = () => new Date();
 const id = (prefix: string) => `${prefix}_${nanoid()}`;
 const toMillis = (value: Date | number) => value instanceof Date ? value.getTime() : value;
+const REVIEW_DECISION_SOURCE_STATUSES = ["submitted", "in_review", "waitlist"] as const satisfies readonly SubmissionStatus[];
+type ReviewDecisionSourceStatus = typeof REVIEW_DECISION_SOURCE_STATUSES[number];
+
+const isReviewDecisionSourceStatus = (status: SubmissionStatus): status is ReviewDecisionSourceStatus =>
+  (REVIEW_DECISION_SOURCE_STATUSES as readonly SubmissionStatus[]).includes(status);
 
 const AiResponse = Schema.Struct({
   scores: Schema.Record({
@@ -1371,8 +1377,8 @@ export const acceptSubmission = (
     if (submission.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before accepting" }));
     }
-    if (submission.status === "accepted") {
-      return yield* Effect.fail(new Conflict({ message: "Submission is already accepted" }));
+    if (!isReviewDecisionSourceStatus(submission.status)) {
+      return yield* Effect.fail(new Conflict({ message: `Submission status "${submission.status}" does not allow acceptance` }));
     }
     const [primarySpeaker] = yield* database(() =>
       db.select({ associationId: submissionSpeakers.id, speakerId: submissionSpeakers.speakerId }).from(submissionSpeakers).where(and(eq(submissionSpeakers.eventId, input.eventId), eq(submissionSpeakers.submissionId, input.submissionId), eq(submissionSpeakers.isPrimary, true))).limit(1),
@@ -1446,7 +1452,12 @@ export const acceptSubmission = (
           id: idempotencyId, eventId: input.eventId, operationId: "review.acceptSubmission", principalId,
           keyHash, requestHash, status: "in_progress", expiresAt: new Date(acceptedAt.getTime() + 86_400_000), createdAt: acceptedAt,
         }),
-        db.update(submissions).set({ status: "accepted", acceptedAt, version: nextVersion, updatedAt: acceptedAt }).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId), eq(submissions.version, input.expectedVersion))),
+        db.update(submissions).set({ status: "accepted", acceptedAt, version: nextVersion, updatedAt: acceptedAt }).where(and(
+          eq(submissions.eventId, input.eventId),
+          eq(submissions.id, input.submissionId),
+          eq(submissions.version, input.expectedVersion),
+          inArray(submissions.status, REVIEW_DECISION_SOURCE_STATUSES),
+        )),
         insertAcceptance,
         db.insert(speakerProvisioning).values({ id: provisioningId, eventId: input.eventId, acceptanceEventId, submissionId: input.submissionId, primarySpeakerId: primarySpeaker.speakerId, status: "pending", availableAt: acceptedAt, attemptCount: 0, version: 1, createdAt: acceptedAt, updatedAt: acceptedAt }),
         db.insert(domainChanges).values({
@@ -1499,12 +1510,16 @@ export const acceptSubmission = (
           }
 
           const [currentSubmission] = yield* database(() =>
-            db.select({ version: submissions.version }).from(submissions).where(and(
+            db.select({ status: submissions.status, version: submissions.version }).from(submissions).where(and(
               eq(submissions.eventId, input.eventId),
               eq(submissions.id, input.submissionId),
             )).limit(1),
           );
-          if (!currentSubmission || currentSubmission.version !== input.expectedVersion) {
+          if (
+            !currentSubmission
+            || currentSubmission.version !== input.expectedVersion
+            || !isReviewDecisionSourceStatus(currentSubmission.status)
+          ) {
             return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before accepting" }));
           }
           return yield* Effect.fail(batchFailure);
@@ -1735,11 +1750,8 @@ export const rejectSubmission = (
     if (submission.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before rejecting" }));
     }
-    if (submission.status === "accepted") {
-      return yield* Effect.fail(new Conflict({ message: "Accepted submissions must be revoked before they can be rejected" }));
-    }
-    if (submission.status === "rejected") {
-      return yield* Effect.fail(new Conflict({ message: "Submission is already rejected" }));
+    if (!isReviewDecisionSourceStatus(submission.status)) {
+      return yield* Effect.fail(new Conflict({ message: `Submission status "${submission.status}" does not allow rejection` }));
     }
     const speakerRows = yield* database(() =>
       db.select({ speakerId: submissionSpeakers.speakerId }).from(submissionSpeakers).where(and(
@@ -1758,8 +1770,10 @@ export const rejectSubmission = (
     };
     yield* database(() => db.batch([
       db.update(submissions).set({ status: "rejected", acceptedAt: null, version: nextVersion, updatedAt: rejectedAt }).where(and(
-        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId),
-        eq(submissions.version, input.expectedVersion), sql`${submissions.status} <> 'accepted'`,
+        eq(submissions.eventId, input.eventId),
+        eq(submissions.id, input.submissionId),
+        eq(submissions.version, input.expectedVersion),
+        inArray(submissions.status, REVIEW_DECISION_SOURCE_STATUSES),
       )),
       db.insert(idempotencyRecords).select(db.select({
         id: sql<string>`${idempotencyId}`.as("id"), eventId: submissions.eventId,
