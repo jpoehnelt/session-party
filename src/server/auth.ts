@@ -39,6 +39,16 @@ const DEMO_IDENTITIES: Readonly<Record<DemoPersona, { readonly email: string; re
   speaker: { email: "sbek-speaker@example.com", name: "Priya Raman" },
   reviewer: { email: "sbek-reviewer@example.com", name: "Sam Whitfield" },
 };
+const DEMO_EVENT = {
+  name: "DevFlow Conf 2027",
+  slug: "devflow-conf-2027",
+  description: "A three-day conference for engineers building reliable developer platforms and AI systems.",
+  location: "Moscone West, San Francisco",
+  timezone: "America/Los_Angeles",
+  startsAt: Date.parse("2027-05-12T09:00:00-07:00"),
+  endsAt: Date.parse("2027-05-14T17:00:00-07:00"),
+  accentColor: "#7857ff",
+} as const;
 const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
@@ -218,6 +228,64 @@ const issueBrowserSession = async (env: Env, userId: string): Promise<string> =>
   return session;
 };
 
+const ensureDemoSeed = async (
+  env: Env,
+): Promise<{ readonly users: Readonly<Record<DemoPersona, string>>; readonly eventId: string }> => {
+  const nowMs = Date.now();
+  await env.DB.batch(
+    Object.values(DEMO_IDENTITIES).map((identity) =>
+      env.DB.prepare(
+        `INSERT INTO users (id, email, name, version, created_at, updated_at)
+         VALUES (?, ?, ?, 1, ?, ?)
+         ON CONFLICT(email) DO UPDATE SET
+           name = excluded.name,
+           version = users.version + 1,
+           updated_at = excluded.updated_at`,
+      ).bind(nanoid(), identity.email, identity.name, nowMs, nowMs),
+    ),
+  );
+
+  const demoUsers = {} as Record<DemoPersona, string>;
+  for (const [persona, identity] of Object.entries(DEMO_IDENTITIES) as [DemoPersona, typeof DEMO_IDENTITIES[DemoPersona]][]) {
+    const user = await env.DB.prepare(
+      "SELECT id FROM users WHERE email = ? LIMIT 1",
+    ).bind(identity.email).first<{ id: string }>();
+    if (!user) throw new Error(`Demo ${persona} identity was not created`);
+    demoUsers[persona] = user.id;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO events
+       (id, slug, name, description, location, timezone, starts_at, ends_at, banner_asset_id, accent_color, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?)
+     ON CONFLICT DO NOTHING`,
+  ).bind(
+    nanoid(),
+    DEMO_EVENT.slug,
+    DEMO_EVENT.name,
+    DEMO_EVENT.description,
+    DEMO_EVENT.location,
+    DEMO_EVENT.timezone,
+    DEMO_EVENT.startsAt,
+    DEMO_EVENT.endsAt,
+    DEMO_EVENT.accentColor,
+    nowMs,
+    nowMs,
+  ).run();
+  const event = await env.DB.prepare(
+    "SELECT id FROM events WHERE slug = ? LIMIT 1",
+  ).bind(DEMO_EVENT.slug).first<{ id: string }>();
+  if (!event) throw new Error("Demo event was not created");
+
+  await env.DB.prepare(
+    `INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)
+     VALUES (?, ?, ?, 'owner', 1, ?, ?)
+     ON CONFLICT(event_id, user_id) DO NOTHING`,
+  ).bind(nanoid(), event.id, demoUsers.organizer, nowMs, nowMs).run();
+
+  return { users: demoUsers, eventId: event.id };
+};
+
 export const apiKeyUserFromRequest = async (
   request: Request,
   env: Env,
@@ -328,27 +396,15 @@ auth.post("/demo", async (c) => {
 
   try {
     const identity = DEMO_IDENTITIES[parsed.persona];
-    const nowMs = Date.now();
-    await c.env.DB.prepare(
-      `INSERT INTO users (id, email, name, version, created_at, updated_at)
-       VALUES (?, ?, ?, 1, ?, ?)
-       ON CONFLICT(email) DO UPDATE SET
-         name = excluded.name,
-         version = users.version + 1,
-         updated_at = excluded.updated_at`,
-    ).bind(nanoid(), identity.email, identity.name, nowMs, nowMs).run();
-    const user = await c.env.DB.prepare(
-      "SELECT id FROM users WHERE email = ? LIMIT 1",
-    ).bind(identity.email).first<{ id: string }>();
-    if (!user) throw new Error("Demo identity was not created");
-
-    const session = await issueBrowserSession(c.env, user.id);
+    const seed = await ensureDemoSeed(c.env);
+    const session = await issueBrowserSession(c.env, seed.users[parsed.persona]);
     setBrowserSessionCookie(c, session);
     return c.json({
       ok: true,
       persona: parsed.persona,
       email: identity.email,
       name: identity.name,
+      event: { id: seed.eventId, slug: DEMO_EVENT.slug, name: DEMO_EVENT.name },
       returnTo: validatedReturnTo(parsed.returnTo),
     });
   } catch (error) {

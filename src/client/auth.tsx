@@ -74,14 +74,14 @@ export default function LoginPage() {
             {demoPersonas.map(({ persona, name, email }) => (
               <Button
                 key={persona}
-                className="min-h-12 w-full justify-between px-4 normal-case tracking-normal"
+                className="min-h-14 w-full flex-col items-start gap-1 whitespace-normal px-4 text-left normal-case tracking-normal"
                 variant="secondary"
                 disabled={activeDemoPersona !== undefined}
                 loading={activeDemoPersona === persona}
                 onClick={() => void signInAsDemo(persona)}
               >
                 <span>Continue as {persona.charAt(0).toUpperCase() + persona.slice(1)} — {name}</span>
-                <span className="text-[10px] font-bold text-ink-secondary">{email}</span>
+                <span className="break-all text-[10px] font-bold text-ink-secondary">{email}</span>
               </Button>
             ))}
           </div>
