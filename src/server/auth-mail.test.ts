@@ -97,6 +97,63 @@ beforeAll(async () => {
   await applyD1Migrations(env.DB, [...(env as TestEnv).TEST_MIGRATIONS]);
 });
 
+describe("hackathon demo authentication", () => {
+  it.each([
+    ["organizer", "sbek-organizer@example.com", "Jordan Alvarez"],
+    ["speaker", "sbek-speaker@example.com", "Priya Raman"],
+    ["reviewer", "sbek-reviewer@example.com", "Sam Whitfield"],
+  ])("issues a normal session for the %s persona", async (persona, email, name) => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona, returnTo: "/events?from=demo#top" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      persona,
+      email,
+      name,
+      returnTo: "/events?from=demo#top",
+    });
+    const cookie = response.headers.get("set-cookie");
+    expect(cookie).toContain("sp_session=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+
+    const me = await SELF.fetch("https://example.test/api/v1/auth/me", {
+      headers: { Cookie: cookie?.split(";")[0] ?? "" },
+    });
+    expect(me.status).toBe(200);
+    expect(await me.json()).toMatchObject({
+      user: { kind: "browser-session", email, name },
+    });
+  });
+
+  it("rejects unknown personas without creating a session", async () => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "admin" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("normalizes unsafe return paths", async () => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "organizer", returnTo: "//example.net/steal" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ returnTo: "/" });
+  });
+});
+
 describe("durable magic-link authentication", () => {
   it("coalesces concurrent requests into one token, snapshot, and delivery", async () => {
     const email = "concurrent-auth@example.com";

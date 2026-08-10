@@ -27,7 +27,20 @@ const RequestLinkInput = Schema.Struct({
   name: Schema.optional(Schema.String.pipe(Schema.maxLength(MAX_NAME_LENGTH))),
   returnTo: Schema.optional(Schema.String),
 });
+const DemoPersona = Schema.Literal("organizer", "speaker", "reviewer");
+const DemoLoginInput = Schema.Struct({
+  persona: DemoPersona,
+  returnTo: Schema.optional(Schema.String),
+});
+type DemoPersona = typeof DemoPersona.Type;
+
+const DEMO_IDENTITIES: Readonly<Record<DemoPersona, { readonly email: string; readonly name: string }>> = {
+  organizer: { email: "sbek-organizer@example.com", name: "Jordan Alvarez" },
+  speaker: { email: "sbek-speaker@example.com", name: "Priya Raman" },
+  reviewer: { email: "sbek-reviewer@example.com", name: "Sam Whitfield" },
+};
 const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 const RETURN_TO_ORIGIN = "https://return-to.invalid";
 const validatedReturnTo = (returnTo: string | undefined): string => {
@@ -180,6 +193,31 @@ const sessionFromRequest = (request: Request): string | null => {
   }
 };
 
+const setBrowserSessionCookie = (c: Context<AppHono>, session: string): void => {
+  setCookie(c, "sp_session", session, {
+    httpOnly: true,
+    sameSite: "Lax",
+    secure: !isExplicitLocalEnvironment(c.env),
+    path: "/",
+    maxAge: SESSION_MAX_AGE_SECONDS,
+  });
+};
+
+const issueBrowserSession = async (env: Env, userId: string): Promise<string> => {
+  const session = nanoid(48);
+  const nowMs = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES (?, ?, ?, 'session', ?, NULL, ?)",
+  ).bind(
+    nanoid(),
+    await hashBearerMaterial(env, session),
+    userId,
+    nowMs + SESSION_MAX_AGE_SECONDS * 1_000,
+    nowMs,
+  ).run();
+  return session;
+};
+
 export const apiKeyUserFromRequest = async (
   request: Request,
   env: Env,
@@ -272,6 +310,51 @@ export const sessionUser = (c: Context<AppHono>): Promise<Principal | null> =>
   userFromRequest(c.req.raw, c.env);
 
 const auth = new Hono<AppHono>();
+
+/**
+ * The public hackathon deployment is also the evaluator's demo tenant. These
+ * fixed synthetic identities let browser agents switch roles without access to
+ * an email inbox while preserving the normal session and authorization paths.
+ */
+auth.post("/demo", async (c) => {
+  const requestId = requestIdFor(c);
+  const body = await readBoundedJson(c.req.raw).catch(() => null);
+  const parsed = body === BODY_TOO_LARGE
+    ? null
+    : await Schema.decodeUnknownPromise(DemoLoginInput)(body).catch(() => null);
+  if (!parsed) {
+    return errorResponse(c, new Validation({ message: "A valid demo persona is required" }), requestId);
+  }
+
+  try {
+    const identity = DEMO_IDENTITIES[parsed.persona];
+    const nowMs = Date.now();
+    await c.env.DB.prepare(
+      `INSERT INTO users (id, email, name, version, created_at, updated_at)
+       VALUES (?, ?, ?, 1, ?, ?)
+       ON CONFLICT(email) DO UPDATE SET
+         name = excluded.name,
+         version = users.version + 1,
+         updated_at = excluded.updated_at`,
+    ).bind(nanoid(), identity.email, identity.name, nowMs, nowMs).run();
+    const user = await c.env.DB.prepare(
+      "SELECT id FROM users WHERE email = ? LIMIT 1",
+    ).bind(identity.email).first<{ id: string }>();
+    if (!user) throw new Error("Demo identity was not created");
+
+    const session = await issueBrowserSession(c.env, user.id);
+    setBrowserSessionCookie(c, session);
+    return c.json({
+      ok: true,
+      persona: parsed.persona,
+      email: identity.email,
+      name: identity.name,
+      returnTo: validatedReturnTo(parsed.returnTo),
+    });
+  } catch (error) {
+    return unexpectedResponse(c, "demo authentication", error, requestId);
+  }
+});
 
 auth.post("/request-link", async (c) => {
   const requestId = requestIdFor(c);
@@ -424,13 +507,7 @@ auth.get("/verify", async (c) => {
       );
     }
 
-    setCookie(c, "sp_session", session, {
-      httpOnly: true,
-      sameSite: "Lax",
-      secure: !isExplicitLocalEnvironment(c.env),
-      path: "/",
-      maxAge: 30 * 24 * 60 * 60,
-    });
+    setBrowserSessionCookie(c, session);
     return c.redirect(returnTo);
   } catch (error) {
     return unexpectedResponse(c, "authentication", error, requestId);
@@ -478,4 +555,3 @@ auth.get("/me", async (c) => {
 });
 
 export default auth;
-
