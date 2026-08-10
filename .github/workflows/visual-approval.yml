@@ -1,0 +1,30 @@
+name: Visual approval
+
+on:
+  issue_comment:
+    types: [edited]
+
+permissions:
+  contents: read
+
+jobs:
+  approve:
+    if: >-
+      github.event.issue.pull_request
+      && contains(github.event.comment.body, ':visual-regression -->')
+      && contains(github.event.comment.body, '- [x] **Approve screenshots**')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify approval and update visual status
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node tools/visual-regression/approve-comment.mjs
