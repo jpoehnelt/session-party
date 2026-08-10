@@ -1,0 +1,27 @@
+{
+  "core": {
+    "workingDir": ".reg-pages",
+    "actualDir": "screenshots-pages",
+    "thresholdRate": 0.02,
+    "matchingThreshold": 0.05,
+    "ximgdiff": { "invocationType": "client" }
+  },
+  "plugins": {
+    "./tools/visual-regression/reg-keygen-plugin": {},
+    "./tools/visual-regression/reg-notify-plugin": {
+      "statusContext": "session-party-pages",
+      "label": "Page visual diff"
+    },
+    "reg-publish-s3-plugin": {
+      "bucketName": "${REG_S3_BUCKET_NAME}",
+      "acl": "public-read",
+      "pathPrefix": "pages",
+      "customDomain": "${REG_S3_CUSTOM_DOMAIN}",
+      "sdkOptions": {
+        "endpoint": "${REG_S3_ENDPOINT}",
+        "forcePathStyle": true,
+        "region": "${REG_S3_REGION}"
+      }
+    }
+  }
+}

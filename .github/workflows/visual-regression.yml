@@ -1,0 +1,150 @@
+name: Visual regression
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visual-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REG_S3_BUCKET_NAME: ${{ secrets.REG_S3_BUCKET_NAME }}
+  REG_S3_CUSTOM_DOMAIN: ${{ vars.REG_S3_CUSTOM_DOMAIN }}
+  REG_S3_ENDPOINT: ${{ secrets.REG_S3_ENDPOINT }}
+  REG_S3_REGION: ${{ vars.REG_S3_REGION || 'auto' }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.REG_S3_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.REG_S3_SECRET_ACCESS_KEY }}
+  GITHUB_CAPTURE_SHA: ${{ github.sha }}
+  GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+  REG_EXPECTED_SHA: ${{ github.event.pull_request.base.sha || '' }}
+  PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+
+jobs:
+  storybook:
+    name: Storybook visual regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Capture Storybook stories
+        run: pnpm visual:stories:capture
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: storybook-screenshots-${{ github.sha }}
+          path: screenshots/
+          if-no-files-found: error
+      - name: Check visual storage configuration
+        id: storage
+        shell: bash
+        run: |
+          if [[ -n "$REG_S3_BUCKET_NAME" && -n "$REG_S3_CUSTOM_DOMAIN" && -n "$REG_S3_ENDPOINT" && -n "$AWS_ACCESS_KEY_ID" && -n "$AWS_SECRET_ACCESS_KEY" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Visual comparison skipped because the R2 visual-regression secrets are not configured."
+          fi
+      - name: Compare and publish Storybook screenshots
+        if: steps.storage.outputs.enabled == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm visual:stories:compare
+
+  pages:
+    name: Page visual regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    env:
+      PASEO_PORT: "5173"
+      PASEO_BASE_URL: http://127.0.0.1:5173
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Prepare deterministic demo database
+        run: pnpm dev:reset
+      - name: Start local application
+        run: |
+          pnpm dev:local > /tmp/session-party-visual-server.log 2>&1 &
+          echo $! > /tmp/session-party-visual-server.pid
+          for _ in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:5173/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/session-party-visual-server.log
+          exit 1
+      - name: Hydrate deterministic demo workflows
+        run: pnpm demo:hydrate
+      - name: Capture application pages
+        run: pnpm visual:pages:capture
+      - name: Show application log on failure
+        if: failure()
+        run: tail -200 /tmp/session-party-visual-server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: page-screenshots-${{ github.sha }}
+          path: |
+            screenshots-pages/
+            playwright-report/
+            test-results/
+          if-no-files-found: error
+      - name: Check visual storage configuration
+        id: storage
+        shell: bash
+        run: |
+          if [[ -n "$REG_S3_BUCKET_NAME" && -n "$REG_S3_CUSTOM_DOMAIN" && -n "$REG_S3_ENDPOINT" && -n "$AWS_ACCESS_KEY_ID" && -n "$AWS_SECRET_ACCESS_KEY" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Visual comparison skipped because the R2 visual-regression secrets are not configured."
+          fi
+      - name: Compare and publish page screenshots
+        if: steps.storage.outputs.enabled == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm visual:pages:compare
+      - name: Stop local application
+        if: always()
+        run: |
+          if [[ -f /tmp/session-party-visual-server.pid ]]; then
+            kill "$(cat /tmp/session-party-visual-server.pid)" || true
+          fi

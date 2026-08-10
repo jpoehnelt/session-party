@@ -1,0 +1,26 @@
+{
+  "core": {
+    "workingDir": ".reg",
+    "actualDir": "screenshots",
+    "thresholdRate": 0.01,
+    "ximgdiff": { "invocationType": "client" }
+  },
+  "plugins": {
+    "./tools/visual-regression/reg-keygen-plugin": {},
+    "./tools/visual-regression/reg-notify-plugin": {
+      "statusContext": "session-party-stories",
+      "label": "Storybook visual diff"
+    },
+    "reg-publish-s3-plugin": {
+      "bucketName": "${REG_S3_BUCKET_NAME}",
+      "acl": "public-read",
+      "pathPrefix": "storybook",
+      "customDomain": "${REG_S3_CUSTOM_DOMAIN}",
+      "sdkOptions": {
+        "endpoint": "${REG_S3_ENDPOINT}",
+        "forcePathStyle": true,
+        "region": "${REG_S3_REGION}"
+      }
+    }
+  }
+}
