@@ -455,6 +455,7 @@ describe("communications immutable delivery workflow", () => {
     const input = {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 1,
       recipientSpeakerIds: [seeded.speakerId] as [string],
       replyToEmail: "team@example.com",
       scheduledFor: null,
@@ -517,6 +518,44 @@ describe("communications immutable delivery workflow", () => {
     });
   });
 
+  it("rejects a campaign when its authorized template version changed before enqueue", async () => {
+    const seeded = await seedCommunication("stale-template");
+    await seeded.db.update(emailTemplates).set({
+      subject: "Unreviewed concurrent edit",
+      version: 2,
+      updatedAt: new Date(now.getTime() + 1_000),
+    }).where(and(
+      eq(emailTemplates.eventId, seeded.eventId),
+      eq(emailTemplates.id, seeded.templateId),
+    ));
+    const deliveriesBefore = await seeded.db.select().from(mailDeliveries);
+
+    const result = await runEitherAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      expectedTemplateVersion: 1,
+      recipientSpeakerIds: [seeded.speakerId],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-stale-template-001",
+    }));
+
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        _tag: "Conflict",
+        message: "Template version is 2; expected 1",
+      });
+    }
+    expect(await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).toHaveLength(0);
+    expect(await seeded.db.select().from(mailDeliveries)).toEqual(deliveriesBefore);
+    expect(await seeded.db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, seeded.eventId),
+      eq(idempotencyRecords.operationId, "comms.enqueueCommunication"),
+    ))).toHaveLength(0);
+  });
+
   it("persists exact-revision companion data despite mutable agenda changes", async () => {
     const seeded = await seedCommunication("calendar");
     await runAs(seeded.owner, updateTemplate({
@@ -545,6 +584,7 @@ describe("communications immutable delivery workflow", () => {
     const result = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor,
@@ -607,6 +647,7 @@ describe("communications immutable delivery workflow", () => {
     const privateReschedule = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor,
@@ -635,6 +676,7 @@ describe("communications immutable delivery workflow", () => {
     const rescheduled = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor,
@@ -668,6 +710,7 @@ describe("communications immutable delivery workflow", () => {
     const folded = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor,
@@ -702,6 +745,7 @@ describe("communications immutable delivery workflow", () => {
     const enqueued = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 1,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
@@ -831,6 +875,7 @@ describe("communications immutable delivery workflow", () => {
     const result = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
@@ -880,6 +925,7 @@ describe("communications immutable delivery workflow", () => {
     const result = await runEitherAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
@@ -936,6 +982,7 @@ describe("communications immutable delivery workflow", () => {
     const result = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
@@ -1045,6 +1092,7 @@ describe("communications immutable delivery workflow", () => {
     const result = await runEitherAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
       recipientSpeakerIds: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,

@@ -98,6 +98,7 @@ const formatTime = (timestamp: number | null): string => timestamp === null
 
 interface EnqueueRequestBase {
   readonly templateId: string;
+  readonly expectedTemplateVersion: number;
   readonly recipientSpeakerIds: readonly string[];
   readonly replyToEmail: string | null;
 }
@@ -162,16 +163,19 @@ export const createCampaignEnqueueCoordinator = (
         };
       }
 
+      const submittedAttempt = attempt;
       let pending: Promise<T>;
       try {
-        pending = submit(attempt.request);
+        pending = submit(submittedAttempt.request);
       } catch (error) {
         return Promise.reject(error);
       }
       inFlight = pending;
       void pending.then(
         () => {
-          if (inFlight === pending) inFlight = undefined;
+          if (inFlight !== pending) return;
+          inFlight = undefined;
+          if (attempt === submittedAttempt) attempt = undefined;
         },
         () => {
           if (inFlight === pending) inFlight = undefined;
@@ -454,6 +458,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
       const request = buildEnqueueRequest(
         {
           templateId: selectedTemplate.id,
+          expectedTemplateVersion: selectedTemplate.version,
           recipientSpeakerIds: [...selectedSpeakers],
           replyToEmail: replyToEmail.trim() || null,
         },

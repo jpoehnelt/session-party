@@ -234,6 +234,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
     "input": {
       "body": [
         "templateId",
+        "expectedTemplateVersion",
         "recipientSpeakerIds",
         "replyToEmail",
         "scheduledFor",
@@ -3632,6 +3633,13 @@ export const mcpTools: readonly McpToolDescriptor[] = [
   {
     "description": "Confirm an audience and persist immutable mail snapshots plus delivery outbox rows.",
     "inputSchema": {
+      "$defs": {
+        "Int": {
+          "description": "an integer",
+          "title": "int",
+          "type": "integer"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
@@ -3642,6 +3650,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "pattern": "^[A-Za-z0-9_-]+$",
           "title": "maxLength(128)",
           "type": "string"
+        },
+        "expectedTemplateVersion": {
+          "$ref": "#/$defs/Int",
+          "description": "a positive number",
+          "exclusiveMinimum": 0,
+          "title": "positive"
         },
         "idempotencyKey": {
           "description": "a string at most 200 character(s) long",
@@ -3701,6 +3715,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
       "required": [
         "eventId",
         "templateId",
+        "expectedTemplateVersion",
         "recipientSpeakerIds",
         "replyToEmail",
         "scheduledFor",
@@ -22144,6 +22159,12 @@ export const openApi = {
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "expectedTemplateVersion": {
+                    "$ref": "#/$defs/Int",
+                    "description": "a positive number",
+                    "exclusiveMinimum": 0,
+                    "title": "positive"
+                  },
                   "idempotencyKey": {
                     "description": "a string at most 200 character(s) long",
                     "maxLength": 200,
@@ -22201,6 +22222,7 @@ export const openApi = {
                 },
                 "required": [
                   "templateId",
+                  "expectedTemplateVersion",
                   "recipientSpeakerIds",
                   "replyToEmail",
                   "scheduledFor",

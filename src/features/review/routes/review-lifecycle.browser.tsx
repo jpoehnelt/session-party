@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assignedSubmissionFixture, reviewWorkbenchFixture } from "../fixtures";
+import type { SubmissionReviewDetail } from "../schema";
 
 const mutationMocks = vi.hoisted(() => ({
   acceptSubmissionRequest: vi.fn(),
@@ -19,14 +20,18 @@ vi.mock("./mutations", () => mutationMocks);
 
 import { ReviewWorkbenchContent } from "./review-workbench";
 
-const workbenchFor = (id: string, title: string) => {
+type DecisionState = Pick<SubmissionReviewDetail, "status" | "version" | "acceptance">;
+
+const workbenchFor = (
+  id: string,
+  title: string,
+  decision: DecisionState = { status: "submitted", version: 3, acceptance: null },
+) => {
   const selected = {
     ...assignedSubmissionFixture,
     id,
     title,
-    status: "submitted" as const,
-    version: 3,
-    acceptance: null,
+    ...decision,
   };
   return {
     ...reviewWorkbenchFixture,
@@ -61,7 +66,7 @@ describe("rendered review decision lifecycle", () => {
     container.remove();
   });
 
-  it("reuses an ambiguous accept key for one proposal and resets it after a rendered proposal switch", async () => {
+  it("preserves ambiguous retries and rotates accept keys after same-submission state changes", async () => {
     await act(async () => {
       root.render(
         <ReviewWorkbenchContent
@@ -85,17 +90,62 @@ describe("rendered review decision lifecycle", () => {
     await act(async () => {
       root.render(
         <ReviewWorkbenchContent
-          workbench={workbenchFor("submission-b", "Proposal B")}
+          workbench={workbenchFor("submission-a", "Proposal A", {
+            status: "accepted",
+            version: 4,
+            acceptance: {
+              acceptanceEventId: "acceptance-a-1",
+              submissionVersion: 4,
+              acceptedAt: 1_700_000_100_000,
+              provisioningId: "provisioning-a-1",
+              provisioningStatus: "pending",
+            },
+          })}
+          onSelectSubmission={() => undefined}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("Undo acceptance");
+
+    await act(async () => {
+      root.render(
+        <ReviewWorkbenchContent
+          workbench={workbenchFor("submission-a", "Proposal A", {
+            status: "submitted",
+            version: 5,
+            acceptance: null,
+          })}
           onSelectSubmission={() => undefined}
         />,
       );
     });
     await act(async () => buttonNamed("Accept & provision primary speaker").click());
     await vi.waitFor(() => expect(mutationMocks.acceptSubmissionRequest).toHaveBeenCalledTimes(3));
-
+    const reacceptKey = mutationMocks.acceptSubmissionRequest.mock.calls[2]?.[0].idempotencyKey;
     expect(mutationMocks.acceptSubmissionRequest.mock.calls[2]?.[0]).toMatchObject({
-      submissionId: "submission-b",
+      submissionId: "submission-a",
+      expectedVersion: 5,
     });
-    expect(mutationMocks.acceptSubmissionRequest.mock.calls[2]?.[0].idempotencyKey).not.toBe(proposalAKey);
+    expect(reacceptKey).not.toBe(proposalAKey);
+
+    await act(async () => {
+      root.render(
+        <ReviewWorkbenchContent
+          workbench={workbenchFor("submission-b", "Proposal B", {
+            status: "submitted",
+            version: 5,
+            acceptance: null,
+          })}
+          onSelectSubmission={() => undefined}
+        />,
+      );
+    });
+    await act(async () => buttonNamed("Accept & provision primary speaker").click());
+    await vi.waitFor(() => expect(mutationMocks.acceptSubmissionRequest).toHaveBeenCalledTimes(4));
+    expect(mutationMocks.acceptSubmissionRequest.mock.calls[3]?.[0]).toMatchObject({
+      submissionId: "submission-b",
+      expectedVersion: 5,
+    });
+    expect(mutationMocks.acceptSubmissionRequest.mock.calls[3]?.[0].idempotencyKey).not.toBe(reacceptKey);
   });
 });

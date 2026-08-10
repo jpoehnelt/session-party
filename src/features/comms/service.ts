@@ -959,6 +959,11 @@ export const enqueueCommunication = (
       eq(emailTemplates.id, input.templateId),
     )).limit(1));
     if (!template) return yield* Effect.fail(new NotFound({ entity: "communicationTemplate", id: input.templateId }));
+    if (template.version !== input.expectedTemplateVersion) {
+      return yield* Effect.fail(new Conflict({
+        message: `Template version is ${template.version}; expected ${input.expectedTemplateVersion}`,
+      }));
+    }
     const templateContent = decodeTemplateContent(template.body);
     const normalizedTemplate = yield* validateTemplate(
       template.name,

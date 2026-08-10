@@ -137,6 +137,7 @@ describe("rendered campaign confirmation lifecycle", () => {
     );
     await vi.waitFor(() => expect(enqueueCalls()).toHaveLength(1));
     const firstRequest = enqueueCalls()[0]?.[1].body;
+    expect(firstRequest).toMatchObject({ expectedTemplateVersion: 3 });
 
     await vi.waitFor(() => expect(buttonNamed("Queue immutable deliveries").disabled).toBe(false));
 

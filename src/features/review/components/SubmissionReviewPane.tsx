@@ -48,20 +48,29 @@ const statusLabel = {
 const operationRequestId = (operation: string) => `${operation}-${crypto.randomUUID()}`;
 
 export interface SubmissionDecisionKeys {
-  readonly submissionId: string;
+  readonly lifecycleIdentity: string;
   readonly acceptance: string;
   readonly rejection: string;
   readonly revocation: string;
 }
 
+export const submissionDecisionLifecycleIdentity = (
+  submission: Pick<SubmissionReviewDetail, "id" | "version" | "status" | "acceptance">,
+): string => JSON.stringify([
+  submission.id,
+  submission.version,
+  submission.status,
+  submission.acceptance?.acceptanceEventId ?? null,
+]);
+
 export const decisionKeysForSubmission = (
-  submissionId: string,
+  lifecycleIdentity: string,
   current?: SubmissionDecisionKeys,
 ): SubmissionDecisionKeys =>
-  current?.submissionId === submissionId
+  current?.lifecycleIdentity === lifecycleIdentity
     ? current
     : {
-        submissionId,
+        lifecycleIdentity,
         acceptance: `review-accept-${crypto.randomUUID()}`,
         rejection: `review-reject-${crypto.randomUUID()}`,
         revocation: `review-revoke-${crypto.randomUUID()}`,
@@ -147,7 +156,10 @@ export function SubmissionReviewPane({
   const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject">();
   const [mutationError, setMutationError] = useState<string>();
   const decisionKeysRef = useRef<SubmissionDecisionKeys | undefined>(undefined);
-  const decisionKeys = decisionKeysForSubmission(submission.id, decisionKeysRef.current);
+  const decisionKeys = decisionKeysForSubmission(
+    submissionDecisionLifecycleIdentity(submission),
+    decisionKeysRef.current,
+  );
   decisionKeysRef.current = decisionKeys;
   const commentKey = useRef(`review-comment-${crypto.randomUUID()}`);
 

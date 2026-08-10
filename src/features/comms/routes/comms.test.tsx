@@ -10,6 +10,7 @@ import {
 } from "./comms";
 const baseRequest = {
   templateId: "template-1",
+  expectedTemplateVersion: 3,
   recipientSpeakerIds: ["speaker-1"],
   replyToEmail: "team@example.com",
   idempotencyKey: "comms-enqueue-schedule-001",
@@ -92,13 +93,14 @@ describe("communications scheduling control", () => {
     )).toThrow("does not exist in America/Los_Angeles because of a timezone transition.");
   });
 
-  it("single-flights double activation and reuses the confirmed campaign key after an ambiguous failure", async () => {
+  it("single-flights activation, keeps an ambiguous retry key, and rotates the key after success", async () => {
     const createKey = vi.fn()
       .mockReturnValueOnce("enqueue-key-1")
       .mockReturnValueOnce("enqueue-key-2");
     const coordinator = createCampaignEnqueueCoordinator(createKey);
     const request = buildEnqueueRequest({
       templateId: "template-1",
+      expectedTemplateVersion: 3,
       recipientSpeakerIds: ["speaker-1"],
       replyToEmail: "team@example.com",
     }, "now", "", "America/Los_Angeles");
@@ -124,6 +126,17 @@ describe("communications scheduling control", () => {
     expect(submit).toHaveBeenCalledTimes(2);
     expect(submit.mock.calls[1]?.[0]).toEqual(submit.mock.calls[0]?.[0]);
     expect(createKey).toHaveBeenCalledTimes(1);
+
+    await coordinator.run(campaignIdentity(), request, submit);
+    expect(submit).toHaveBeenCalledTimes(3);
+    expect(submit.mock.calls[2]?.[0]).toMatchObject({
+      ...request,
+      idempotencyKey: "enqueue-key-2",
+    });
+    expect(submit.mock.calls[2]?.[0].idempotencyKey).not.toBe(
+      submit.mock.calls[1]?.[0].idempotencyKey,
+    );
+    expect(createKey).toHaveBeenCalledTimes(2);
   });
 
   it("treats recipient order as one confirmation and campaign changes as new confirmation identities", () => {

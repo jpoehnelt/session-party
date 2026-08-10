@@ -155,7 +155,7 @@ export const enqueueCommunicationOperation = {
     path: "/events/:eventId/comms/deliveries",
     input: {
       path: ["eventId"],
-      body: ["templateId", "recipientSpeakerIds", "replyToEmail", "scheduledFor", "idempotencyKey"],
+      body: ["templateId", "expectedTemplateVersion", "recipientSpeakerIds", "replyToEmail", "scheduledFor", "idempotencyKey"],
     },
     summary: "Durably enqueue immutable communication deliveries",
     description: "Persists immutable delivery snapshots and outbox rows, then requests canonical Scheduler dispatch.",

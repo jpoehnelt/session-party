@@ -179,6 +179,7 @@ export type ListDeliveriesInput = typeof ListDeliveriesInput.Type;
 export const EnqueueCommunicationInput = Schema.Struct({
   eventId: EntityId,
   templateId: EntityId,
+  expectedTemplateVersion: ExpectedVersion,
   recipientSpeakerIds: Schema.NonEmptyArray(EntityId),
   replyToEmail: NullableMailbox,
   scheduledFor: Schema.Union(UnixTimestampMs, Schema.Null),
