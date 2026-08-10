@@ -55,4 +55,36 @@ describe("apiFetch", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("passes abort signals through and keeps cancellable GET requests independent", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      () => Promise.resolve(new Response(JSON.stringify({ id: "event-a" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+
+    await Promise.all([
+      apiFetch("/api/v1/events/event-a", { signal: firstController.signal }),
+      apiFetch("/api/v1/events/event-a", { signal: secondController.signal }),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]![1]).toEqual(expect.objectContaining({ signal: firstController.signal }));
+    expect(fetchMock.mock.calls[1]![1]).toEqual(expect.objectContaining({ signal: secondController.signal }));
+  });
+
+  it("surfaces request cancellation as an abort instead of an API failure", async () => {
+    const fetchMock = vi.fn().mockImplementation((_path: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const request = apiFetch("/api/v1/events/event-a", { signal: controller.signal });
+    controller.abort();
+
+    await expect(request).rejects.toEqual(expect.objectContaining({ name: "AbortError" }));
+  });
 });

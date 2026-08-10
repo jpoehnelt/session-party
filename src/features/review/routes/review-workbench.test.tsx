@@ -7,9 +7,12 @@ import {
   decideQueueInteraction,
   loadReviewWorkbench,
   path,
+  reviewSelectionSearch,
   ReviewLoadFailure,
   ReviewWorkbenchContent,
+  selectCachedReviewDetail,
   selectVisibleFallback,
+  shouldApplyReviewRefresh,
 } from "./review-workbench";
 
 
@@ -114,6 +117,47 @@ describe("review workbench route", () => {
     expect(selectVisibleFallback("submission_fallback", undefined, visibleSubmissionIds)).toBeUndefined();
   });
 
+  it("keeps selection URLs shareable without discarding other query state", () => {
+    expect(reviewSelectionSearch("?status=submitted", "submission_other")).toBe(
+      "?status=submitted&selectedSubmissionId=submission_other",
+    );
+    expect(reviewSelectionSearch("?selectedSubmissionId=old&status=accepted", "submission_new")).toBe(
+      "?selectedSubmissionId=submission_new&status=accepted",
+    );
+  });
+
+  it("applies cached detail against the latest queue summary", () => {
+    const cached = {
+      ...workbench.selected!,
+      title: "Cached title",
+      abstract: "Cached authoritative abstract",
+      version: 2,
+    };
+    const latest: ReviewWorkbench = {
+      ...workbench,
+      queue: workbench.queue.map((submission) => ({
+        ...submission,
+        title: "Latest queue title",
+        version: 4,
+        status: "in_review" as const,
+      })),
+    };
+
+    const selected = selectCachedReviewDetail(latest, cached).selected;
+    expect(selected).toMatchObject({
+      id: cached.id,
+      title: "Latest queue title",
+      abstract: "Cached authoritative abstract",
+      version: 4,
+      status: "in_review",
+    });
+  });
+
+  it("rejects a mutation refresh after selection moves to another proposal", () => {
+    expect(shouldApplyReviewRefresh("submission_authoritative", "submission_authoritative")).toBe(true);
+    expect(shouldApplyReviewRefresh("submission_other", "submission_authoritative")).toBe(false);
+  });
+
 
   it("keeps the queue and filters mounted while selected detail reloads", () => {
     const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
@@ -176,6 +220,28 @@ describe("review workbench route", () => {
     expect(markup).toContain("Accept &amp; provision primary speaker");
     expect(markup).toContain("No email is sent");
     expect(markup).toContain("Save my review");
+  });
+
+  it("reuses known event identity for cancellable proposal detail loads", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(workbench)));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await loadReviewWorkbench("summit-2026", "submission_authoritative", {
+      event: {
+        id: "event_summit",
+        name: "Summit 2026",
+        slug: "summit-2026",
+        timezone: "America/Los_Angeles",
+      },
+      signal: controller.signal,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/events/event_summit/review?selectedSubmissionId=submission_authoritative",
+      expect.objectContaining({ method: "GET", signal: controller.signal }),
+    );
   });
 
   it("offers organizers a plain-language undo action without exposing acceptance IDs", () => {

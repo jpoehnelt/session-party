@@ -13,7 +13,9 @@ import FormsPage, {
   FormsWorkspace,
   path,
   publishFormDraft,
+  selectedFormForRender,
   setFormLifecycle,
+  shouldApplyReturnedForm,
   type EventIdentity,
   updateFormDraft,
 } from "./forms";
@@ -241,6 +243,29 @@ describe("forms organizer route", () => {
     expect(markup).not.toContain("[&amp;&gt;header]:bg-[#caff4a]");
     expect(markup).not.toContain("[&amp;&gt;header]:bg-[#8fdcff]");
     expect(markup).not.toContain("[&amp;&gt;header]:bg-[#ff714f]");
+  });
+
+  it("never renders detail whose identity differs from the selected form", () => {
+    expect(selectedFormForRender("form_other", formDetail)).toBeUndefined();
+    expect(selectedFormForRender(formDetail.id, formDetail)).toBe(formDetail);
+
+    const markup = renderToStaticMarkup(
+      createElement(FormsWorkspace, {
+        event,
+        initialSummaries: [formSummary, { ...formSummary, id: "form_other", name: "Speaker logistics" }],
+        initialSelectedId: "form_other",
+        initialSelectedForm: formDetail,
+      }),
+    );
+    expect(markup).toContain("Speaker logistics");
+    expect(markup).not.toContain("Best-fit track");
+    expect(markup).not.toContain("Save draft");
+  });
+
+  it("does not let an older form mutation steal a newer selection", () => {
+    expect(shouldApplyReturnedForm(formDetail.id, formDetail.id)).toBe(true);
+    expect(shouldApplyReturnedForm("form_other", formDetail.id)).toBe(false);
+    expect(shouldApplyReturnedForm("form_other", formDetail.id, true)).toBe(true);
   });
 
   it("shows presence only for people viewing the selected form", () => {

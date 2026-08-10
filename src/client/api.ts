@@ -15,21 +15,24 @@ export interface ApiFetchOptions<T> {
   method?: string;
   body?: unknown;
   schema?: Schema.Schema<T, any, never>;
+  signal?: AbortSignal;
 }
 
 const pendingGetRequests = new Map<string, Promise<unknown>>();
 
 export async function apiFetch<T>(
   path: string,
-  { method = "GET", body, schema }: ApiFetchOptions<T> = {},
+  { method = "GET", body, schema, signal }: ApiFetchOptions<T> = {},
 ): Promise<T> {
   const normalizedMethod = method.toUpperCase();
   const requestKey =
-    normalizedMethod === "GET" ? `${path}\n${body === undefined ? "" : JSON.stringify(body)}` : undefined;
+    normalizedMethod === "GET" && signal === undefined
+      ? `${path}\n${body === undefined ? "" : JSON.stringify(body)}`
+      : undefined;
   let request = requestKey ? pendingGetRequests.get(requestKey) : undefined;
 
   if (!request) {
-    request = fetchPayload(path, method, body);
+    request = fetchPayload(path, method, body, signal);
     if (requestKey) {
       pendingGetRequests.set(requestKey, request);
       void request.then(
@@ -43,9 +46,10 @@ export async function apiFetch<T>(
   return schema ? Schema.decodeUnknownSync(schema)(payload) : (payload as T);
 }
 
-async function fetchPayload(path: string, method: string, body: unknown): Promise<unknown> {
+async function fetchPayload(path: string, method: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
   const response = await fetch(path, {
     method,
+    signal,
     credentials: "include",
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
