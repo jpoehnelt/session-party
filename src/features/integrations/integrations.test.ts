@@ -1,18 +1,19 @@
-import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import { applyD1Migrations, env, runInDurableObject, type D1Migration } from "cloudflare:test";
 import type { AppError } from "contracts/errors";
 import type {
   ApiScope,
   BrowserSessionPrincipal,
   EventApiKeyPrincipal,
 } from "contracts/principal";
-import { apiKeys, auditLog, domainChanges, eventMembers, events, integrations, users } from "contracts/schema";
+import { airtableRefreshState, apiKeys, auditLog, domainChanges, eventMembers, events, integrations, users } from "contracts/schema";
 import type { AcceleventsImportRun, AirtableConfig } from "contracts/types";
 import { drizzle } from "drizzle-orm/d1";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   type AcceleventsImports,
+  type AirtableSync,
   type Authorizer,
   type CurrentUser,
   AppLayer,
@@ -21,8 +22,11 @@ import {
 } from "@/server/services";
 import {
   configureAcceleventsOperation,
+  configureAirtableOperation,
   getAcceleventsConfigurationOperation,
   getAcceleventsImportStatusOperation,
+  getAirtableSyncStatusOperation,
+  requestAirtableRefreshOperation,
   runAcceleventsImportOperation,
 } from "./operations";
 import {
@@ -31,9 +35,12 @@ import {
 } from "./presentation";
 import {
   configureAccelevents,
+  configureAirtable,
   getAcceleventsConfiguration,
   getAcceleventsImportStatus,
+  getAirtableSyncStatus,
   listIntegrationConfigurations,
+  requestAirtableRefresh,
   runAcceleventsImport,
 } from "./service";
 
@@ -77,7 +84,7 @@ const admin = browserPrincipal("integrations-admin", "Admin");
 const reviewer = browserPrincipal("integrations-reviewer", "Reviewer");
 const outsider = browserPrincipal("integrations-outsider", "Outsider");
 
-type Requirements = AcceleventsImports | Authorizer | CurrentUser | Db;
+type Requirements = AcceleventsImports | AirtableSync | Authorizer | CurrentUser | Db;
 
 const runEitherAs = <A>(
   principal: BrowserSessionPrincipal | EventApiKeyPrincipal,
@@ -363,6 +370,100 @@ describe("Accelevents configuration service", () => {
   });
 });
 
+describe("Airtable synchronization administration", () => {
+  it("reports server-observed fake capability and durable queue state", async () => {
+    const status = await runAs(owner, getAirtableSyncStatus(targetEventSlug));
+    expect(status).toMatchObject({
+      configured: true,
+      configuration: { config: airtableConfiguration, version: 1 },
+      capability: { mode: "fake", state: "ready", reason: null },
+      counts: { pending: 0, retrying: 0, blocked: 0, deadLetters: 0, pendingEdits: 0, conflicts: 0 },
+    });
+    await expectFailure(reviewer, getAirtableSyncStatus(targetEventId), "Forbidden");
+  });
+
+  it("creates a versioned non-secret mapping with replay and wakes the lane", async () => {
+    const configured: AirtableConfig = {
+      ...airtableConfiguration,
+      baseId: "appOtherAirtableConfig",
+      origin: "integration-test",
+    };
+    const input = {
+      idOrSlug: otherEventId,
+      config: configured,
+      expectedVersion: 0,
+      idempotencyKey: "configure-airtable-idempotency",
+    };
+    const first = await runAs(owner, configureAirtable(input));
+    expect(first).toMatchObject({
+      configuration: { config: configured, version: 1 },
+      replayed: false,
+    });
+    await expect(runAs(owner, configureAirtable(input))).resolves.toEqual({ ...first, replayed: true });
+    await expectFailure(owner, configureAirtable({
+      ...input,
+      idempotencyKey: "configure-airtable-stale",
+    }), "Conflict");
+    const [stored] = await drizzle(env.DB).select().from(integrations).where(and(
+      eq(integrations.eventId, otherEventId),
+      eq(integrations.kind, "airtable"),
+    ));
+    expect(stored).toMatchObject({ secretRef: "AIRTABLE_PAT", config: configured, version: 1 });
+    expect(JSON.stringify(first)).not.toContain("AIRTABLE_PAT");
+    const stub = env.AIRTABLE_SYNC.get(env.AIRTABLE_SYNC.idFromName(configured.baseId));
+    const alarm = await runInDurableObject(stub, async (_instance, state) => state.storage.getAlarm());
+    expect(alarm).not.toBeNull();
+  });
+
+  it("rejects incomplete physical mappings before persisting configuration", async () => {
+    await expectFailure(owner, configureAirtable({
+      idOrSlug: otherEventId,
+      config: {
+        ...airtableConfiguration,
+        baseId: "",
+      },
+      expectedVersion: 1,
+      idempotencyKey: "configure-airtable-empty-base",
+    }), "Validation");
+    await expectFailure(owner, configureAirtable({
+      idOrSlug: otherEventId,
+      config: {
+        ...airtableConfiguration,
+        baseId: "appAnotherMapping",
+        tables: {
+          ...airtableConfiguration.tables,
+          speakers: {
+            ...airtableConfiguration.tables.speakers,
+            fields: {
+              ...airtableConfiguration.tables.speakers.fields,
+              bio: "",
+            },
+          },
+        },
+      },
+      expectedVersion: 1,
+      idempotencyKey: "configure-airtable-empty-field",
+    }), "Validation");
+  });
+
+  it("coalesces page-load refresh requests for all entity tables", async () => {
+    const result = await runAs(owner, requestAirtableRefresh({
+      idOrSlug: targetEventId,
+      entityTypes: ["speaker", "submission", "talk", "speaker"],
+    }));
+    expect(result.entityTypes).toEqual(["speaker", "submission", "talk"]);
+    await runAs(owner, requestAirtableRefresh({
+      idOrSlug: targetEventId,
+      entityTypes: ["speaker", "submission", "talk"],
+    }));
+    const rows = await drizzle(env.DB).select().from(airtableRefreshState).where(
+      eq(airtableRefreshState.integrationId, "integration-airtable-target"),
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.status === "requested")).toBe(true);
+  });
+});
+
 describe("Accelevents transport and route contracts", () => {
   it("exposes status and idempotent import through REST and MCP metadata", () => {
     expect(getAcceleventsImportStatusOperation.rest).toMatchObject({
@@ -388,6 +489,14 @@ describe("Accelevents transport and route contracts", () => {
     expect(configureAcceleventsOperation.mcp.name).toBe("configure_accelevents");
     expect(configureAcceleventsOperation.concurrency).toBe("required");
     expect(getAcceleventsConfigurationOperation.mcp.name).toBe("get_accelevents_configuration");
+    expect(getAirtableSyncStatusOperation.rest.path).toBe("/events/:idOrSlug/integrations/airtable/status");
+    expect(getAirtableSyncStatusOperation.mcp.name).toBe("get_airtable_sync_status");
+    expect(configureAirtableOperation.rest.method).toBe("put");
+    expect(configureAirtableOperation.concurrency).toBe("required");
+    expect(requestAirtableRefreshOperation.rest).toMatchObject({
+      method: "post",
+      path: "/events/:idOrSlug/integrations/airtable/refreshes",
+    });
   });
 
   it("labels only server-reported ready modes as live or fixture", () => {

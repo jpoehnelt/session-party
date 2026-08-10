@@ -1,6 +1,7 @@
 import { env, applyD1Migrations, type D1Migration } from "cloudflare:test";
 import type { AppError } from "contracts/errors";
 import type { BrowserSessionPrincipal } from "contracts/principal";
+import type { ServerMessage } from "contracts/protocol";
 import {
   airtableOutbox,
   airtablePendingEdits,
@@ -22,13 +23,14 @@ import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  type AirtableSync,
   type Authorizer,
   AppLayer,
   type CurrentUser,
   CurrentUser as CurrentUserTag,
   type Db,
   type Files,
-  type Rooms,
+  Rooms,
 } from "@/server/services";
 import { operations } from "./operations";
 import {
@@ -52,7 +54,7 @@ import {
 } from "./service";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
-type PortalRequirements = Authorizer | CurrentUser | Db | Files | Rooms;
+type PortalRequirements = AirtableSync | Authorizer | CurrentUser | Db | Files | Rooms;
 
 const expiresAt = Date.UTC(2100, 0, 1);
 const principal = (userId: string): BrowserSessionPrincipal => ({
@@ -89,6 +91,17 @@ const runAs = async <A>(
   }
   return result.right;
 };
+
+const runAsRecording = <A>(
+  user: BrowserSessionPrincipal,
+  effect: Effect.Effect<A, AppError, PortalRequirements>,
+  messages: ServerMessage[],
+) => Effect.runPromise(effect.pipe(
+  Effect.provide(Layer.succeed(Rooms, {
+    broadcast: (_eventId, message) => Effect.sync(() => { messages.push(message); }),
+  })),
+  Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUserTag, user))),
+));
 
 const expectFailure = async (
   user: BrowserSessionPrincipal,
@@ -750,7 +763,8 @@ describe("portal service", () => {
       bio: "A durable speaker biography.",
       links: [{ label: "Website", url: "https://speaker.example.com" }],
     } as const;
-    const updated = await runAs(speakerUser, updateSpeakerProfile(profileInput));
+    const syncMessages: ServerMessage[] = [];
+    const updated = await runAsRecording(speakerUser, updateSpeakerProfile(profileInput), syncMessages);
     const replay = await runAs(speakerUser, updateSpeakerProfile(profileInput));
     expect(replay).toEqual(updated);
     expect(updated.pendingSyncFields).toEqual(["title", "bio"]);
@@ -763,6 +777,13 @@ describe("portal service", () => {
     });
     expect((await db.select().from(airtablePendingEdits).where(eq(airtablePendingEdits.entityId, setup.speakerId))).map(({ fieldKey }) => fieldKey).sort()).toEqual(["bio", "title"]);
     expect(await db.select().from(airtableOutbox).where(eq(airtableOutbox.entityId, setup.speakerId))).toHaveLength(2);
+    expect(syncMessages).toEqual([{
+      t: "integrations/airtable_sync",
+      entityType: "speaker",
+      entityId: setup.speakerId,
+      state: "pending",
+      fields: ["title", "bio"],
+    }]);
 
     const completedProfile = await runAs(speakerUser, setTaskCompletion({
       eventId: setup.eventId,
@@ -852,6 +873,18 @@ describe("portal service", () => {
 
   it("publishes only visible accepted provisioned public speaker fields", async () => {
     const setup = await fixture();
+    const db = drizzle(env.DB);
+    const integrationId = `airtable-publication-${setup.eventId}`;
+    const integrationNow = new Date();
+    await db.insert(integrations).values({
+      id: integrationId,
+      eventId: setup.eventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: integrationNow,
+      updatedAt: integrationNow,
+    });
     await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
     const gallery = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
     expect(gallery.event).toEqual({
@@ -876,6 +909,14 @@ describe("portal service", () => {
       links: [],
     }]);
     await runAs(owner, updateSpeakerPublication({ eventId: setup.eventId, speakerId: setup.speakerId, expectedVersion: 1, visible: false }));
+    await expect(db.select().from(airtableOutbox).where(eq(airtableOutbox.integrationId, integrationId)))
+      .resolves.toEqual([expect.objectContaining({
+        entityType: "speaker",
+        entityId: setup.speakerId,
+        changedFields: { visible: false },
+        outboundRevision: 1,
+        status: "pending",
+      })]);
     const hidden = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
     expect(hidden.speakers).toEqual([]);
   });

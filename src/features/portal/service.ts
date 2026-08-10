@@ -26,7 +26,8 @@ import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import type { BatchItem } from "drizzle-orm/batch";
 import { nanoid } from "nanoid";
-import { Authorizer, CurrentUser, Db, Files, Rooms } from "@/server/services";
+import { AirtableSync, Authorizer, CurrentUser, Db, Files, Rooms } from "@/server/services";
+import { prepareAirtableProjection } from "@/server/sync/airtable-outbox";
 import {
   PortalTask as PortalTaskSchema,
   SpeakerContact as SpeakerContactSchema,
@@ -1364,7 +1365,7 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
   };
 });
 
-export const updateSpeakerProfile = (input: UpdateProfileInput): Effect.Effect<SpeakerProfile, AppError, Db | CurrentUser> => Effect.gen(function* () {
+export const updateSpeakerProfile = (input: UpdateProfileInput): Effect.Effect<SpeakerProfile, AppError, AirtableSync | Db | CurrentUser | Rooms> => Effect.gen(function* () {
   const event = yield* resolveEvent(input.eventId);
   const { speaker, actor } = yield* selfSpeaker(event.id);
   const { db } = yield* Db;
@@ -1461,7 +1462,7 @@ export const updateSpeakerProfile = (input: UpdateProfileInput): Effect.Effect<S
       outboundRevision += 1;
       const pendingEditId = id("airtable_pending");
       const changedFields: Record<string, unknown> = { [field]: input[field] };
-      const outboundHash = yield* sha256(JSON.stringify(changedFields));
+      const outboundHash = yield* sha256(JSON.stringify({ visible: speaker.visible }));
       pending.set(field, input[field]);
       syncStatements.push(
         db.insert(airtablePendingEdits).values({
@@ -1617,6 +1618,18 @@ export const updateSpeakerProfile = (input: UpdateProfileInput): Effect.Effect<S
         ),
     ),
   );
+  if (airtableIntegration && changedSyncFields.length > 0) {
+    const { broadcast } = yield* Rooms;
+    yield* broadcast(event.id, {
+      t: "integrations/airtable_sync",
+      entityType: "speaker",
+      entityId: speaker.id,
+      state: "pending",
+      fields: changedSyncFields,
+    }).pipe(Effect.catchAll(() => Effect.void));
+    const sync = yield* AirtableSync;
+    yield* sync.wakeEvent(event.id);
+  }
   return result;
 });
 
@@ -2523,7 +2536,18 @@ export const updateSpeakerPublication = (input: UpdateSpeakerPublicationInput): 
     actor,
     updatedAt,
   );
-  const [, , updatedRows] = yield* database(() => db.batch([
+  const airtableProjection = yield* database(() => prepareAirtableProjection(db, {
+    eventId: input.eventId,
+    entityType: "speaker",
+    entityId: input.speakerId,
+    entityVersion: version,
+    changedFields: { visible: input.visible },
+    d1Projection: { visible: input.visible },
+    origin: "portal.updateSpeakerPublication",
+    idempotencyKey: `portal.updateSpeakerPublication:${input.speakerId}:${version}`,
+    now: updatedAt,
+  }));
+  const results = yield* database(() => db.batch([
     db.insert(domainChanges).select(
       db.select(changeSelection(versionClaim)).from(speakers).where(guard),
     ),
@@ -2534,7 +2558,9 @@ export const updateSpeakerPublication = (input: UpdateSpeakerPublicationInput): 
       .set({ visible: input.visible, version, updatedAt })
       .where(guard)
       .returning(),
-  ]));
+    ...(airtableProjection ? [airtableProjection.statement] : []),
+  ] as never));
+  const updatedRows = results[2] as (typeof speakers.$inferSelect)[];
   const updated = updatedRows[0];
   if (!updated) {
     return yield* Effect.fail(

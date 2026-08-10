@@ -21,7 +21,11 @@ import type { AnswerValue } from "contracts/types";
 import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
-import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import { AirtableSync, Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import {
+  prepareAirtableProjection,
+  prepareAirtableSubmissionProjection,
+} from "@/server/sync/airtable-outbox";
 import { ConditionalLogic, FormFieldType, Routing } from "@/features/forms/schema";
 import { PublicSubmissionAbuse, PublicSubmissionRequest, normalizePublicEmail } from "./abuse";
 import {
@@ -518,7 +522,7 @@ export interface SubmitCommandTestHooks {
 export const createPublicSubmission = (
   input: CreatePublicSubmissionInput,
   testHooks?: SubmitCommandTestHooks,
-): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, Db | Rooms | PublicSubmissionAbuse | PublicSubmissionRequest> =>
+): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, AirtableSync | Db | Rooms | PublicSubmissionAbuse | PublicSubmissionRequest> =>
   Effect.gen(function* () {
     const loaded = yield* loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId);
     if (loaded.formKind !== "cfp") {
@@ -569,6 +573,41 @@ export const createPublicSubmission = (
     const versionId = loaded.publicForm.form.versionId;
     const nowMs = now.getTime();
     const commitNowMs = sql<Date>`CAST(unixepoch('subsec') * 1000 AS INTEGER)`;
+    const abstract = validated.answers.find(({ field }) => field.semanticKey === "submissionAbstract")?.value ?? "";
+    const airtableSubmission = yield* database(() => prepareAirtableSubmissionProjection(db, {
+      eventId: loaded.eventId,
+      submission: {
+        id: submissionId,
+        title: validated.title,
+        abstract,
+        category: validated.category,
+        status: "submitted",
+        submittedAt: now,
+        version: 1,
+      },
+      changedKeys: [],
+      bootstrap: true,
+      origin: "submit.create",
+      idempotencyKey: `submit.create:${idempotencyId}:submission`,
+      now,
+    }));
+    const airtableSpeaker = yield* database(() => prepareAirtableProjection(db, {
+      eventId: loaded.eventId,
+      entityType: "speaker",
+      entityId: speakerId,
+      entityVersion: 1,
+      changedFields: {
+        displayName: validated.speakerName,
+        title: null,
+        company: null,
+        bio: null,
+        visible: true,
+      },
+      d1Projection: { visible: true },
+      origin: "submit.create",
+      idempotencyKey: `submit.create:${idempotencyId}:speaker`,
+      now,
+    }));
     /**
      * The reservation re-evaluates published availability inside the commit, so a
      * concurrent close or retirement between the read and the write yields zero rows.
@@ -794,6 +833,8 @@ export const createPublicSubmission = (
           .from(submissions)
           .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
       ),
+      ...(airtableSpeaker ? [airtableSpeaker.statement] : []),
+      ...(airtableSubmission ? [airtableSubmission.statement] : []),
     ];
 
     if (testHooks?.beforeCommit) {
@@ -836,6 +877,8 @@ export const createPublicSubmission = (
       submissionId,
       title: validated.title,
     }).pipe(Effect.catchAll(() => Effect.void));
+    const airtableSync = yield* AirtableSync;
+    yield* airtableSync.wakeEvent(loaded.eventId);
     return output;
   });
 
@@ -911,7 +954,7 @@ const loadProvisionedSpeaker = (eventId: string) =>
 export const createTaskSubmission = (
   input: CreateTaskSubmissionInput,
   testHooks?: SubmitCommandTestHooks,
-): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, CurrentUser | Db | Rooms> =>
+): Effect.Effect<typeof CreatePublicSubmissionOutput.Type, AppError, AirtableSync | CurrentUser | Db | Rooms> =>
   Effect.gen(function* () {
     const actor = yield* loadProvisionedSpeaker(input.eventId);
     const loaded = yield* loadPublishedForm({ kind: "id", value: input.eventId }, input.formId);
@@ -948,6 +991,24 @@ export const createTaskSubmission = (
     const nowMs = now.getTime();
     const commitNowMs = sql<Date>`CAST(unixepoch('subsec') * 1000 AS INTEGER)`;
     /** Re-check immutable publication, availability, speaker identity, and provisioning inside the atomic batch. */
+    const taskAbstract = validated.answers.find(({ field }) => field.semanticKey === "submissionAbstract")?.value ?? "";
+    const airtableSubmission = yield* database(() => prepareAirtableSubmissionProjection(db, {
+      eventId: loaded.eventId,
+      submission: {
+        id: submissionId,
+        title: validated.title,
+        abstract: taskAbstract,
+        category: null,
+        status: "submitted",
+        submittedAt: now,
+        version: 1,
+      },
+      changedKeys: [],
+      bootstrap: true,
+      origin: "submit.createTask",
+      idempotencyKey: `submit.createTask:${idempotencyId}:submission`,
+      now,
+    }));
     const reserveSubmission = db.insert(submissions).select(
       db
         .select({
@@ -1131,6 +1192,7 @@ export const createTaskSubmission = (
           .from(submissions)
           .where(and(eq(submissions.eventId, loaded.eventId), eq(submissions.id, submissionId))),
       ),
+      ...(airtableSubmission ? [airtableSubmission.statement] : []),
     ];
 
     if (testHooks?.beforeCommit) yield* Effect.promise(testHooks.beforeCommit);
@@ -1174,6 +1236,8 @@ export const createTaskSubmission = (
       submissionId,
       title: validated.title,
     }).pipe(Effect.catchAll(() => Effect.void));
+    const airtableSync = yield* AirtableSync;
+    yield* airtableSync.wakeEvent(loaded.eventId);
     return output;
   });
 

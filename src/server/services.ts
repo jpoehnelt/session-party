@@ -19,6 +19,7 @@ import {
   type AcceleventsImportsService,
   type SecretResolverService,
 } from "./accelevents";
+import { decodeAirtableConfig } from "./sync/airtable-mapping";
 import {
   localTestPublicSubmissionAbuse,
   PublicSubmissionAbuse,
@@ -62,6 +63,16 @@ export class AcceleventsAdapter extends Context.Tag("session-party/AcceleventsAd
 export class AcceleventsImports extends Context.Tag("session-party/AcceleventsImports")<
   AcceleventsImports,
   AcceleventsImportsService
+>() {}
+
+export class AirtableSync extends Context.Tag("session-party/AirtableSync")<
+  AirtableSync,
+  {
+    readonly mode: "fake" | "live";
+    readonly available: boolean;
+    readonly wake: (baseId: string) => Effect.Effect<void>;
+    readonly wakeEvent: (eventId: string) => Effect.Effect<void>;
+  }
 >() {}
 
 export class Mail extends Context.Tag("session-party/Mail")<
@@ -126,6 +137,7 @@ type SecretBindings = {
   readonly PREVIEW_MODE?: string;
   readonly SESSION_SECRET?: string;
   readonly ACCELEVENTS_API_TOKEN?: string;
+  readonly AIRTABLE_PAT?: string;
   readonly TURNSTILE_SECRET?: string;
 };
 
@@ -152,6 +164,32 @@ export const isExplicitPreviewEnvironment = (env: object): boolean =>
 
 const usesFakeExternalServices = (env: object): boolean =>
   isExplicitLocalEnvironment(env) || isExplicitPreviewEnvironment(env);
+
+export const wakeAirtableBase = async (env: Env, baseId: string): Promise<void> => {
+  const id = env.AIRTABLE_SYNC.idFromName(baseId);
+  const response = await env.AIRTABLE_SYNC.get(id).fetch("https://airtable-sync/poke", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-session-party-internal": sessionSecret(env),
+    },
+    body: JSON.stringify({ baseId }),
+  });
+  if (!response.ok) throw new Error(`Airtable sync lane returned ${response.status}`);
+};
+
+export const wakeAirtableForEvent = async (env: Env, eventId: string): Promise<void> => {
+  const db = drizzle(env.DB, { schema });
+  const rows = await db
+    .select({ config: schema.integrations.config })
+    .from(schema.integrations)
+    .where(and(eq(schema.integrations.eventId, eventId), eq(schema.integrations.kind, "airtable")));
+  const baseIds = [...new Set(rows.flatMap((row) => {
+    const config = decodeAirtableConfig(row.config);
+    return config ? [config.baseId] : [];
+  }))];
+  await Promise.all(baseIds.map((baseId) => wakeAirtableBase(env, baseId)));
+};
 
 export const sessionSecret = (env: Env & SecretBindings): string => {
   if (isExplicitLocalEnvironment(env)) return LOCAL_SESSION_SECRET;
@@ -391,7 +429,9 @@ export const sendMail = async (
     };
   }
 
-  const result = await env.EMAIL.send({
+  const email = env.EMAIL;
+  if (!email) throw new Error("Missing required production binding: EMAIL");
+  const result = await email.send({
     from: payload.fromEmail,
     replyTo: payload.replyToEmail,
     to: payload.to,
@@ -512,12 +552,32 @@ export const AppLayer = (env: Env) => {
     fixtureAdapter: fixtureAcceleventsAdapter,
     secrets,
   });
+  const airtableMode = isExplicitLocalEnvironment(env) ? "fake" as const : "live" as const;
+  const airtableAvailable = airtableMode === "fake" || optionalSecret(env, "AIRTABLE_PAT") !== undefined;
 
   return Layer.mergeAll(
     Layer.succeed(Db, { db }),
     Layer.succeed(SecretResolver, secrets),
     Layer.succeed(AcceleventsAdapter, acceleventsAdapter),
     Layer.succeed(AcceleventsImports, acceleventsImports),
+    Layer.succeed(AirtableSync, {
+      mode: airtableMode,
+      available: airtableAvailable,
+      wake: (baseId) => Effect.tryPromise({
+        try: () => wakeAirtableBase(env, baseId),
+        catch: (error) => error,
+      }).pipe(
+        Effect.catchAll((error) =>
+          Effect.logWarning("Airtable work persisted but sync lane wake failed", { error })),
+      ),
+      wakeEvent: (eventId) => Effect.tryPromise({
+        try: () => wakeAirtableForEvent(env, eventId),
+        catch: (error) => error,
+      }).pipe(
+        Effect.catchAll((error) =>
+          Effect.logWarning("Airtable work persisted but event sync lane wake failed", { error })),
+      ),
+    }),
     Layer.succeed(PublicSubmissionAbuse, publicSubmissionAbuse(env)),
     Layer.succeed(PublicSubmissionRequest, { remoteIp: null }),
     Layer.succeed(Authorizer, { authorize: authorizePrincipal }),
@@ -579,7 +639,9 @@ export const AppLayer = (env: Env) => {
               detail: "Workers AI is disabled in local and preview environments",
             }))
           : externalEffect("workers-ai", async () => {
-              const result: unknown = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+              const ai = env.AI;
+              if (!ai) throw new Error("Missing required production binding: AI");
+              const result: unknown = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
                 prompt,
               });
               if (
@@ -601,6 +663,7 @@ export type AppServices =
   | SecretResolver
   | AcceleventsAdapter
   | AcceleventsImports
+  | AirtableSync
   | PublicSubmissionAbuse
   | PublicSubmissionRequest
   | Mail

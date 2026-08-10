@@ -11,6 +11,7 @@ import {
   AcceleventsAdapter,
   AcceleventsImports,
   ApiKeyCredentials,
+  AirtableSync,
   AppLayer,
   Authorizer,
   CurrentUser,
@@ -20,6 +21,7 @@ import {
   MailQueue,
   Rooms,
   SecretResolver,
+  wakeAirtableForEvent,
 } from "./services";
 
 export type AppHono = { Bindings: Env };
@@ -29,6 +31,7 @@ export type RuntimeServices =
   | AcceleventsAdapter
   | AcceleventsImports
   | ApiKeyCredentials
+  | AirtableSync
   | Mail
   | MailQueue
   | Files
@@ -89,8 +92,7 @@ const failureFrom = <A>(exit: Exit.Exit<A, AppError>): AppError | undefined => {
   return failure._tag === "Some" ? failure.value : undefined;
 };
 
-const eventIdFrom = (operation: AnyOperationDef, input: unknown): string | null => {
-  if (operation.authorize.kind !== "event") return null;
+const eventIdFrom = (_operation: AnyOperationDef, input: unknown): string | null => {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
   const eventId = Reflect.get(input, "eventId");
   return typeof eventId === "string" && eventId.length > 0 ? eventId : null;
@@ -174,6 +176,22 @@ export const runRestOperation = async (
       ),
     );
     if (Exit.isSuccess(exit)) {
+      const eventId = eventIdFrom(operation, rawInput);
+      if (operation.kind === "command" && eventId) {
+        const wake = wakeAirtableForEvent(c.env, eventId).catch((error) => {
+          console.warn(JSON.stringify({
+            message: "Command committed but Airtable sync wake failed",
+            operation: operation.id,
+            eventId,
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        });
+        try {
+          c.executionCtx.waitUntil(wake);
+        } catch {
+          await wake;
+        }
+      }
       const status = operation.rest?.successStatus ?? 200;
       return status === 204 ? c.body(null, 204) : c.json(exit.value, status);
     }
@@ -205,7 +223,20 @@ export const runTransportOperation = async (
     principal,
     operationEffect(operation, rawInput, principal),
   );
-  if (Exit.isSuccess(exit)) return exit.value;
+  if (Exit.isSuccess(exit)) {
+    const eventId = eventIdFrom(operation, rawInput);
+    if (operation.kind === "command" && eventId) {
+      await wakeAirtableForEvent(env, eventId).catch((error) => {
+        console.warn(JSON.stringify({
+          message: "Command committed but Airtable sync wake failed",
+          operation: operation.id,
+          eventId,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      });
+    }
+    return exit.value;
+  }
   const failure = failureFrom(exit);
   if (failure) {
     logAppError(failure, requestId, operation.id);

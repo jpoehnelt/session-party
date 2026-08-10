@@ -23,6 +23,7 @@ import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 // BaselineGreen may rename these invocation seams; keep the shared import isolated here.
 import { Authorizer, CurrentUser, Db, Rooms } from "@/server/services";
+import { prepareAirtableTalkProjection } from "@/server/sync/airtable-outbox";
 import {
   AgendaDeliveryProjection as AgendaDeliveryProjectionSchema,
   PublishedAgenda as PublishedAgendaSchema,
@@ -1205,7 +1206,23 @@ export const createTalk = (
       metadata: { idempotencyKeyHash: prepared.keyHash },
       occurredAt: prepared.now,
     });
-    yield* database(() => db.batch([talkInsert, ...speakerInserts, idempotencyInsertQuery, changeInsert, auditInsert]));
+    const airtableProjection = yield* database(() => prepareAirtableTalkProjection(db, {
+      eventId: input.eventId,
+      talk: candidate,
+      changedKeys: [],
+      bootstrap: true,
+      origin: "agenda.createTalk",
+      idempotencyKey: `agenda.createTalk:${prepared.id}`,
+      now: prepared.now,
+    }));
+    yield* database(() => db.batch([
+      talkInsert,
+      ...speakerInserts,
+      idempotencyInsertQuery,
+      changeInsert,
+      auditInsert,
+      ...(airtableProjection ? [airtableProjection.statement] : []),
+    ] as never));
     yield* broadcastMutation(result, principal.name, prepared.requestId);
     return result;
   }));
@@ -1300,7 +1317,21 @@ const repositionTalk = (
       metadata: { idempotencyKeyHash: prepared.keyHash },
       occurredAt: prepared.now,
     });
-    yield* database(() => db.batch([update, idempotencyInsertQuery, changeInsert, auditInsert]));
+    const airtableProjection = yield* database(() => prepareAirtableTalkProjection(db, {
+      eventId: input.eventId,
+      talk: candidate,
+      changedKeys: ["track", "room", "startsAt", "durationMin", "status"],
+      origin: operationId,
+      idempotencyKey: `${operationId}:${prepared.id}`,
+      now: prepared.now,
+    }));
+    yield* database(() => db.batch([
+      update,
+      idempotencyInsertQuery,
+      changeInsert,
+      auditInsert,
+      ...(airtableProjection ? [airtableProjection.statement] : []),
+    ] as never));
     yield* broadcastMutation(result, principal.name, prepared.requestId);
     return result;
   }));
@@ -1332,6 +1363,14 @@ export const cancelTalk = (
     const auditId = nanoid();
     const result: AgendaMutationResult = { talk: candidate, conflicts: [], changeId, auditId, replayed: false };
     const actor = actorColumns(principal);
+    const airtableProjection = yield* database(() => prepareAirtableTalkProjection(db, {
+      eventId: input.eventId,
+      talk: candidate,
+      changedKeys: ["status"],
+      origin: "agenda.cancelTalk",
+      idempotencyKey: `agenda.cancelTalk:${prepared.id}`,
+      now: prepared.now,
+    }));
     yield* database(() => db.batch([
       db.update(talks).set({ status: "cancelled", version: candidate.version, updatedAt: prepared.now }).where(and(
         eq(talks.eventId, input.eventId),
@@ -1372,7 +1411,8 @@ export const cancelTalk = (
         metadata: { idempotencyKeyHash: prepared.keyHash },
         occurredAt: prepared.now,
       }),
-    ]));
+      ...(airtableProjection ? [airtableProjection.statement] : []),
+    ] as never));
     yield* broadcastMutation(result, principal.name, prepared.requestId);
     return result;
   }));

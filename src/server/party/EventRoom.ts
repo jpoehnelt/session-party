@@ -236,6 +236,8 @@ export const audiencesForServerMessage = (
       return ["role:owner", "role:admin", "role:reviewer", "scope:reviews:read"];
     case "submissions/new":
       return ["role:owner", "role:admin", "role:reviewer", "scope:submissions:read"];
+    case "integrations/airtable_sync":
+      return ["role:owner", "role:admin", "scope:integrations:read"];
   }
 };
 

@@ -3,10 +3,10 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import {
   AcceleventsImportRun,
   AcceleventsImportStatus,
+  AirtableConfig,
   IntegrationConfig,
   type AcceleventsImportRun as AcceleventsImportRunType,
   type AcceleventsImportStatus as AcceleventsImportStatusType,
-  type AirtableConfig,
   type IntegrationConfig as IntegrationConfigType,
 } from "contracts/types";
 import { Schema } from "effect";
@@ -15,9 +15,13 @@ import { loginPathForLocation } from "@/client/return-to";
 import { acceleventsCapabilityLabel, configurationTruth } from "../presentation";
 import {
   AcceleventsConfiguration,
+  AirtableSyncStatus,
   ConfigureAcceleventsResult,
+  ConfigureAirtableResult,
   type AcceleventsConfiguration as AcceleventsConfigurationType,
+  type AirtableSyncStatus as AirtableSyncStatusType,
   type ConfigureAcceleventsResult as ConfigureAcceleventsResultType,
+  type ConfigureAirtableResult as ConfigureAirtableResultType,
 } from "../schema";
 import {
   Alert,
@@ -39,6 +43,7 @@ import {
   Input,
   Separator,
   Skeleton,
+  Textarea,
   Toaster,
   toast,
 } from "@/ui";
@@ -136,6 +141,133 @@ function MappingTable({ configuration }: { readonly configuration: AirtableConfi
         ))}
       </div>
     </div>
+  );
+}
+
+function AirtableConfigEditor({
+  eventSlug,
+  status,
+  onConfigured,
+}: {
+  readonly eventSlug: string;
+  readonly status: AirtableSyncStatusType;
+  readonly onConfigured: (result: ConfigureAirtableResultType) => void;
+}) {
+  const initial = status.configuration?.config ?? {
+    kind: "airtable",
+    baseId: "apphFjgebe5pq9gez",
+    origin: "session-party",
+    tables: {
+      speakers: {
+        tableId: "",
+        fields: {
+          sessionPartyId: "",
+          spRevision: "",
+          spHash: "",
+          spOrigin: "",
+          displayName: "",
+          jobTitle: "",
+          company: "",
+          bio: "",
+          visibility: "",
+        },
+      },
+      submissions: {
+        tableId: "",
+        fields: {
+          sessionPartyId: "",
+          spRevision: "",
+          spHash: "",
+          spOrigin: "",
+          title: "",
+          abstract: "",
+          category: "",
+          status: "",
+          submittedAt: "",
+          speakerLinks: "",
+        },
+      },
+      talks: {
+        tableId: "",
+        fields: {
+          sessionPartyId: "",
+          spRevision: "",
+          spHash: "",
+          spOrigin: "",
+          title: "",
+          description: "",
+          track: "",
+          room: "",
+          startsAt: "",
+          durationMin: "",
+          status: "",
+          speakerLinks: "",
+          submissionLink: "",
+        },
+      },
+    },
+  };
+  const [mapping, setMapping] = useState(() => JSON.stringify(initial, null, 2));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = () => {
+    if (saving) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(mapping);
+    } catch {
+      setError("Mapping must be valid JSON");
+      return;
+    }
+    const decoded = Schema.decodeUnknownEither(AirtableConfig)(parsed);
+    if (decoded._tag === "Left") {
+      setError("Mapping must include all three tables and their required physical field IDs");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    void apiFetch<ConfigureAirtableResultType>(
+      `/api/v1/events/${encodeURIComponent(eventSlug)}/integrations/airtable/configuration`,
+      {
+        method: "PUT",
+        body: {
+          config: decoded.right,
+          expectedVersion: status.configuration?.version ?? 0,
+          idempotencyKey: crypto.randomUUID(),
+        },
+        schema: ConfigureAirtableResult,
+      },
+    ).then((result) => {
+      onConfigured(result);
+      toast("Airtable mapping saved and sync lane woken", { tone: "success" });
+    }).catch((cause) => {
+      const message = cause instanceof Error ? cause.message : "Could not save Airtable mapping";
+      setError(message);
+      toast(message, { tone: "danger" });
+    }).finally(() => setSaving(false));
+  };
+
+  return (
+    <section className="space-y-3" aria-labelledby="airtable-configuration">
+      <h4 id="airtable-configuration" className="text-sm font-semibold text-ink">Configuration</h4>
+      <p className="text-xs leading-relaxed text-ink-secondary">
+        Map logical fields to Airtable <code>tbl…</code> and <code>fld…</code> IDs. The PAT stays in the Worker secret and is never accepted here.
+      </p>
+      <Textarea
+        label="Airtable mapping JSON"
+        rows={14}
+        value={mapping}
+        onChange={(event) => setMapping(event.target.value)}
+        error={error ?? undefined}
+        spellCheck={false}
+        className="font-mono text-xs"
+        disabled={saving}
+      />
+      <Button onClick={save} loading={saving}>
+        {status.configuration ? "Save Airtable mapping" : "Configure Airtable"}
+      </Button>
+    </section>
   );
 }
 
@@ -250,9 +382,13 @@ function IntegrationsWorkspace({
   runResult,
   runError,
   configuration,
+  airtableStatus,
+  refreshingAirtable,
   onReload,
   onRun,
+  onRefreshAirtable,
   onConfigured,
+  onAirtableConfigured,
 }: {
   readonly eventSlug: string;
   readonly configurations: readonly IntegrationConfigType[];
@@ -261,14 +397,18 @@ function IntegrationsWorkspace({
   readonly runResult: AcceleventsImportRunType | null;
   readonly runError: string | null;
   readonly configuration: AcceleventsConfigurationType | null;
+  readonly airtableStatus: AirtableSyncStatusType;
+  readonly refreshingAirtable: boolean;
   readonly onReload: () => void;
   readonly onRun: () => void;
+  readonly onRefreshAirtable: () => void;
   readonly onConfigured: (result: ConfigureAcceleventsResultType) => void;
+  readonly onAirtableConfigured: (result: ConfigureAirtableResultType) => void;
 }) {
   const truth = useMemo(() => configurationTruth(configurations), [configurations]);
   const airtable = configurations.find(
     (configuration): configuration is AirtableConfig => configuration.kind === "airtable",
-  );
+  ) ?? airtableStatus.configuration?.config;
   const accelevents = status.config;
   const capability = acceleventsCapabilityLabel(status);
   const canRun = status.configured && status.capability.state === "ready";
@@ -327,14 +467,80 @@ function IntegrationsWorkspace({
               </div>
             }
           >
-            {airtable ? (
-              <MappingTable configuration={airtable} />
-            ) : (
-              <EmptyState
-                title="Airtable is not configured"
-                description="No validated Airtable field map exists for this event."
+            <div className="space-y-5">
+              <dl className="grid border-2 border-line-strong bg-surface text-sm sm:grid-cols-2">
+                <div className="border-b-2 border-line-strong sm:border-b-0 sm:border-r-2">
+                  <dt className="bg-ink px-3 py-2 text-[9px] font-black uppercase tracking-[0.14em] text-production-lime">Adapter</dt>
+                  <dd className="px-3 py-2.5">
+                    <Badge tone={airtableStatus.capability.state === "ready" ? airtableStatus.capability.mode === "live" ? "success" : "warning" : "danger"}>
+                      {airtableStatus.capability.state === "ready"
+                        ? airtableStatus.capability.mode === "live" ? "Live" : "Deterministic fake"
+                        : "Unavailable"}
+                    </Badge>
+                  </dd>
+                </div>
+                <div>
+                  <dt className="bg-ink px-3 py-2 text-[9px] font-black uppercase tracking-[0.14em] text-production-sky">Last confirmed</dt>
+                  <dd className="px-3 py-3 text-xs font-semibold text-ink-secondary">
+                    {airtableStatus.lastSyncedAt
+                      ? new Date(airtableStatus.lastSyncedAt).toLocaleString()
+                      : "Not synced yet"}
+                  </dd>
+                </div>
+              </dl>
+              {airtableStatus.capability.reason && (
+                <Alert tone="warning">
+                  <AlertTitle>Airtable unavailable</AlertTitle>
+                  <AlertDescription>{airtableStatus.capability.reason}</AlertDescription>
+                </Alert>
+              )}
+              {airtableStatus.lastError && (
+                <Alert tone="danger">
+                  <AlertTitle>Latest sync error</AlertTitle>
+                  <AlertDescription>{airtableStatus.lastError}</AlertDescription>
+                </Alert>
+              )}
+              {airtable ? (
+                <>
+                  <MappingTable configuration={airtable} />
+                  <dl className="grid grid-cols-2 border-2 border-line-strong text-xs sm:grid-cols-3">
+                    {[
+                      ["Pending", airtableStatus.counts.pending],
+                      ["Retrying", airtableStatus.counts.retrying],
+                      ["Blocked", airtableStatus.counts.blocked],
+                      ["Dead letters", airtableStatus.counts.deadLetters],
+                      ["Pending edits", airtableStatus.counts.pendingEdits],
+                      ["Conflicts", airtableStatus.counts.conflicts],
+                    ].map(([label, value], index) => (
+                      <div className={`px-2.5 py-3 ${index > 1 ? "border-t-2" : ""} ${index % 2 === 1 ? "border-l-2 sm:border-l-0" : ""} ${index % 3 !== 0 ? "sm:border-l-2" : ""}`} key={label}>
+                        <dt className="text-[8px] font-black uppercase tracking-[0.1em] text-ink/60">{label}</dt>
+                        <dd className="mt-1 text-lg font-black tracking-[-0.04em] text-ink">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <Button
+                    variant="secondary"
+                    onClick={onRefreshAirtable}
+                    loading={refreshingAirtable}
+                    disabled={airtableStatus.capability.state !== "ready"}
+                  >
+                    Refresh from Airtable
+                  </Button>
+                </>
+              ) : (
+                <EmptyState
+                  title="Airtable is not configured"
+                  description="No validated Airtable field map exists for this event."
+                />
+              )}
+              <Separator />
+              <AirtableConfigEditor
+                key={`${airtableStatus.configuration?.version ?? 0}:${airtableStatus.configuration?.config.baseId ?? "new"}`}
+                eventSlug={eventSlug}
+                status={airtableStatus}
+                onConfigured={onAirtableConfigured}
               />
-            )}
+            </div>
           </Card>
 
           <Card
@@ -462,9 +668,11 @@ export default function IntegrationsPage() {
   const [configurations, setConfigurations] = useState<readonly IntegrationConfigType[] | null | undefined>(undefined);
   const [status, setStatus] = useState<AcceleventsImportStatusType | null | undefined>(undefined);
   const [configuration, setConfiguration] = useState<AcceleventsConfigurationType | null | undefined>(undefined);
+  const [airtableStatus, setAirtableStatus] = useState<AirtableSyncStatusType | null | undefined>(undefined);
   const [runResult, setRunResult] = useState<AcceleventsImportRunType | null>(null);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [refreshingAirtable, setRefreshingAirtable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState(0);
   const reload = useCallback(() => setRequest((current) => current + 1), []);
@@ -474,6 +682,7 @@ export default function IntegrationsPage() {
     setConfigurations(undefined);
     setStatus(undefined);
     setConfiguration(undefined);
+    setAirtableStatus(undefined);
     setRunResult(null);
     setRunError(null);
     setError(null);
@@ -491,12 +700,25 @@ export default function IntegrationsPage() {
         `${eventPath}/accelevents/configuration`,
         { schema: Schema.NullOr(AcceleventsConfiguration) },
       ),
+      apiFetch<AirtableSyncStatusType>(
+        `${eventPath}/airtable/status`,
+        { schema: AirtableSyncStatus },
+      ),
     ])
-      .then(([loadedConfigurations, loadedStatus, loadedConfiguration]) => {
+      .then(([loadedConfigurations, loadedStatus, loadedConfiguration, loadedAirtableStatus]) => {
         if (!active) return;
         setConfigurations(loadedConfigurations);
         setStatus(loadedStatus);
         setConfiguration(loadedConfiguration);
+        setAirtableStatus(loadedAirtableStatus);
+        if (loadedAirtableStatus.configured && loadedAirtableStatus.capability.state === "ready") {
+          void apiFetch(
+            `${eventPath}/airtable/refreshes`,
+            { method: "POST", body: { entityTypes: ["speaker", "submission", "talk"] } },
+          ).catch((cause) => {
+            console.warn("Could not request the on-load Airtable refresh", cause);
+          });
+        }
       })
       .catch((cause) => {
         if (!active) return;
@@ -507,6 +729,7 @@ export default function IntegrationsPage() {
         setConfigurations(null);
         setStatus(null);
         setConfiguration(null);
+        setAirtableStatus(null);
         if (!unauthenticated && !notFound) toast(message, { tone: "danger" });
       });
     return () => {
@@ -544,11 +767,26 @@ export default function IntegrationsPage() {
       .finally(() => setRunning(false));
   }, [eventSlug, running, status]);
 
-  if (configurations === undefined || status === undefined || configuration === undefined) {
+  const refreshAirtable = useCallback(() => {
+    if (refreshingAirtable || !airtableStatus?.configured) return;
+    setRefreshingAirtable(true);
+    void apiFetch(
+      `/api/v1/events/${encodeURIComponent(eventSlug)}/integrations/airtable/refreshes`,
+      { method: "POST", body: { entityTypes: ["speaker", "submission", "talk"] } },
+    ).then(() => {
+      toast("Airtable refresh requested", { tone: "success" });
+      window.setTimeout(reload, 500);
+    }).catch((cause) => {
+      const message = cause instanceof Error ? cause.message : "Could not request Airtable refresh";
+      toast(message, { tone: "danger" });
+    }).finally(() => setRefreshingAirtable(false));
+  }, [airtableStatus, eventSlug, refreshingAirtable, reload]);
+
+  if (configurations === undefined || status === undefined || configuration === undefined || airtableStatus === undefined) {
     return <LoadingRegion label="Loading integration configuration" />;
   }
 
-  if (configurations === null || status === null) {
+  if (configurations === null || status === null || airtableStatus === null) {
     if (error === "unauthenticated") {
       return (
         <>
@@ -579,13 +817,24 @@ export default function IntegrationsPage() {
       configurations={configurations}
       status={status}
       configuration={configuration}
+      airtableStatus={airtableStatus}
+      refreshingAirtable={refreshingAirtable}
       running={running}
       runResult={runResult}
       runError={runError}
       onReload={reload}
       onRun={runImport}
+      onRefreshAirtable={refreshAirtable}
       onConfigured={(result) => {
         setConfiguration(result.configuration);
+        reload();
+      }}
+      onAirtableConfigured={(result) => {
+        setAirtableStatus((current) => current ? {
+          ...current,
+          configured: true,
+          configuration: result.configuration,
+        } : current);
         reload();
       }}
     />

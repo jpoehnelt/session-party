@@ -23,6 +23,7 @@ import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { AiService, CurrentUser, Db } from "@/server/services";
+import { prepareAirtableSubmissionProjection } from "@/server/sync/airtable-outbox";
 import {
   AcceptSubmissionOutput,
   type AcceptSubmissionInput,
@@ -1331,7 +1332,10 @@ export const acceptSubmission = (
       db
         .select({
           id: submissions.id,
+          title: submissions.title,
+          category: submissions.category,
           status: submissions.status,
+          submittedAt: submissions.submittedAt,
           acceptedAt: submissions.acceptedAt,
           version: submissions.version,
         })
@@ -1420,6 +1424,22 @@ export const acceptSubmission = (
         ),
     );
 
+    const airtableProjection = yield* database(() => prepareAirtableSubmissionProjection(db, {
+      eventId: input.eventId,
+      submission: {
+        id: submission.id,
+        title: submission.title,
+        category: submission.category,
+        status: "accepted",
+        submittedAt: submission.submittedAt,
+        version: nextVersion,
+      },
+      changedKeys: ["status"],
+      origin: "review.acceptSubmission",
+      idempotencyKey: `review.acceptSubmission:${idempotencyId}`,
+      now: acceptedAt,
+    }));
+
     const commitAcceptance = database(() =>
       db.batch([
         db.insert(idempotencyRecords).values({
@@ -1452,7 +1472,8 @@ export const acceptSubmission = (
           metadata: { idempotencyRecordId: idempotencyId }, occurredAt: acceptedAt,
         }),
         db.update(idempotencyRecords).set({ status: "completed", responseStatus: 200, responseBody: output, completedAt: acceptedAt }).where(eq(idempotencyRecords.id, idempotencyId)),
-      ]),
+        ...(airtableProjection ? [airtableProjection.statement] : []),
+      ] as never),
     );
 
     return yield* commitAcceptance.pipe(
