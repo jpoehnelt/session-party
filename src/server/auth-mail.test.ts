@@ -97,6 +97,102 @@ beforeAll(async () => {
   await applyD1Migrations(env.DB, [...(env as TestEnv).TEST_MIGRATIONS]);
 });
 
+describe("hackathon demo authentication", () => {
+  it.each([
+    ["organizer", "sbek-organizer@example.com", "Jordan Alvarez"],
+    ["speaker", "sbek-speaker@example.com", "Priya Raman"],
+    ["reviewer", "sbek-reviewer@example.com", "Sam Whitfield"],
+  ])("issues a normal session for the %s persona", async (persona, email, name) => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona, returnTo: "/events?from=demo#top" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      persona,
+      email,
+      name,
+      event: { slug: "devflow-conf-2027", name: "DevFlow Conf 2027" },
+      returnTo: "/events?from=demo#top",
+    });
+    const cookie = response.headers.get("set-cookie");
+    expect(cookie).toContain("sp_session=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+
+    const me = await SELF.fetch("https://example.test/api/v1/auth/me", {
+      headers: { Cookie: cookie?.split(";")[0] ?? "" },
+    });
+    expect(me.status).toBe(200);
+    expect(await me.json()).toMatchObject({
+      user: { kind: "browser-session", email, name },
+    });
+  });
+
+  it("rejects unknown personas without creating a session", async () => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "admin" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("seeds the eval event and identities without bypassing reviewer or speaker provisioning", async () => {
+    await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "organizer" }),
+    });
+
+    const seed = await env.DB.prepare(
+      `SELECT
+        (SELECT count(*) FROM users WHERE email IN (?, ?, ?)) AS user_count,
+        (SELECT count(*) FROM events WHERE slug = 'devflow-conf-2027' AND name = 'DevFlow Conf 2027') AS event_count,
+        (SELECT count(*)
+         FROM event_members m
+         JOIN events e ON e.id = m.event_id
+         JOIN users u ON u.id = m.user_id
+         WHERE e.slug = 'devflow-conf-2027' AND u.email = ? AND m.role = 'owner') AS owner_count,
+        (SELECT count(*)
+         FROM event_members m
+         JOIN events e ON e.id = m.event_id
+         JOIN users u ON u.id = m.user_id
+         WHERE e.slug = 'devflow-conf-2027' AND u.email IN (?, ?)) AS provisioned_non_owner_count`,
+    ).bind(
+      "sbek-organizer@example.com",
+      "sbek-speaker@example.com",
+      "sbek-reviewer@example.com",
+      "sbek-organizer@example.com",
+      "sbek-speaker@example.com",
+      "sbek-reviewer@example.com",
+    ).first();
+
+    expect(seed).toEqual({
+      user_count: 3,
+      event_count: 1,
+      owner_count: 1,
+      provisioned_non_owner_count: 0,
+    });
+  });
+
+  it("normalizes unsafe return paths", async () => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "organizer", returnTo: "//example.net/steal" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ returnTo: "/" });
+  });
+});
+
 describe("durable magic-link authentication", () => {
   it("coalesces concurrent requests into one token, snapshot, and delivery", async () => {
     const email = "concurrent-auth@example.com";
