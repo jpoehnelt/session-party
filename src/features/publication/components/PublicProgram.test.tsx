@@ -123,7 +123,9 @@ describe("public program", () => {
     const markup = render("schedule");
     expect(markup).toContain("My schedule (0)");
     expect(markup).toContain("Add to my schedule");
-    expect(markup).toContain("Add to calendar (.ics)");
+    expect(markup).toContain("Subscribe / download (.ics)");
+    expect(markup).toContain(`/events/${agenda.eventSlug}/schedule.ics`);
+    expect(markup).toContain(`/events/${agenda.eventSlug}/schedule.json`);
     expect(markup).toContain("Principal Engineer at Latticework Systems");
   });
 
