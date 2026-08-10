@@ -310,7 +310,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(10);
+    expect(migrations).toHaveLength(11);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -325,7 +325,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(10);
+    expect(migrations).toHaveLength(11);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -486,7 +486,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(10);
+    expect(migrations).toHaveLength(11);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -579,5 +579,38 @@ describe("baseline migration parity", () => {
         ('bad-counts', 'accel-event', 'accel-integration', 'provider-1', 'event-one',
          'fixture', 'succeeded', 2, 1, 0, 0, 0, NULL, NULL, 1700000000000, 1700000000001)`,
     ).run()).rejects.toThrow();
+  });
+
+  it("upgrades existing review assignments as active and permits historical recusal plus reassignment", async () => {
+    const migrations = testMigrations();
+    const db = (env as TestEnv).MIGRATION_DB;
+    expect(migrations).toHaveLength(11);
+    await applyOneByOne(db, migrations.slice(0, 10));
+    const now = 1_700_000_000_000;
+    await db.batch([
+      db.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('recusal-user', 'recusal@example.com', 'Recusal Reviewer', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('recusal-event', 'recusal-event', 'Recusal Event', 'UTC', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('recusal-member', 'recusal-event', 'recusal-user', 'reviewer', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO forms (id, event_id, kind, name, status, version, created_at, updated_at) VALUES ('recusal-form', 'recusal-event', 'cfp', 'Recusal CFP', 'closed', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO form_versions (id, event_id, form_id, version_number, name, published_at, created_at) VALUES ('recusal-form-v1', 'recusal-event', 'recusal-form', 1, 'Recusal CFP', ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, version, created_at, updated_at) VALUES ('recusal-submission', 'recusal-event', 'recusal-form', 'recusal-form-v1', 'Recusal proposal', 'submitted', ?, 1, ?, ?)").bind(now, now, now),
+      db.prepare("INSERT INTO review_rounds (id, event_id, name, `order`, status, rubric, version, created_at, updated_at) VALUES ('recusal-round', 'recusal-event', 'Review', 1, 'active', '{\"criteria\":[{\"key\":\"clarity\",\"label\":\"Clarity\",\"max\":5}]}', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, version, created_at, updated_at) VALUES ('recusal-assignment-old', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 1, ?, ?)").bind(now, now),
+    ]);
+
+    await applyOneByOne(db, migrations.slice(10));
+    expect(await db.prepare(
+      "SELECT id, status, recusal_reason, recused_at, version FROM review_assignments WHERE id = 'recusal-assignment-old'",
+    ).first()).toEqual({
+      id: "recusal-assignment-old",
+      status: "assigned",
+      recusal_reason: null,
+      recused_at: null,
+      version: 1,
+    });
+    await db.prepare("UPDATE review_assignments SET status = 'recused', recusal_reason = 'Conflict', recused_at = ?, version = 2, updated_at = ? WHERE id = 'recusal-assignment-old'").bind(now + 1, now + 1).run();
+    await db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-new', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 2, now + 2).run();
+    await expect(db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-duplicate', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 3, now + 3).run()).rejects.toThrow(/review_assignments/);
+    await assertDatabaseIntegrity(db);
   });
 });

@@ -8,6 +8,7 @@ import {
   CreateReviewRoundOutput,
   RequestAiSuggestionOutput,
   RejectSubmissionOutput,
+  RecuseAssignmentOutput,
   RevokeAcceptanceOutput,
   SaveScoreOutput,
   type AcceptSubmissionInput,
@@ -17,6 +18,7 @@ import {
   type CreateReviewRoundInput,
   type RequestAiSuggestionInput,
   type RejectSubmissionInput,
+  type RecuseAssignmentInput,
   type RevokeAcceptanceInput,
   type SaveScoreInput,
 } from "../schema";
@@ -84,6 +86,20 @@ export function assignReviewerRequest(input: AssignReviewerInput) {
       expectedVersion: input.expectedVersion,
     },
     schema: AssignReviewerOutput,
+  });
+}
+
+export function recuseAssignmentRequest(input: RecuseAssignmentInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/assignments/${segment(input.assignmentId)}/recusal`,
+    method: "POST",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: {
+      expectedVersion: input.expectedVersion,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+    },
+    schema: RecuseAssignmentOutput,
   });
 }
 

@@ -146,6 +146,39 @@ describe("Scheduler durable delivery recovery", () => {
       ics_content: null,
     });
   });
+
+  it("redacts terminal reviewer-invitation mail containing a bearer token", async () => {
+    const now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('invitation-owner', 'invitation-owner@example.com', 'Invitation Owner', 1, ?, ?)").bind(now, now),
+      env.DB.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('invitation-event', 'invitation-event', 'Invitation Event', 'UTC', 1, ?, ?)").bind(now, now),
+      env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('invitation-owner-member', 'invitation-event', 'invitation-owner', 'owner', 1, ?, ?)").bind(now, now),
+      env.DB.prepare(`INSERT INTO mail_delivery_snapshots
+        (id, event_id, recipient_email, from_email, subject, rendered_html, rendered_text, created_at)
+        VALUES ('invitation-snapshot', 'invitation-event', 'invitee@example.com', 'Session Party <welcome@sessionparty.com>', 'Reviewer invitation', '<a href="https://example.test/reviewer-invitations/accept?token=secret">Accept</a>', 'token=secret', ?)`)
+        .bind(now),
+      env.DB.prepare(`INSERT INTO mail_deliveries
+        (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, attempt_count, max_attempts, provider, provider_message_id, sent_at, created_at)
+        VALUES ('invitation-delivery', 'invitation-snapshot', 'auth-reviewer-invitation:invitation-record', 'sent', ?, ?, 1, 8, 'local-fake', 'invitation-provider-id', ?, ?)`)
+        .bind(now, now, now, now),
+      env.DB.prepare(`INSERT INTO reviewer_invitations
+        (id, event_id, email, token_hash, status, invited_by_user_id, accepted_by_user_id, delivery_id, expires_at, accepted_at, version, created_at, updated_at)
+        VALUES ('invitation-record', 'invitation-event', 'invitee@example.com', ?, 'pending', 'invitation-owner', NULL, 'invitation-delivery', ?, NULL, 1, ?, ?)`)
+        .bind("d".repeat(64), now + 86_400_000, now, now),
+    ]);
+    const scheduler = env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
+    await runInDurableObject(scheduler, async (_instance, state) => state.storage.deleteAll());
+    await recoverMailScheduler(env);
+    await runInDurableObject(scheduler, async (instance) => instance.alarm());
+
+    expect(await env.DB.prepare(
+      "SELECT redacted_at IS NOT NULL AS redacted, rendered_html, rendered_text FROM mail_delivery_snapshots WHERE id = 'invitation-snapshot'",
+    ).first()).toEqual({ redacted: 1, rendered_html: null, rendered_text: null });
+    await runInDurableObject(scheduler, async (_instance, state) => {
+      await state.storage.deleteAlarm();
+      await state.storage.deleteAll();
+    });
+  });
   it("recovers a committed delivery through the canonical scheduled wake", async () => {
     const now = Date.now();
     await env.DB.batch([

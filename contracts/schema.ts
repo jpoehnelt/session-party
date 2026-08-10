@@ -509,14 +509,20 @@ export const reviewAssignments = sqliteTable(
     roundId: text("round_id").notNull(),
     submissionId: text("submission_id").notNull(),
     reviewerUserId: text("reviewer_user_id").notNull(),
+    status: text("status", { enum: ["assigned", "recused"] }).notNull().default("assigned"),
+    recusalReason: text("recusal_reason"),
+    recusedAt: integer("recused_at", { mode: "timestamp_ms" }),
     version: version(),
     ...timestamps,
   },
   (t) => [
     uniqueIndex("review_assignments_event_id_unique").on(t.eventId, t.id),
-    uniqueIndex("review_assignments_pair_unique").on(t.eventId, t.roundId, t.submissionId, t.reviewerUserId),
+    uniqueIndex("review_assignments_active_pair_unique")
+      .on(t.eventId, t.roundId, t.submissionId, t.reviewerUserId)
+      .where(sql`${t.status} = 'assigned'`),
     index("review_assignments_reviewer").on(t.eventId, t.reviewerUserId, t.roundId),
     index("review_assignments_submission").on(t.eventId, t.submissionId),
+    index("review_assignments_recusals").on(t.eventId, t.roundId, t.status, t.recusedAt),
     foreignKey({ columns: [t.eventId, t.roundId], foreignColumns: [reviewRounds.eventId, reviewRounds.id], name: "review_assignments_round_fk" })
       .onDelete("cascade").onUpdate("cascade"),
     foreignKey({ columns: [t.eventId, t.submissionId], foreignColumns: [submissions.eventId, submissions.id], name: "review_assignments_submission_fk" })
@@ -524,6 +530,10 @@ export const reviewAssignments = sqliteTable(
     foreignKey({ columns: [t.eventId, t.reviewerUserId], foreignColumns: [eventMembers.eventId, eventMembers.userId], name: "review_assignments_member_fk" })
       .onDelete("cascade").onUpdate("cascade"),
     check("review_assignments_version_positive", sql`${t.version} > 0`),
+    check(
+      "review_assignments_recusal_state",
+      sql`(${t.status} = 'assigned' and ${t.recusalReason} is null and ${t.recusedAt} is null) or (${t.status} = 'recused' and ${t.recusedAt} is not null)`,
+    ),
   ],
 );
 
@@ -842,6 +852,39 @@ export const mailDeliveries = sqliteTable(
     check("mail_deliveries_lease_pair", sql`(${t.leaseOwner} is null) = (${t.leaseExpiresAt} is null)`),
     check("mail_deliveries_sent_state", sql`(${t.status} = 'sent' and ${t.sentAt} is not null and ${t.providerMessageId} is not null) or ${t.status} <> 'sent'`),
     check("mail_deliveries_dead_state", sql`(${t.status} = 'dead_letter' and ${t.deadLetteredAt} is not null) or ${t.status} <> 'dead_letter'`),
+  ],
+);
+
+/** Reviewer-specific invitation bridge into the existing user and event-member model. */
+export const reviewerInvitations = sqliteTable(
+  "reviewer_invitations",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    email: text("email").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    status: text("status", { enum: ["pending", "accepted", "expired"] }).notNull().default("pending"),
+    invitedByUserId: text("invited_by_user_id").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    acceptedByUserId: text("accepted_by_user_id").references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    deliveryId: text("delivery_id").notNull().references(() => mailDeliveries.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
+    version: version(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("reviewer_invitations_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("reviewer_invitations_token_hash_unique").on(t.tokenHash),
+    uniqueIndex("reviewer_invitations_pending_email_unique")
+      .on(t.eventId, t.email)
+      .where(sql`${t.status} = 'pending'`),
+    index("reviewer_invitations_event_status").on(t.eventId, t.status, t.createdAt),
+    check("reviewer_invitations_token_hash_format", sql`length(${t.tokenHash}) = 64 and ${t.tokenHash} = lower(${t.tokenHash}) and ${t.tokenHash} not glob '*[^0-9a-f]*'`),
+    check("reviewer_invitations_version_positive", sql`${t.version} > 0`),
+    check(
+      "reviewer_invitations_acceptance_state",
+      sql`(${t.status} = 'accepted' and ${t.acceptedAt} is not null and ${t.acceptedByUserId} is not null) or (${t.status} <> 'accepted' and ${t.acceptedAt} is null and ${t.acceptedByUserId} is null)`,
+    ),
   ],
 );
 

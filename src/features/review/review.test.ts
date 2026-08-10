@@ -53,6 +53,7 @@ import {
   assignReviewer,
   createReviewRound,
   getWorkbench,
+  recuseAssignment,
   rejectSubmission,
   revokeAcceptance,
   requestAiSuggestion,
@@ -436,6 +437,7 @@ describe("review and acceptance slice", () => {
       "review.assignReviewer",
       "review.createRound",
       "review.getWorkbench",
+      "review.recuseAssignment",
       "review.rejectSubmission",
       "review.requestAiSuggestion",
       "review.revokeAcceptance",
@@ -462,6 +464,12 @@ describe("review and acceptance slice", () => {
     const scoreAuthorization = operations.find((operation) => operation.id === "review.saveScore")!.authorize;
     expect(scoreAuthorization.kind).toBe("event");
     if (scoreAuthorization.kind === "event") expect(scoreAuthorization.apiKey.kind).toBe("deny");
+    const recusalAuthorization = operations.find((operation) => operation.id === "review.recuseAssignment")!.authorize;
+    expect(recusalAuthorization.kind).toBe("event");
+    if (recusalAuthorization.kind === "event") {
+      expect(recusalAuthorization.browser).toEqual({ kind: "event-member", roles: ["reviewer"] });
+      expect(recusalAuthorization.apiKey.kind).toBe("deny");
+    }
     const commentAuthorization = operations.find((operation) => operation.id === "review.appendComment")!.authorize;
     expect(commentAuthorization.kind).toBe("event");
     if (commentAuthorization.kind === "event") {
@@ -1027,6 +1035,140 @@ describe("review and acceptance slice", () => {
     }));
     expect(stale._tag).toBe("Left");
     if (stale._tag === "Left") expect(stale.left._tag).toBe("Conflict");
+  });
+
+  it("derives organizer progress from active assignments and preserves recusal history through reassignment", async () => {
+    const { submissionId } = await seedTransitionSubmission("submitted");
+    const baseline = await runAs(owner, getWorkbench({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      page: 1,
+      pageSize: 100,
+    }));
+    expect(baseline.progress).not.toBeNull();
+    const baselineAssigned = baseline.progress!.assignedReviewCount;
+    const baselineOutstanding = baseline.progress!.outstandingReviewCount;
+    const baselineRecusals = baseline.progress!.recusalCount;
+
+    const assigned = await runAs(owner, assignReviewer({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId,
+      reviewerUserId: fixtureReviewerId,
+      expectedVersion: 0,
+      requestId: "request_recusal_assign",
+    }));
+    expect(assigned.assignment).toMatchObject({ status: "assigned", recusalReason: null, recusedAt: null, version: 1 });
+    const afterAssignment = await runAs(owner, getWorkbench({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      selectedSubmissionId: submissionId,
+      page: 1,
+      pageSize: 100,
+    }));
+    expect(afterAssignment.progress).toMatchObject({
+      assignedReviewCount: baselineAssigned + 1,
+      outstandingReviewCount: baselineOutstanding + 1,
+      recusalCount: baselineRecusals,
+    });
+    expect(afterAssignment.progress?.incompleteSubmissions).toContainEqual(expect.objectContaining({
+      submissionId,
+      assignedReviewCount: 1,
+      completedReviewCount: 0,
+      outstandingReviewerNames: ["Ada Rivera"],
+      needsReviewer: false,
+    }));
+
+    const input = {
+      eventId: fixtureEventId,
+      assignmentId: assigned.assignment.id,
+      expectedVersion: 1,
+      reason: "I advised the submitter on this proposal.",
+      idempotencyKey: "recusal-history-01",
+      requestId: "request_recusal_history_01",
+    } as const;
+    const concurrentRecusals = await Promise.all([
+      runAs(reviewer, recuseAssignment(input)),
+      runAs(reviewer, recuseAssignment(input)),
+    ]);
+    expect(concurrentRecusals.map((result) => result.idempotent).sort()).toEqual([false, true]);
+    const recused = concurrentRecusals.find((result) => !result.idempotent)!;
+    const replayed = await runAs(reviewer, recuseAssignment(input));
+    expect(recused).toMatchObject({
+      assignment: {
+        id: assigned.assignment.id,
+        status: "recused",
+        recusalReason: input.reason,
+        version: 2,
+      },
+      idempotent: false,
+    });
+    expect(replayed).toEqual({ ...recused, idempotent: true });
+
+    const scoreAfterRecusal = await runEitherAs(reviewer, saveScore({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId,
+      expectedVersion: 0,
+      scores: [
+        { criterionKey: "relevance", score: 4 },
+        { criterionKey: "specificity", score: 4 },
+        { criterionKey: "delivery", score: 4 },
+      ],
+      requestId: "request_score_after_recusal",
+    }));
+    expect(scoreAfterRecusal._tag).toBe("Left");
+    if (scoreAfterRecusal._tag === "Left") expect(scoreAfterRecusal.left._tag).toBe("Conflict");
+
+    const afterRecusal = await runAs(owner, getWorkbench({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      selectedSubmissionId: submissionId,
+      page: 1,
+      pageSize: 100,
+    }));
+    expect(afterRecusal.progress).toMatchObject({
+      assignedReviewCount: baselineAssigned,
+      outstandingReviewCount: baselineOutstanding,
+      recusalCount: baselineRecusals + 1,
+    });
+    expect(afterRecusal.progress?.incompleteSubmissions).toContainEqual(expect.objectContaining({
+      submissionId,
+      assignedReviewCount: 0,
+      completedReviewCount: 0,
+      recusalCount: 1,
+      needsReviewer: true,
+    }));
+    expect(afterRecusal.selected?.assignments).toContainEqual(expect.objectContaining({
+      id: assigned.assignment.id,
+      status: "recused",
+      recusalReason: input.reason,
+      version: 2,
+    }));
+
+    const reassigned = await runAs(owner, assignReviewer({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId,
+      reviewerUserId: fixtureReviewerId,
+      expectedVersion: 0,
+      requestId: "request_recusal_reassign",
+    }));
+    expect(reassigned.assignment.id).not.toBe(assigned.assignment.id);
+    const history = await db.select().from(reviewAssignments).where(and(
+      eq(reviewAssignments.eventId, fixtureEventId),
+      eq(reviewAssignments.submissionId, submissionId),
+      eq(reviewAssignments.reviewerUserId, fixtureReviewerId),
+    ));
+    expect(history.map((assignment) => assignment.status).sort()).toEqual(["assigned", "recused"]);
+    expect(await db.select().from(auditLog).where(and(
+      eq(auditLog.resourceType, "reviewAssignment"),
+      eq(auditLog.resourceId, assigned.assignment.id),
+    ))).toContainEqual(expect.objectContaining({ action: "review.recuseAssignment" }));
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.aggregateType, "reviewAssignment"),
+      eq(domainChanges.aggregateId, assigned.assignment.id),
+    ))).toContainEqual(expect.objectContaining({ eventType: "review.assignment.recused" }));
   });
 
   it("allows pending assignments but limits scoring and AI suggestions to active rounds", async () => {

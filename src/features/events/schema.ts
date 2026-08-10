@@ -117,6 +117,53 @@ export const RemoveEventMemberOutput = Schema.Struct({
 });
 export type RemoveEventMemberOutput = typeof RemoveEventMemberOutput.Type;
 
+export const ReviewerInvitation = Schema.Struct({
+  id: EntityId,
+  eventId: EntityId,
+  email: Email,
+  status: Schema.Literal("pending", "accepted", "expired"),
+  deliveryStatus: Schema.Literal("pending", "claimed", "dispatching", "retry", "sent", "dead_letter", "cancelled"),
+  expiresAt: Schema.DateFromString,
+  acceptedAt: Schema.NullOr(Schema.DateFromString),
+  version: Schema.Int.pipe(Schema.positive()),
+  createdAt: Schema.DateFromString,
+});
+export type ReviewerInvitation = typeof ReviewerInvitation.Type;
+
+export const ListReviewerInvitationsInput = Schema.Struct({ eventId: EntityId });
+export type ListReviewerInvitationsInput = typeof ListReviewerInvitationsInput.Type;
+
+export const CreateReviewerInvitationInput = Schema.Struct({
+  eventId: EntityId,
+  email: Email,
+  idempotencyKey: IdempotencyKey,
+  requestId: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+});
+export type CreateReviewerInvitationInput = typeof CreateReviewerInvitationInput.Type;
+
+export const CreateReviewerInvitationOutput = Schema.Struct({
+  invitation: ReviewerInvitation,
+  idempotent: Schema.Boolean,
+});
+export type CreateReviewerInvitationOutput = typeof CreateReviewerInvitationOutput.Type;
+
+export const AcceptReviewerInvitationInput = Schema.Struct({
+  token: Schema.String.pipe(Schema.minLength(32), Schema.maxLength(256)),
+  idempotencyKey: IdempotencyKey,
+  requestId: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+});
+export type AcceptReviewerInvitationInput = typeof AcceptReviewerInvitationInput.Type;
+
+export const AcceptReviewerInvitationOutput = Schema.Struct({
+  invitationId: EntityId,
+  eventId: EntityId,
+  eventSlug: Schema.String.pipe(Schema.minLength(1)),
+  eventName: Schema.String.pipe(Schema.minLength(1)),
+  member: EventMember,
+  idempotent: Schema.Boolean,
+});
+export type AcceptReviewerInvitationOutput = typeof AcceptReviewerInvitationOutput.Type;
+
 export const EventApiKey = Schema.Struct({
   id: EntityId,
   name: Schema.String,

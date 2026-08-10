@@ -6,6 +6,7 @@ import {
   assignReviewerRequest,
   createReviewRoundRequest,
   rejectSubmissionRequest,
+  recuseAssignmentRequest,
   revokeAcceptanceRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
@@ -129,6 +130,9 @@ describe("review mutation client", () => {
           id: "assignment_1",
           reviewerUserId: "reviewer_ada",
           reviewerName: "Ada Reviewer",
+          status: "assigned",
+          recusalReason: null,
+          recusedAt: null,
           version: 1,
         },
         created: true,
@@ -283,6 +287,44 @@ describe("review mutation client", () => {
       },
       body: JSON.stringify({ expectedVersion: 4 }),
     });
+  });
+
+  it("posts a versioned, idempotent recusal with an optional reason", async () => {
+    const output = {
+      assignment: {
+        id: "assignment_1",
+        reviewerUserId: "reviewer_ada",
+        reviewerName: "Ada Reviewer",
+        status: "recused" as const,
+        recusalReason: "Conflict with the submitter",
+        recusedAt: 1_700_000_000_000,
+        version: 2,
+      },
+      idempotent: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(output));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(recuseAssignmentRequest({
+      eventId: "event_one",
+      assignmentId: "assignment_1",
+      expectedVersion: 1,
+      reason: "Conflict with the submitter",
+      idempotencyKey: "recusal-key-1",
+      requestId: "request-recusal",
+    })).resolves.toEqual(output);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/events/event_one/review/assignments/assignment_1/recusal",
+      {
+        method: "POST",
+        headers: {
+          "x-request-id": "request-recusal",
+          "idempotency-key": "recusal-key-1",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ expectedVersion: 1, reason: "Conflict with the submitter" }),
+      },
+    );
   });
 
   it("surfaces the safe mutation error returned by the API", async () => {

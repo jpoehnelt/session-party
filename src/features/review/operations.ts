@@ -16,6 +16,8 @@ import {
   RequestAiSuggestionOutput,
   RejectSubmissionInput,
   RejectSubmissionOutput,
+  RecuseAssignmentInput,
+  RecuseAssignmentOutput,
   RevokeAcceptanceInput,
   RevokeAcceptanceOutput,
   ReviewWorkbench,
@@ -31,6 +33,7 @@ import {
   getWorkbench,
   requestAiSuggestion,
   rejectSubmission,
+  recuseAssignment,
   revokeAcceptance,
   saveScore,
 } from "./service";
@@ -57,6 +60,11 @@ const reviewWrite = eventAuthorization(
 
 const humanReviewWrite = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
+  { kind: "deny" },
+);
+
+const reviewerSelfWrite = eventAuthorization(
+  { kind: "event-member", roles: ["reviewer"] },
   { kind: "deny" },
 );
 
@@ -272,6 +280,30 @@ const rejectSubmissionOperation = {
   emits: ["review.submission.rejected"],
 } as const satisfies AnyOperationDef;
 
+const recuseAssignmentOperation = {
+  id: "review.recuseAssignment",
+  kind: "command",
+  input: RecuseAssignmentInput,
+  output: RecuseAssignmentOutput,
+  authorize: reviewerSelfWrite,
+  invoke: recuseAssignment,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/assignments/:assignmentId/recusal",
+    input: {
+      path: ["eventId", "assignmentId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["expectedVersion", "reason"],
+    },
+    summary: "Recuse the authenticated reviewer from an assigned submission while retaining assignment history",
+    successStatus: 200,
+  },
+  party: { intentType: "review/recuseAssignment" },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.assignment.recused"],
+} as const satisfies AnyOperationDef;
+
 const revokeAcceptanceOperation = {
   id: "review.revokeAcceptance",
   kind: "command",
@@ -327,6 +359,7 @@ export const operations = [
   assignReviewerOperation,
   createRoundOperation,
   getWorkbenchOperation,
+  recuseAssignmentOperation,
   rejectSubmissionOperation,
   requestAiSuggestionOperation,
   revokeAcceptanceOperation,

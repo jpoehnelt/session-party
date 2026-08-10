@@ -95,6 +95,9 @@ export const ReviewerAssignment = Schema.Struct({
   id: EntityId,
   reviewerUserId: EntityId,
   reviewerName: NonEmptyText,
+  status: Schema.Literal("assigned", "recused"),
+  recusalReason: Schema.NullOr(Schema.String.pipe(Schema.maxLength(2_000))),
+  recusedAt: Schema.NullOr(UnixTimestampMs),
   version: Schema.Int.pipe(Schema.positive()),
 });
 export type ReviewerAssignment = typeof ReviewerAssignment.Type;
@@ -104,6 +107,39 @@ export const ReviewMember = Schema.Struct({
   name: NonEmptyText,
 });
 export type ReviewMember = typeof ReviewMember.Type;
+
+export const ReviewerRoundProgress = Schema.Struct({
+  reviewerUserId: EntityId,
+  reviewerName: NonEmptyText,
+  assignedReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  completedReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  outstandingReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  recusalCount: Schema.Int.pipe(Schema.nonNegative()),
+});
+export type ReviewerRoundProgress = typeof ReviewerRoundProgress.Type;
+
+export const SubmissionRoundProgress = Schema.Struct({
+  submissionId: EntityId,
+  title: NonEmptyText,
+  assignedReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  completedReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  outstandingReviewerNames: Schema.Array(NonEmptyText),
+  recusalCount: Schema.Int.pipe(Schema.nonNegative()),
+  needsReviewer: Schema.Boolean,
+});
+export type SubmissionRoundProgress = typeof SubmissionRoundProgress.Type;
+
+export const ReviewRoundProgress = Schema.Struct({
+  roundId: EntityId,
+  roundName: NonEmptyText,
+  assignedReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  completedReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  outstandingReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  recusalCount: Schema.Int.pipe(Schema.nonNegative()),
+  reviewers: Schema.Array(ReviewerRoundProgress),
+  incompleteSubmissions: Schema.Array(SubmissionRoundProgress),
+});
+export type ReviewRoundProgress = typeof ReviewRoundProgress.Type;
 
 export const HumanReview = Schema.Struct({
   id: EntityId,
@@ -230,6 +266,7 @@ export const ReviewWorkbench = Schema.Struct({
   viewerUserId: EntityId,
   reviewers: Schema.Array(ReviewMember),
   rounds: Schema.Array(ReviewRound),
+  progress: Schema.optional(Schema.NullOr(ReviewRoundProgress)),
   order: WorkbenchOrder,
   queue: Schema.Array(SubmissionReviewSummary),
   selected: Schema.NullOr(SubmissionReviewDetail),
@@ -256,6 +293,22 @@ export const AssignReviewerOutput = Schema.Struct({
   created: Schema.Boolean,
 });
 export type AssignReviewerOutput = typeof AssignReviewerOutput.Type;
+
+export const RecuseAssignmentInput = Schema.Struct({
+  eventId: EntityId,
+  assignmentId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  reason: Schema.optional(Schema.String.pipe(Schema.maxLength(2_000))),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type RecuseAssignmentInput = typeof RecuseAssignmentInput.Type;
+
+export const RecuseAssignmentOutput = Schema.Struct({
+  assignment: ReviewerAssignment,
+  idempotent: Schema.Boolean,
+});
+export type RecuseAssignmentOutput = typeof RecuseAssignmentOutput.Type;
 
 export const SaveScoreInput = Schema.Struct({
   eventId: EntityId,

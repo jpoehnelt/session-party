@@ -35,6 +35,31 @@ const workbench: ReviewWorkbench = {
     rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] },
     version: 1,
   }],
+  progress: {
+    roundId: "round_active",
+    roundName: "Main review",
+    assignedReviewCount: 2,
+    completedReviewCount: 1,
+    outstandingReviewCount: 1,
+    recusalCount: 1,
+    reviewers: [{
+      reviewerUserId: "user_reviewer",
+      reviewerName: "Grace Reviewer",
+      assignedReviewCount: 1,
+      completedReviewCount: 0,
+      outstandingReviewCount: 1,
+      recusalCount: 1,
+    }],
+    incompleteSubmissions: [{
+      submissionId: "submission_authoritative",
+      title: "Authoritative proposal",
+      assignedReviewCount: 0,
+      completedReviewCount: 0,
+      outstandingReviewerNames: [],
+      recusalCount: 1,
+      needsReviewer: true,
+    }],
+  },
   order: "coverage",
   queue: [{
     id: "submission_authoritative",
@@ -273,6 +298,11 @@ describe("review workbench route", () => {
     expect(markup).not.toContain("Fixture snapshot");
     expect(markup).not.toContain("reviewWorkbenchFixture");
     expect(markup).toContain("Assign reviewer");
+    expect(markup).toContain("review progress");
+    expect(markup).toContain("1 / 2");
+    expect(markup).toContain("Needs reviewer");
+    expect(markup).toContain("Reviewer invitations");
+    expect(markup).toContain("Invite reviewer");
     expect(markup).toContain("Request AI suggestion");
     expect(markup).toContain("Accept &amp; provision primary speaker");
     expect(markup).toContain("No email is sent");
@@ -340,7 +370,15 @@ describe("review workbench route", () => {
         reviewState: "in_progress",
         completedReviewCount: 1,
         averageScore: 4,
-        assignments: [],
+        assignments: [{
+          id: "assignment_reviewer",
+          reviewerUserId: "user_reviewer",
+          reviewerName: "Grace Reviewer",
+          status: "assigned",
+          recusalReason: null,
+          recusedAt: null,
+          version: 1,
+        }],
         reviews: [{
           id: "review_colleague",
           reviewerUserId: "user_colleague",
@@ -378,6 +416,8 @@ describe("review workbench route", () => {
     expect(markup).toContain("Post message");
     expect(markup).toContain("Speakers and API keys cannot author");
     expect(markup).toContain("Assignments are optional workload markers");
+    expect(markup).toContain("Recusal reason (optional)");
+    expect(markup).toContain("Recuse from this submission");
     expect(markup).not.toContain("Assign reviewer");
     expect(markup).not.toContain("Accept &amp; provision primary speaker");
     expect(markup).not.toContain("Create round");

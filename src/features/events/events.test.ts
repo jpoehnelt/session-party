@@ -6,7 +6,16 @@ import type {
   EventApiKeyPrincipal,
   EventRole,
 } from "contracts/principal";
-import { apiKeys, auditLog, domainChanges, eventMembers, events } from "contracts/schema";
+import {
+  apiKeys,
+  auditLog,
+  domainChanges,
+  eventMembers,
+  events,
+  mailDeliveries,
+  mailDeliverySnapshots,
+  reviewerInvitations,
+} from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Exit, Layer } from "effect";
@@ -15,19 +24,23 @@ import {
   type Authorizer,
   type ApiKeyCredentials,
   type CurrentUser,
+  type MailQueue,
   AppLayer,
   CurrentUser as CurrentUserTag,
   type Db,
 } from "@/server/services";
 import {
   addEventMember,
+  acceptReviewerInvitation,
   createEventApiKey,
   createEvent,
+  createReviewerInvitation,
   getEvent,
   listEventMembers,
   listEventAccess,
   listEventApiKeys,
   listEvents,
+  listReviewerInvitations,
   removeEventMember,
   revokeEventApiKey,
   updateEvent,
@@ -78,7 +91,7 @@ const reviewer = browserPrincipal("user-reviewer", "Reviewer");
 const outsider = browserPrincipal("user-outsider", "Outsider");
 const secondOwner = browserPrincipal("user-second-owner", "Second owner");
 
-type EventServiceRequirements = ApiKeyCredentials | Authorizer | CurrentUser | Db;
+type EventServiceRequirements = ApiKeyCredentials | Authorizer | CurrentUser | Db | MailQueue;
 
 const runEitherAs = <A, E>(
   principal: BrowserSessionPrincipal | EventApiKeyPrincipal,
@@ -355,6 +368,96 @@ describe("events service", () => {
     const audits = await db.select().from(auditLog).where(eq(auditLog.eventId, created.id));
     expect(changes.some((change) => change.eventType === "events.member.added")).toBe(true);
     expect(audits.some((audit) => audit.action === "events.addMember")).toBe(true);
+  });
+
+  it("queues a reviewer invitation and securely accepts it into the existing reviewer membership", async () => {
+    const created = await runAs(owner, createEvent({ name: "Reviewer invite", slug: "reviewer-invite" }));
+    const input = {
+      eventId: created.id,
+      email: `  ${outsider.email.toUpperCase()}  `,
+      idempotencyKey: "reviewer-invitation-create-1",
+      requestId: "request-reviewer-invitation-create-1",
+    } as const;
+    const invited = await runAs(owner, createReviewerInvitation(input));
+    expect(invited).toMatchObject({
+      invitation: { email: outsider.email, status: "pending", deliveryStatus: "pending", version: 1 },
+      idempotent: false,
+    });
+    const duplicate = await runAs(owner, createReviewerInvitation({
+      ...input,
+      idempotencyKey: "reviewer-invitation-create-duplicate",
+      requestId: "request-reviewer-invitation-create-duplicate",
+    }));
+    expect(duplicate).toMatchObject({ invitation: { id: invited.invitation.id }, idempotent: true });
+    await expect(runAs(owner, createReviewerInvitation({
+      ...input,
+      idempotencyKey: "reviewer-invitation-create-duplicate",
+      requestId: "request-reviewer-invitation-create-duplicate-replay",
+    }))).resolves.toEqual(duplicate);
+
+    const db = drizzle(env.DB);
+    const [stored] = await db.select({
+      invitation: reviewerInvitations,
+      delivery: mailDeliveries,
+      snapshot: mailDeliverySnapshots,
+    })
+      .from(reviewerInvitations)
+      .innerJoin(mailDeliveries, eq(mailDeliveries.id, reviewerInvitations.deliveryId))
+      .innerJoin(mailDeliverySnapshots, eq(mailDeliverySnapshots.id, mailDeliveries.snapshotId))
+      .where(eq(reviewerInvitations.id, invited.invitation.id));
+    expect(stored?.invitation.tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored?.snapshot.eventId).toBe(created.id);
+    expect(stored?.snapshot.recipientEmail).toBe(outsider.email);
+    expect(stored?.delivery.idempotencyKey).toBe(`auth-reviewer-invitation:${invited.invitation.id}`);
+    const tokenMatch = stored?.snapshot.renderedText?.match(/[?&]token=([^\s&]+)/);
+    const rawToken = tokenMatch ? decodeURIComponent(tokenMatch[1]!) : "";
+    expect(rawToken).toMatch(/^reviewer_inv_/);
+    expect(stored?.invitation.tokenHash).not.toBe(rawToken);
+
+    await expectFailure(reviewer, acceptReviewerInvitation({
+      token: rawToken,
+      idempotencyKey: "reviewer-invitation-wrong-user",
+      requestId: "request-reviewer-invitation-wrong-user",
+    }), "Forbidden");
+
+    const acceptanceInput = {
+      token: rawToken,
+      idempotencyKey: "reviewer-invitation-accept-1",
+      requestId: "request-reviewer-invitation-accept-1",
+    } as const;
+    const concurrentAcceptances = await Promise.all([
+      runAs(outsider, acceptReviewerInvitation(acceptanceInput)),
+      runAs(outsider, acceptReviewerInvitation(acceptanceInput)),
+    ]);
+    expect(concurrentAcceptances.map((result) => result.idempotent).sort()).toEqual([false, true]);
+    const accepted = concurrentAcceptances.find((result) => !result.idempotent)!;
+    const replayed = await runAs(outsider, acceptReviewerInvitation(acceptanceInput));
+    expect(accepted).toMatchObject({
+      invitationId: invited.invitation.id,
+      eventId: created.id,
+      eventSlug: created.slug,
+      member: { userId: outsider.userId, email: outsider.email, role: "reviewer", version: 1 },
+      idempotent: false,
+    });
+    expect(replayed).toEqual({ ...accepted, idempotent: true });
+    expect(await runAs(owner, listReviewerInvitations({ eventId: created.id }))).toContainEqual(expect.objectContaining({
+      id: invited.invitation.id,
+      status: "accepted",
+    }));
+    expect(await runAs(owner, listEventMembers({ eventId: created.id }))).toContainEqual(expect.objectContaining({
+      userId: outsider.userId,
+      role: "reviewer",
+    }));
+    const changes = await db.select().from(domainChanges).where(eq(domainChanges.eventId, created.id));
+    const audits = await db.select().from(auditLog).where(eq(auditLog.eventId, created.id));
+    expect(changes.map((change) => change.eventType)).toEqual(expect.arrayContaining([
+      "events.reviewerInvitation.created",
+      "events.reviewerInvitation.accepted",
+    ]));
+    expect(audits.map((audit) => audit.action)).toEqual(expect.arrayContaining([
+      "events.createReviewerInvitation",
+      "events.acceptReviewerInvitation",
+    ]));
   });
 
   it("authorizes member management at the operation boundary with canonical eventId", async () => {

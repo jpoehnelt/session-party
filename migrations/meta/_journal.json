@@ -71,6 +71,13 @@
       "when": 1786347789317,
       "tag": "0009_small_stone_men",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786383604624,
+      "tag": "0010_true_albert_cleary",
+      "breakpoints": true
     }
   ]
 }
