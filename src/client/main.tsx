@@ -6,7 +6,7 @@ import "@/ui/styles.css";
 import { router } from "./router";
 
 posthog.init("phc_oLnzedUCyVJw8SFt7g44ARPDoEDLofo68BjmkcnGMAwx", {
-  api_host: "https://k.hf.dev",
+  api_host: "https://us.i.posthog.com",
   defaults: "2026-05-30",
 });
 
