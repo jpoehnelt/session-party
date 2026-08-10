@@ -27,6 +27,14 @@ function commentBody({ context, label, sha, reportUrl, result }) {
   if (emptyBaseline) {
     lines.push("", "No existing screenshots passed, so this run is treated as a missing baseline rather than an automatic approval.");
   }
+  if (state === "failure") {
+    lines.push(
+      "",
+      `- [ ] **Approve screenshots** for \`${sha.slice(0, 7)}\``,
+      "",
+      `_Check this box after reviewing the report to approve \`${context}\` for this exact commit. The approval resets on every push._`,
+    );
+  }
   if (reportUrl) lines.push("", `[Open the visual comparison report](${reportUrl})`);
   lines.push("", `Informational result for \`${sha.slice(0, 7)}\`; this repository does not require the status through branch protection.`);
   return lines.join("\n");
