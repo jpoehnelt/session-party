@@ -10,9 +10,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  ci:
+  checks:
+    name: Static checks and builds
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -23,8 +29,45 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm run ci
+      - run: pnpm check:registry
+      - run: pnpm check:types
+      - run: pnpm test:visual-tools
+      - run: pnpm build
+      - run: pnpm storybook:build
+
+  worker-tests:
+    name: Worker tests (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:worker --shard=${{ matrix.shard }}/3
+
+  # Preserve the existing required check and keep preview/deploy behind every shard.
+  ci:
+    if: always()
+    needs: [checks, worker-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          WORKER_TESTS_RESULT: ${{ needs.worker-tests.result }}
+        run: |
+          test "${CHECKS_RESULT}" = "success"
+          test "${WORKER_TESTS_RESULT}" = "success"
 
   preview:
     if: >-
