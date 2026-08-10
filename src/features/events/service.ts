@@ -12,6 +12,9 @@ import {
   eventMembers,
   events,
   idempotencyRecords,
+  mailDeliveries,
+  mailDeliverySnapshots,
+  reviewerInvitations,
   speakerProvisioning,
   speakers,
   submissions,
@@ -20,11 +23,17 @@ import {
 import { Effect, Schema } from "effect";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { ApiKeyCredentials, Authorizer, CurrentUser, Db } from "@/server/services";
+import { ApiKeyCredentials, Authorizer, CurrentUser, Db, MailQueue } from "@/server/services";
 import {
+  AcceptReviewerInvitationOutput,
+  type AcceptReviewerInvitationInput,
+  type AcceptReviewerInvitationOutput as AcceptReviewerInvitationOutputType,
   AddEventMemberOutput,
   type AddEventMemberInput,
   type AddEventMemberOutput as AddEventMemberOutputType,
+  CreateReviewerInvitationOutput,
+  type CreateReviewerInvitationInput,
+  type CreateReviewerInvitationOutput as CreateReviewerInvitationOutputType,
   type EventMember as EventMemberType,
   type EventAccess as EventAccessType,
   type EventApiKey as EventApiKeyType,
@@ -32,10 +41,12 @@ import {
   type CreateEventApiKeyOutput,
   type ListEventApiKeysInput,
   type ListEventMembersInput,
+  type ListReviewerInvitationsInput,
   RemoveEventMemberOutput,
   type RemoveEventMemberInput,
   type RemoveEventMemberOutput as RemoveEventMemberOutputType,
   type RevokeEventApiKeyInput,
+  type ReviewerInvitation as ReviewerInvitationType,
   UpdateEventMemberOutput,
   type UpdateEventMemberInput,
   type UpdateEventMemberOutput as UpdateEventMemberOutputType,
@@ -661,7 +672,7 @@ export const addEventMember = (
         action: "events.addMember", resourceType: "eventMember", resourceId: membership.id, before: null,
         after: member, metadata: { addExistingUser: true, idempotencyRecordId: recordId }, occurredAt,
       }),
-    ]));
+    ] as never));
     return yield* commit.pipe(
       Effect.as(output),
       Effect.catchAll((error) => replay(event.id, "events.addMember", actor.userId, keyHash, requestHash, AddEventMemberOutput).pipe(
@@ -747,4 +758,511 @@ export const removeEventMember = (
       db.insert(auditLog).values({ id: commandId("audit"), eventId: event.id, requestId, actorUserId: actor.userId, actorApiKeyId: null, action: "events.removeMember", resourceType: "eventMember", resourceId: before.id, before, after: null, metadata: { idempotencyRecordId: recordId }, occurredAt }),
     ]));
     return output;
+  });
+
+type ReviewerInvitationRow = {
+  readonly invitation: typeof reviewerInvitations.$inferSelect;
+  readonly deliveryStatus: typeof mailDeliveries.$inferSelect.status;
+};
+
+const reviewerInvitationOutput = (
+  row: ReviewerInvitationRow,
+  at = new Date(),
+): ReviewerInvitationType => ({
+  id: row.invitation.id,
+  eventId: row.invitation.eventId,
+  email: row.invitation.email,
+  status: row.invitation.status === "pending" && row.invitation.expiresAt <= at
+    ? "expired"
+    : row.invitation.status,
+  deliveryStatus: row.deliveryStatus,
+  expiresAt: row.invitation.expiresAt,
+  acceptedAt: row.invitation.acceptedAt,
+  version: row.invitation.version,
+  createdAt: row.invitation.createdAt,
+});
+
+const escapeHtml = (value: string): string => value
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
+
+export const listReviewerInvitations = (
+  input: ListReviewerInvitationsInput,
+): Effect.Effect<readonly ReviewerInvitationType[], AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const event = yield* findEvent(input.eventId);
+    yield* requireMemberManager(event.id);
+    const { db } = yield* Db;
+    const rows = yield* database(() =>
+      db.select({ invitation: reviewerInvitations, deliveryStatus: mailDeliveries.status })
+        .from(reviewerInvitations)
+        .innerJoin(mailDeliveries, eq(mailDeliveries.id, reviewerInvitations.deliveryId))
+        .where(eq(reviewerInvitations.eventId, event.id))
+        .orderBy(desc(reviewerInvitations.createdAt), asc(reviewerInvitations.id)),
+    );
+    const at = new Date();
+    return rows.map((row) => reviewerInvitationOutput(row as ReviewerInvitationRow, at));
+  });
+
+export const createReviewerInvitation = (
+  input: CreateReviewerInvitationInput,
+): Effect.Effect<CreateReviewerInvitationOutputType, AppError, Authorizer | CurrentUser | Db | MailQueue> =>
+  Effect.gen(function* () {
+    const event = yield* findEvent(input.eventId);
+    const actor = yield* requireMemberManager(event.id);
+    const email = normalizedEmail(input.email);
+    if (!email.includes("@")) {
+      return yield* Effect.fail(new Validation({ message: "Enter a valid reviewer email" }));
+    }
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({ eventId: event.id, email }));
+    const prior = yield* replay(
+      event.id,
+      "events.createReviewerInvitation",
+      actor.userId,
+      keyHash,
+      requestHash,
+      CreateReviewerInvitationOutput,
+    );
+    if (prior) return { ...prior, idempotent: true };
+
+    const { db } = yield* Db;
+    const [member] = yield* database(() =>
+      db.select({ id: eventMembers.id })
+        .from(eventMembers)
+        .innerJoin(users, eq(users.id, eventMembers.userId))
+        .where(and(eq(eventMembers.eventId, event.id), sql`lower(trim(${users.email})) = ${email}`))
+        .limit(1),
+    );
+    if (member) {
+      return yield* Effect.fail(new Conflict({ message: "This person is already an event member" }));
+    }
+
+    const [pending] = yield* database(() =>
+      db.select({ invitation: reviewerInvitations, deliveryStatus: mailDeliveries.status })
+        .from(reviewerInvitations)
+        .innerJoin(mailDeliveries, eq(mailDeliveries.id, reviewerInvitations.deliveryId))
+        .where(and(
+          eq(reviewerInvitations.eventId, event.id),
+          eq(reviewerInvitations.email, email),
+          eq(reviewerInvitations.status, "pending"),
+        ))
+        .orderBy(desc(reviewerInvitations.createdAt))
+        .limit(1),
+    );
+    const createdAt = new Date();
+    if (pending && pending.invitation.expiresAt > createdAt) {
+      const output: CreateReviewerInvitationOutputType = {
+        invitation: reviewerInvitationOutput(pending as ReviewerInvitationRow, createdAt),
+        idempotent: true,
+      };
+      const idempotencyId = commandId("idempotency");
+      return yield* database(() => db.insert(idempotencyRecords).values({
+        id: idempotencyId,
+        eventId: event.id,
+        operationId: "events.createReviewerInvitation",
+        principalId: actor.userId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 201,
+        responseBody: output,
+        expiresAt: new Date(createdAt.getTime() + 86_400_000),
+        completedAt: createdAt,
+        createdAt,
+      })).pipe(
+        Effect.as(output),
+        Effect.catchAll((failure) => replay(
+          event.id,
+          "events.createReviewerInvitation",
+          actor.userId,
+          keyHash,
+          requestHash,
+          CreateReviewerInvitationOutput,
+        ).pipe(Effect.flatMap((stored) => stored
+          ? Effect.succeed({ ...stored, idempotent: true })
+          : Effect.fail(failure)))),
+      );
+    }
+
+    const queue = yield* MailQueue;
+    const rawToken = `reviewer_inv_${nanoid(48)}`;
+    const tokenHash = yield* sha256(rawToken);
+    const invitationId = commandId("reviewer_invitation");
+    const snapshotId = commandId("mail_snapshot");
+    const deliveryId = commandId("mail_delivery");
+    const idempotencyId = commandId("idempotency");
+    const expiresAt = new Date(createdAt.getTime() + 7 * 24 * 60 * 60_000);
+    const acceptUrl = new URL("/reviewer-invitations/accept", queue.appOrigin);
+    acceptUrl.searchParams.set("token", rawToken);
+    const safeEventName = escapeHtml(event.name);
+    const renderedHtml = `<p>You have been invited to review proposals for <strong>${safeEventName}</strong>.</p><p><a href="${escapeHtml(acceptUrl.toString())}">Accept reviewer invitation</a></p><p>This invitation expires in 7 days. Sign in with ${escapeHtml(email)} to accept it.</p>`;
+    const renderedText = `You have been invited to review proposals for ${event.name}.\n\nAccept reviewer invitation: ${acceptUrl.toString()}\n\nThis invitation expires in 7 days. Sign in with ${email} to accept it.`;
+    const invitation: ReviewerInvitationType = {
+      id: invitationId,
+      eventId: event.id,
+      email,
+      status: "pending",
+      deliveryStatus: "pending",
+      expiresAt,
+      acceptedAt: null,
+      version: 1,
+      createdAt,
+    };
+    const output: CreateReviewerInvitationOutputType = { invitation, idempotent: false };
+
+    const commit = database(() => db.batch([
+      ...(pending ? [db.update(reviewerInvitations).set({
+        status: "expired" as const,
+        version: pending.invitation.version + 1,
+        updatedAt: createdAt,
+      }).where(and(
+        eq(reviewerInvitations.id, pending.invitation.id),
+        eq(reviewerInvitations.status, "pending"),
+        eq(reviewerInvitations.version, pending.invitation.version),
+      ))] : []),
+      db.insert(mailDeliverySnapshots).values({
+        id: snapshotId,
+        eventId: event.id,
+        templateId: null,
+        recipientUserId: null,
+        recipientEmail: email,
+        recipientName: null,
+        fromEmail: queue.fromEmail,
+        replyToEmail: null,
+        subject: `Reviewer invitation · ${event.name}`,
+        renderedHtml,
+        renderedText,
+        icsFilename: null,
+        icsContent: null,
+        createdAt,
+      }),
+      db.insert(mailDeliveries).values({
+        id: deliveryId,
+        snapshotId,
+        idempotencyKey: `auth-reviewer-invitation:${invitationId}`,
+        status: "pending",
+        scheduledFor: createdAt,
+        availableAt: createdAt,
+        attemptCount: 0,
+        maxAttempts: 8,
+        provider: "cloudflare-email",
+        createdAt,
+      }),
+      db.insert(reviewerInvitations).values({
+        id: invitationId,
+        eventId: event.id,
+        email,
+        tokenHash,
+        status: "pending",
+        invitedByUserId: actor.userId,
+        acceptedByUserId: null,
+        deliveryId,
+        expiresAt,
+        acceptedAt: null,
+        version: 1,
+        createdAt,
+        updatedAt: createdAt,
+      }),
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId,
+        eventId: event.id,
+        operationId: "events.createReviewerInvitation",
+        principalId: actor.userId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 201,
+        responseBody: output,
+        expiresAt: new Date(createdAt.getTime() + 86_400_000),
+        completedAt: createdAt,
+        createdAt,
+      }),
+      db.insert(domainChanges).values({
+        id: commandId("change"),
+        eventId: event.id,
+        aggregateType: "reviewerInvitation",
+        aggregateId: invitationId,
+        aggregateVersion: 1,
+        eventType: "events.reviewerInvitation.created",
+        audiences: [{ kind: "admins" }],
+        payload: { invitationId, email, status: "pending", expiresAt: expiresAt.getTime(), deliveryId },
+        actorUserId: actor.userId,
+        actorApiKeyId: null,
+        requestId: input.requestId,
+        idempotencyRecordId: idempotencyId,
+        occurredAt: createdAt,
+      }),
+      db.insert(auditLog).values({
+        id: commandId("audit"),
+        eventId: event.id,
+        requestId: input.requestId,
+        actorUserId: actor.userId,
+        actorApiKeyId: null,
+        action: "events.createReviewerInvitation",
+        resourceType: "reviewerInvitation",
+        resourceId: invitationId,
+        before: null,
+        after: invitation,
+        metadata: { deliveryId, idempotencyRecordId: idempotencyId, grantsRole: "reviewer" },
+        occurredAt: createdAt,
+      }),
+    ] as never));
+
+    const committed = yield* commit.pipe(
+      Effect.as(output),
+      Effect.catchAll((failure) => replay(
+        event.id,
+        "events.createReviewerInvitation",
+        actor.userId,
+        keyHash,
+        requestHash,
+        CreateReviewerInvitationOutput,
+      ).pipe(Effect.flatMap((stored) => stored
+        ? Effect.succeed({ ...stored, idempotent: true })
+        : Effect.fail(failure)))),
+    );
+    yield* queue.wake();
+    return committed;
+  });
+
+export const acceptReviewerInvitation = (
+  input: AcceptReviewerInvitationInput,
+): Effect.Effect<AcceptReviewerInvitationOutputType, AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const principal = yield* authorizeCurrent(browserSessionAuthorization, null);
+    if (!principal || principal.kind !== "browser-session") {
+      return yield* Effect.fail(new Forbidden({ reason: "Reviewer invitation acceptance requires a browser session" }));
+    }
+    const tokenHash = yield* sha256(input.token);
+    const { db } = yield* Db;
+    const [found] = yield* database(() =>
+      db.select({
+        invitation: reviewerInvitations,
+        event: { id: events.id, slug: events.slug, name: events.name },
+      })
+        .from(reviewerInvitations)
+        .innerJoin(events, eq(events.id, reviewerInvitations.eventId))
+        .where(eq(reviewerInvitations.tokenHash, tokenHash))
+        .limit(1),
+    );
+    if (!found) return yield* Effect.fail(new NotFound({ entity: "reviewer invitation", id: "token" }));
+    if (normalizedEmail(principal.email) !== found.invitation.email) {
+      return yield* Effect.fail(new Forbidden({ reason: "Sign in with the email address that received this reviewer invitation" }));
+    }
+
+    const loadAccepted = () =>
+      Effect.gen(function* () {
+        const [membership] = yield* database(() =>
+          db.select({ membership: eventMembers, user: { email: users.email, name: users.name } })
+            .from(eventMembers)
+            .innerJoin(users, eq(users.id, eventMembers.userId))
+            .where(and(
+              eq(eventMembers.eventId, found.event.id),
+              eq(eventMembers.userId, principal.userId),
+            ))
+            .limit(1),
+        );
+        if (!membership) return null;
+        return {
+          invitationId: found.invitation.id,
+          eventId: found.event.id,
+          eventSlug: found.event.slug,
+          eventName: found.event.name,
+          member: memberOutput(membership as EventMemberRow),
+          idempotent: true,
+        } satisfies AcceptReviewerInvitationOutputType;
+      });
+
+    if (found.invitation.status === "accepted") {
+      if (found.invitation.acceptedByUserId !== principal.userId) {
+        return yield* Effect.fail(new Forbidden({ reason: "This reviewer invitation was accepted by another account" }));
+      }
+      const accepted = yield* loadAccepted();
+      if (!accepted) return yield* Effect.fail(new External({ service: "database", detail: "Accepted reviewer invitation has no event membership" }));
+      return accepted;
+    }
+    const acceptedAt = new Date();
+    if (found.invitation.status !== "pending" || found.invitation.expiresAt <= acceptedAt) {
+      return yield* Effect.fail(new Conflict({ message: "Reviewer invitation is expired or no longer pending" }));
+    }
+
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({ invitationId: found.invitation.id }));
+    const prior = yield* replay(
+      found.event.id,
+      "events.acceptReviewerInvitation",
+      principal.userId,
+      keyHash,
+      requestHash,
+      AcceptReviewerInvitationOutput,
+    );
+    if (prior) return { ...prior, idempotent: true };
+
+    const [existingMembership] = yield* database(() =>
+      db.select({ membership: eventMembers, user: { email: users.email, name: users.name } })
+        .from(eventMembers)
+        .innerJoin(users, eq(users.id, eventMembers.userId))
+        .where(and(
+          eq(eventMembers.eventId, found.event.id),
+          eq(eventMembers.userId, principal.userId),
+        ))
+        .limit(1),
+    );
+    const memberId = existingMembership?.membership.id ?? commandId("member");
+    const member: EventMemberType = existingMembership
+      ? memberOutput(existingMembership as EventMemberRow)
+      : {
+          id: memberId,
+          userId: principal.userId,
+          email: normalizedEmail(principal.email),
+          name: principal.name,
+          role: "reviewer",
+          version: 1,
+          createdAt: acceptedAt,
+          updatedAt: acceptedAt,
+        };
+    const output: AcceptReviewerInvitationOutputType = {
+      invitationId: found.invitation.id,
+      eventId: found.event.id,
+      eventSlug: found.event.slug,
+      eventName: found.event.name,
+      member,
+      idempotent: false,
+    };
+    const nextVersion = found.invitation.version + 1;
+    const idempotencyId = commandId("idempotency");
+    const acceptedAtMs = acceptedAt.getTime();
+    const acceptedMarker = and(
+      eq(reviewerInvitations.id, found.invitation.id),
+      eq(reviewerInvitations.status, "accepted"),
+      eq(reviewerInvitations.acceptedByUserId, principal.userId),
+      eq(reviewerInvitations.version, nextVersion),
+    );
+    const statements = [
+      db.update(reviewerInvitations).set({
+        status: "accepted",
+        acceptedByUserId: principal.userId,
+        acceptedAt,
+        version: nextVersion,
+        updatedAt: acceptedAt,
+      }).where(and(
+        eq(reviewerInvitations.id, found.invitation.id),
+        eq(reviewerInvitations.status, "pending"),
+        eq(reviewerInvitations.version, found.invitation.version),
+        sql`${reviewerInvitations.expiresAt} > ${acceptedAtMs}`,
+      )),
+      ...(existingMembership ? [] : [
+        db.insert(eventMembers).select(
+          db.select({
+            id: sql<string>`${memberId}`.as("id"),
+            eventId: reviewerInvitations.eventId,
+            userId: sql<string>`${principal.userId}`.as("user_id"),
+            role: sql<"reviewer">`'reviewer'`.as("role"),
+            version: sql<number>`1`.as("version"),
+            createdAt: sql<Date>`${acceptedAtMs}`.as("created_at"),
+            updatedAt: sql<Date>`${acceptedAtMs}`.as("updated_at"),
+          }).from(reviewerInvitations).where(acceptedMarker),
+        ).onConflictDoNothing(),
+      ]),
+      db.insert(idempotencyRecords).select(
+        db.select({
+          id: sql<string>`${idempotencyId}`.as("id"),
+          eventId: reviewerInvitations.eventId,
+          operationId: sql<string>`'events.acceptReviewerInvitation'`.as("operation_id"),
+          principalId: sql<string>`${principal.userId}`.as("principal_id"),
+          keyHash: sql<string>`${keyHash}`.as("key_hash"),
+          requestHash: sql<string>`${requestHash}`.as("request_hash"),
+          status: sql<"completed">`'completed'`.as("status"),
+          responseStatus: sql<number>`200`.as("response_status"),
+          responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+          expiresAt: sql<Date>`${acceptedAtMs + 86_400_000}`.as("expires_at"),
+          completedAt: sql<Date>`${acceptedAtMs}`.as("completed_at"),
+          createdAt: sql<Date>`${acceptedAtMs}`.as("created_at"),
+        }).from(reviewerInvitations).where(acceptedMarker),
+      ),
+      db.insert(domainChanges).select(
+        db.select({
+          sequence: sql<number | null>`null`.as("sequence"),
+          id: sql<string>`${commandId("change")}`.as("id"),
+          eventId: reviewerInvitations.eventId,
+          aggregateType: sql<string>`'reviewerInvitation'`.as("aggregate_type"),
+          aggregateId: reviewerInvitations.id,
+          aggregateVersion: reviewerInvitations.version,
+          eventType: sql<string>`'events.reviewerInvitation.accepted'`.as("event_type"),
+          audiences: sql<unknown>`${JSON.stringify([{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: [principal.userId] }])}`.as("audiences"),
+          payload: sql<unknown>`${JSON.stringify({ invitationId: found.invitation.id, memberId, userId: principal.userId, role: member.role })}`.as("payload"),
+          actorUserId: sql<string>`${principal.userId}`.as("actor_user_id"),
+          actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+          requestId: sql<string>`${input.requestId}`.as("request_id"),
+          idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+          occurredAt: sql<Date>`${acceptedAtMs}`.as("occurred_at"),
+        }).from(reviewerInvitations).where(acceptedMarker),
+      ),
+      ...(existingMembership ? [] : [
+        db.insert(domainChanges).select(
+          db.select({
+            sequence: sql<number | null>`null`.as("sequence"),
+            id: sql<string>`${commandId("change")}`.as("id"),
+            eventId: reviewerInvitations.eventId,
+            aggregateType: sql<string>`'eventMember'`.as("aggregate_type"),
+            aggregateId: sql<string>`${memberId}`.as("aggregate_id"),
+            aggregateVersion: sql<number>`1`.as("aggregate_version"),
+            eventType: sql<string>`'events.member.added'`.as("event_type"),
+            audiences: sql<unknown>`${JSON.stringify([{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: [principal.userId] }])}`.as("audiences"),
+            payload: sql<unknown>`${JSON.stringify(member)}`.as("payload"),
+            actorUserId: sql<string>`${principal.userId}`.as("actor_user_id"),
+            actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+            requestId: sql<string>`${input.requestId}`.as("request_id"),
+            idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+            occurredAt: sql<Date>`${acceptedAtMs}`.as("occurred_at"),
+          }).from(reviewerInvitations).where(and(
+            acceptedMarker,
+            sql`exists (select 1 from event_members where event_id = ${found.event.id} and id = ${memberId} and user_id = ${principal.userId} and role = 'reviewer')`,
+          )),
+        ),
+      ]),
+      db.insert(auditLog).select(
+        db.select({
+          id: sql<string>`${commandId("audit")}`.as("id"),
+          eventId: reviewerInvitations.eventId,
+          requestId: sql<string>`${input.requestId}`.as("request_id"),
+          actorUserId: sql<string>`${principal.userId}`.as("actor_user_id"),
+          actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+          action: sql<string>`'events.acceptReviewerInvitation'`.as("action"),
+          resourceType: sql<string>`'reviewerInvitation'`.as("resource_type"),
+          resourceId: reviewerInvitations.id,
+          before: sql<unknown>`${JSON.stringify({ status: "pending", version: found.invitation.version })}`.as("before"),
+          after: sql<unknown>`${JSON.stringify({ status: "accepted", version: nextVersion, memberId, userId: principal.userId, role: member.role })}`.as("after"),
+          metadata: sql<unknown>`${JSON.stringify({ idempotencyRecordId: idempotencyId, membershipCreated: !existingMembership })}`.as("metadata"),
+          occurredAt: sql<Date>`${acceptedAtMs}`.as("occurred_at"),
+        }).from(reviewerInvitations).where(acceptedMarker),
+      ),
+    ];
+
+    const committedHere = yield* database(() => db.batch(statements as never)).pipe(
+      Effect.as(true),
+      Effect.catchAll((failure) =>
+        replay(
+          found.event.id,
+          "events.acceptReviewerInvitation",
+          principal.userId,
+          keyHash,
+          requestHash,
+          AcceptReviewerInvitationOutput,
+        ).pipe(Effect.flatMap((stored) => stored
+          ? Effect.succeed(false)
+          : loadAccepted().pipe(Effect.flatMap((accepted) => accepted
+              ? Effect.succeed(false)
+              : Effect.fail(failure))))),
+      ),
+    );
+    const accepted = yield* loadAccepted();
+    if (!accepted) {
+      return yield* Effect.fail(new Conflict({ message: "Reviewer invitation changed; reload before accepting" }));
+    }
+    return { ...accepted, idempotent: !committedHere };
   });

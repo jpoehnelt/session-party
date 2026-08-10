@@ -5,10 +5,12 @@ import { EntityId } from "contracts/domain";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { Badge, Button, Card, EmptyState, Input, Select, Skeleton } from "@/ui";
+import { ReviewerInvitations } from "@/features/events/components/ReviewerInvitations";
 import type { ReviewWorkbench, SubmissionReviewDetail, SubmissionReviewSummary, SubmissionStatus } from "../schema";
 import { ReviewWorkbench as ReviewWorkbenchSchema } from "../schema";
 import { SubmissionReviewPane } from "../components/SubmissionReviewPane";
 import { ReviewRoundSetup } from "../components/ReviewRoundSetup";
+import { ReviewProgressPanel } from "../components/ReviewProgressPanel";
 import { compareReviewQueue } from "../ordering";
 
 export const path = "/e/:eventSlug/review";
@@ -552,12 +554,14 @@ export function ReviewWorkbenchContent({
       </header>
 
       {(workbench.viewerRole === "owner" || workbench.viewerRole === "admin") && (
-        <section className="mb-4" aria-label="Review round setup">
+        <section className="mb-4 space-y-4" aria-label="Review operations">
           <ReviewRoundSetup
             eventId={workbench.eventId}
             rounds={workbench.rounds}
             onMutationCommitted={onMutationCommitted}
           />
+          {workbench.progress ? <ReviewProgressPanel progress={workbench.progress} /> : null}
+          <ReviewerInvitations eventId={workbench.eventId} />
         </section>
       )}
 

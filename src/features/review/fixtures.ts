@@ -173,8 +173,8 @@ export const assignedSubmissionFixture = {
   ],
   round: activeRoundFixture,
   assignments: [
-    { id: "assignment_ada_01", reviewerUserId: fixtureReviewerId, reviewerName: "Ada Rivera", version: 1 },
-    { id: "assignment_dev_01", reviewerUserId: "user_reviewer_dev", reviewerName: "Dev Shah", version: 1 },
+    { id: "assignment_ada_01", reviewerUserId: fixtureReviewerId, reviewerName: "Ada Rivera", status: "assigned", recusalReason: null, recusedAt: null, version: 1 },
+    { id: "assignment_dev_01", reviewerUserId: "user_reviewer_dev", reviewerName: "Dev Shah", status: "assigned", recusalReason: null, recusedAt: null, version: 1 },
   ],
   reviews: [
     {
@@ -221,7 +221,7 @@ export const acceptedSubmissionFixture = {
   speakers: [{ id: fixturePrimarySpeakerId, displayName: "Jordan Lee", isPrimary: true }],
   round: completedRoundFixture,
   assignments: [
-    { id: "assignment_accepted_01", reviewerUserId: fixtureReviewerId, reviewerName: "Ada Rivera", version: 1 },
+    { id: "assignment_accepted_01", reviewerUserId: fixtureReviewerId, reviewerName: "Ada Rivera", status: "assigned", recusalReason: null, recusedAt: null, version: 1 },
   ],
   reviews: [
     {
@@ -265,6 +265,9 @@ export function detailForFixtureSubmission(submissionId: string): SubmissionRevi
           id: `assignment_fixture_${String(number).padStart(2, "0")}`,
           reviewerUserId: fixtureReviewerId,
           reviewerName: "Ada Rivera",
+          status: "assigned",
+          recusalReason: null,
+          recusedAt: null,
           version: 1,
         }]
       : [],

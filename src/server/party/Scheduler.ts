@@ -108,7 +108,10 @@ const redactAuthSnapshot = async (
   idempotencyKey: string,
   redactedAt: Date,
 ): Promise<void> => {
-  if (!idempotencyKey.startsWith("auth-magic-link:")) return;
+  if (
+    !idempotencyKey.startsWith("auth-magic-link:")
+    && !idempotencyKey.startsWith("auth-reviewer-invitation:")
+  ) return;
   try {
     await db
       .update(mailDeliverySnapshots)
@@ -349,6 +352,29 @@ export class Scheduler extends DurableObject<Env> {
              )`,
         ).bind(nowMs),
         this.env.DB.prepare(
+          `UPDATE mail_deliveries
+           SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL
+           WHERE idempotency_key LIKE 'auth-reviewer-invitation:%'
+             AND (
+               status IN ('pending', 'retry')
+               OR (status = 'claimed' AND lease_expires_at <= ?)
+             )
+             AND EXISTS (
+               SELECT 1 FROM reviewer_invitations
+               WHERE id = substr(mail_deliveries.idempotency_key, length('auth-reviewer-invitation:') + 1)
+                 AND (status <> 'pending' OR expires_at <= ?)
+             )`,
+        ).bind(nowMs, nowMs),
+        this.env.DB.prepare(
+          `UPDATE mail_delivery_snapshots
+           SET rendered_html = NULL, rendered_text = NULL, ics_filename = NULL, ics_content = NULL, redacted_at = ?
+           WHERE redacted_at IS NULL
+             AND id IN (
+               SELECT snapshot_id FROM mail_deliveries
+               WHERE idempotency_key LIKE 'auth-reviewer-invitation:%' AND status IN ('cancelled', 'sent', 'dead_letter')
+             )`,
+        ).bind(nowMs),
+        this.env.DB.prepare(
           `UPDATE mail_delivery_snapshots
            SET rendered_html = NULL, rendered_text = NULL, ics_filename = NULL, ics_content = NULL, redacted_at = ?
            WHERE event_id IS NOT NULL
@@ -358,6 +384,7 @@ export class Scheduler extends DurableObject<Env> {
                SELECT 1 FROM mail_deliveries
                WHERE mail_deliveries.snapshot_id = mail_delivery_snapshots.id
                  AND mail_deliveries.idempotency_key NOT LIKE 'auth-magic-link:%'
+                 AND mail_deliveries.idempotency_key NOT LIKE 'auth-reviewer-invitation:%'
                  AND mail_deliveries.status IN ('cancelled', 'sent', 'dead_letter')
              )`,
         ).bind(nowMs, nowMs - MAIL_SNAPSHOT_RETENTION_MS),

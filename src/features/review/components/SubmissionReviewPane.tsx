@@ -4,6 +4,7 @@ import {
   acceptSubmissionRequest,
   appendReviewCommentRequest,
   assignReviewerRequest,
+  recuseAssignmentRequest,
   rejectSubmissionRequest,
   revokeAcceptanceRequest,
   requestAiSuggestionRequest,
@@ -145,15 +146,22 @@ export function SubmissionReviewPane({
   const round = submission.round;
   const organizer = viewerRole === "owner" || viewerRole === "admin";
   const currentReview = submission.reviews.find((review) => review.reviewerUserId === viewerUserId);
-  const canScore = round?.status === "active";
+  const currentAssignment = submission.assignments.find(
+    (assignment) => assignment.reviewerUserId === viewerUserId && assignment.status === "assigned",
+  );
+  const recusedWithoutReassignment = submission.assignments.some(
+    (assignment) => assignment.reviewerUserId === viewerUserId && assignment.status === "recused",
+  ) && !currentAssignment;
+  const canScore = round?.status === "active" && !recusedWithoutReassignment;
   const canRequestAi = round?.status === "active";
   const primarySpeaker = submission.speakers.find((speaker) => speaker.isPrimary);
   const [selectedReviewerUserId, setSelectedReviewerUserId] = useState("");
   const [scores, setScores] = useState<readonly CriterionScore[]>(currentReview?.scores ?? []);
   const [comment, setComment] = useState(currentReview?.comment ?? "");
   const [threadBody, setThreadBody] = useState("");
+  const [recusalReason, setRecusalReason] = useState("");
   const [confirmedAiSuggestionId, setConfirmedAiSuggestionId] = useState<string>();
-  const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject">();
+  const [pendingOperation, setPendingOperation] = useState<"assign" | "recuse" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject">();
   const [mutationError, setMutationError] = useState<string>();
   const decisionKeysRef = useRef<SubmissionDecisionKeys | undefined>(undefined);
   const decisionKeys = decisionKeysForSubmission(
@@ -162,6 +170,7 @@ export function SubmissionReviewPane({
   );
   decisionKeysRef.current = decisionKeys;
   const commentKey = useRef(`review-comment-${crypto.randomUUID()}`);
+  const recusalKey = useRef(`review-recusal-${crypto.randomUUID()}`);
 
   useEffect(() => {
     setScores(currentReview?.scores ?? []);
@@ -172,7 +181,9 @@ export function SubmissionReviewPane({
 
   useEffect(() => {
     setThreadBody("");
+    setRecusalReason("");
     commentKey.current = `review-comment-${crypto.randomUUID()}`;
+    recusalKey.current = `review-recusal-${crypto.randomUUID()}`;
   }, [submission.id]);
 
   const runMutation = async (
@@ -197,7 +208,7 @@ export function SubmissionReviewPane({
   const assignSelectedReviewer = () => {
     if (!round || !selectedReviewerUserId) return;
     const existingAssignment = submission.assignments.find(
-      (assignment) => assignment.reviewerUserId === selectedReviewerUserId,
+      (assignment) => assignment.reviewerUserId === selectedReviewerUserId && assignment.status === "assigned",
     );
     void runMutation("assign", () => assignReviewerRequest({
       eventId,
@@ -207,6 +218,22 @@ export function SubmissionReviewPane({
       expectedVersion: existingAssignment?.version ?? 0,
       requestId: operationRequestId("review-assign"),
     }));
+  };
+
+  const recuse = () => {
+    if (!currentAssignment) return;
+    void runMutation("recuse", async () => {
+      await recuseAssignmentRequest({
+        eventId,
+        assignmentId: currentAssignment.id,
+        expectedVersion: currentAssignment.version,
+        ...(recusalReason.trim() ? { reason: recusalReason.trim() } : {}),
+        idempotencyKey: recusalKey.current,
+        requestId: operationRequestId("review-recusal"),
+      });
+      recusalKey.current = `review-recusal-${crypto.randomUUID()}`;
+      setRecusalReason("");
+    });
   };
 
   const saveReview = () => {
@@ -367,10 +394,44 @@ export function SubmissionReviewPane({
         {submission.assignments.length === 0 ? (
           <p className="text-sm text-ink-faint">No reviewers are assigned in this round.</p>
         ) : (
-          <div className="flex flex-wrap gap-2" aria-label="Current reviewers">
-            {submission.assignments.map((assignment) => <Badge key={assignment.id} tone="accent">Assigned · {assignment.reviewerName}</Badge>)}
-          </div>
+          <ul className="space-y-2" aria-label="Reviewer assignment history">
+            {submission.assignments.map((assignment) => (
+              <li key={assignment.id} className="flex flex-wrap items-center gap-2 text-sm text-ink-secondary">
+                <Badge tone={assignment.status === "assigned" ? "accent" : "warning"}>
+                  {assignment.status === "assigned" ? "Assigned" : "Recused"} · {assignment.reviewerName}
+                </Badge>
+                {assignment.status === "recused" ? (
+                  <span>
+                    {assignment.recusalReason || "No reason provided"}
+                    {assignment.recusedAt ? ` · ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(assignment.recusedAt)} ${timezone}` : ""}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         )}
+        {viewerRole === "reviewer" && currentAssignment && !currentReview ? (
+          <div className="mt-4 border-t-2 border-line-strong pt-4">
+            <Textarea
+              label="Recusal reason (optional)"
+              hint="Recusal remains in assignment history and alerts organizers that coverage may need replacing."
+              maxLength={2_000}
+              rows={3}
+              value={recusalReason}
+              disabled={pendingOperation !== undefined}
+              onChange={(event) => setRecusalReason(event.target.value)}
+            />
+            <Button
+              className="mt-3"
+              variant="secondary"
+              loading={pendingOperation === "recuse"}
+              disabled={pendingOperation !== undefined}
+              onClick={recuse}
+            >
+              Recuse from this submission
+            </Button>
+          </div>
+        ) : null}
         {organizer && round && (
           <div className="mt-4 grid gap-2 border-t-2 border-line-strong pt-4 sm:grid-cols-[minmax(14rem,1fr)_auto] sm:items-end">
             <Select
@@ -383,7 +444,7 @@ export function SubmissionReviewPane({
               <option value="">Choose reviewer</option>
               {reviewers.map((reviewer) => {
                 const assigned = submission.assignments.some(
-                  (assignment) => assignment.reviewerUserId === reviewer.userId,
+                  (assignment) => assignment.reviewerUserId === reviewer.userId && assignment.status === "assigned",
                 );
                 return <option key={reviewer.userId} value={reviewer.userId}>{reviewer.name}{assigned ? " · assigned" : ""}</option>;
               })}
