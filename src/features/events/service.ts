@@ -4,7 +4,19 @@ import {
   eventAuthorization,
   type AuthorizationPolicy,
 } from "contracts/principal";
-import { apiKeys, auditLog, domainChanges, eventMembers, events, idempotencyRecords, users } from "contracts/schema";
+import {
+  acceptanceEvents,
+  apiKeys,
+  auditLog,
+  domainChanges,
+  eventMembers,
+  events,
+  idempotencyRecords,
+  speakerProvisioning,
+  speakers,
+  submissions,
+  users,
+} from "contracts/schema";
 import { Effect, Schema } from "effect";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -14,6 +26,7 @@ import {
   type AddEventMemberInput,
   type AddEventMemberOutput as AddEventMemberOutputType,
   type EventMember as EventMemberType,
+  type EventAccess as EventAccessType,
   type EventApiKey as EventApiKeyType,
   type CreateEventApiKeyInput,
   type CreateEventApiKeyOutput,
@@ -266,6 +279,87 @@ export const listEvents = (): Effect.Effect<
         .where(eq(eventMembers.userId, principal.userId))
         .then((rows) => rows.map(({ event }) => event)),
     );
+  });
+
+/**
+ * Resolves the event-scoped surfaces available to the signed-in person.
+ * Membership and speaker identity are deliberately independent, so one event
+ * can expose both an organizer/reviewer surface and the speaker portal.
+ */
+export const listEventAccess = (): Effect.Effect<
+  readonly EventAccessType[],
+  AppError,
+  Authorizer | CurrentUser | Db
+> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const principal = yield* authorizeCurrent(browserSessionAuthorization, null);
+    if (!principal || principal.kind !== "browser-session") {
+      return yield* Effect.fail(
+        new Forbidden({ reason: "Event access requires a browser session" }),
+      );
+    }
+
+    const [memberRows, speakerRows] = yield* Effect.all([
+      database(() => db
+        .select({ event: events, memberRole: eventMembers.role })
+        .from(events)
+        .innerJoin(eventMembers, eq(eventMembers.eventId, events.id))
+        .where(eq(eventMembers.userId, principal.userId))),
+      database(() => db
+        .select({ event: events })
+        .from(events)
+        .innerJoin(speakers, and(
+          eq(speakers.eventId, events.id),
+          eq(speakers.userId, principal.userId),
+        ))
+        .innerJoin(acceptanceEvents, and(
+          eq(acceptanceEvents.eventId, speakers.eventId),
+          eq(acceptanceEvents.primarySpeakerId, speakers.id),
+          eq(acceptanceEvents.type, "accepted"),
+        ))
+        .innerJoin(speakerProvisioning, and(
+          eq(speakerProvisioning.eventId, acceptanceEvents.eventId),
+          eq(speakerProvisioning.acceptanceEventId, acceptanceEvents.id),
+          eq(speakerProvisioning.status, "provisioned"),
+        ))
+        .innerJoin(submissions, and(
+          eq(submissions.eventId, acceptanceEvents.eventId),
+          eq(submissions.id, acceptanceEvents.submissionId),
+          eq(submissions.status, "accepted"),
+        ))
+        .where(sql`not exists (
+          select 1
+          from acceptance_events as newer_access_acceptance
+          where newer_access_acceptance.event_id = ${acceptanceEvents.eventId}
+            and newer_access_acceptance.submission_id = ${acceptanceEvents.submissionId}
+            and (
+              newer_access_acceptance.occurred_at > ${acceptanceEvents.occurredAt}
+              or (
+                newer_access_acceptance.occurred_at = ${acceptanceEvents.occurredAt}
+                and newer_access_acceptance.id > ${acceptanceEvents.id}
+              )
+            )
+        )`)),
+    ]);
+
+    const accessByEvent = new Map<string, EventAccessType>();
+    for (const row of memberRows) {
+      accessByEvent.set(row.event.id, {
+        event: row.event,
+        memberRole: row.memberRole,
+        speakerPortal: false,
+      });
+    }
+    for (const row of speakerRows) {
+      const current = accessByEvent.get(row.event.id);
+      accessByEvent.set(row.event.id, {
+        event: row.event,
+        memberRole: current?.memberRole ?? null,
+        speakerPortal: true,
+      });
+    }
+    return [...accessByEvent.values()];
   });
 
 export const updateEvent = (

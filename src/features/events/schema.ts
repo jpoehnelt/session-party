@@ -41,6 +41,14 @@ export const EventOutput = Schema.Struct({
 });
 export type EventOutput = typeof EventOutput.Type;
 
+/** Event-scoped browser access. Authentication remains identity-only; these relationships are resolved per event. */
+export const EventAccess = Schema.Struct({
+  event: EventOutput,
+  memberRole: Schema.NullOr(EventRole),
+  speakerPortal: Schema.Boolean,
+});
+export type EventAccess = typeof EventAccess.Type;
+
 const Email = Schema.String.pipe(Schema.minLength(3), Schema.maxLength(320));
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200));
 

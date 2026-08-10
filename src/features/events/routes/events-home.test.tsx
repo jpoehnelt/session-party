@@ -4,12 +4,15 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EventsWorkspace,
+  eventAccessDestinations,
   eventPhase,
+  fetchEventAccess,
   fetchEvents,
   formatEventDates,
   prioritizeEvents,
   slugifyEventName,
   type EventSummary,
+  type EventAccessSummary,
 } from "./events-home";
 
 const now = new Date("2026-08-09T18:00:00.000Z");
@@ -33,17 +36,29 @@ function event(overrides: Partial<EventSummary> = {}): EventSummary {
   };
 }
 
+function access(
+  eventValue = event(),
+  overrides: Partial<Omit<EventAccessSummary, "event">> = {},
+): EventAccessSummary {
+  return {
+    event: eventValue,
+    memberRole: "owner",
+    speakerPortal: false,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("events organizer home", () => {
+describe("events home", () => {
   it("renders one event as an active workspace with useful metadata and workflow shortcuts", () => {
     const markup = renderToStaticMarkup(
       createElement(
         MemoryRouter,
         { initialEntries: ["/events"] },
-        createElement(EventsWorkspace, { events: [event()], now }),
+        createElement(EventsWorkspace, { access: [access()], now }),
       ),
     );
 
@@ -53,11 +68,32 @@ describe("events organizer home", () => {
     expect(markup).toContain("Pier 27, San Francisco");
     expect(markup).toContain("5/5");
     expect(markup).toContain("Shape the program");
+    expect(markup).toContain('href="/e/production-summit/dashboard"');
     expect(markup).toContain('href="/e/production-summit/forms"');
     expect(markup).toContain('href="/e/production-summit/review"');
     expect(markup).toContain('href="/e/production-summit/speakers"');
     expect(markup).toContain('href="/e/production-summit/agenda"');
     expect(markup).not.toContain("Other events");
+  });
+
+  it("presents organizer and speaker destinations independently for a dual-role event", () => {
+    const dualRole = access(event(), { speakerPortal: true });
+    const markup = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ["/events"] },
+        createElement(EventsWorkspace, { access: [dualRole], now }),
+      ),
+    );
+
+    expect(eventAccessDestinations(dualRole)).toEqual([
+      { label: "Organizer dashboard", role: "Organizer", to: "/e/production-summit/dashboard" },
+      { label: "Speaker portal", role: "Speaker", to: "/e/production-summit/portal" },
+    ]);
+    expect(markup).toContain("Organizer dashboard");
+    expect(markup).toContain("Speaker portal");
+    expect(markup).toContain('href="/e/production-summit/dashboard"');
+    expect(markup).toContain('href="/e/production-summit/portal"');
   });
 
   it("prioritizes live and upcoming work ahead of undated and completed events", () => {
@@ -101,6 +137,31 @@ describe("events organizer home", () => {
     expect(loaded?.updatedAt).toEqual(new Date(payload.updatedAt));
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/events",
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+  });
+
+  it("decodes independent event access relationships for the signed-in home", async () => {
+    const eventPayload = {
+      ...event(),
+      startsAt: "2026-09-14T16:00:00.000Z",
+      endsAt: "2026-09-15T23:00:00.000Z",
+      createdAt: "2026-07-01T12:00:00.000Z",
+      updatedAt: "2026-08-08T12:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([{
+      event: eventPayload,
+      memberRole: "owner",
+      speakerPortal: true,
+    }]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const [loaded] = await fetchEventAccess();
+
+    expect(loaded).toMatchObject({ memberRole: "owner", speakerPortal: true });
+    expect(loaded?.event.startsAt).toEqual(new Date(eventPayload.startsAt));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/me/events",
       expect.objectContaining({ method: "GET", credentials: "include" }),
     );
   });
