@@ -95,6 +95,7 @@ interface AgendaSnapshot {
 
 interface CommunicationTemplate {
   readonly id: string;
+  readonly version: number;
 }
 
 interface DeliveryHistory {
@@ -662,6 +663,7 @@ await request(`/events/${eventId}/comms/deliveries`, {
   expectedStatus: 202,
   body: {
     templateId: template.id,
+    expectedTemplateVersion: template.version,
     recipientSpeakerIds: [accepted.primarySpeakerId],
     replyToEmail: "program@sessionparty.local",
     scheduledFor: null,

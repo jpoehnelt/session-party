@@ -3,6 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server.edge";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewWorkbench } from "../schema";
 import {
+  decisionKeysForSubmission,
+  submissionDecisionLifecycleIdentity,
+} from "../components/SubmissionReviewPane";
+import {
   errorFrom,
   decideQueueInteraction,
   loadReviewWorkbench,
@@ -80,6 +84,59 @@ const workbench: ReviewWorkbench = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("review workbench route", () => {
+  it("keeps ambiguous retry keys stable and rotates them across proposal and decision state changes", () => {
+    const submittedAIdentity = submissionDecisionLifecycleIdentity({
+      id: "submission-a",
+      version: 3,
+      status: "submitted",
+      acceptance: null,
+    });
+    const acceptedAIdentity = submissionDecisionLifecycleIdentity({
+      id: "submission-a",
+      version: 4,
+      status: "accepted",
+      acceptance: {
+        acceptanceEventId: "acceptance-a-1",
+        submissionVersion: 4,
+        acceptedAt: 1_700_000_100_000,
+        provisioningId: "provisioning-a-1",
+        provisioningStatus: "pending",
+      },
+    });
+    const revokedAIdentity = submissionDecisionLifecycleIdentity({
+      id: "submission-a",
+      version: 5,
+      status: "submitted",
+      acceptance: null,
+    });
+    const submittedBIdentity = submissionDecisionLifecycleIdentity({
+      id: "submission-b",
+      version: 5,
+      status: "submitted",
+      acceptance: null,
+    });
+    const proposalA = decisionKeysForSubmission(submittedAIdentity);
+    const proposalARetry = decisionKeysForSubmission(submittedAIdentity, proposalA);
+    const acceptedA = decisionKeysForSubmission(acceptedAIdentity, proposalARetry);
+    const revokedA = decisionKeysForSubmission(revokedAIdentity, acceptedA);
+    const proposalB = decisionKeysForSubmission(submittedBIdentity, revokedA);
+    const proposalBAmbiguousRetry = decisionKeysForSubmission(submittedBIdentity, proposalB);
+
+    expect(proposalARetry).toBe(proposalA);
+    expect(proposalBAmbiguousRetry).toBe(proposalB);
+    for (const next of [acceptedA, revokedA, proposalB]) {
+      expect(next.acceptance).not.toBe(proposalA.acceptance);
+      expect(next.rejection).not.toBe(proposalA.rejection);
+      expect(next.revocation).not.toBe(proposalA.revocation);
+    }
+    expect(revokedA.acceptance).not.toBe(acceptedA.acceptance);
+    expect(revokedA.rejection).not.toBe(acceptedA.rejection);
+    expect(revokedA.revocation).not.toBe(acceptedA.revocation);
+    expect(proposalB.acceptance).not.toBe(revokedA.acceptance);
+    expect(proposalB.rejection).not.toBe(revokedA.rejection);
+    expect(proposalB.revocation).not.toBe(revokedA.revocation);
+  });
+
   it("exports the review navigation route", () => {
     expect(path).toBe("/e/:eventSlug/review");
   });

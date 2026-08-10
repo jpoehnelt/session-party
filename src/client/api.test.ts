@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiFetch } from "./api";
+import { apiFetch, invalidateAuthGeneration, synchronizeAuthenticatedPrincipal } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  invalidateAuthGeneration();
 });
 
 describe("apiFetch", () => {
@@ -42,6 +43,50 @@ describe("apiFetch", () => {
 
     await apiFetch("/api/v1/events/event-a");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts principal A and never coalesces its in-flight GET into principal B", async () => {
+    let principalASignal: AbortSignal | undefined;
+    let resolvePrincipalB!: (response: Response) => void;
+    const principalBResponse = new Promise<Response>((resolve) => {
+      resolvePrincipalB = resolve;
+    });
+    const fetchMock = vi.fn()
+      .mockImplementationOnce((_path: string, init: RequestInit) => {
+        principalASignal = init.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          principalASignal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          }, { once: true });
+        });
+      })
+      .mockImplementationOnce(() => principalBResponse);
+    vi.stubGlobal("fetch", fetchMock);
+
+    synchronizeAuthenticatedPrincipal("session-a");
+    const principalARequest = apiFetch<{ principal: string }>("/api/v1/private");
+    const principalAResult = expect(principalARequest).rejects.toMatchObject({ name: "AbortError" });
+
+    synchronizeAuthenticatedPrincipal(null);
+    expect(principalASignal?.aborted).toBe(true);
+    synchronizeAuthenticatedPrincipal("session-b");
+    const principalBRequest = apiFetch<{ principal: string }>("/api/v1/private");
+    const principalBDuplicate = apiFetch<{ principal: string }>("/api/v1/private");
+
+    await principalAResult;
+    const principalBAfterOldCleanup = apiFetch<{ principal: string }>("/api/v1/private");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    resolvePrincipalB(new Response(JSON.stringify({ principal: "B" }), { status: 200 }));
+    await expect(Promise.all([
+      principalBRequest,
+      principalBDuplicate,
+      principalBAfterOldCleanup,
+    ])).resolves.toEqual([
+      { principal: "B" },
+      { principal: "B" },
+      { principal: "B" },
+    ]);
   });
 
   it("does not coalesce mutations", async () => {

@@ -4,7 +4,9 @@ import { discoveredClientRouteModules, discoveredClientRoutePaths } from "./rout
 describe("client route discovery", () => {
   it("excludes test modules from the client router", () => {
     expect(discoveredClientRoutePaths).not.toEqual([]);
-    expect(discoveredClientRoutePaths.every((path) => !path.includes(".test."))).toBe(true);
+    expect(discoveredClientRoutePaths.every((path) =>
+      !path.includes(".test.") && !path.includes(".browser.")
+    )).toBe(true);
   });
 
   it("assigns an intentional content width to every organizer page", () => {

@@ -666,7 +666,7 @@ export function ReviewWorkbenchContent({
         </Card>
 
         <section ref={detailRef} tabIndex={-1} aria-labelledby={selected ? `proposal-heading-${selected.id}` : undefined} aria-label={selected ? undefined : "Proposal detail"} className="min-w-0 scroll-mt-4 outline-none focus-visible:ring-2 focus-visible:ring-accent">
-          {selected ? <SubmissionReviewPane eventId={workbench.eventId} submission={selected} viewerRole={workbench.viewerRole} viewerUserId={workbench.viewerUserId} reviewers={workbench.reviewers} timezone={workbench.timezone} onMutationCommitted={onMutationCommitted} /> : <Card><EmptyState title={queue.length === 0 ? "No proposal detail in this round" : "Loading selected proposal"} description={queue.length === 0 ? "When a proposal enters this round, its abstract, rubric, assignments, and evidence will appear here." : "The authoritative proposal detail is loading."} /></Card>}
+          {selected ? <SubmissionReviewPane key={selected.id} eventId={workbench.eventId} submission={selected} viewerRole={workbench.viewerRole} viewerUserId={workbench.viewerUserId} reviewers={workbench.reviewers} timezone={workbench.timezone} onMutationCommitted={onMutationCommitted} /> : <Card><EmptyState title={queue.length === 0 ? "No proposal detail in this round" : "Loading selected proposal"} description={queue.length === 0 ? "When a proposal enters this round, its abstract, rubric, assignments, and evidence will appear here." : "The authoritative proposal detail is loading."} /></Card>}
         </section>
       </div>
     </div>

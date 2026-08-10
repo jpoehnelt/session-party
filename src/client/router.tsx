@@ -8,7 +8,11 @@ import {
   useParams,
 } from "react-router";
 import { AppShell, Button, EmptyState, Sheet } from "@/ui";
-import { apiFetch } from "./api";
+import {
+  apiFetch,
+  invalidateAuthGeneration,
+  synchronizeAuthenticatedPrincipal,
+} from "./api";
 import LoginPage from "./auth";
 import { availableEventNavItems } from "./event-nav";
 import {
@@ -22,7 +26,9 @@ export { discoveredClientRoutePaths };
 
 type AuthMeResponse = {
   email?: string;
-  user?: { email?: string };
+  sessionId?: string;
+  userId?: string;
+  user?: { email?: string; sessionId?: string; userId?: string };
 };
 
 type SessionState =
@@ -116,10 +122,13 @@ function Topbar({
       .then((user) => {
         if (!isCurrent) return;
         const email = user.user?.email ?? user.email;
+        synchronizeAuthenticatedPrincipal(user.user?.sessionId ?? user.sessionId ?? user.user?.userId ?? user.userId ?? email ?? null);
         setSession(email ? { status: "signed-in", email } : { status: "signed-out" });
       })
       .catch(() => {
-        if (isCurrent) setSession({ status: "signed-out" });
+        if (!isCurrent) return;
+        synchronizeAuthenticatedPrincipal(null);
+        setSession({ status: "signed-out" });
       });
 
     return () => {
@@ -128,9 +137,12 @@ function Topbar({
   }, []);
 
   async function logout() {
+    synchronizeAuthenticatedPrincipal(null);
     try {
       await apiFetch("/api/v1/auth/logout", { method: "POST" });
     } finally {
+      invalidateAuthGeneration();
+      setSession({ status: "signed-out" });
       navigate("/login");
     }
   }

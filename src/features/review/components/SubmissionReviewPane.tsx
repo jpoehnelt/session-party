@@ -47,6 +47,35 @@ const statusLabel = {
 
 const operationRequestId = (operation: string) => `${operation}-${crypto.randomUUID()}`;
 
+export interface SubmissionDecisionKeys {
+  readonly lifecycleIdentity: string;
+  readonly acceptance: string;
+  readonly rejection: string;
+  readonly revocation: string;
+}
+
+export const submissionDecisionLifecycleIdentity = (
+  submission: Pick<SubmissionReviewDetail, "id" | "version" | "status" | "acceptance">,
+): string => JSON.stringify([
+  submission.id,
+  submission.version,
+  submission.status,
+  submission.acceptance?.acceptanceEventId ?? null,
+]);
+
+export const decisionKeysForSubmission = (
+  lifecycleIdentity: string,
+  current?: SubmissionDecisionKeys,
+): SubmissionDecisionKeys =>
+  current?.lifecycleIdentity === lifecycleIdentity
+    ? current
+    : {
+        lifecycleIdentity,
+        acceptance: `review-accept-${crypto.randomUUID()}`,
+        rejection: `review-reject-${crypto.randomUUID()}`,
+        revocation: `review-revoke-${crypto.randomUUID()}`,
+      };
+
 function ScoreRationales({
   reviews,
   submission,
@@ -126,9 +155,12 @@ export function SubmissionReviewPane({
   const [confirmedAiSuggestionId, setConfirmedAiSuggestionId] = useState<string>();
   const [pendingOperation, setPendingOperation] = useState<"assign" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject">();
   const [mutationError, setMutationError] = useState<string>();
-  const acceptanceKey = useRef(`review-accept-${crypto.randomUUID()}`);
-  const rejectionKey = useRef(`review-reject-${crypto.randomUUID()}`);
-  const revocationKey = useRef(`review-revoke-${crypto.randomUUID()}`);
+  const decisionKeysRef = useRef<SubmissionDecisionKeys | undefined>(undefined);
+  const decisionKeys = decisionKeysForSubmission(
+    submissionDecisionLifecycleIdentity(submission),
+    decisionKeysRef.current,
+  );
+  decisionKeysRef.current = decisionKeys;
   const commentKey = useRef(`review-comment-${crypto.randomUUID()}`);
 
   useEffect(() => {
@@ -224,7 +256,7 @@ export function SubmissionReviewPane({
       eventId,
       submissionId: submission.id,
       expectedVersion: submission.version,
-      idempotencyKey: acceptanceKey.current,
+      idempotencyKey: decisionKeys.acceptance,
       requestId: operationRequestId("review-accept"),
     }));
   };
@@ -235,7 +267,7 @@ export function SubmissionReviewPane({
       eventId,
       submissionId: submission.id,
       expectedVersion: submission.version,
-      idempotencyKey: rejectionKey.current,
+      idempotencyKey: decisionKeys.rejection,
       requestId: operationRequestId("review-reject"),
     }));
   };
@@ -247,7 +279,7 @@ export function SubmissionReviewPane({
       eventId,
       submissionId: submission.id,
       expectedVersion: submission.version,
-      idempotencyKey: revocationKey.current,
+      idempotencyKey: decisionKeys.revocation,
       requestId: operationRequestId("review-revoke"),
     }));
   };

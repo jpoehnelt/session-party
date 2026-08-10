@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
@@ -98,18 +98,101 @@ const formatTime = (timestamp: number | null): string => timestamp === null
 
 interface EnqueueRequestBase {
   readonly templateId: string;
+  readonly expectedTemplateVersion: number;
   readonly recipientSpeakerIds: readonly string[];
   readonly replyToEmail: string | null;
+}
+
+interface EnqueueRequest extends EnqueueRequestBase {
+  readonly scheduledFor: number | null;
+}
+
+interface ConfirmedEnqueueRequest extends EnqueueRequest {
   readonly idempotencyKey: string;
 }
 
-export const buildEnqueueRequest = (
-  input: EnqueueRequestBase,
+export interface CampaignConfirmationInput {
+  readonly eventId: string;
+  readonly templateId: string;
+  readonly templateVersion: number;
+  readonly recipientSpeakerIds: readonly string[];
+  readonly replyToEmail: string | null;
+  readonly sendMode: SendMode;
+  readonly scheduledWallTime: string;
+  readonly timezone: string;
+}
+
+export const campaignConfirmationIdentity = (input: CampaignConfirmationInput): string =>
+  JSON.stringify({
+    ...input,
+    recipientSpeakerIds: [...input.recipientSpeakerIds].sort(),
+  });
+
+export interface CampaignEnqueueCoordinator {
+  readonly run: <T>(
+    confirmationIdentity: string,
+    request: EnqueueRequest,
+    submit: (confirmedRequest: ConfirmedEnqueueRequest) => Promise<T>,
+  ) => Promise<T>;
+}
+
+export const createCampaignEnqueueCoordinator = (
+  createKey: () => string = () => operationKey("enqueue-communications"),
+): CampaignEnqueueCoordinator => {
+  let attempt: {
+    readonly confirmationIdentity: string;
+    readonly request: ConfirmedEnqueueRequest;
+  } | undefined;
+  let inFlight: Promise<unknown> | undefined;
+
+  return {
+    run<T>(
+      confirmationIdentity: string,
+      request: EnqueueRequest,
+      submit: (confirmedRequest: ConfirmedEnqueueRequest) => Promise<T>,
+    ): Promise<T> {
+      if (inFlight) return inFlight as Promise<T>;
+      if (attempt?.confirmationIdentity !== confirmationIdentity) {
+        attempt = {
+          confirmationIdentity,
+          request: {
+            ...request,
+            recipientSpeakerIds: [...request.recipientSpeakerIds].sort(),
+            idempotencyKey: createKey(),
+          },
+        };
+      }
+
+      const submittedAttempt = attempt;
+      let pending: Promise<T>;
+      try {
+        pending = submit(submittedAttempt.request);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      inFlight = pending;
+      void pending.then(
+        () => {
+          if (inFlight !== pending) return;
+          inFlight = undefined;
+          if (attempt === submittedAttempt) attempt = undefined;
+        },
+        () => {
+          if (inFlight === pending) inFlight = undefined;
+        },
+      );
+      return pending;
+    },
+  };
+};
+
+export const buildEnqueueRequest = <T extends EnqueueRequestBase>(
+  input: T,
   mode: SendMode,
   scheduledWallTime: string,
   timezone: string,
   now = Date.now(),
-) => {
+): T & { readonly scheduledFor: number | null } => {
   if (mode === "now") return { ...input, scheduledFor: null };
   const scheduledFor = parseDateTimeInTimezone(scheduledWallTime, timezone, "Scheduled delivery");
   if (scheduledFor === null) throw new Error("Choose a delivery date and time.");
@@ -236,7 +319,7 @@ export default function CommunicationsPage() {
   return <CommunicationsWorkspace key={event.id} event={event} />;
 }
 
-function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
+export function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("templates");
   const [templates, setTemplates] = useState<readonly CommunicationTemplateValue[] | undefined>(undefined);
   const [audience, setAudience] = useState<AudienceSnapshotValue | undefined>(undefined);
@@ -249,11 +332,12 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
   const [replyToEmail, setReplyToEmail] = useState("");
   const [sendMode, setSendMode] = useState<SendMode>("now");
   const [scheduledWallTime, setScheduledWallTime] = useState("");
-  const [automatedDeliveryConfirmed, setAutomatedDeliveryConfirmed] = useState(false);
+  const [confirmedCampaignIdentity, setConfirmedCampaignIdentity] = useState<string>();
   const [busy, setBusy] = useState<"save" | "preview" | "enqueue" | `retry:${string}` | null>(null);
   const [queueResult, setQueueResult] = useState<EnqueueCommunicationResultValue | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const campaignEnqueue = useRef(createCampaignEnqueueCoordinator()).current;
 
   const loadWorkspace = useCallback(async () => {
     const root = `/api/v1/events/${encodeURIComponent(event.id)}/comms`;
@@ -289,6 +373,17 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
   const eligibleRecipients = audience?.recipients.filter((recipient) => recipient.eligibility === "eligible") ?? [];
   const selectedTemplate = templates?.find((template) => template.id === selectedTemplateId) ?? null;
   const selectedCount = [...selectedSpeakers].filter((speakerId) => eligibleRecipients.some((recipient) => recipient.speakerId === speakerId)).length;
+  const confirmationIdentity = campaignConfirmationIdentity({
+    eventId: event.id,
+    templateId: selectedTemplate?.id ?? "",
+    templateVersion: selectedTemplate?.version ?? 0,
+    recipientSpeakerIds: [...selectedSpeakers],
+    replyToEmail: replyToEmail.trim() || null,
+    sendMode,
+    scheduledWallTime,
+    timezone: event.timezone,
+  });
+
 
   const saveTemplate = async (event_: FormEvent) => {
     event_.preventDefault();
@@ -357,28 +452,29 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
   };
 
   const enqueue = async () => {
-    if (!selectedTemplate || selectedCount === 0) return;
+    if (!selectedTemplate || selectedCount === 0 || confirmedCampaignIdentity !== confirmationIdentity) return;
     setBusy("enqueue");
     try {
       const request = buildEnqueueRequest(
         {
           templateId: selectedTemplate.id,
+          expectedTemplateVersion: selectedTemplate.version,
           recipientSpeakerIds: [...selectedSpeakers],
           replyToEmail: replyToEmail.trim() || null,
-          idempotencyKey: operationKey("enqueue-communications"),
         },
         sendMode,
         scheduledWallTime,
         event.timezone,
       );
-      const result = await apiFetch(`/api/v1/events/${encodeURIComponent(event.id)}/comms/deliveries`, {
-        method: "POST",
-        body: request,
-        schema: EnqueueCommunicationResult,
-      });
+      const result = await campaignEnqueue.run(confirmationIdentity, request, (confirmedRequest) =>
+        apiFetch(`/api/v1/events/${encodeURIComponent(event.id)}/comms/deliveries`, {
+          method: "POST",
+          body: confirmedRequest,
+          schema: EnqueueCommunicationResult,
+        }));
       setQueueResult(result);
       setSelectedSpeakers(new Set());
-      setAutomatedDeliveryConfirmed(false);
+      setConfirmedCampaignIdentity(undefined);
       setRefresh((value) => value + 1);
       toast(`${result.deliveries.length} ${result.deliveries.length === 1 ? "delivery" : "deliveries"} queued durably`, { tone: "success" });
     } catch (error) {
@@ -729,14 +825,14 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                   <p className="grid min-w-20 place-items-center border-l-2 border-line-strong px-4 text-5xl font-black tracking-[-0.07em] text-ink">{selectedCount}</p>
                 </div>
                 <Checkbox
-                  checked={automatedDeliveryConfirmed}
-                  onChange={(event_) => setAutomatedDeliveryConfirmed(event_.target.checked)}
+                  checked={confirmedCampaignIdentity === confirmationIdentity}
+                  onChange={(event_) => setConfirmedCampaignIdentity(event_.target.checked ? confirmationIdentity : undefined)}
                   label="Authorize Session Party to send"
                   description="I reviewed the selected template, recipients, reply-to address, and delivery time."
                 />
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button className="w-full" loading={busy === "enqueue"} disabled={!automatedDeliveryConfirmed || !selectedTemplate || selectedCount === 0 || (sendMode === "scheduled" && scheduledWallTime === "")}>
+                    <Button className="w-full" loading={busy === "enqueue"} disabled={busy === "enqueue" || confirmedCampaignIdentity !== confirmationIdentity || !selectedTemplate || selectedCount === 0 || (sendMode === "scheduled" && scheduledWallTime === "")}>
                       {sendMode === "scheduled" ? "Schedule immutable deliveries" : "Queue immutable deliveries"}
                     </Button>
                   </AlertDialogTrigger>
@@ -749,7 +845,7 @@ function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Review recipients</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => void enqueue()}>{sendMode === "scheduled" ? "Schedule deliveries" : "Queue deliveries"}</AlertDialogAction>
+                      <AlertDialogAction disabled={busy === "enqueue"} onClick={() => void enqueue()}>{sendMode === "scheduled" ? "Schedule deliveries" : "Queue deliveries"}</AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
