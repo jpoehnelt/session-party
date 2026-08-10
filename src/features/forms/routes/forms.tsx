@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { Schema } from "effect";
 import type { PresenceUser } from "contracts/protocol";
@@ -466,6 +466,22 @@ export interface FormsWorkspaceProps {
   readonly onUnauthenticated?: () => void;
 }
 
+export function selectedFormForRender(
+  selectedId: string | null,
+  selectedForm: FormDetail | null | undefined,
+): FormDetail | null | undefined {
+  if (selectedForm && selectedForm.id !== selectedId) return undefined;
+  return selectedForm;
+}
+
+export function shouldApplyReturnedForm(
+  activeFormId: string | null,
+  returnedFormId: string,
+  forceSelection = false,
+): boolean {
+  return forceSelection || activeFormId === returnedFormId;
+}
+
 export function FormsWorkspace({
   event,
   initialSummaries,
@@ -484,14 +500,26 @@ export function FormsWorkspace({
   const [additionalName, setAdditionalName] = useState("");
   const [additionalDescription, setAdditionalDescription] = useState("");
   const [realtimeReady, setRealtimeReady] = useState(false);
+  const selectedIdRef = useRef<string | null>(initialSelectedId);
+  selectedIdRef.current = selectedId;
 
   useEffect(() => {
     setRealtimeReady(true);
   }, []);
 
-  const applyDetail = useCallback((form: FormDetail) => {
-    setSelectedId(form.id);
-    setSelectedForm(form);
+  const selectForm = useCallback((formId: string | null) => {
+    selectedIdRef.current = formId;
+    setSelectedId(formId);
+    setSelectedForm(formId ? undefined : null);
+    setDetailError(null);
+  }, []);
+
+  const applyDetail = useCallback((form: FormDetail, forceSelection = false) => {
+    if (shouldApplyReturnedForm(selectedIdRef.current, form.id, forceSelection)) {
+      selectedIdRef.current = form.id;
+      setSelectedId(form.id);
+      setSelectedForm(form);
+    }
     setSummaries((current) => {
       const summary = toSummary(form);
       if (!current) return [summary];
@@ -518,7 +546,7 @@ export function FormsWorkspace({
     setMutation({ action: "create", tone: "neutral", message: purpose === "primary-cfp" ? "Creating primary CFP…" : "Creating form…" });
     try {
       const created = await createFormDraft(event.id, purpose, mutationKey("forms-create"), details);
-      applyDetail(created);
+      applyDetail(created, true);
       const message = purpose === "primary-cfp" ? "Primary CFP draft created." : "Additional form draft created.";
       setMutation({ action: null, tone: "success", message });
       if (purpose === "additional") {
@@ -538,8 +566,7 @@ export function FormsWorkspace({
       await deleteFormDraft(event.id, draft.id, draft.version, mutationKey("forms-delete-draft"));
       const remaining = (summaries ?? []).filter((form) => form.id !== draft.id);
       setSummaries(remaining);
-      setSelectedId(remaining[0]?.id ?? null);
-      setSelectedForm(null);
+      selectForm(remaining[0]?.id ?? null);
       setMutation({ action: null, tone: "success", message: "Unpublished draft deleted." });
       toast("Draft deleted.", { tone: "success" });
     } catch (error) {
@@ -603,8 +630,11 @@ export function FormsWorkspace({
       .then((loaded) => {
         if (!active) return;
         setSummaries(loaded);
-        setSelectedId((current) =>
-          current && loaded.some((form) => form.id === current) ? current : (loaded[0]?.id ?? null));
+        setSelectedId((current) => {
+          const next = current && loaded.some((form) => form.id === current) ? current : (loaded[0]?.id ?? null);
+          selectedIdRef.current = next;
+          return next;
+        });
       })
       .catch((error) => {
         if (!active) return;
@@ -650,6 +680,8 @@ export function FormsWorkspace({
       active = false;
     };
   }, [event.id, onUnauthenticated, selectedId]);
+
+  const visibleSelectedForm = selectedFormForRender(selectedId, selectedForm);
 
   if (summaries === undefined) {
     return <LoadingRegion label="Loading forms" />;
@@ -753,7 +785,7 @@ export function FormsWorkspace({
                       key={form.id}
                       variant={active ? "secondary" : "ghost"}
                       aria-current={active ? "page" : undefined}
-                      onClick={() => setSelectedId(form.id)}
+                      onClick={() => selectForm(form.id)}
                       className={`h-auto w-full flex-col items-stretch whitespace-normal rounded-none border-2 border-[#171714] px-3 py-3 text-left transition-transform hover:-translate-y-0.5 ${
                         active ? "bg-[#896aff] text-[#171714] shadow-[3px_3px_0_#171714]" : "bg-[#f3efe3] hover:bg-[#caff4a]"
                       }`}
@@ -794,9 +826,9 @@ export function FormsWorkspace({
 
           <section className="min-w-0" aria-label="Form editor">
             {realtimeReady && selectedId && <RealtimeFormPresence eventId={event.id} formId={selectedId} />}
-            {selectedForm === undefined ? (
+            {visibleSelectedForm === undefined ? (
               <Skeleton className="h-[36rem] rounded-none border-2 border-[#171714] motion-reduce:animate-none" />
-            ) : selectedForm === null ? (
+            ) : visibleSelectedForm === null ? (
               <Card className="rounded-none border-2 border-[#171714] bg-[#fffdf7] shadow-[5px_5px_0_#ff714f]">
                 <EmptyState
                   title={detailError ? "Could not load form" : "Choose a form"}
@@ -805,8 +837,8 @@ export function FormsWorkspace({
               </Card>
             ) : (
               <FormBuilder
-                key={`${selectedForm.id}:${selectedForm.version}`}
-                form={selectedForm}
+                key={`${visibleSelectedForm.id}:${visibleSelectedForm.version}`}
+                form={visibleSelectedForm}
                 busyAction={mutation.action}
                 onChange={setSelectedForm}
                 onSave={(draft) => void handleSave(draft)}
@@ -818,10 +850,10 @@ export function FormsWorkspace({
           </section>
 
           <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start" aria-label="Live mobile preview">
-            {selectedForm && (
+            {visibleSelectedForm && (
               <FormPreview
-                key={`${selectedForm.id}:${selectedForm.version}`}
-                form={selectedForm}
+                key={`${visibleSelectedForm.id}:${visibleSelectedForm.version}`}
+                form={visibleSelectedForm}
                 now={Date.now()}
               />
             )}

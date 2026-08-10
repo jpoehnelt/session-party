@@ -5,7 +5,7 @@ import { EntityId } from "contracts/domain";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { Badge, Button, Card, EmptyState, Input, Select, Skeleton } from "@/ui";
-import type { ReviewWorkbench, SubmissionReviewSummary, SubmissionStatus } from "../schema";
+import type { ReviewWorkbench, SubmissionReviewDetail, SubmissionReviewSummary, SubmissionStatus } from "../schema";
 import { ReviewWorkbench as ReviewWorkbenchSchema } from "../schema";
 import { SubmissionReviewPane } from "../components/SubmissionReviewPane";
 import { ReviewRoundSetup } from "../components/ReviewRoundSetup";
@@ -40,13 +40,19 @@ class ReviewLoadError extends Error {
 export async function loadReviewWorkbench(
   eventSlug: string,
   selectedSubmissionId?: string,
+  options: {
+    readonly event?: EventIdentity;
+    readonly signal?: AbortSignal;
+  } = {},
 ): Promise<{ readonly event: EventIdentity; readonly workbench: ReviewWorkbench }> {
   let event: EventIdentity;
   try {
-    event = await apiFetch<EventIdentity>(`/api/v1/events/${encodeURIComponent(eventSlug)}`, {
+    event = options.event ?? await apiFetch<EventIdentity>(`/api/v1/events/${encodeURIComponent(eventSlug)}`, {
       schema: EventIdentitySchema,
+      signal: options.signal,
     });
   } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new ReviewLoadError("event", error);
   }
 
@@ -56,12 +62,44 @@ export async function loadReviewWorkbench(
   try {
     const workbench = await apiFetch<ReviewWorkbench>(
       `/api/v1/events/${encodeURIComponent(event.id)}/review${query}`,
-      { schema: ReviewWorkbenchSchema },
+      { schema: ReviewWorkbenchSchema, signal: options.signal },
     );
     return { event, workbench };
   } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new ReviewLoadError("review", error);
   }
+}
+
+export function reviewSelectionSearch(currentSearch: string, submissionId: string): string {
+  const params = new URLSearchParams(currentSearch);
+  if (submissionId) params.set("selectedSubmissionId", submissionId);
+  else params.delete("selectedSubmissionId");
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export function selectCachedReviewDetail(
+  workbench: ReviewWorkbench,
+  detail: SubmissionReviewDetail,
+): ReviewWorkbench {
+  const summary = workbench.queue.find((submission) => submission.id === detail.id);
+  return {
+    ...workbench,
+    selected: summary ? { ...detail, ...summary } : detail,
+  };
+}
+
+export function shouldApplyReviewRefresh(
+  activeSubmissionId: string | undefined,
+  refreshedSubmissionId: string,
+): boolean {
+  return activeSubmissionId === refreshedSubmissionId;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (error instanceof Error && error.name === "AbortError")
+    || (error instanceof ReviewLoadError && isAbortError(error.cause));
 }
 
 const statusLabel: Record<SubmissionStatus, string> = {
@@ -209,53 +247,125 @@ export default function ReviewWorkbenchRoute() {
     readonly version: number;
   }>();
   const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const eventRef = useRef<EventIdentity | undefined>(undefined);
+  const selectedSubmissionIdRef = useRef<string | undefined>(undefined);
+  const detailCacheRef = useRef(new Map<string, SubmissionReviewDetail>());
+  const detailAbortRef = useRef<AbortController | undefined>(undefined);
+  const mutationRefreshAbortRef = useRef<AbortController | undefined>(undefined);
+  const locationRef = useRef(location);
+  locationRef.current = location;
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
+    detailAbortRef.current?.abort();
+    mutationRefreshAbortRef.current?.abort();
+    detailCacheRef.current.clear();
+    eventRef.current = undefined;
+    selectedSubmissionIdRef.current = undefined;
     setLoadError(undefined);
     setResult(undefined);
     setDetailRequest(undefined);
     setIsDetailLoading(false);
     const selectedSubmissionId = new URLSearchParams(location.search).get("selectedSubmissionId") ?? undefined;
-    void loadReviewWorkbench(eventSlug, selectedSubmissionId)
+    void loadReviewWorkbench(eventSlug, selectedSubmissionId, { signal: controller.signal })
       .then((loaded) => {
-        if (active) setResult(loaded);
+        if (!active) return;
+        eventRef.current = loaded.event;
+        selectedSubmissionIdRef.current = loaded.workbench.selected?.id;
+        if (loaded.workbench.selected) {
+          detailCacheRef.current.set(loaded.workbench.selected.id, loaded.workbench.selected);
+        }
+        setResult(loaded);
       })
       .catch((error: unknown) => {
-        if (active) setLoadError(errorFrom(error));
+        if (active && !isAbortError(error)) setLoadError(errorFrom(error));
       });
-    return () => { active = false; };
-  }, [eventSlug, initialRequestVersion, location.search]);
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [eventSlug, initialRequestVersion]);
 
   useEffect(() => {
     if (!detailRequest || detailRequest.eventSlug !== eventSlug) return;
+    const event = eventRef.current;
+    if (!event) return;
     let active = true;
+    const controller = new AbortController();
+    detailAbortRef.current?.abort();
+    detailAbortRef.current = controller;
     setLoadError(undefined);
     setIsDetailLoading(true);
-    void loadReviewWorkbench(eventSlug, detailRequest.submissionId)
+    void loadReviewWorkbench(eventSlug, detailRequest.submissionId, { event, signal: controller.signal })
       .then((loaded) => {
-        if (active) setResult(loaded);
+        if (!active) return;
+        const detail = loaded.workbench.selected;
+        if (detail) detailCacheRef.current.set(detail.id, detail);
+        if (selectedSubmissionIdRef.current === detailRequest.submissionId) setResult(loaded);
       })
       .catch((error: unknown) => {
-        if (active) setLoadError(errorFrom(error));
+        if (active && !isAbortError(error)) setLoadError(errorFrom(error));
       })
       .finally(() => {
         if (active) setIsDetailLoading(false);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [detailRequest, eventSlug]);
 
-  const requestDetail = useCallback((submissionId: string) => {
-    setDetailRequest((current) => (
-      current?.eventSlug === eventSlug && current.submissionId === submissionId
-        ? current
-        : { eventSlug, submissionId, version: (current?.version ?? 0) + 1 }
-    ));
-  }, [eventSlug]);
+  const requestDetail = useCallback((submissionId: string, syncUrl = true) => {
+    selectedSubmissionIdRef.current = submissionId;
+    mutationRefreshAbortRef.current?.abort();
+    const cached = detailCacheRef.current.get(submissionId);
+    if (cached) {
+      setDetailRequest(undefined);
+      setIsDetailLoading(false);
+      setResult((current) => current && {
+        ...current,
+        workbench: selectCachedReviewDetail(current.workbench, cached),
+      });
+    } else {
+      setIsDetailLoading(true);
+      setDetailRequest((current) => (
+        current?.eventSlug === eventSlug && current.submissionId === submissionId
+          ? current
+          : { eventSlug, submissionId, version: (current?.version ?? 0) + 1 }
+      ));
+    }
+    if (syncUrl) {
+      const currentLocation = locationRef.current;
+      const search = reviewSelectionSearch(currentLocation.search, submissionId);
+      if (search !== currentLocation.search) {
+        void navigate({ pathname: currentLocation.pathname, search }, { replace: true });
+      }
+    }
+  }, [eventSlug, navigate]);
+
+  useEffect(() => {
+    if (!result) return;
+    const fromUrl = new URLSearchParams(location.search).get("selectedSubmissionId")
+      ?? result.workbench.queue[0]?.id;
+    if (fromUrl && fromUrl !== selectedSubmissionIdRef.current) requestDetail(fromUrl, false);
+  }, [location.search, requestDetail, result]);
 
   const refreshSelectedDetail = useCallback(async (submissionId: string) => {
-    const loaded = await loadReviewWorkbench(eventSlug, submissionId);
-    setResult(loaded);
+    const event = eventRef.current;
+    if (!event || !submissionId) return;
+    mutationRefreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    mutationRefreshAbortRef.current = controller;
+    detailCacheRef.current.delete(submissionId);
+    try {
+      const loaded = await loadReviewWorkbench(eventSlug, submissionId, { event, signal: controller.signal });
+      const detail = loaded.workbench.selected;
+      if (detail) detailCacheRef.current.set(detail.id, detail);
+      if (shouldApplyReviewRefresh(selectedSubmissionIdRef.current, submissionId)) setResult(loaded);
+    } catch (error) {
+      if (!isAbortError(error)) throw error;
+    }
   }, [eventSlug]);
 
   const retry = () => {
