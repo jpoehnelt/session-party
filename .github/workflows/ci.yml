@@ -73,6 +73,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install rubric browser
+        run: pnpm exec playwright install --with-deps chromium
       - name: Test rubric scoring
         run: pnpm rubric:test
       - name: Compute base-branch rubric grade

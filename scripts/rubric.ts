@@ -6,7 +6,7 @@ import { join, relative, resolve } from "node:path";
 import { readBaseline, writeBaseline } from "./rubric/baseline.ts";
 import { evidencePlan } from "./rubric/evidence.ts";
 import { loadManifest, validateEvidencePlan } from "./rubric/manifest.ts";
-import type { EvidencePlan, RubricReport, VitestCheck } from "./rubric/model.ts";
+import type { EvidencePlan, RubricReport, VitestBrowserCheck, VitestCheck } from "./rubric/model.ts";
 import { renderMarkdown } from "./rubric/report.ts";
 import { scoreRubric, testKey, type TestOutcomes } from "./rubric/score.ts";
 
@@ -38,8 +38,11 @@ The gate reads the committed monotonic baseline; the baseline command advances i
 const asVitestChecks = (plan: EvidencePlan): readonly VitestCheck[] =>
   Object.values(plan).flatMap((checks) => checks.filter((check): check is VitestCheck => check.kind === "vitest"));
 
+const asBrowserChecks = (plan: EvidencePlan): readonly VitestBrowserCheck[] =>
+  Object.values(plan).flatMap((checks) => checks.filter((check): check is VitestBrowserCheck => check.kind === "vitest-browser"));
+
 function validateFiles(plan: EvidencePlan): void {
-  for (const check of asVitestChecks(plan)) {
+  for (const check of [...asVitestChecks(plan), ...asBrowserChecks(plan)]) {
     if (!existsSync(resolve(check.file))) throw new Error(`Rubric evidence file does not exist: ${check.file}`);
     if (check.title.trim().length === 0) throw new Error(`Rubric evidence title is empty: ${check.file}`);
   }
@@ -102,14 +105,26 @@ function readVitestOutcomes(path: string): TestOutcomes {
   return outcomes;
 }
 
-function runVitest(plan: EvidencePlan): TestOutcomes {
-  const files = [...new Set(asVitestChecks(plan).map(({ file }) => file))].sort();
+function runVitestChecks(
+  checks: readonly (VitestCheck | VitestBrowserCheck)[],
+  config?: string,
+): TestOutcomes {
+  if (checks.length === 0) return new Map();
+  const files = [...new Set(checks.map(({ file }) => file))].sort();
   const temporary = mkdtempSync(join(tmpdir(), "session-party-rubric-"));
   const reportPath = join(temporary, "vitest.json");
   try {
     const result = spawnSync(
       "pnpm",
-      ["exec", "vitest", "run", ...files, "--reporter=json", `--outputFile=${reportPath}`],
+      [
+        "exec",
+        "vitest",
+        "run",
+        ...(config ? ["--config", config] : []),
+        ...files,
+        "--reporter=json",
+        `--outputFile=${reportPath}`,
+      ],
       { cwd: process.cwd(), env: process.env, stdio: "inherit" },
     );
     if (!existsSync(reportPath)) {
@@ -119,6 +134,12 @@ function runVitest(plan: EvidencePlan): TestOutcomes {
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+}
+
+function runVitest(plan: EvidencePlan): TestOutcomes {
+  const worker = runVitestChecks(asVitestChecks(plan));
+  const browser = runVitestChecks(asBrowserChecks(plan), "src/client/vitest.audit-browser.config.ts");
+  return new Map([...worker, ...browser]);
 }
 
 function writeReport(report: RubricReport, outputDirectory: string): void {
