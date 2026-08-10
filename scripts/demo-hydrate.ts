@@ -10,7 +10,7 @@ const speakerSession = "demo-speaker-session";
 const DAY_MS = 86_400_000;
 
 const fixtureSpeakerNames = [
-  "Sam Speaker", "Alex Morgan", "Avery Chen", "Blair Okafor", "Cameron Singh",
+  "Priya Raman", "Alex Morgan", "Avery Chen", "Blair Okafor", "Cameron Singh",
   "Casey Rivera", "Dakota Kim", "Drew Williams", "Elliot Hassan", "Emerson Silva",
   "Finley Jones", "Harper Brown", "Hayden Garcia", "Jamie Patel", "Jordan Lee",
   "Kai Thompson", "Kendall Martin", "Lane Davis", "Logan Wilson", "Marley Taylor",
@@ -22,7 +22,7 @@ const fixtureSpeakers = fixtureSpeakerNames.map((name, index) => {
   const ordinal = String(index + 1).padStart(2, "0");
   return {
     name,
-    email: index === 0 ? "speaker@sessionparty.local" : `speaker${ordinal}@sessionparty.local`,
+    email: index === 0 ? "sbek-speaker@example.com" : `speaker${ordinal}@sessionparty.local`,
     session: index === 0 ? speakerSession : `demo-speaker-${ordinal}-session`,
   };
 });
@@ -496,11 +496,11 @@ const profile = await request<SpeakerProfile>(`/events/${eventId}/portal/profile
   body: {
     expectedVersion: claimed.speakerVersion,
     idempotencyKey: "demo-speaker-profile-v1",
-    displayName: "Sam Speaker",
+    displayName: "Priya Raman",
     title: "Principal AI Engineer",
     company: "Fieldcraft Labs",
-    bio: "Sam builds reliable agent systems and teaches teams how to operate them in production.",
-    links: [{ label: "Website", url: "https://example.com/sam-speaker" }],
+    bio: "Priya builds reliable agent systems and teaches teams how to operate them in production.",
+    links: [{ label: "Website", url: "https://example.com/priya-raman" }],
   },
 });
 
@@ -517,7 +517,7 @@ await request(`/events/${eventId}/portal/assets`, {
   body: {
     taskId: tasks[1]!.id,
     purpose: "headshot",
-    filename: "sam-speaker.png",
+    filename: "priya-raman.png",
     contentType: "image/png",
     contentBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
     expectedVersion: profile.version,

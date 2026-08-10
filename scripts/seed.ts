@@ -14,10 +14,10 @@ const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 const json = (value: unknown): string => quote(JSON.stringify(value));
 
 const corePersonas = [
-  ["demo-owner", "owner@sessionparty.local", "Olivia Owner", "demo-owner-session", expiresAt],
+  ["demo-owner", "sbek-organizer@example.com", "Jordan Alvarez", "demo-owner-session", expiresAt],
   ["demo-admin", "admin@sessionparty.local", "Amari Admin", "demo-admin-session", expiresAt],
-  ["demo-reviewer", "reviewer@sessionparty.local", "Riley Reviewer", "demo-reviewer-session", expiresAt],
-  ["demo-speaker", "speaker@sessionparty.local", "Sam Speaker", "demo-speaker-session", expiresAt],
+  ["demo-reviewer", "sbek-reviewer@example.com", "Sam Whitfield", "demo-reviewer-session", expiresAt],
+  ["demo-speaker", "sbek-speaker@example.com", "Priya Raman", "demo-speaker-session", expiresAt],
   ["demo-observer", "observer@sessionparty.local", "Owen Observer", "demo-observer-session", expiresAt],
   ["demo-expired", "expired@sessionparty.local", "Emery Expired", "demo-expired-session", expiredAt],
 ] as const;

@@ -1324,7 +1324,7 @@ describe("agenda service", () => {
           status: "claimed",
           attemptCount: 1,
           leaseOwner: claimLease,
-          leaseExpiresAt: new Date(FIXED_NOW + 60_000),
+          leaseExpiresAt: new Date(Date.now() + 60_000),
         }).where(eq(mailDeliveries.id, updateDelivery!.id));
       }),
     ));
