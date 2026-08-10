@@ -10,12 +10,21 @@ const demoPersonas = [
   { persona: "reviewer", name: "Sam Whitfield", email: "sbek-reviewer@example.com" },
 ] as const;
 
-type DemoPersona = (typeof demoPersonas)[number]["persona"];
+export type DemoPersona = (typeof demoPersonas)[number]["persona"];
 type DemoLoginResponse = { readonly returnTo: string };
+
+const demoPersonaHome: Readonly<Record<DemoPersona, string>> = {
+  organizer: "/e/devflow-conf-2027",
+  speaker: "/e/devflow-conf-2027/portal",
+  reviewer: "/e/devflow-conf-2027/review",
+};
+
+export const demoReturnTo = (persona: DemoPersona, search: string): string =>
+  validReturnTo(search) ?? demoPersonaHome[persona];
 
 export default function LoginPage() {
   const { search } = useLocation();
-  const returnTo = validReturnTo(search) ?? "/events";
+  const emailReturnTo = validReturnTo(search) ?? "/events";
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string>();
@@ -28,7 +37,7 @@ export default function LoginPage() {
     try {
       const result = await apiFetch<DemoLoginResponse>("/api/v1/auth/demo", {
         method: "POST",
-        body: { persona, returnTo },
+        body: { persona, returnTo: demoReturnTo(persona, search) },
       });
       window.location.assign(result.returnTo);
     } catch (cause) {
@@ -45,7 +54,7 @@ export default function LoginPage() {
     try {
       await apiFetch("/api/v1/auth/request-link", {
         method: "POST",
-        body: { email, returnTo },
+        body: { email, returnTo: emailReturnTo },
       });
       setSubmitted(true);
     } catch (cause) {

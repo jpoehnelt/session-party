@@ -49,18 +49,32 @@ const DEMO_EVENT = {
   endsAt: Date.parse("2027-05-14T17:00:00-07:00"),
   accentColor: "#7857ff",
 } as const;
+const DEMO_PERSONA_HOME: Readonly<Record<DemoPersona, string>> = {
+  organizer: `/e/${DEMO_EVENT.slug}`,
+  speaker: `/e/${DEMO_EVENT.slug}/portal`,
+  reviewer: `/e/${DEMO_EVENT.slug}/review`,
+};
+const DEMO_RECORD_IDS = {
+  form: "demo-devflow-cfp",
+  formVersion: "demo-devflow-cfp-v1",
+  submission: "demo-devflow-submission-priya",
+  speaker: "demo-devflow-speaker-priya",
+  submissionSpeaker: "demo-devflow-submission-speaker-priya",
+  acceptance: "demo-devflow-acceptance-priya",
+  provisioning: "demo-devflow-provisioning-priya",
+} as const;
 const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 const RETURN_TO_ORIGIN = "https://return-to.invalid";
-const validatedReturnTo = (returnTo: string | undefined): string => {
-  if (!returnTo?.startsWith("/") || returnTo.startsWith("//")) return "/";
+const validatedReturnTo = (returnTo: string | undefined, fallback = "/"): string => {
+  if (!returnTo?.startsWith("/") || returnTo.startsWith("//")) return fallback;
   try {
     const target = new URL(returnTo, RETURN_TO_ORIGIN);
-    if (target.origin !== RETURN_TO_ORIGIN || target.pathname.startsWith("//")) return "/";
+    if (target.origin !== RETURN_TO_ORIGIN || target.pathname.startsWith("//")) return fallback;
     return `${target.pathname}${target.search}${target.hash}`;
   } catch {
-    return "/";
+    return fallback;
   }
 };
 
@@ -277,11 +291,107 @@ const ensureDemoSeed = async (
   ).bind(DEMO_EVENT.slug).first<{ id: string }>();
   if (!event) throw new Error("Demo event was not created");
 
-  await env.DB.prepare(
-    `INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)
-     VALUES (?, ?, ?, 'owner', 1, ?, ?)
-     ON CONFLICT(event_id, user_id) DO NOTHING`,
-  ).bind(nanoid(), event.id, demoUsers.organizer, nowMs, nowMs).run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)
+       VALUES (?, ?, ?, 'owner', 1, ?, ?)
+       ON CONFLICT(event_id, user_id) DO UPDATE SET
+         role = excluded.role,
+         version = event_members.version + 1,
+         updated_at = excluded.updated_at
+       WHERE event_members.role <> excluded.role`,
+    ).bind(nanoid(), event.id, demoUsers.organizer, nowMs, nowMs),
+    env.DB.prepare(
+      `INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)
+       VALUES (?, ?, ?, 'reviewer', 1, ?, ?)
+       ON CONFLICT(event_id, user_id) DO UPDATE SET
+         role = excluded.role,
+         version = event_members.version + 1,
+         updated_at = excluded.updated_at
+       WHERE event_members.role <> excluded.role`,
+    ).bind(nanoid(), event.id, demoUsers.reviewer, nowMs, nowMs),
+    env.DB.prepare(
+      `INSERT INTO forms (id, event_id, kind, name, status, version, created_at, updated_at)
+       VALUES (?, ?, 'cfp', 'DevFlow Conf CFP', 'closed', 1, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(DEMO_RECORD_IDS.form, event.id, nowMs, nowMs),
+    env.DB.prepare(
+      `INSERT INTO form_versions (id, event_id, form_id, version_number, name, published_at, created_at)
+       VALUES (?, ?, ?, 1, 'DevFlow Conf CFP', ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(DEMO_RECORD_IDS.formVersion, event.id, DEMO_RECORD_IDS.form, nowMs, nowMs),
+    env.DB.prepare(
+      `INSERT INTO submissions
+         (id, event_id, form_id, form_version_id, title, category, status, submitted_at, accepted_at, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'Designing reliable AI workflows', 'AI systems', 'accepted', ?, ?, 1, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(
+      DEMO_RECORD_IDS.submission,
+      event.id,
+      DEMO_RECORD_IDS.form,
+      DEMO_RECORD_IDS.formVersion,
+      nowMs,
+      nowMs,
+      nowMs,
+      nowMs,
+    ),
+    env.DB.prepare(
+      `INSERT INTO speakers
+       (id, event_id, user_id, contact_email, display_name, title, company, bio, links, visible, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'Staff Engineer', 'Northstar Labs', 'Priya builds dependable AI systems and developer platforms.', '[]', 1, 1, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(
+      DEMO_RECORD_IDS.speaker,
+      event.id,
+      demoUsers.speaker,
+      DEMO_IDENTITIES.speaker.email,
+      DEMO_IDENTITIES.speaker.name,
+      nowMs,
+      nowMs,
+    ),
+    env.DB.prepare(
+      `INSERT INTO submission_speakers
+         (id, event_id, submission_id, speaker_id, is_primary, title_at_time, organization_at_time, created_at)
+       VALUES (?, ?, ?, ?, 1, 'Staff Engineer', 'Northstar Labs', ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(
+      DEMO_RECORD_IDS.submissionSpeaker,
+      event.id,
+      DEMO_RECORD_IDS.submission,
+      DEMO_RECORD_IDS.speaker,
+      nowMs,
+    ),
+    env.DB.prepare(
+      `INSERT INTO acceptance_events
+         (id, event_id, submission_id, primary_submission_speaker_id, primary_speaker_id, primary_association_is_primary, type, submission_version, actor_user_id, occurred_at)
+       VALUES (?, ?, ?, ?, ?, 1, 'accepted', 1, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(
+      DEMO_RECORD_IDS.acceptance,
+      event.id,
+      DEMO_RECORD_IDS.submission,
+      DEMO_RECORD_IDS.submissionSpeaker,
+      DEMO_RECORD_IDS.speaker,
+      demoUsers.organizer,
+      nowMs,
+    ),
+    env.DB.prepare(
+      `INSERT INTO speaker_provisioning
+         (id, event_id, acceptance_event_id, submission_id, primary_speaker_id, status, available_at, attempt_count, provisioned_at, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'provisioned', ?, 0, ?, 1, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(
+      DEMO_RECORD_IDS.provisioning,
+      event.id,
+      DEMO_RECORD_IDS.acceptance,
+      DEMO_RECORD_IDS.submission,
+      DEMO_RECORD_IDS.speaker,
+      nowMs,
+      nowMs,
+      nowMs,
+      nowMs,
+    ),
+  ]);
 
   return { users: demoUsers, eventId: event.id };
 };
@@ -405,7 +515,7 @@ auth.post("/demo", async (c) => {
       email: identity.email,
       name: identity.name,
       event: { id: seed.eventId, slug: DEMO_EVENT.slug, name: DEMO_EVENT.name },
-      returnTo: validatedReturnTo(parsed.returnTo),
+      returnTo: validatedReturnTo(parsed.returnTo, DEMO_PERSONA_HOME[parsed.persona]),
     });
   } catch (error) {
     return unexpectedResponse(c, "demo authentication", error, requestId);

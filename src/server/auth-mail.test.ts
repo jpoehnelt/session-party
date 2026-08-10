@@ -99,14 +99,14 @@ beforeAll(async () => {
 
 describe("hackathon demo authentication", () => {
   it.each([
-    ["organizer", "sbek-organizer@example.com", "Jordan Alvarez"],
-    ["speaker", "sbek-speaker@example.com", "Priya Raman"],
-    ["reviewer", "sbek-reviewer@example.com", "Sam Whitfield"],
-  ])("issues a normal session for the %s persona", async (persona, email, name) => {
+    ["organizer", "sbek-organizer@example.com", "Jordan Alvarez", "/e/devflow-conf-2027"],
+    ["speaker", "sbek-speaker@example.com", "Priya Raman", "/e/devflow-conf-2027/portal"],
+    ["reviewer", "sbek-reviewer@example.com", "Sam Whitfield", "/e/devflow-conf-2027/review"],
+  ])("issues a normal session for the %s persona", async (persona, email, name, defaultReturnTo) => {
     const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona, returnTo: "/events?from=demo#top" }),
+      body: JSON.stringify({ persona }),
     });
 
     expect(response.status).toBe(200);
@@ -116,7 +116,7 @@ describe("hackathon demo authentication", () => {
       email,
       name,
       event: { slug: "devflow-conf-2027", name: "DevFlow Conf 2027" },
-      returnTo: "/events?from=demo#top",
+      returnTo: defaultReturnTo,
     });
     const cookie = response.headers.get("set-cookie");
     expect(cookie).toContain("sp_session=");
@@ -143,7 +143,7 @@ describe("hackathon demo authentication", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
-  it("seeds the eval event and identities without bypassing reviewer or speaker provisioning", async () => {
+  it("seeds distinct organizer, reviewer, and provisioned speaker access", async () => {
     await SELF.fetch("https://example.test/api/v1/auth/demo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -163,21 +163,75 @@ describe("hackathon demo authentication", () => {
          FROM event_members m
          JOIN events e ON e.id = m.event_id
          JOIN users u ON u.id = m.user_id
-         WHERE e.slug = 'devflow-conf-2027' AND u.email IN (?, ?)) AS provisioned_non_owner_count`,
+         WHERE e.slug = 'devflow-conf-2027' AND u.email = ? AND m.role = 'reviewer') AS reviewer_count,
+        (SELECT count(*)
+         FROM speakers s
+         JOIN events e ON e.id = s.event_id
+         JOIN users u ON u.id = s.user_id
+         JOIN speaker_provisioning p ON p.event_id = s.event_id AND p.primary_speaker_id = s.id
+         WHERE e.slug = 'devflow-conf-2027' AND u.email = ? AND p.status = 'provisioned') AS provisioned_speaker_count`,
     ).bind(
       "sbek-organizer@example.com",
-      "sbek-speaker@example.com",
       "sbek-reviewer@example.com",
+      "sbek-speaker@example.com",
       "sbek-organizer@example.com",
-      "sbek-speaker@example.com",
       "sbek-reviewer@example.com",
+      "sbek-speaker@example.com",
     ).first();
 
     expect(seed).toEqual({
       user_count: 3,
       event_count: 1,
       owner_count: 1,
-      provisioned_non_owner_count: 0,
+      reviewer_count: 1,
+      provisioned_speaker_count: 1,
+    });
+  });
+
+  it("preserves a safe explicit return path for every persona", async () => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "reviewer", returnTo: "/events?from=demo#top" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ returnTo: "/events?from=demo#top" });
+  });
+
+  it("authorizes the reviewer desk and the provisioned speaker portal independently", async () => {
+    const speakerLogin = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "speaker" }),
+    });
+    const speakerCookie = speakerLogin.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const speakerPortal = await SELF.fetch("https://example.test/api/v1/events/devflow-conf-2027/portal", {
+      headers: { Cookie: speakerCookie },
+    });
+    expect(speakerPortal.status).toBe(200);
+    expect(await speakerPortal.json()).toMatchObject({
+      event: { slug: "devflow-conf-2027" },
+      speaker: { displayName: "Priya Raman" },
+      provisioningStatus: "provisioned",
+    });
+
+    const reviewerLogin = await SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "reviewer" }),
+    });
+    const reviewerPayload = await reviewerLogin.json<{ event: { id: string } }>();
+    const reviewerCookie = reviewerLogin.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const reviewDesk = await SELF.fetch(
+      `https://example.test/api/v1/events/${reviewerPayload.event.id}/review`,
+      { headers: { Cookie: reviewerCookie } },
+    );
+    expect(reviewDesk.status).toBe(200);
+    expect(await reviewDesk.json()).toMatchObject({
+      eventId: reviewerPayload.event.id,
+      viewerRole: "reviewer",
+      queue: [{ title: "Designing reliable AI workflows" }],
     });
   });
 
@@ -189,7 +243,7 @@ describe("hackathon demo authentication", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ returnTo: "/" });
+    expect(await response.json()).toMatchObject({ returnTo: "/e/devflow-conf-2027" });
   });
 });
 
