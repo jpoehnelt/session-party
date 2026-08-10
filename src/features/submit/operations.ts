@@ -6,6 +6,7 @@ import {
   CreateTaskSubmissionInput,
   GetOwnSubmissionsInput,
   GetPublicSubmissionFormInput,
+  GetTaskSubmissionFormInput,
   ListSubmissionsInput,
   OwnSubmissions,
   PublicSubmissionForm,
@@ -18,6 +19,7 @@ import {
   createTaskSubmission,
   getOwnSubmissions,
   getPublicSubmissionForm,
+  getTaskSubmissionForm,
   listSubmissions,
   updateOwnSubmissionAbstract,
 } from "./service";
@@ -85,6 +87,24 @@ export const getPublicSubmissionFormOperation = {
     path: "/public/events/:eventSlug/forms/:formId",
     input: { path: ["eventSlug", "formId"] },
     summary: "Get the current immutable public submission form",
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} satisfies AnyOperationDef;
+
+export const getTaskSubmissionFormOperation = {
+  id: "submit.getTaskForm",
+  kind: "query",
+  input: GetTaskSubmissionFormInput,
+  output: PublicSubmissionForm,
+  authorize: browserSessionAuthorization,
+  invoke: getTaskSubmissionForm,
+  rest: {
+    method: "get",
+    path: "/events/:eventId/portal/forms/:formId",
+    input: { path: ["eventId", "formId"] },
+    summary: "Get a published task form as the exact provisioned speaker",
   },
   idempotency: "none",
   concurrency: "none",
@@ -163,6 +183,7 @@ export const operations = [
   createTaskSubmissionOperation,
   getOwnSubmissionsOperation,
   getPublicSubmissionFormOperation,
+  getTaskSubmissionFormOperation,
   listSubmissionsOperation,
   updateOwnSubmissionAbstractOperation,
 ] as const satisfies readonly AnyOperationDef[];

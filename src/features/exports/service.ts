@@ -22,7 +22,7 @@ import type { GetInstitutionalArchiveInput, InstitutionalArchive } from "./schem
 
 const exportAuthorization = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
-  { kind: "api-key", scopes: ["event:read", "reviews:read"] },
+  { kind: "deny" },
 );
 
 const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>

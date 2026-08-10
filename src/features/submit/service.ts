@@ -32,6 +32,7 @@ import {
   CreatePublicSubmissionOutput,
   type CreatePublicSubmissionInput,
   type CreateTaskSubmissionInput,
+  type GetTaskSubmissionFormInput,
   type GetOwnSubmissionsInput,
   type ListSubmissionsInput,
   type OwnSubmissionSummary,
@@ -236,9 +237,24 @@ export const getPublicSubmissionForm = (
   input: { readonly eventSlug: string; readonly formId: string },
 ): Effect.Effect<PublicSubmissionForm, AppError, Db | PublicSubmissionAbuse> =>
   Effect.gen(function* () {
-    const { publicForm } = yield* loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId);
+    const loaded = yield* loadPublishedForm({ kind: "slug", value: input.eventSlug }, input.formId);
+    if (loaded.formKind !== "cfp") {
+      return yield* Effect.fail(new NotFound({ entity: "published CFP form", id: input.formId }));
+    }
     const abuse = yield* PublicSubmissionAbuse;
-    return { ...publicForm, turnstileSiteKey: abuse.turnstileSiteKey };
+    return { ...loaded.publicForm, turnstileSiteKey: abuse.turnstileSiteKey };
+  });
+
+export const getTaskSubmissionForm = (
+  input: GetTaskSubmissionFormInput,
+): Effect.Effect<PublicSubmissionForm, AppError, CurrentUser | Db> =>
+  Effect.gen(function* () {
+    yield* loadProvisionedSpeaker(input.eventId);
+    const loaded = yield* loadPublishedForm({ kind: "id", value: input.eventId }, input.formId);
+    if (loaded.formKind !== "task") {
+      return yield* Effect.fail(new NotFound({ entity: "published task form", id: input.formId }));
+    }
+    return loaded.publicForm;
   });
 
 const conditionMatches = (
@@ -1484,6 +1500,7 @@ const ownSubmissionRows = (
     }
     return {
       submissions: rows.filter((row) => {
+        if (row.status === "accepted") return row.primarySpeakerUserId === owner.userId;
         if (row.primarySpeakerUserId === owner.userId) return true;
         const email = answerBySubmission.get(row.id)?.find((answer) => answer.semanticKey === "speakerEmail")?.value;
         return typeof email === "string" && normalizePublicEmail(email) === owner.email;
@@ -1510,10 +1527,10 @@ const ownSummary = (
     status: row.status,
     submittedAt: row.submittedAt.getTime(),
     version: row.version,
-    editable: availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
-      && row.status !== "accepted"
-      && row.status !== "rejected"
-      && row.status !== "withdrawn",
+    editable: row.status === "accepted" ||
+      (availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
+        && row.status !== "rejected"
+        && row.status !== "withdrawn"),
   };
 };
 
@@ -1581,7 +1598,7 @@ export const updateOwnSubmissionAbstract = (
       return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before saving" }));
     }
     if (!ownSummary(row, owned.answers, Date.now()).editable) {
-      return yield* Effect.fail(new Conflict({ message: "This proposal can no longer be edited because the CFP is closed or a decision has been recorded" }));
+      return yield* Effect.fail(new Conflict({ message: "This proposal can no longer be edited" }));
     }
     const abstractAnswer = owned.answers.find(
       (answer) => answer.submissionId === row.id && answer.semanticKey === "submissionAbstract",
@@ -1595,13 +1612,10 @@ export const updateOwnSubmissionAbstract = (
     const nextVersion = row.version + 1;
     const idempotencyId = nanoid();
     const requestId = nanoid();
-    const summary: OwnSubmissionSummary = {
-      ...ownSummary({ ...row, version: nextVersion }, [
-        ...owned.answers.filter((answer) => answer.id !== abstractAnswer.id),
-        { ...abstractAnswer, value: abstract },
-      ], savedAt.getTime()),
-      editable: true,
-    };
+    const summary: OwnSubmissionSummary = ownSummary({ ...row, version: nextVersion }, [
+      ...owned.answers.filter((answer) => answer.id !== abstractAnswer.id),
+      { ...abstractAnswer, value: abstract },
+    ], savedAt.getTime());
     const output = { submission: summary, idempotent: false } as const;
     const commitNowMs = sql<Date>`CAST(unixepoch('subsec') * 1000 AS INTEGER)`;
     const updatedAt = savedAt.getTime();
@@ -1611,14 +1625,41 @@ export const updateOwnSubmissionAbstract = (
         eq(submissions.eventId, event.id),
         eq(submissions.id, input.submissionId),
         eq(submissions.version, input.expectedVersion),
-        inArray(submissions.status, ["submitted", "in_review", "waitlist"]),
+        or(
+          inArray(submissions.status, ["submitted", "in_review", "waitlist"]),
+          and(
+            eq(submissions.status, "accepted"),
+            exists(
+              db.select({ id: submissionSpeakers.id })
+                .from(submissionSpeakers)
+                .innerJoin(
+                  speakers,
+                  and(
+                    eq(speakers.eventId, submissionSpeakers.eventId),
+                    eq(speakers.id, submissionSpeakers.speakerId),
+                  ),
+                )
+                .where(and(
+                  eq(submissionSpeakers.eventId, submissions.eventId),
+                  eq(submissionSpeakers.submissionId, submissions.id),
+                  eq(submissionSpeakers.isPrimary, true),
+                  eq(speakers.userId, owner.userId),
+                )),
+            ),
+          ),
+        ),
         exists(db.select({ id: forms.id }).from(forms).where(and(
           eq(forms.eventId, submissions.eventId),
           eq(forms.id, submissions.formId),
           eq(forms.kind, "cfp"),
-          eq(forms.status, "open"),
-          or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
-          or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
+          or(
+            eq(submissions.status, "accepted"),
+            and(
+              eq(forms.status, "open"),
+              or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
+              or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
+            ),
+          ),
         ))),
       )),
       db.update(submissionAnswers).set({ value: abstract, version: abstractAnswer.version + 1, updatedAt: savedAt }).where(and(

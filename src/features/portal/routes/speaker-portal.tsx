@@ -355,7 +355,7 @@ export function SpeakerPortalContent({
           {activeFormTask?.formId && (
             <SpeakerTaskFormPanel
               key={activeFormTask.id}
-              eventSlug={snapshot.event.slug}
+              eventId={snapshot.event.id}
               task={activeFormTask}
               busy={busyAction !== null}
               onClose={() => setActiveFormTaskId(null)}
@@ -450,14 +450,14 @@ export function SpeakerPortalContent({
 }
 
 export function SpeakerTaskFormPanel({
-  eventSlug,
+  eventId,
   task,
   busy,
   initialForm,
   onClose,
   onSubmit,
 }: {
-  readonly eventSlug: string;
+  readonly eventId: string;
   readonly task: PortalTask;
   readonly busy: boolean;
   readonly initialForm?: PublicSubmissionFormValue | null;
@@ -478,7 +478,7 @@ export function SpeakerTaskFormPanel({
     let active = true;
     setForm(undefined);
     setLoadError(null);
-    void getSpeakerTaskForm(eventSlug, task.formId).then(
+    void getSpeakerTaskForm(eventId, task.formId).then(
       (loaded) => {
         if (active) setForm(loaded);
       },
@@ -491,7 +491,7 @@ export function SpeakerTaskFormPanel({
     return () => {
       active = false;
     };
-  }, [eventSlug, initialForm, task.formId]);
+  }, [eventId, initialForm, task.formId]);
 
   const shownFields = useMemo(() => form ? visibleFields(form.form.fields, answers) : [], [answers, form]);
   const accepting = form?.form.availability === "open";

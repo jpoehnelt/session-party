@@ -331,13 +331,13 @@ describe("portal API loading", () => {
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === `/api/v1/public/events/${event.slug}/forms/${formTask.formId}`) return ok(linkedForm);
+      if (url === `/api/v1/events/${event.id}/portal/forms/${formTask.formId}`) return ok(linkedForm);
       if (url === `/api/v1/events/${event.id}/portal/forms/${formTask.formId}/submissions`) return ok(created, 201);
       throw new Error(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(getSpeakerTaskForm(event.slug, formTask.formId!)).resolves.toEqual(linkedForm);
+    await expect(getSpeakerTaskForm(event.id, formTask.formId!)).resolves.toEqual(linkedForm);
     await expect(submitSpeakerTaskForm({
       eventId: event.id,
       formId: formTask.formId!,
@@ -346,7 +346,7 @@ describe("portal API loading", () => {
     })).resolves.toEqual(created);
 
     expect(fetchMock.mock.calls[0]).toEqual([
-      `/api/v1/public/events/${event.slug}/forms/${formTask.formId}`,
+      `/api/v1/events/${event.id}/portal/forms/${formTask.formId}`,
       expect.objectContaining({ method: "GET", credentials: "include" }),
     ]);
     const [request, init] = fetchMock.mock.calls[1]!;
@@ -456,7 +456,7 @@ describe("speaker portal content", () => {
 
   it("renders the linked published form in the authenticated portal experience", () => {
     const markup = renderToStaticMarkup(createElement(SpeakerTaskFormPanel, {
-      eventSlug: event.slug,
+      eventId: event.id,
       task: formTask,
       busy: false,
       initialForm: linkedForm,

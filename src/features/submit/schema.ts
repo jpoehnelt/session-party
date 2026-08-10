@@ -70,6 +70,12 @@ export const GetPublicSubmissionFormInput = Schema.Struct({
 });
 export type GetPublicSubmissionFormInput = typeof GetPublicSubmissionFormInput.Type;
 
+export const GetTaskSubmissionFormInput = Schema.Struct({
+  eventId: EntityId,
+  formId: EntityId,
+});
+export type GetTaskSubmissionFormInput = typeof GetTaskSubmissionFormInput.Type;
+
 export const SubmissionAnswer = Schema.Struct({
   fieldId: EntityId,
   value: AnswerValue,

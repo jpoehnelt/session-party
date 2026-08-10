@@ -7,6 +7,7 @@ import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AppLayer, Authorizer, CurrentUser, Db } from "@/server/services";
 import { getInstitutionalArchive } from "./service";
+import { getArchiveOperation } from "./operations";
 
 interface TestEnv extends Cloudflare.Env {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -19,6 +20,16 @@ const principal = (userId: string): Principal => ({
   email: `${userId}@example.com`,
   name: userId,
   sessionId: `session-${userId}`,
+  expiresAt: Date.now() + 86_400_000,
+});
+
+const reviewReadApiKey = (eventId: string): Principal => ({
+  kind: "api-key",
+  userId: "api-key:archive-review-reader",
+  apiKeyId: "archive-review-reader",
+  eventId,
+  name: "Archive review reader",
+  scopes: ["event:read", "reviews:read"],
   expiresAt: Date.now() + 86_400_000,
 });
 
@@ -40,6 +51,7 @@ const seed = async (name: string) => {
   const eventId = id("event");
   const ownerId = id("owner");
   const reviewerId = id("reviewer");
+  const adminId = id("admin");
   const speakerId = id("speaker");
   const talkId = id("talk");
   const taskId = id("task");
@@ -47,6 +59,7 @@ const seed = async (name: string) => {
     db.insert(users).values([
       { id: ownerId, email: `${ownerId}@example.com`, name: "Archive Owner", createdAt: now, updatedAt: now },
       { id: reviewerId, email: `${reviewerId}@example.com`, name: "Archive Reviewer", createdAt: now, updatedAt: now },
+      { id: adminId, email: `${adminId}@example.com`, name: "Archive Admin", createdAt: now, updatedAt: now },
     ]),
     db.insert(events).values({
       id: eventId,
@@ -58,6 +71,7 @@ const seed = async (name: string) => {
     }),
     db.insert(eventMembers).values([
       { id: id("owner-member"), eventId, userId: ownerId, role: "owner", createdAt: now, updatedAt: now },
+      { id: id("admin-member"), eventId, userId: adminId, role: "admin", createdAt: now, updatedAt: now },
       { id: id("reviewer-member"), eventId, userId: reviewerId, role: "reviewer", createdAt: now, updatedAt: now },
     ]),
     db.insert(speakers).values({
@@ -111,7 +125,15 @@ const seed = async (name: string) => {
     }),
   ];
   await db.batch(rows);
-  return { eventId, owner: principal(ownerId), reviewer: principal(reviewerId), speakerId, talkId, taskId };
+  return {
+    eventId,
+    owner: principal(ownerId),
+    admin: principal(adminId),
+    reviewer: principal(reviewerId),
+    speakerId,
+    talkId,
+    taskId,
+  };
 };
 
 describe("institutional archive", () => {
@@ -131,9 +153,22 @@ describe("institutional archive", () => {
     expect(archive.exportedAt).toEqual(expect.any(Number));
   });
 
-  it("keeps committee evidence exports owner/admin-only", async () => {
+  it("allows an event admin to export the institutional archive", async () => {
+    const seeded = await seed("archive-admin");
+    const archive = await runAs(seeded.admin, getInstitutionalArchive({ eventId: seeded.eventId }));
+    expect(archive).toMatchObject({
+      format: "session-party.archive.v1",
+      event: { id: seeded.eventId },
+      taskCompletions: [{ taskId: seeded.taskId, speakerId: seeded.speakerId }],
+    });
+  });
+
+  it("denies reviewers and review-scoped API keys", async () => {
     const seeded = await seed("archive-private");
-    const result = await runEitherAs(seeded.reviewer, getInstitutionalArchive({ eventId: seeded.eventId }));
-    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "Forbidden" } });
+    for (const actor of [seeded.reviewer, reviewReadApiKey(seeded.eventId)]) {
+      const result = await runEitherAs(actor, getInstitutionalArchive({ eventId: seeded.eventId }));
+      expect(result).toMatchObject({ _tag: "Left", left: { _tag: "Forbidden" } });
+    }
+    expect("mcp" in getArchiveOperation).toBe(false);
   });
 });
