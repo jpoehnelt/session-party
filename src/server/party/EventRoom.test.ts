@@ -15,6 +15,7 @@ type TestEnv = Cloudflare.Env & {
 };
 
 const EVENT_ID = "room-authority-event";
+const OPERATION_EVENT_ID = "room-operation-event";
 const expiresAt = 4_102_444_800_000;
 
 const waitForType = (
@@ -38,12 +39,15 @@ const waitForMessage = (
     socket.addEventListener("message", onMessage);
   });
 
-const connect = async (credential: { cookie: string } | { bearer: string }): Promise<WebSocket> => {
+const connect = async (
+  credential: { cookie: string } | { bearer: string },
+  eventId = EVENT_ID,
+): Promise<WebSocket> => {
   const headers = new Headers({ Upgrade: "websocket" });
   if ("cookie" in credential) headers.set("Cookie", `sp_session=${credential.cookie}`);
   else headers.set("Authorization", `Bearer ${credential.bearer}`);
   const response = await SELF.fetch(
-    `https://example.test/parties/event-room/${EVENT_ID}`,
+    `https://example.test/parties/event-room/${eventId}`,
     { headers },
   );
   expect(response.status).toBe(101);
@@ -89,8 +93,10 @@ beforeAll(async () => {
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-demoted', 'room-demoted@example.com', 'Room Demoted', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-expired', 'room-expired@example.com', 'Room Expired', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES (?, 'room-authority', 'Room Authority', 'UTC', 1, ?, ?)").bind(EVENT_ID, now, now),
+    env.DB.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES (?, 'room-operation', 'Room Operation', 'UTC', 1, ?, ?)").bind(OPERATION_EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO talks (id, event_id, submission_id, title, description, track_id, room_id, starts_at, duration_min, status, version, created_at, updated_at) VALUES ('room-live-talk', ?, NULL, 'Realtime keynote', NULL, NULL, NULL, ?, 30, 'confirmed', 1, ?, ?)").bind(EVENT_ID, now + 3_600_000, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-owner-member', ?, 'room-owner', 'owner', 1, ?, ?)").bind(EVENT_ID, now, now),
+    env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-operation-owner-member', ?, 'room-owner', 'owner', 1, ?, ?)").bind(OPERATION_EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-reviewer-member', ?, 'room-reviewer', 'reviewer', 1, ?, ?)").bind(EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-demoted-member', ?, 'room-demoted', 'owner', 1, ?, ?)").bind(EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('room-expired-member', ?, 'room-expired', 'reviewer', 1, ?, ?)").bind(EVENT_ID, now, now),
@@ -193,7 +199,7 @@ describe("EventRoom live authorization", () => {
   });
 
   it("executes the canonical event operation without trusting a client event id", async () => {
-    const owner = await connect({ cookie: "room-owner-session" });
+    const owner = await connect({ cookie: "room-owner-session" }, OPERATION_EVENT_ID);
     const result = waitForType(owner, "room/result");
     owner.send(JSON.stringify({
       t: "events/get",
@@ -205,8 +211,8 @@ describe("EventRoom live authorization", () => {
       operationId: "events.get",
       replyTo: "event-from-room",
       result: {
-        id: EVENT_ID,
-        slug: "room-authority",
+        id: OPERATION_EVENT_ID,
+        slug: "room-operation",
       },
     });
     owner.close();
