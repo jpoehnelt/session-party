@@ -24,6 +24,9 @@ export const activeRoundFixture = {
   name: "Program fit",
   order: 1,
   status: "active",
+  startsAt: fixtureClock - 86_400_000,
+  endsAt: fixtureClock + 7 * 86_400_000,
+  blind: false,
   version: 3,
   rubric: {
     criteria: [
@@ -31,18 +34,27 @@ export const activeRoundFixture = {
         key: "relevance",
         label: "Audience relevance",
         description: "A clear fit for working event-production teams.",
+        type: "numeric",
+        weight: 1,
+        required: true,
         max: 5,
       },
       {
         key: "specificity",
         label: "Specificity",
         description: "Concrete lessons rather than a broad product pitch.",
+        type: "numeric",
+        weight: 1,
+        required: true,
         max: 5,
       },
       {
         key: "delivery",
         label: "Delivery potential",
         description: "A credible structure that will work in the allotted time.",
+        type: "numeric",
+        weight: 1,
+        required: true,
         max: 5,
       },
     ],
@@ -54,11 +66,14 @@ export const pendingRoundFixture = {
   name: "Final selection",
   order: 2,
   status: "pending",
+  startsAt: fixtureClock + 8 * 86_400_000,
+  endsAt: fixtureClock + 15 * 86_400_000,
+  blind: false,
   version: 1,
   rubric: {
     criteria: [
-      { key: "program_balance", label: "Program balance", description: "Complements the accepted program.", max: 5 },
-      { key: "readiness", label: "Speaker readiness", description: "Evidence supports a production-ready session.", max: 5 },
+      { key: "program_balance", label: "Program balance", description: "Complements the accepted program.", type: "numeric", weight: 1, required: true, max: 5 },
+      { key: "readiness", label: "Speaker readiness", description: "Evidence supports a production-ready session.", type: "numeric", weight: 1, required: true, max: 5 },
     ],
   },
 } satisfies ReviewRound;
@@ -68,11 +83,14 @@ export const completedRoundFixture = {
   name: "Blind screen",
   order: 0,
   status: "complete",
+  startsAt: fixtureClock - 15 * 86_400_000,
+  endsAt: fixtureClock - 8 * 86_400_000,
+  blind: true,
   version: 7,
   rubric: {
     criteria: [
-      { key: "clarity", label: "Clarity", description: "The proposal is immediately legible.", max: 5 },
-      { key: "originality", label: "Originality", description: "The angle adds something new.", max: 5 },
+      { key: "clarity", label: "Clarity", description: "The proposal is immediately legible.", type: "numeric", weight: 1, required: true, max: 5 },
+      { key: "originality", label: "Originality", description: "The angle adds something new.", type: "numeric", weight: 1, required: true, max: 5 },
     ],
   },
 } satisfies ReviewRound;
@@ -168,8 +186,8 @@ export const assignedSubmissionFixture = {
   abstract:
     "A practical teardown of a live session handoff: the cues, accessible checks, equipment reset, and ownership boundaries that let a small team turn a room in twelve minutes without rushing speakers or attendees.",
   speakers: [
-    { id: fixturePrimarySpeakerId, displayName: "Jordan Lee", isPrimary: true },
-    { id: "speaker_cospeaker_01", displayName: "Samira Bell", isPrimary: false },
+    { id: fixturePrimarySpeakerId, displayName: "Jordan Lee", isPrimary: true, role: "Primary presenter" },
+    { id: "speaker_cospeaker_01", displayName: "Samira Bell", isPrimary: false, role: "Co-presenter" },
   ],
   round: activeRoundFixture,
   assignments: [
@@ -208,6 +226,8 @@ export const assignedSubmissionFixture = {
       createdAt: fixtureClock - 20 * 60_000,
     },
   ],
+  recusals: [],
+  recusedByMe: false,
   aiSuggestions: [aiSuggestionFixture],
   acceptance: null,
 } satisfies SubmissionReviewDetail;
@@ -218,7 +238,7 @@ export const acceptedSubmissionFixture = {
   ...acceptedSummary,
   abstract:
     "A timed, repeatable room-turnover playbook for program leads, stage managers, and accessibility staff.",
-  speakers: [{ id: fixturePrimarySpeakerId, displayName: "Jordan Lee", isPrimary: true }],
+  speakers: [{ id: fixturePrimarySpeakerId, displayName: "Jordan Lee", isPrimary: true, role: "Primary presenter" }],
   round: completedRoundFixture,
   assignments: [
     { id: "assignment_accepted_01", reviewerUserId: fixtureReviewerId, reviewerName: "Ada Rivera", status: "assigned", recusalReason: null, recusedAt: null, version: 1 },
@@ -239,6 +259,8 @@ export const acceptedSubmissionFixture = {
     },
   ],
   comments: [],
+  recusals: [],
+  recusedByMe: false,
   aiSuggestions: [],
   acceptance: acceptedProvisionedFixture,
 } satisfies SubmissionReviewDetail;
@@ -258,6 +280,7 @@ export function detailForFixtureSubmission(submissionId: string): SubmissionRevi
       id: `speaker_fixture_${String(number).padStart(2, "0")}`,
       displayName: `Fixture Speaker ${String(number).padStart(2, "0")}`,
       isPrimary: true,
+      role: "Primary presenter",
     }],
     round: activeRoundFixture,
     assignments: assigned
@@ -288,6 +311,8 @@ export function detailForFixtureSubmission(submissionId: string): SubmissionRevi
         }]
       : [],
     comments: [],
+    recusals: [],
+    recusedByMe: false,
     aiSuggestions: [],
     acceptance: null,
   };
@@ -300,6 +325,7 @@ export const emptyReviewFixture = {
   viewerRole: "admin",
   viewerUserId: "user_fixture_admin",
   reviewers: [{ userId: fixtureReviewerId, name: "Ada Rivera" }],
+  reviewerProgress: [],
   rounds: [completedRoundFixture, activeRoundFixture, pendingRoundFixture],
   order: "coverage",
   queue: [],
@@ -315,6 +341,7 @@ export const reviewWorkbenchFixture = {
   viewerRole: "admin",
   viewerUserId: "user_fixture_admin",
   reviewers: [{ userId: fixtureReviewerId, name: "Ada Rivera" }],
+  reviewerProgress: [{ reviewerUserId: fixtureReviewerId, reviewerName: "Ada Rivera", assignedCount: 12, completedCount: 6, outstandingCount: 6, completionPercent: 50 }],
   rounds: [completedRoundFixture, activeRoundFixture, pendingRoundFixture],
   order: "coverage",
   queue: submissionQueueFixture,

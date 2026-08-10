@@ -59,7 +59,9 @@ function scoreArea(
       weight: item.weight,
       type: item.type,
       verdict: verdict(checks),
-      evidenceBacked: checks.every(({ kind, outcome }) => kind === "vitest" && outcome !== "pending"),
+      evidenceBacked: checks.every(
+        ({ kind, outcome }) => (kind === "vitest" || kind === "vitest-browser") && outcome !== "pending",
+      ),
       implementationGap: checks.some(({ kind }) => kind === "gap"),
       checks,
     };

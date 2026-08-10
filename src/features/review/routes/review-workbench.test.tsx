@@ -27,12 +27,16 @@ const workbench: ReviewWorkbench = {
   viewerRole: "admin",
   viewerUserId: "user_admin",
   reviewers: [{ userId: "user_reviewer", name: "Grace Reviewer" }],
+  reviewerProgress: [],
   rounds: [{
     id: "round_active",
     name: "Main review",
     order: 1,
     status: "active",
-    rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] },
+    startsAt: null,
+    endsAt: null,
+    blind: false,
+    rubric: { criteria: [{ key: "clarity", label: "Clarity", type: "numeric", weight: 1, required: true, max: 5 }] },
     version: 1,
   }],
   progress: {
@@ -87,18 +91,23 @@ const workbench: ReviewWorkbench = {
     completedReviewCount: 0,
     averageScore: null,
     abstract: "Returned by the review API.",
-    speakers: [{ id: "speaker_ada", displayName: "Ada Rivera", isPrimary: true }],
+    speakers: [{ id: "speaker_ada", displayName: "Ada Rivera", isPrimary: true, role: "Primary presenter" }],
     round: {
       id: "round_active",
       name: "Main review",
       order: 1,
       status: "active",
-      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] },
+      startsAt: null,
+      endsAt: null,
+      blind: false,
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", type: "numeric", weight: 1, required: true, max: 5 }] },
       version: 1,
     },
     assignments: [],
     reviews: [],
     comments: [],
+    recusals: [],
+    recusedByMe: false,
     aiSuggestions: [],
     acceptance: null,
   },
@@ -294,7 +303,7 @@ describe("review workbench route", () => {
     expect(markup).toContain("Returned by the review API.");
     expect(markup).toContain("Review rounds");
     expect(markup).toContain("Create round");
-    expect(markup).toContain("version 1");
+    expect(markup).toContain("Version 3");
     expect(markup).not.toContain("Fixture snapshot");
     expect(markup).not.toContain("reviewWorkbenchFixture");
     expect(markup).toContain("Assign reviewer");
@@ -359,7 +368,7 @@ describe("review workbench route", () => {
     expect(markup).not.toContain("Durable acceptance");
   });
 
-  it("renders scoring and the private committee conversation for an unassigned event reviewer", () => {
+  it("renders scoring and the private committee conversation for an assigned event reviewer", () => {
     const reviewerWorkbench: ReviewWorkbench = {
       ...workbench,
       viewerRole: "reviewer",
@@ -368,6 +377,8 @@ describe("review workbench route", () => {
       selected: workbench.selected && {
         ...workbench.selected,
         reviewState: "in_progress",
+        assignedToMe: true,
+        assignmentCount: 1,
         completedReviewCount: 1,
         averageScore: 4,
         assignments: [{
@@ -415,9 +426,9 @@ describe("review workbench route", () => {
     expect(markup).toContain("Add committee message");
     expect(markup).toContain("Post message");
     expect(markup).toContain("Speakers and API keys cannot author");
-    expect(markup).toContain("Assignments are optional workload markers");
     expect(markup).toContain("Recusal reason (optional)");
     expect(markup).toContain("Recuse from this submission");
+    expect(markup).toContain("Reviewers can open and score only proposals assigned to them");
     expect(markup).not.toContain("Assign reviewer");
     expect(markup).not.toContain("Accept &amp; provision primary speaker");
     expect(markup).not.toContain("Create round");

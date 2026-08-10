@@ -13,6 +13,33 @@ type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
 };
 
+const mailScheduler = () => env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
+
+async function resetMailScheduler(): Promise<ReturnType<typeof mailScheduler>> {
+  const scheduler = mailScheduler();
+  await runInDurableObject(scheduler, async (_instance, state) => {
+    await state.storage.deleteAlarm();
+    await state.storage.deleteAll();
+    await state.storage.put("mail-scheduler-enabled", true);
+  });
+  return scheduler;
+}
+
+async function runMailSchedulerAlarm(
+  scheduler: ReturnType<typeof mailScheduler>,
+  setup?: (storage: DurableObjectStorage) => Promise<void>,
+): Promise<void> {
+  await runInDurableObject(scheduler, async (instance, state) => {
+    await state.storage.deleteAlarm();
+    if (setup) await setup(state.storage);
+    try {
+      await instance.alarm();
+    } finally {
+      await state.storage.deleteAlarm();
+    }
+  });
+}
+
 beforeAll(async () => {
   if (!("TEST_MIGRATIONS" in env)) {
     throw new Error("TEST_MIGRATIONS test binding is unavailable");
@@ -85,56 +112,50 @@ describe("Scheduler durable delivery recovery", () => {
       ).bind(now - 60_000),
     ]);
     await env.DB.prepare(
-      "CREATE TRIGGER fail_auth_redaction BEFORE UPDATE OF rendered_html ON mail_delivery_snapshots WHEN new.redacted_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'forced redaction failure'); END",
+      "CREATE TRIGGER fail_auth_redaction BEFORE UPDATE OF rendered_html ON mail_delivery_snapshots WHEN old.id = 'crash-snapshot' AND new.redacted_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'forced redaction failure'); END",
     ).run();
 
-    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail"));
-    await runInDurableObject(stub, async (_instance, state) => state.storage.deleteAll());
-    await stub.fetch("https://scheduler/poke", {
-      method: "POST",
-      headers: { "x-session-party-internal": sessionSecret(env) },
-    });
-    await runInDurableObject(stub, async (instance) => {
-      await instance.alarm();
-    });
+    const stub = await resetMailScheduler();
+    try {
+      await runMailSchedulerAlarm(stub);
 
-    const delivery = await env.DB.prepare(
-      "SELECT status, attempt_count, provider, provider_message_id, lease_owner, lease_expires_at FROM mail_deliveries WHERE id = 'crash-delivery'",
-    ).first();
-    expect(delivery).toEqual({
-      status: "sent",
-      attempt_count: 1,
-      provider: "local-fake",
-      provider_message_id: providerBeforeCrash.providerMessageId,
-      lease_owner: null,
-      lease_expires_at: null,
-    });
-    const attempts = await env.DB.prepare(
-      "SELECT count(*) AS count, min(status) AS status, min(provider_message_id) AS provider_message_id, min(provider_result) AS provider_result FROM mail_delivery_attempts WHERE delivery_id = 'crash-delivery'",
-    ).first<{ count: number; status: string; provider_message_id: string; provider_result: string }>();
-    expect(attempts).toMatchObject({
-      count: 1,
-      status: "sent",
-      provider_message_id: providerBeforeCrash.providerMessageId,
-    });
-    const attemptResult = JSON.parse(attempts?.provider_result ?? "{}") as Record<string, unknown>;
-    expect(attemptResult.outboundCorrelationId).toBe(
-      providerBeforeCrash.providerResult.outboundCorrelationId,
-    );
-    const retained = await env.DB.prepare(
-      "SELECT redacted_at IS NOT NULL AS redacted, rendered_html, rendered_text, ics_filename, ics_content FROM mail_delivery_snapshots WHERE id = 'crash-snapshot'",
-    ).first();
-    expect(retained).toEqual({
-      redacted: 0,
-      rendered_html: payload.html,
-      rendered_text: payload.text,
-      ics_filename: payload.icsFilename,
-      ics_content: payload.ics,
-    });
-    await env.DB.prepare("DROP TRIGGER fail_auth_redaction").run();
-    await runInDurableObject(stub, async (instance) => {
-      await instance.alarm();
-    });
+      const delivery = await env.DB.prepare(
+        "SELECT status, attempt_count, provider, provider_message_id, lease_owner, lease_expires_at FROM mail_deliveries WHERE id = 'crash-delivery'",
+      ).first();
+      expect(delivery).toEqual({
+        status: "sent",
+        attempt_count: 1,
+        provider: "local-fake",
+        provider_message_id: providerBeforeCrash.providerMessageId,
+        lease_owner: null,
+        lease_expires_at: null,
+      });
+      const attempts = await env.DB.prepare(
+        "SELECT count(*) AS count, min(status) AS status, min(provider_message_id) AS provider_message_id, min(provider_result) AS provider_result FROM mail_delivery_attempts WHERE delivery_id = 'crash-delivery'",
+      ).first<{ count: number; status: string; provider_message_id: string; provider_result: string }>();
+      expect(attempts).toMatchObject({
+        count: 1,
+        status: "sent",
+        provider_message_id: providerBeforeCrash.providerMessageId,
+      });
+      const attemptResult = JSON.parse(attempts?.provider_result ?? "{}") as Record<string, unknown>;
+      expect(attemptResult.outboundCorrelationId).toBe(
+        providerBeforeCrash.providerResult.outboundCorrelationId,
+      );
+      const retained = await env.DB.prepare(
+        "SELECT redacted_at IS NOT NULL AS redacted, rendered_html, rendered_text, ics_filename, ics_content FROM mail_delivery_snapshots WHERE id = 'crash-snapshot'",
+      ).first();
+      expect(retained).toEqual({
+        redacted: 0,
+        rendered_html: payload.html,
+        rendered_text: payload.text,
+        ics_filename: payload.icsFilename,
+        ics_content: payload.ics,
+      });
+    } finally {
+      await env.DB.prepare("DROP TRIGGER IF EXISTS fail_auth_redaction").run();
+    }
+    await runMailSchedulerAlarm(stub);
     const redacted = await env.DB.prepare(
       "SELECT redacted_at IS NOT NULL AS redacted, rendered_html, rendered_text, ics_filename, ics_content FROM mail_delivery_snapshots WHERE id = 'crash-snapshot'",
     ).first();
@@ -217,6 +238,7 @@ describe("Scheduler durable delivery recovery", () => {
       noncanonical,
       async (_instance, state) => state.storage.get("mail-scheduler-enabled"),
     )).toBeUndefined();
+    await runMailSchedulerAlarm(canonical);
     expect(await env.DB.prepare(
       "SELECT status, attempt_count FROM mail_deliveries WHERE id = 'scheduled-recovery-delivery'",
     ).first()).toEqual({ status: "sent", attempt_count: 1 });
@@ -245,13 +267,8 @@ describe("Scheduler durable delivery recovery", () => {
            'cloudflare-email', ?)`,
       ).bind(now, now, now),
     ]);
-    const scheduler = env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
-    await runInDurableObject(scheduler, async (_instance, state) => state.storage.deleteAll());
-    await scheduler.fetch("https://scheduler/poke", {
-      method: "POST",
-      headers: { "x-session-party-internal": sessionSecret(env) },
-    });
-    await runInDurableObject(scheduler, async (instance) => instance.alarm());
+    const scheduler = await resetMailScheduler();
+    await runMailSchedulerAlarm(scheduler);
     expect(await env.DB.prepare(
       `SELECT id, status, attempt_count FROM mail_deliveries
        WHERE id IN ('claimed-original-delivery', 'claimed-replacement-delivery') ORDER BY id`,
@@ -305,10 +322,8 @@ describe("Scheduler durable delivery recovery", () => {
         ),
       ]),
     ]);
-    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME));
-    await runInDurableObject(stub, async (_instance, state) => state.storage.deleteAll());
-    await recoverMailScheduler(env);
-    await runInDurableObject(stub, async (instance) => instance.alarm());
+    const stub = await resetMailScheduler();
+    await runMailSchedulerAlarm(stub);
     const snapshots = await env.DB.prepare(
       `SELECT substr(id, length('retention-') + 1, instr(substr(id, length('retention-') + 1), '-') - 1) AS name,
               redacted_at IS NOT NULL AS redacted,
@@ -403,16 +418,10 @@ describe("Scheduler durable delivery recovery", () => {
          VALUES ('budget-dead-delivery', 'budget-dead-snapshot', 'budget-dead-delivery', ?, ?, 1, 'cloudflare-email', ?)`,
       ).bind(now, now, now),
     ]);
-    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("mail"));
-    await runInDurableObject(stub, async (_instance, state) => state.storage.deleteAll());
-    await stub.fetch("https://scheduler/poke", {
-      method: "POST",
-      headers: { "x-session-party-internal": sessionSecret(env) },
-    });
+    const stub = await resetMailScheduler();
     const day = new Date(now).toISOString().slice(0, 10);
-    await runInDurableObject(stub, async (instance, state) => {
-      await state.storage.put(`dispatch-budget:${day}:total`, 1_000);
-      await instance.alarm();
+    await runMailSchedulerAlarm(stub, async (storage) => {
+      await storage.put(`dispatch-budget:${day}:total`, 1_000);
     });
     const deliveries = await env.DB.prepare(
       `SELECT id, status, attempt_count, provider_message_id, last_error, dead_lettered_at IS NOT NULL AS dead_lettered

@@ -21,6 +21,7 @@ import {
   Sheet,
   Skeleton,
   Tabs,
+  Textarea,
   Toaster,
   toast,
 } from "@/ui";
@@ -256,7 +257,14 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [selectedTalkId, setSelectedTalkId] = useState<string | null>(null);
   const [intent, setIntent] = useState<RealtimeIntentState>(idleIntent);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ trackId: "", roomId: "", startsAt: "", durationMin: "30" });
+  const [form, setForm] = useState({
+    title: "",
+    description: "",
+    trackId: "",
+    roomId: "",
+    startsAt: "",
+    durationMin: "30",
+  });
   const [setupOpen, setSetupOpen] = useState(false);
   const [trackDraft, setTrackDraft] = useState<TrackDraft>(emptyTrackDraft);
   const [roomDraft, setRoomDraft] = useState<RoomDraft>(emptyRoomDraft);
@@ -417,6 +425,8 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     room.send({ t: "agenda/focus", talkId: talk.id });
     setSelectedTalkId(talk.id);
     setForm({
+      title: talk.title,
+      description: talk.description ?? "",
       trackId: talk.trackId ?? "",
       roomId: talk.roomId ?? "",
       startsAt: localInputValue(talk.startsAt, event.timezone),
@@ -553,6 +563,61 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       await refreshAfterCommit();
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not save schedule", { tone: "danger" });
+      await refreshAfterStaleFailure(error);
+    }
+  };
+
+  const saveTalkContent = async () => {
+    if (!selectedTalk) return;
+    const title = form.title.trim();
+    if (!title) {
+      toast("Enter a session title", { tone: "danger" });
+      return;
+    }
+    const clientId = clientIntentId();
+    try {
+      const result = await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
+        `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks/${encodeURIComponent(selectedTalk.id)}/content`,
+        {
+          method: "PATCH",
+          body: {
+            title,
+            description: form.description.trim() || null,
+            expectedVersion: selectedTalk.version,
+            idempotencyKey: idempotencyKey("update-talk-content"),
+          },
+          schema: AgendaMutationResult,
+        },
+      ));
+      selectTalk(result.talk);
+      toast("Session title and abstract updated", { tone: "success" });
+      await refreshAfterCommit();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not update session content", { tone: "danger" });
+      await refreshAfterStaleFailure(error);
+    }
+  };
+
+  const autoPlaceSelectedTalk = async () => {
+    if (!selectedTalk) return;
+    const clientId = clientIntentId();
+    try {
+      const result = await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
+        `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks/${encodeURIComponent(selectedTalk.id)}/auto-placement`,
+        {
+          method: "POST",
+          body: {
+            expectedVersion: selectedTalk.version,
+            idempotencyKey: idempotencyKey("auto-place-talk"),
+          },
+          schema: AgendaMutationResult,
+        },
+      ));
+      selectTalk(result.talk);
+      toast("Talk auto-placed in the first conflict-free slot", { tone: "success" });
+      await refreshAfterCommit();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not auto-place talk", { tone: "danger" });
       await refreshAfterStaleFailure(error);
     }
   };
@@ -1008,6 +1073,38 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-secondary">Cue version {selectedTalk.version}</p>
             </div>
             <ConflictIndicator conflicts={selectedConflicts} blocking={false} />
+            <section className="space-y-3 border-2 border-line-strong bg-surface-muted p-4" aria-labelledby="agenda-session-content-heading">
+              <div>
+                <h3 id="agenda-session-content-heading" className="font-black text-ink">Session content</h3>
+                <p className="text-xs text-ink-secondary">Organizer edits flow into the next published agenda revision.</p>
+              </div>
+              <Input
+                required
+                label="Session title"
+                maxLength={300}
+                value={form.title}
+                onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
+              />
+              <Textarea
+                label="Session abstract"
+                rows={7}
+                maxLength={20_000}
+                value={form.description}
+                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+              />
+              <Button type="button" variant="secondary" disabled={busy} onClick={() => void saveTalkContent()}>
+                Save session content
+              </Button>
+            </section>
+            <div className="flex items-center justify-between gap-3 border-2 border-line-strong bg-production-yellow p-4">
+              <div>
+                <p className="font-black text-ink">Assisted placement</p>
+                <p className="text-xs text-ink-secondary">Find the first room and time without room or speaker overlap.</p>
+              </div>
+              <Button type="button" variant="secondary" disabled={busy} onClick={() => void autoPlaceSelectedTalk()}>
+                Auto-place talk
+              </Button>
+            </div>
             <Select
               label="Track"
               value={form.trackId}

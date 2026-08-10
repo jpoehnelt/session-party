@@ -61,7 +61,10 @@ describe("review mutation client", () => {
       name: "Program fit",
       order: 1,
       status: "active" as const,
-      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 as const }] as const },
+      startsAt: null,
+      endsAt: null,
+      blind: false,
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", type: "numeric" as const, weight: 1, required: true, max: 5 as const }] as const },
       version: 1,
     };
     const fetchMock = vi.fn()
@@ -79,6 +82,9 @@ describe("review mutation client", () => {
       eventId: "event_one",
       name: round.name,
       initialStatus: "active",
+      startsAt: null,
+      endsAt: null,
+      blind: false,
       rubric: round.rubric,
       expectedRoundCount: 0,
       idempotencyKey: "round-create-key-1",
@@ -104,6 +110,9 @@ describe("review mutation client", () => {
       body: JSON.stringify({
         name: "Program fit",
         initialStatus: "active",
+        startsAt: null,
+        endsAt: null,
+        blind: false,
         rubric: round.rubric,
         expectedRoundCount: 0,
       }),

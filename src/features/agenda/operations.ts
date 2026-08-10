@@ -2,6 +2,7 @@ import type { AnyOperationDef, PartyIntentDescriptor } from "contracts/operation
 import { eventAuthorization, publicAuthorization } from "contracts/principal";
 import type { JsonObject } from "contracts/domain";
 import {
+  autoPlaceTalk,
   cancelTalk,
   createRoom,
   createTalk,
@@ -12,11 +13,13 @@ import {
   publishAgenda,
   scheduleTalk,
   updateRoom,
+  updateTalkContent,
   updateTrack,
 } from "./service";
 import {
   AgendaMutationResult,
   AgendaSnapshot,
+  AutoPlaceTalkInput,
   CancelTalkInput,
   CreateRoomInput,
   CreateTalkInput,
@@ -30,6 +33,7 @@ import {
   ScheduleTalkInput,
   TrackMutationResult,
   UpdateRoomInput,
+  UpdateTalkContentInput,
   UpdateTrackInput,
 } from "./schema";
 
@@ -42,6 +46,29 @@ const writeAuthorization = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
   { kind: "api-key", scopes: ["agenda:write"] },
 );
+
+export const autoPlaceTalkOperation = {
+  id: "agenda.autoPlaceTalk",
+  kind: "command",
+  input: AutoPlaceTalkInput,
+  output: AgendaMutationResult,
+  authorize: writeAuthorization,
+  invoke: autoPlaceTalk,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/agenda/talks/:talkId/auto-placement",
+    input: { path: ["eventId", "talkId"], body: ["expectedVersion", "idempotencyKey"] },
+    summary: "Auto-place a talk in the first conflict-free event slot",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "agenda_auto_place_talk",
+    description: "Place a talk in the first conflict-free room and time inside the event window.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["agenda.talk_changed"],
+} as const satisfies AnyOperationDef;
 
 export const createRoomOperation = {
   id: "agenda.createRoom",
@@ -272,6 +299,32 @@ export const updateRoomOperation = {
   emits: ["agenda.talk_changed"],
 } as const satisfies AnyOperationDef;
 
+export const updateTalkContentOperation = {
+  id: "agenda.updateTalkContent",
+  kind: "command",
+  input: UpdateTalkContentInput,
+  output: AgendaMutationResult,
+  authorize: writeAuthorization,
+  invoke: updateTalkContent,
+  rest: {
+    method: "patch",
+    path: "/events/:eventId/agenda/talks/:talkId/content",
+    input: {
+      path: ["eventId", "talkId"],
+      body: ["title", "description", "expectedVersion", "idempotencyKey"],
+    },
+    summary: "Update an agenda talk title and abstract",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "agenda_update_talk_content",
+    description: "Update the organizer-owned session title and abstract with optimistic concurrency.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["agenda.talk_changed"],
+} as const satisfies AnyOperationDef;
+
 export const updateTrackOperation = {
   id: "agenda.updateTrack",
   kind: "command",
@@ -296,6 +349,7 @@ export const updateTrackOperation = {
 
 /** Bytewise order is deliberate and matches the registry generator comparator. */
 export const operations = [
+  autoPlaceTalkOperation,
   cancelTalkOperation,
   createRoomOperation,
   createTalkOperation,
@@ -306,6 +360,7 @@ export const operations = [
   publishAgendaOperation,
   scheduleTalkOperation,
   updateRoomOperation,
+  updateTalkContentOperation,
   updateTrackOperation,
 ] as const satisfies readonly AnyOperationDef[];
 

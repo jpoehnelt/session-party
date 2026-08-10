@@ -1,6 +1,7 @@
 import type { Principal } from "contracts/principal";
 import { API } from "contracts/routes";
 import { Hono } from "hono";
+import { Effect } from "effect";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
 import publicationFeeds from "@/features/publication/feed-api";
@@ -11,13 +12,14 @@ import { MAIL_SCHEDULER_NAME, Scheduler } from "./party/Scheduler";
 import { mcpToolsForPrincipal } from "./mcp";
 import { AirtableRateLimiter } from "./sync/AirtableRateLimiter";
 import { AirtableSyncLane } from "./sync/AirtableSyncLane";
+import { enqueueAutomatedDueTaskReminders } from "@/features/portal/service";
 import {
   apiRouters,
   mcpTools,
   operationById,
   restRegistrations,
 } from "./registry.gen";
-import { isExplicitLocalEnvironment, sessionSecret } from "./services";
+import { AppLayer, isExplicitLocalEnvironment, sessionSecret } from "./services";
 
 type JsonRpcId = string | number;
 type JsonRpcRequest = {
@@ -336,6 +338,9 @@ export const recoverMailScheduler = async (env: Env): Promise<void> => {
   }
 };
 
+export const runAutomatedDueReminderCron = (env: Env, runAt: Date): Promise<{ readonly queuedCount: number; readonly runDate: string }> =>
+  Effect.runPromise(enqueueAutomatedDueTaskReminders(runAt).pipe(Effect.provide(AppLayer(env))));
+
 export { AirtableRateLimiter, AirtableSyncLane, EventRoom, Scheduler };
 export default {
   fetch(request, env, ctx) {
@@ -346,7 +351,11 @@ export default {
         ? fetchPublicProgram(request, env)
       : app.fetch(request, env, ctx);
   },
-  scheduled(_controller, env, ctx) {
+  scheduled(controller, env, ctx) {
     ctx.waitUntil(recoverMailScheduler(env));
+    const runAt = new Date(controller.scheduledTime);
+    if (runAt.getUTCHours() === 14 && runAt.getUTCMinutes() === 0) {
+      ctx.waitUntil(runAutomatedDueReminderCron(env, runAt));
+    }
   },
 } satisfies ExportedHandler<Env>;

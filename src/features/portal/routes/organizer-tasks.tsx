@@ -12,6 +12,7 @@ import {
   AlertDialogTrigger,
   Button,
   Card,
+  Checkbox,
   EmptyState,
   Input,
   Select,
@@ -19,8 +20,8 @@ import {
   Toaster,
   toast,
 } from "@/ui";
-import type { CreateTaskInput, PortalTaskDefinition, PortalTaskKind, UpdateTaskInput } from "../schema";
-import { createTask, deleteTask, getTaskDefinitions, resolveOrganizerEventId, updateTask } from "./api";
+import type { CreateTaskInput, PortalTaskDefinition, PortalTaskKind, SpeakerDirectoryItem, UpdateTaskInput } from "../schema";
+import { createTask, deleteTask, getSpeakerDirectory, getTaskDefinitions, resolveOrganizerEventId, updateTask } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
 import {
   ProductionHeader,
@@ -61,6 +62,7 @@ function createTaskInput(eventId: string, form: HTMLFormElement): CreateTaskInpu
     formId: nullable(values, "formId"),
     dueAt: dueAt(values),
     order: Number(values.get("order")),
+    speakerIds: values.getAll("speakerIds").map(String),
   };
 }
 
@@ -70,7 +72,10 @@ function updateTaskInput(eventId: string, task: PortalTaskDefinition, form: HTML
 
 export default function OrganizerTasksRoute() {
   const { eventSlug = "" } = useParams();
-  const [state, retry] = useRouteLoad(() => getTaskDefinitions(eventSlug), eventSlug);
+  const [state, retry] = useRouteLoad(async () => {
+    const [tasks, directory] = await Promise.all([getTaskDefinitions(eventSlug), getSpeakerDirectory(eventSlug)]);
+    return { tasks, speakers: directory.speakers };
+  }, eventSlug);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   if (state.status === "loading") return <RouteLoading label="Loading portal tasks" />;
@@ -93,7 +98,8 @@ export default function OrganizerTasksRoute() {
   return (
     <>
       <OrganizerTasksContent
-        tasks={state.data}
+        tasks={state.data.tasks}
+        speakers={state.data.speakers}
         busyId={busyId}
         onCreate={(form) => mutate("new", (eventId) => createTask(eventId, createTaskInput(eventId, form)), "Task created")}
         onUpdate={(task, form) => mutate(task.id, (eventId) => updateTask(eventId, updateTaskInput(eventId, task, form)), "Task updated")}
@@ -106,12 +112,14 @@ export default function OrganizerTasksRoute() {
 
 export function OrganizerTasksContent({
   tasks,
+  speakers = [],
   busyId = null,
   onCreate,
   onUpdate,
   onDelete,
 }: {
   readonly tasks: readonly PortalTaskDefinition[];
+  readonly speakers?: readonly SpeakerDirectoryItem[];
   readonly busyId?: string | null;
   readonly onCreate: (form: HTMLFormElement) => void;
   readonly onUpdate: (task: PortalTaskDefinition, form: HTMLFormElement) => void;
@@ -136,6 +144,7 @@ export function OrganizerTasksContent({
       />
       <Card className={productionCardClass} title="New cue / Create task">
         <TaskFields
+          speakers={speakers}
           submitLabel="Create task"
           loading={busyId === "new"}
           onSubmit={(event) => {
@@ -160,6 +169,7 @@ export function OrganizerTasksContent({
               >
                 <TaskFields
                   task={task}
+                  speakers={speakers}
                   submitLabel="Save changes"
                   loading={busyId === task.id}
                   onSubmit={(event) => {
@@ -195,12 +205,14 @@ export function OrganizerTasksContent({
 
 function TaskFields({
   task,
+  speakers = [],
   submitLabel,
   loading,
   onSubmit,
   deleteAction,
 }: {
   readonly task?: PortalTaskDefinition;
+  readonly speakers?: readonly SpeakerDirectoryItem[];
   readonly submitLabel: string;
   readonly loading: boolean;
   readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -219,6 +231,21 @@ function TaskFields({
         <Input name="formId" label="Form ID" hint="Required only for form tasks." defaultValue={task?.formId ?? ""} />
       </div>
       <Textarea name="description" label="Instructions" defaultValue={task?.description ?? ""} />
+      <fieldset className="space-y-2 border-2 border-[#171714] bg-[#fffdf7] p-3">
+        <legend className="px-2 text-xs font-black uppercase tracking-wide">Assigned speakers</legend>
+        <p className="text-xs text-ink-muted">Leave every speaker unchecked to assign this task to all current and future speakers.</p>
+        <div className="grid max-h-48 gap-2 overflow-auto sm:grid-cols-2">
+          {speakers.map((item) => (
+            <Checkbox
+              key={item.speaker.id}
+              name="speakerIds"
+              value={item.speaker.id}
+              label={`${item.speaker.displayName} · ${item.speaker.workflowStatus}`}
+              defaultChecked={task?.speakerIds.includes(item.speaker.id) ?? false}
+            />
+          ))}
+        </div>
+      </fieldset>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button className={`${productionButtonClass} bg-[#896aff] text-[#171714]`} type="submit" loading={loading}>{submitLabel}</Button>
         {deleteAction}

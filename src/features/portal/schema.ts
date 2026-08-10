@@ -60,6 +60,8 @@ export const PortalTaskDefinition = Schema.Struct({
   formId: Schema.NullOr(EntityId),
   dueAt: Schema.NullOr(Timestamp),
   order: Schema.Int,
+  targetMode: Schema.Literal("all", "selected"),
+  speakerIds: Schema.Array(EntityId),
   version: Schema.Int.pipe(Schema.positive()),
 });
 export type PortalTaskDefinition = typeof PortalTaskDefinition.Type;
@@ -113,9 +115,11 @@ export const SpeakerProfile = Schema.Struct({
   id: EntityId,
   eventId: EntityId,
   displayName: Schema.String,
+  contactEmail: NullableText,
   title: NullableText,
   company: NullableText,
   bio: NullableText,
+  workflowStatus: NonEmptyText,
   headshotAssetId: Schema.NullOr(EntityId),
   links: SpeakerLinks,
   visible: Schema.Boolean,
@@ -142,6 +146,15 @@ export const AcceptedSubmission = Schema.Struct({
   version: Schema.Int.pipe(Schema.positive()),
 });
 export type AcceptedSubmission = typeof AcceptedSubmission.Type;
+
+export const SpeakerSession = Schema.Struct({
+  id: EntityId,
+  title: NonEmptyText,
+  startsAt: Schema.NullOr(Timestamp),
+  durationMin: Schema.Int.pipe(Schema.positive()),
+  status: Schema.Literal("draft", "confirmed", "cancelled"),
+});
+export type SpeakerSession = typeof SpeakerSession.Type;
 
 export const ReadinessSummary = Schema.Struct({
   tasksTotal: Schema.Int.pipe(Schema.nonNegative()),
@@ -179,11 +192,13 @@ export type PortalSnapshot = typeof PortalSnapshot.Type;
 export const SpeakerDirectoryItem = Schema.Struct({
   speaker: SpeakerProfile,
   submission: Schema.NullOr(AcceptedSubmission),
-  acceptanceEventId: EntityId,
-  provisioningId: EntityId,
-  provisioningVersion: Schema.Int.pipe(Schema.positive()),
-  provisioningStatus: Schema.Literal("pending", "claimed", "provisioned", "retry", "failed", "revoked"),
+  source: Schema.Literal("accepted", "manual"),
+  acceptanceEventId: Schema.NullOr(EntityId),
+  provisioningId: Schema.NullOr(EntityId),
+  provisioningVersion: VersionFromZero,
+  provisioningStatus: Schema.Literal("manual", "pending", "claimed", "provisioned", "retry", "failed", "revoked"),
   provisionedAt: Schema.NullOr(Timestamp),
+  sessions: Schema.Array(SpeakerSession),
   readiness: ReadinessSummary,
   latestContact: Schema.NullOr(SpeakerContact),
 });
@@ -258,6 +273,7 @@ export const CreateTaskInput = Schema.Struct({
   formId: Schema.NullOr(EntityId),
   dueAt: Schema.NullOr(Timestamp),
   order: Schema.Int,
+  speakerIds: Schema.optional(Schema.Array(EntityId)),
 });
 export type CreateTaskInput = typeof CreateTaskInput.Type;
 
@@ -271,6 +287,7 @@ export const UpdateTaskInput = Schema.Struct({
   formId: Schema.NullOr(EntityId),
   dueAt: Schema.NullOr(Timestamp),
   order: Schema.Int,
+  speakerIds: Schema.optional(Schema.Array(EntityId)),
 });
 export type UpdateTaskInput = typeof UpdateTaskInput.Type;
 
@@ -328,6 +345,117 @@ export const UpdateSpeakerPublicationInput = Schema.Struct({
 });
 export type UpdateSpeakerPublicationInput = typeof UpdateSpeakerPublicationInput.Type;
 
+export const CreateManagedSpeakerInput = Schema.Struct({
+  eventId: EntityId,
+  displayName: NonEmptyText,
+  contactEmail: Schema.String.pipe(Schema.pattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)),
+  title: NullableText,
+  company: NullableText,
+  bio: NullableText,
+  workflowStatus: NonEmptyText,
+  visible: Schema.Boolean,
+});
+export type CreateManagedSpeakerInput = typeof CreateManagedSpeakerInput.Type;
+
+export const UpdateManagedSpeakerInput = Schema.Struct({
+  ...CreateManagedSpeakerInput.fields,
+  speakerId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+});
+export type UpdateManagedSpeakerInput = typeof UpdateManagedSpeakerInput.Type;
+
+export const UploadManagedSpeakerHeadshotInput = Schema.Struct({
+  eventId: EntityId,
+  speakerId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  filename: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255)),
+  contentType: Schema.Literal("image/jpeg", "image/png", "image/webp"),
+  contentBase64: Schema.String.pipe(Schema.minLength(1), Schema.pattern(/^[A-Za-z0-9+/]+={0,2}$/)),
+  idempotencyKey: IdempotencyKey,
+});
+export type UploadManagedSpeakerHeadshotInput = typeof UploadManagedSpeakerHeadshotInput.Type;
+
+export const ImportSpeakersCsvInput = Schema.Struct({
+  eventId: EntityId,
+  csv: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(1_000_000)),
+  idempotencyKey: IdempotencyKey,
+});
+export type ImportSpeakersCsvInput = typeof ImportSpeakersCsvInput.Type;
+
+export const ImportSpeakersCsvOutput = Schema.Struct({
+  createdCount: Schema.Int.pipe(Schema.nonNegative()),
+  updatedCount: Schema.Int.pipe(Schema.nonNegative()),
+  skippedCount: Schema.Int.pipe(Schema.nonNegative()),
+  speakers: Schema.Array(SpeakerProfile),
+  idempotent: Schema.Boolean,
+});
+export type ImportSpeakersCsvOutput = typeof ImportSpeakersCsvOutput.Type;
+
+export const SendSpeakerMessagesInput = Schema.Struct({
+  eventId: EntityId,
+  speakerIds: Schema.NonEmptyArray(EntityId).pipe(Schema.maxItems(200)),
+  kind: Schema.Literal("invite", "reminder"),
+  idempotencyKey: IdempotencyKey,
+});
+export type SendSpeakerMessagesInput = typeof SendSpeakerMessagesInput.Type;
+
+export const SendSpeakerMessagesOutput = Schema.Struct({
+  queuedCount: Schema.Int.pipe(Schema.nonNegative()),
+  skippedCount: Schema.Int.pipe(Schema.nonNegative()),
+  idempotent: Schema.Boolean,
+});
+export type SendSpeakerMessagesOutput = typeof SendSpeakerMessagesOutput.Type;
+
+export const ContentComment = Schema.Struct({
+  id: EntityId,
+  authorName: NonEmptyText,
+  body: NonEmptyText,
+  createdAt: Timestamp,
+});
+export type ContentComment = typeof ContentComment.Type;
+
+export const ContentAsset = Schema.Struct({
+  ...PortalAsset.fields,
+  speakerId: EntityId,
+  speakerName: NonEmptyText,
+  current: Schema.Boolean,
+  supersedesAssetId: Schema.NullOr(EntityId),
+  restoredFromAssetId: Schema.NullOr(EntityId),
+  uploadedAt: Timestamp,
+  comments: Schema.Array(ContentComment),
+});
+export type ContentAsset = typeof ContentAsset.Type;
+
+export const ContentLibrary = Schema.Struct({
+  event: PortalEvent,
+  assets: Schema.Array(ContentAsset),
+});
+export type ContentLibrary = typeof ContentLibrary.Type;
+
+export const AddContentCommentInput = Schema.Struct({
+  eventId: EntityId,
+  assetId: EntityId,
+  body: NonEmptyText,
+  idempotencyKey: IdempotencyKey,
+});
+export type AddContentCommentInput = typeof AddContentCommentInput.Type;
+
+export const RestoreContentVersionInput = Schema.Struct({
+  eventId: EntityId,
+  assetId: EntityId,
+  idempotencyKey: IdempotencyKey,
+});
+export type RestoreContentVersionInput = typeof RestoreContentVersionInput.Type;
+
+export const DownloadContentInput = Schema.Struct({ eventId: EntityId, assetId: EntityId });
+export type DownloadContentInput = typeof DownloadContentInput.Type;
+
+export const DownloadContentOutput = Schema.Struct({
+  asset: ContentAsset,
+  contentBase64: Schema.String,
+});
+export type DownloadContentOutput = typeof DownloadContentOutput.Type;
+
 export const DeletePortalEntityOutput = Schema.Struct({ id: EntityId });
 export type DeletePortalEntityOutput = typeof DeletePortalEntityOutput.Type;
 
@@ -342,6 +470,7 @@ export const ManageSpeakerOnboardingInput = Schema.Struct({
       formId: Schema.NullOr(EntityId),
       dueAt: Schema.NullOr(Timestamp),
       order: Schema.Int,
+      speakerIds: Schema.optional(Schema.Array(EntityId)),
     }),
     Schema.Struct({
       type: Schema.Literal("updateTask"),
@@ -353,6 +482,7 @@ export const ManageSpeakerOnboardingInput = Schema.Struct({
       formId: Schema.NullOr(EntityId),
       dueAt: Schema.NullOr(Timestamp),
       order: Schema.Int,
+      speakerIds: Schema.optional(Schema.Array(EntityId)),
     }),
     Schema.Struct({
       type: Schema.Literal("deleteTask"),

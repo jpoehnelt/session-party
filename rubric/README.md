@@ -20,7 +20,7 @@ pnpm rubric:baseline
 `rubric:run` executes the exact Vitest assertions named in `evidence.ts`. Each
 rubric item is composed from one or more checks:
 
-- a passing Vitest assertion is positive behavioral evidence;
+- a passing worker or browser-mode Vitest assertion is positive behavioral evidence;
 - a known product or test gap is a failed capability check but does not count as deterministic evidence coverage;
 - all checks passing derives `pass`;
 - a mix of passing and failing checks derives `partial`;
@@ -48,11 +48,12 @@ contain the baseline file.
 ## Adding a capability
 
 Add or strengthen a focused behavioral test, then replace the relevant `gap()`
-entry in `scripts/rubric/evidence.ts` with an exact `test(file, title)` reference.
+entry in `scripts/rubric/evidence.ts` with an exact `test(file, title)` or
+`browser(file, title)` reference.
 `rubric:validate` fails if the rubric and evidence plan stop covering the same
 IDs, while `rubric:run` fails if a referenced assertion is renamed or removed.
 
 The harness deliberately does not use source-code grep, screenshots judged by a
-model, or a hand-entered pass/partial score. Browser interactions that are not
-yet deterministic remain explicit gaps until a Playwright or component-level
-interaction probe is added.
+model, or a hand-entered pass/partial score. Browser interactions run through
+the dedicated component-level browser suite; interactions without an executable
+probe remain explicit gaps.

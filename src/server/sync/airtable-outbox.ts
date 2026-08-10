@@ -200,6 +200,8 @@ export const prepareAirtableTalkProjection = async (
   ]);
   const speakerRecordById = new Map(speakerLinks.map((link) => [link.entityId, link.recordId]));
   const d1Projection = {
+    title: input.talk.title,
+    description: input.talk.description,
     track: track?.name ?? null,
     room: room?.name ?? null,
     startsAt: input.talk.startsAt === null ? null : new Date(input.talk.startsAt).toISOString(),
@@ -222,7 +224,7 @@ export const prepareAirtableTalkProjection = async (
     entityId: input.talk.id,
     entityVersion: input.talk.version,
     changedFields: input.bootstrap
-      ? { title: input.talk.title, description: input.talk.description, ...d1Projection }
+      ? d1Projection
       : changedFields,
     d1Projection,
     origin: input.origin,

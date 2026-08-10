@@ -30,6 +30,7 @@
     "rubric:gate": "tsx scripts/rubric.ts gate",
     "rubric:baseline": "tsx scripts/rubric.ts baseline",
     "test:worker": "vitest run",
+    "test:audit-browser": "vitest run --config src/client/vitest.audit-browser.config.ts",
     "test:storybook": "vitest run --config vitest.storybook.config.ts",
     "test:visual-tools": "node --test tools/visual-regression/*.node-test.mjs",
     "visual:stories:capture": "pnpm test:storybook",
@@ -39,7 +40,7 @@
     "test:migrations": "vitest run src/server/migration-parity.test.ts",
     "smoke:local": "tsx scripts/local-smoke.ts",
     "test": "pnpm test:worker",
-    "ci": "pnpm check && pnpm rubric:test && pnpm test:worker && pnpm test:storybook && pnpm test:visual-tools && pnpm build && pnpm storybook:build",
+    "ci": "pnpm check && pnpm rubric:test && pnpm test:worker && pnpm test:audit-browser && pnpm test:storybook && pnpm test:visual-tools && pnpm build && pnpm storybook:build",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply session-party --local",
     "db:migrate:remote": "wrangler d1 migrations apply session-party --remote"

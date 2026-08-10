@@ -9,9 +9,15 @@ import {
   AppendReviewCommentOutput,
   AssignReviewerInput,
   AssignReviewerOutput,
+  BulkAssignReviewersInput,
+  BulkAssignReviewersOutput,
   CreateReviewRoundInput,
   CreateReviewRoundOutput,
+  ExportReviewResultsInput,
+  ExportReviewResultsOutput,
   GetWorkbenchInput,
+  RecuseReviewerInput,
+  RecuseReviewerOutput,
   RequestAiSuggestionInput,
   RequestAiSuggestionOutput,
   RejectSubmissionInput,
@@ -23,19 +29,28 @@ import {
   ReviewWorkbench,
   SaveScoreInput,
   SaveScoreOutput,
+  SendReviewRemindersInput,
+  SendReviewRemindersOutput,
+  UpdateReviewRoundInput,
+  UpdateReviewRoundOutput,
 } from "./schema";
 import {
   acceptSubmission,
   advanceReviewRound,
   appendReviewComment,
   assignReviewer,
+  bulkAssignReviewers,
   createReviewRound,
+  exportReviewResults,
   getWorkbench,
+  recuseReviewer,
   requestAiSuggestion,
   rejectSubmission,
   recuseAssignment,
   revokeAcceptance,
   saveScore,
+  sendReviewReminders,
+  updateReviewRound,
 } from "./service";
 
 const organizerWrite = eventAuthorization(
@@ -176,6 +191,33 @@ const assignReviewerOperation = {
   emits: ["review.assignment.created"],
 } as const satisfies AnyOperationDef;
 
+const bulkAssignReviewersOperation = {
+  id: "review.bulkAssignReviewers",
+  kind: "command",
+  input: BulkAssignReviewersInput,
+  output: BulkAssignReviewersOutput,
+  authorize: organizerWrite,
+  invoke: bulkAssignReviewers,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/assignments/bulk",
+    input: {
+      path: ["eventId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["roundId", "submissionIds", "reviewerUserIds", "reviewsPerSubmission", "strategy"],
+    },
+    summary: "Assign selected proposals across an independent round reviewer pool",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "review_bulk_assign_reviewers",
+    description: "Assign selected CFP proposals to a reviewer pool using all-reviewer or deterministic balanced distribution.",
+  },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["review.assignments.bulkCreated"],
+} as const satisfies AnyOperationDef;
+
 const createRoundOperation = {
   id: "review.createRound",
   kind: "command",
@@ -189,7 +231,7 @@ const createRoundOperation = {
     input: {
       path: ["eventId"],
       headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
-      body: ["name", "initialStatus", "rubric", "expectedRoundCount"],
+      body: ["name", "initialStatus", "startsAt", "endsAt", "blind", "rubric", "expectedRoundCount"],
     },
     summary: "Create an ordered pending or active review round",
     successStatus: 201,
@@ -201,6 +243,29 @@ const createRoundOperation = {
   idempotency: "required",
   concurrency: "required",
   emits: ["review.round.created"],
+} as const satisfies AnyOperationDef;
+
+const exportReviewResultsOperation = {
+  id: "review.exportResults",
+  kind: "query",
+  input: ExportReviewResultsInput,
+  output: ExportReviewResultsOutput,
+  authorize: reviewRead,
+  invoke: exportReviewResults,
+  rest: {
+    method: "get",
+    path: "/events/:eventId/review/rounds/:roundId/export",
+    input: { path: ["eventId", "roundId"] },
+    summary: "Export normalized review results for CSV or spreadsheet download",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "review_export_results",
+    description: "Export normalized proposal, reviewer, aggregate score, response, and rationale rows for one review round.",
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
 } as const satisfies AnyOperationDef;
 
 const getWorkbenchOperation = {
@@ -255,6 +320,29 @@ const requestAiSuggestionOperation = {
   idempotency: "none",
   concurrency: "none",
   emits: ["review.aiSuggestion.created"],
+} as const satisfies AnyOperationDef;
+
+const recuseReviewerOperation = {
+  id: "review.recuseReviewer",
+  kind: "command",
+  input: RecuseReviewerInput,
+  output: RecuseReviewerOutput,
+  authorize: humanReviewWrite,
+  invoke: recuseReviewer,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/rounds/:roundId/submissions/:submissionId/recusal",
+    input: {
+      path: ["eventId", "roundId", "submissionId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["reason"],
+    },
+    summary: "Recuse the assigned reviewer from one proposal",
+    successStatus: 201,
+  },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["review.reviewer.recused"],
 } as const satisfies AnyOperationDef;
 
 const rejectSubmissionOperation = {
@@ -351,17 +439,76 @@ const saveScoreOperation = {
   emits: ["review.score.saved"],
 } as const satisfies AnyOperationDef;
 
+const sendReviewRemindersOperation = {
+  id: "review.sendReminders",
+  kind: "command",
+  input: SendReviewRemindersInput,
+  output: SendReviewRemindersOutput,
+  authorize: organizerWrite,
+  invoke: sendReviewReminders,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/rounds/:roundId/reminders",
+    input: {
+      path: ["eventId", "roundId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["reviewerUserIds"],
+    },
+    summary: "Queue reminders for reviewers with outstanding assignments",
+    successStatus: 202,
+  },
+  mcp: {
+    name: "review_send_reminders",
+    description: "Queue reminder emails for selected reviewers who still have outstanding assignments in a review round.",
+  },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["review.reminders.enqueued"],
+} as const satisfies AnyOperationDef;
+
+const updateReviewRoundOperation = {
+  id: "review.updateRound",
+  kind: "command",
+  input: UpdateReviewRoundInput,
+  output: UpdateReviewRoundOutput,
+  authorize: organizerWrite,
+  invoke: updateReviewRound,
+  rest: {
+    method: "put",
+    path: "/events/:eventId/review/rounds/:roundId",
+    input: {
+      path: ["eventId", "roundId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["name", "startsAt", "endsAt", "blind", "rubric", "expectedVersion"],
+    },
+    summary: "Update a review round schedule, blind-review policy, and scorecard",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "review_update_round",
+    description: "Update a review round's name, dates, blind-review policy, and typed weighted scorecard with version protection.",
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.round.updated"],
+} as const satisfies AnyOperationDef;
+
 /** Bytewise operation-id order; registry generation must preserve this sequence. */
 export const operations = [
   acceptSubmissionOperation,
   advanceRoundOperation,
   appendCommentOperation,
   assignReviewerOperation,
+  bulkAssignReviewersOperation,
   createRoundOperation,
+  exportReviewResultsOperation,
   getWorkbenchOperation,
   recuseAssignmentOperation,
+  recuseReviewerOperation,
   rejectSubmissionOperation,
   requestAiSuggestionOperation,
   revokeAcceptanceOperation,
   saveScoreOperation,
+  sendReviewRemindersOperation,
+  updateReviewRoundOperation,
 ] as const satisfies readonly AnyOperationDef[];

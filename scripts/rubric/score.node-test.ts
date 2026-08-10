@@ -58,3 +58,21 @@ test("withholds pending manual checks from the judgeable denominator", () => {
   assert.equal(report.required[0]?.implementationGapPct, (2 / 6) * 100);
   assert.equal(report.required[0]?.items[2]?.verdict, "cannot_judge");
 });
+
+test("counts executed browser assertions as deterministic evidence", () => {
+  const browserPlan: EvidencePlan = {
+    ...plan,
+    "REQ-01": [{ kind: "vitest-browser", file: "pass.browser.tsx", title: "passes in a browser" }],
+  };
+  const report = scoreRubric(
+    manifest,
+    browserPlan,
+    new Map([
+      [testKey("pass.test.ts", "passes"), "passed"],
+      [testKey("pass.browser.tsx", "passes in a browser"), "passed"],
+    ]),
+  );
+  assert.equal(report.required[0]?.items[0]?.verdict, "pass");
+  assert.equal(report.required[0]?.items[0]?.evidenceBacked, true);
+  assert.equal(report.required[0]?.evidenceCoveragePct, 50);
+});

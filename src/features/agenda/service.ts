@@ -46,6 +46,7 @@ import type {
   AgendaSnapshot,
   AgendaTalk,
   AgendaWarnings,
+  AutoPlaceTalkInput,
   BacklogProposal,
   CancelTalkInput,
   CreateRoomInput,
@@ -63,6 +64,7 @@ import type {
   ScheduleTalkInput,
   Track,
   TrackMutationResult,
+  UpdateTalkContentInput,
   UpdateRoomInput,
   UpdateTrackInput,
 } from "./schema";
@@ -97,7 +99,7 @@ type IdempotencyContext = {
 
 export interface AgendaMutationReservation {
   readonly eventId: string;
-  readonly operationId: "agenda.createTalk" | "agenda.moveTalk" | "agenda.scheduleTalk";
+  readonly operationId: "agenda.autoPlaceTalk" | "agenda.createTalk" | "agenda.moveTalk" | "agenda.scheduleTalk";
   readonly workspaceVersion: number;
 }
 
@@ -1239,15 +1241,16 @@ export const createTalk = (
   }));
 
 const repositionTalk = (
-  operationId: "agenda.scheduleTalk" | "agenda.moveTalk",
-  action: "scheduled" | "moved",
+  operationId: "agenda.autoPlaceTalk" | "agenda.scheduleTalk" | "agenda.moveTalk",
+  action: "auto_placed" | "scheduled" | "moved",
   input: ScheduleTalkInput | MoveTalkInput,
   interlock?: AgendaMutationInterlock,
+  idempotencyInput: AutoPlaceTalkInput | ScheduleTalkInput | MoveTalkInput = input,
 ): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
   mutationContention(Effect.gen(function* () {
     const { db } = yield* Db;
     const principal = yield* CurrentUser;
-    const prepared = yield* prepareIdempotency(operationId, input);
+    const prepared = yield* prepareIdempotency(operationId, idempotencyInput);
     if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
     const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
     yield* waitAfterWorkspaceSample(interlock, {
@@ -1352,6 +1355,155 @@ export const scheduleTalk = (input: ScheduleTalkInput, interlock?: AgendaMutatio
 
 export const moveTalk = (input: MoveTalkInput, interlock?: AgendaMutationInterlock) =>
   repositionTalk("agenda.moveTalk", "moved", input, interlock);
+
+export const autoPlaceTalk = (
+  input: AutoPlaceTalkInput,
+): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [event, before, roomRows, existing] = yield* Effect.all([
+      getEvent(input.eventId),
+      loadTalk(input.eventId, input.talkId),
+      database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name), asc(rooms.id))),
+      loadTalkRows(input.eventId),
+    ]);
+    if (before.status === "cancelled") {
+      return yield* Effect.fail(new Conflict({ message: "Cancelled talks cannot be auto-placed" }));
+    }
+    const eventStartsAt = timestamp(event.startsAt);
+    const eventEndsAt = timestamp(event.endsAt);
+    if (eventStartsAt === null || eventEndsAt === null) {
+      return yield* Effect.fail(new Validation({ message: "Set event start and end dates before auto-placement" }));
+    }
+    if (roomRows.length === 0) {
+      return yield* Effect.fail(new Validation({ message: "Create at least one room before auto-placement" }));
+    }
+    const scheduled = existing.filter(({ id, status, startsAt }) =>
+      id !== before.id && status !== "cancelled" && startsAt !== null);
+    const stepMs = 15 * 60_000;
+    let placement: { readonly roomId: string; readonly startsAt: number } | null = null;
+    for (
+      let startsAt = eventStartsAt;
+      startsAt + before.durationMin * 60_000 <= eventEndsAt && placement === null;
+      startsAt += stepMs
+    ) {
+      for (const room of roomRows) {
+        const candidate: AgendaTalk = {
+          ...before,
+          roomId: room.id,
+          startsAt,
+          status: "confirmed",
+        };
+        if (detectAgendaConflicts(candidate, scheduled).length === 0) {
+          placement = { roomId: room.id, startsAt };
+          break;
+        }
+      }
+    }
+    if (placement === null) {
+      return yield* Effect.fail(new Conflict({ message: "No conflict-free room and time remain inside the event window" }));
+    }
+    return yield* repositionTalk("agenda.autoPlaceTalk", "auto_placed", {
+      ...input,
+      trackId: before.trackId,
+      roomId: placement.roomId,
+      startsAt: placement.startsAt,
+      durationMin: before.durationMin,
+    }, undefined, input);
+  });
+
+export const updateTalkContent = (
+  input: UpdateTalkContentInput,
+): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
+  mutationContention(Effect.gen(function* () {
+    const { db } = yield* Db;
+    const principal = yield* CurrentUser;
+    const prepared = yield* prepareIdempotency("agenda.updateTalkContent", input);
+    if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
+    const before = yield* loadTalk(input.eventId, input.talkId);
+    if (before.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: `Talk version is ${before.version}; expected ${input.expectedVersion}` }));
+    }
+    if (before.status === "cancelled") {
+      return yield* Effect.fail(new Conflict({ message: "Cancelled talks cannot be edited" }));
+    }
+    const title = input.title.trim().replace(/\s+/g, " ");
+    if (title.length === 0) return yield* Effect.fail(new Validation({ message: "Talk title must contain visible characters" }));
+    const description = input.description?.trim() || null;
+    const candidate: AgendaTalk = { ...before, title, description, version: before.version + 1 };
+    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
+    const changeId = nanoid();
+    const auditId = nanoid();
+    const conflicts = yield* loadConflicts(input.eventId, [
+      ...(yield* loadTalkRows(input.eventId)).filter(({ id }) => id !== candidate.id),
+      candidate,
+    ]);
+    const result: AgendaMutationResult = {
+      talk: candidate,
+      conflicts: conflicts.filter(({ talkIds }) => talkIds.includes(candidate.id)),
+      changeId,
+      auditId,
+      replayed: false,
+    };
+    const actor = actorColumns(principal);
+    const airtableProjection = yield* database(() => prepareAirtableTalkProjection(db, {
+      eventId: input.eventId,
+      talk: candidate,
+      changedKeys: ["title", "description"],
+      origin: "agenda.updateTalkContent",
+      idempotencyKey: `agenda.updateTalkContent:${prepared.id}`,
+      now: prepared.now,
+    }));
+    yield* database(() => db.batch([
+      db.update(talks).set({
+        title,
+        description,
+        version: candidate.version,
+        updatedAt: prepared.now,
+      }).where(and(
+        eq(talks.eventId, input.eventId),
+        eq(talks.id, input.talkId),
+        eq(talks.version, input.expectedVersion),
+      )),
+      db.insert(idempotencyRecords).values(idempotencyInsert(
+        prepared,
+        input.eventId,
+        "agenda.updateTalkContent",
+        result as unknown as JsonValue,
+        true,
+      )),
+      db.insert(domainChanges).values({
+        id: changeId,
+        eventId: input.eventId,
+        aggregateType: "agenda-workspace",
+        aggregateId: input.eventId,
+        aggregateVersion: workspaceVersion,
+        eventType: TALK_CHANGE_EVENT,
+        audiences: PRIVATE_AUDIENCE,
+        payload: { action: "content_updated", talk: candidate },
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
+      db.insert(auditLog).values({
+        id: auditId,
+        eventId: input.eventId,
+        requestId: prepared.requestId,
+        ...actor,
+        action: "agenda.talk_content_updated",
+        resourceType: "talk",
+        resourceId: input.talkId,
+        before,
+        after: candidate,
+        metadata: { idempotencyKeyHash: prepared.keyHash },
+        occurredAt: prepared.now,
+      }),
+      ...(airtableProjection ? [airtableProjection.statement] : []),
+    ] as never));
+    yield* broadcastMutation(result, principal.name, prepared.requestId);
+    return result;
+  }));
 
 export const cancelTalk = (
   input: CancelTalkInput,

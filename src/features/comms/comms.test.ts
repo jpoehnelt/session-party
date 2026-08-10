@@ -405,6 +405,46 @@ describe("communications authorization and validation", () => {
     expect(audience.eligibleCount).toBe(2);
   });
 
+  it("includes rejected applicants in bulk communications and queues their outcome email", async () => {
+    const seeded = await seedCommunication("rejected-audience");
+    await seeded.db.batch([
+      seeded.db.update(submissions).set({ status: "rejected", acceptedAt: null, version: 3, updatedAt: now }).where(eq(submissions.id, "submission-comms-rejected-audience")),
+      seeded.db.update(emailTemplates).set({
+        subject: "An update on your {{event.name}} proposal",
+        body: "Hi {{speaker.name}},\n\nThank you for submitting to {{event.name}}.",
+        attachIcs: false,
+        version: 2,
+        updatedAt: now,
+      }).where(eq(emailTemplates.id, seeded.templateId)),
+    ]);
+    const audience = await runAs(seeded.owner, listAudience({ eventId: seeded.eventId }));
+    expect(audience.recipients).toContainEqual(expect.objectContaining({
+      speakerId: seeded.speakerId,
+      name: "Accepted Speaker",
+      eligibility: "eligible",
+    }));
+    const mailQueue: MailQueueStub = {
+      appOrigin: "https://events.example.com",
+      fromEmail: "Events <configured@example.com>",
+      wake: () => Effect.void,
+    };
+    const queued = await runAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
+      recipientSpeakerIds: [seeded.speakerId],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-rejected-audience-001",
+    }), mailQueue);
+    expect(queued.deliveries).toHaveLength(1);
+    const [snapshot] = await seeded.db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.id, queued.deliveries[0]!.snapshotId));
+    expect(snapshot).toMatchObject({
+      recipientEmail: "speaker-user-comms-rejected-audience@example.com",
+      subject: "An update on your Communications rejected-audience proposal",
+    });
+  });
+
   it("accepts the frozen dotted merge contract and rejects unknown or malformed variables", async () => {
     await expect(Effect.runPromise(validateTemplate(
       "Accepted",

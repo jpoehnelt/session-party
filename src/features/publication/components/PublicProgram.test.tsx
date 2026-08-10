@@ -6,6 +6,8 @@ import type { PublishedAgenda } from "@/features/agenda/schema";
 import type { PublicSpeakerGallery } from "@/features/portal/schema";
 import {
   PublicProgram,
+  embedDefinitionStorageKey,
+  parseSavedEmbedDefinitions,
   publicSurfaceFromSplat,
   sessionMatches,
   sortPublicSpeakers,
@@ -140,9 +142,51 @@ describe("public program", () => {
     expect(markup).toContain("Bold &amp; energetic");
     expect(markup).toContain("Clean &amp; minimal");
     expect(markup).toContain("Editorial");
+    expect(markup).toContain("iCalendar");
+    expect(markup).toContain("Track filter");
+    expect(markup).toContain("Included fields");
+    expect(markup).toContain("Save embed definition");
+    expect(markup).toContain("Saved embeds (0)");
     expect(markup).toContain("Generated share URL or code");
     expect(markup).toContain("/embed/devflow-conf-2027/schedule");
     expect(markup).toContain("aesthetic=bold&amp;accent=%23635BFF");
     expect(markup).toContain("Preview live embed");
+  });
+
+  it("round-trips named saved embed definitions for later code retrieval", () => {
+    const definition = {
+      id: "embed-main",
+      name: "Main schedule",
+      widget: "schedule" as const,
+      format: "styled-html" as const,
+      aesthetic: "bold" as const,
+      accent: "#635BFF",
+      track: "Platform & Infra",
+      fields: ["title", "time", "room"],
+      code: '<iframe title="Main schedule"></iframe>',
+      enabled: true,
+    };
+    expect(embedDefinitionStorageKey(agenda.eventSlug)).toBe(
+      "session-party:devflow-conf-2027:saved-embeds",
+    );
+    expect(parseSavedEmbedDefinitions(JSON.stringify([definition]))).toEqual([definition]);
+    expect(parseSavedEmbedDefinitions("not-json")).toEqual([]);
+  });
+
+  it("keeps session and speaker identity consistent across public surfaces and organizer source", () => {
+    const sourceTalk = agenda.talks[0]!;
+    for (const surface of ["sessions", "agenda", "schedule"] as const) {
+      const markup = render(surface);
+      expect(markup).toContain(sourceTalk.title);
+      expect(markup).toContain(sourceTalk.room);
+      expect(markup).toContain(sourceTalk.track?.replaceAll("&", "&amp;"));
+      expect(markup).toContain(sourceTalk.speakerNames[0]);
+    }
+    for (const surface of ["speakers", "gallery"] as const) {
+      const markup = render(surface);
+      expect(markup).toContain("Priya Raman");
+      expect(markup).toContain("Principal Engineer");
+      expect(markup).toContain("Latticework Systems");
+    }
   });
 });

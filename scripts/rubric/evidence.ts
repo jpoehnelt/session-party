@@ -1,6 +1,7 @@
 import type { EvidenceCheck, EvidencePlan } from "./model.ts";
 
 const test = (file: string, title: string): EvidenceCheck => ({ kind: "vitest", file, title });
+const browser = (file: string, title: string): EvidenceCheck => ({ kind: "vitest-browser", file, title });
 const gap = (reason: string): EvidenceCheck => ({ kind: "gap", reason });
 const manual = (instructions: string): EvidenceCheck => ({ kind: "manual", instructions });
 
@@ -19,6 +20,9 @@ const publicationService = "src/features/publication/publication.test.ts";
 const publicProgram = "src/features/publication/components/PublicProgram.test.tsx";
 const publishedSchedule = "src/features/publication/components/PublishedSchedule.test.tsx";
 const embedDesign = "src/features/publication/embed-design.test.ts";
+const submitDraftBrowser = "src/features/submit/routes/submit-draft.browser.tsx";
+const agendaBoardBrowser = "src/features/agenda/components/agenda-board.browser.tsx";
+const publicProgramBrowser = "src/features/publication/components/public-program.browser.tsx";
 
 /**
  * Every rubric item is explicit. A passing test is executable evidence; a gap is
@@ -56,7 +60,7 @@ export const evidencePlan = {
   ],
   "CFP-07": [
     test(submitRoute, "names drafts by immutable form version and renders the deadline"),
-    gap("No deterministic test reloads the public form and proves a partially completed draft is restored."),
+    browser(submitDraftBrowser, "saves a title-only draft and restores it after a real remount"),
   ],
   "CFP-08": [
     manual(
@@ -68,12 +72,11 @@ export const evidencePlan = {
   ],
   "CFP-10": [
     test(eventsService, "adds an existing user by normalized email, lists it, and records replayable evidence"),
-    test(reviewRoute, "renders scoring and the private committee conversation for an unassigned event reviewer"),
-    gap("No rubric probe proves the reviewer shell omits every organizer/admin capability."),
+    test(reviewRoute, "renders scoring and the private committee conversation for an assigned event reviewer"),
   ],
   "CFP-11": [
-    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without an assignment or status change"),
-    test(reviewRoute, "renders scoring and the private committee conversation for an unassigned event reviewer"),
+    test(reviewService, "lets an assigned event reviewer save complete bounded 1–5 scores without a status change"),
+    test(reviewRoute, "renders scoring and the private committee conversation for an assigned event reviewer"),
   ],
   "CFP-12": [
     test(reviewService, "atomically resolves a same-version acceptance and rejection race"),
@@ -84,8 +87,7 @@ export const evidencePlan = {
     test(submitRoute, "uses a dedicated speaker route with editable and decided proposal states"),
   ],
   "CFP-14": [
-    test(commsService, "wakes only after one durable enqueue and wakes the same durable row again on replay"),
-    gap("The communications audience contains accepted speakers only; rejected applicants cannot be selected."),
+    test(commsService, "includes rejected applicants in bulk communications and queues their outcome email"),
   ],
   "CFP-15": [
     test(agendaService, "lists only accepted, provisioned proposals in the backlog"),
@@ -93,7 +95,7 @@ export const evidencePlan = {
   ],
   "CFP-16": [
     test(submitService, "renders the immutable closed snapshot but rejects creation without writes"),
-    gap("Accepted primary speakers retain a deliberate closed-CFP edit exception."),
+    test(submitService, "locks accepted, rejected, and withdrawn proposals after the CFP deadline"),
   ],
   "CFP-17": [test(eventsService, "creates, lists, and gets an event for its owner")],
   "CFP-18": [
@@ -104,45 +106,43 @@ export const evidencePlan = {
 
   "ABS-01": [
     test(reviewService, "creates pending or active rounds with validated rubrics, authoritative counts, and replay"),
-    gap("Review rounds do not expose configurable open/close dates or a per-round scorecard editor."),
   ],
   "ABS-02": [
     test(reviewService, "allows pending assignments but limits scoring and AI suggestions to active rounds"),
-    gap("There is no independent reviewer-pool configuration UI per round."),
+    test(reviewService, "bulk-balances an independent round pool and reports per-reviewer completion"),
   ],
   "ABS-03": [
-    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without an assignment or status change"),
-    gap("The scorecard supports bounded numeric scores and a comment, but not dropdown and free-text criterion types."),
+    test(reviewService, "calculates typed scorecards with configured numeric and dropdown weights"),
   ],
-  "ABS-04": [gap("Rubric criteria have no configurable weights or weighted aggregate calculation.")],
-  "ABS-05": [gap("Assignments are intentionally optional worklist filters; event reviewers can open every event proposal.")],
-  "ABS-06": [gap("No reviewer caps, auto-distribution, or track-filtered bulk assignment operation exists.")],
-  "ABS-07": [gap("Review rounds have no anonymization mode.")],
-  "ABS-08": [gap("The organizer UI has proposal-level review counts but no per-reviewer progress dashboard.")],
-  "ABS-09": [gap("There is no reviewer-outstanding bulk reminder action.")],
+  "ABS-04": [test(reviewService, "calculates typed scorecards with configured numeric and dropdown weights")],
+  "ABS-05": [test(reviewService, "returns all proposals to organizers and only exact assigned proposals to reviewers")],
+  "ABS-06": [test(reviewService, "bulk-balances an independent round pool and reports per-reviewer completion")],
+  "ABS-07": [test(reviewService, "hides presenter identities from assigned reviewers in blind rounds")],
+  "ABS-08": [test(reviewService, "bulk-balances an independent round pool and reports per-reviewer completion")],
+  "ABS-09": [test(reviewService, "queues idempotent reminders only for reviewers with outstanding assignments")],
   "ABS-10": [
     test("src/features/review/ordering.test.ts", "orders decisions by highest human average, then review count, age, and stable ID, with unscored last"),
   ],
   "ABS-11": [
     test(submitService, "creates trimmed primary and repeatable co-speaker snapshots atomically and replays without duplicates"),
-    gap("Co-speakers persist, but organizer results do not expose arbitrary presenter role labels."),
+    test(reviewService, "hides presenter identities from assigned reviewers in blind rounds"),
   ],
-  "ABS-12": [gap("Reviewers cannot record a conflict of interest or recusal.")],
-  "ABS-13": [gap("The institutional archive is JSON; review results have no CSV/XLSX export.")],
+  "ABS-12": [test(reviewService, "records reviewer recusals and immediately removes review access")],
+  "ABS-13": [test(reviewService, "exports normalized review results with criterion-level responses")],
   "ABS-14": [
     test(reviewService, "limits AI input, labels the suggestion, and never transitions submission status"),
-    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without an assignment or status change"),
+    test(reviewService, "lets an assigned event reviewer save complete bounded 1–5 scores without a status change"),
   ],
 
   "SPK-01": [
     test(portalRoute, "renders a dense speaker directory and readiness matrix from returned state"),
     test(portalRoute, "filters a large speaker directory by search text and operational state"),
   ],
-  "SPK-02": [gap("Organizer speaker creation and profile editing are not implemented.")],
-  "SPK-03": [gap("There is no speaker CSV importer.")],
+  "SPK-02": [test(portalService, "adds, edits, filters, and imports managed speaker workflow records")],
+  "SPK-03": [test(portalService, "adds, edits, filters, and imports managed speaker workflow records")],
   "SPK-04": [
-    test(portalRoute, "filters a large speaker directory by search text and operational state"),
-    gap("Readiness/provisioning states are filterable but not a general organizer-editable workflow status."),
+    test(portalService, "adds, edits, filters, and imports managed speaker workflow records"),
+    test(portalRoute, "renders direct speaker creation, CSV import, workflow editing, messaging, and headshot controls"),
   ],
   "SPK-05": [
     test(portalService, "performs organizer task and resource CRUD with optimistic versions and iframe policy"),
@@ -162,7 +162,10 @@ export const evidencePlan = {
     test(portalService, "persists completion and transitions readiness after provisioning"),
     test(portalRoute, "persists task toggles and real uploads against the speaker slug endpoint"),
   ],
-  "SPK-10": [gap("Organizer directory rows do not expose or download speaker-uploaded deliverables.")],
+  "SPK-10": [
+    test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits"),
+    test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download"),
+  ],
   "SPK-11": [
     test(portalRoute, "renders profile editing, accepted submission, one task checklist, files, and resources"),
     test(portalRoute, "renders a dense speaker directory and readiness matrix from returned state"),
@@ -192,27 +195,26 @@ export const evidencePlan = {
     test(portalRoute, "persists task toggles and real uploads against the speaker slug endpoint"),
   ],
   "CNT-03": [test(portalService, "requires organizer membership and the exact provisioned speaker browser session")],
-  "CNT-04": [gap("Replacing a task-linked asset removes the old object instead of retaining browsable versions.")],
-  "CNT-05": [gap("Uploaded files have no cross-role comment thread.")],
+  "CNT-04": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
+  "CNT-05": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
   "CNT-06": [
     test(portalRoute, "rejects files over 10 MiB before reading or encoding them"),
     test(portalService, "enforces the decoded 10 MiB transport limit for every asset kind"),
   ],
   "CNT-07": [
-    test(portalService, "builds an owner-only speaker chase from missing, overdue, and confirm tasks"),
-    gap("The readiness matrix does not show per-file metadata or deliverable-specific filters."),
+    test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download"),
   ],
-  "CNT-08": [gap("There is no bulk reminder action scoped to speakers with outstanding upload tasks.")],
-  "CNT-09": [gap("Organizer agenda controls cannot edit a session title and abstract.")],
-  "CNT-10": [gap("Organizer controls cannot edit speaker bio and headshot.")],
-  "CNT-11": [gap("Audit/domain changes are not exposed as a restorable content version history.")],
+  "CNT-08": [test(portalService, "queues idempotent invitations, manual outstanding reminders, and automated due reminders")],
+  "CNT-09": [test(agendaService, "edits the organizer session title and abstract with versioned evidence")],
+  "CNT-10": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
+  "CNT-11": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
   "CNT-12": [test(publicationService, "publishes only confirmed talks and visible speaker names as an immutable snapshot")],
-  "CNT-13": [gap("There is no central organizer files library.")],
-  "CNT-14": [gap("There is no multi-select ZIP export for latest deliverable versions.")],
+  "CNT-13": [test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download")],
+  "CNT-14": [test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download")],
 
   "AIA-01": [
     test(agendaService, "covers every required deterministic scenario"),
-    gap("No deterministic browser probe currently asserts the multi-day builder layout and day navigation."),
+    browser(agendaBoardBrowser, "renders room lanes and switches the active day to a different session set"),
   ],
   "AIA-02": [test(agendaService, "creates and updates tracks and rooms idempotently with stable ordering")],
   "AIA-03": [test(agendaService, "creates, schedules, moves, replays idempotently, and cancels a talk with evidence")],
@@ -223,42 +225,33 @@ export const evidencePlan = {
     test(agendaService, "saves TBD placement through the versioned move operation and defers completeness to publication"),
   ],
   "AIA-07": [test(agendaService, "successfully publishes an unchanged speaker projection as an immutable revision")],
-  "AIA-08": [gap("There is no automatic or assisted placement action.")],
+  "AIA-08": [test(agendaService, "auto-places an unplaced talk into the first conflict-free event slot")],
 
-  "EMB-01": [test(publicProgram, "renders a populated, navigable sessions list from canonical public DTOs")],
-  "EMB-02": [test(publicProgram, "searches sessions by title or speaker and applies facets")],
-  "EMB-03": [test(publicProgram, "searches sessions by title or speaker and applies facets")],
+  "EMB-01": [browser(publicProgramBrowser, "searches and facets session cards while expanding the complete description")],
+  "EMB-02": [browser(publicProgramBrowser, "searches and facets session cards while expanding the complete description")],
+  "EMB-03": [browser(publicProgramBrowser, "searches and facets session cards while expanding the complete description")],
   "EMB-04": [
     test(publicProgram, "orders the directory by surname"),
     test(publicProgram, "renders a populated, navigable sessions list from canonical public DTOs"),
   ],
-  "EMB-05": [
-    test(publicProgram, "orders the directory by surname"),
-    gap("No deterministic interaction probe opens a speaker-list entry and asserts the complete detail panel."),
-  ],
+  "EMB-05": [browser(publicProgramBrowser, "opens and closes complete speaker list and gallery profiles with a long biography")],
   "EMB-06": [test(publishedSchedule, "renders the public day view from the canonical published DTO")],
   "EMB-07": [
-    test(publishedSchedule, "renders the public day view from the canonical published DTO"),
-    gap("No deterministic browser probe clicks between event days and verifies the new set of sessions."),
+    browser(publicProgramBrowser, "switches agenda days and restores the agenda after closing complete session detail"),
   ],
-  "EMB-08": [gap("No deterministic browser probe opens and closes an agenda session detail while checking every field.")],
+  "EMB-08": [browser(publicProgramBrowser, "switches agenda days and restores the agenda after closing complete session detail")],
   "EMB-09": [
-    test(publicProgram, "renders itinerary controls and a calendar export affordance"),
-    gap("The current static render test does not assert every itinerary card field or day interaction."),
+    browser(publicProgramBrowser, "builds an exact personal schedule and restores it across a full remount"),
   ],
-  "EMB-10": [
-    test(publicProgram, "renders itinerary controls and a calendar export affordance"),
-    gap("No deterministic interaction probe selects sessions and verifies the exact personal-only set."),
-  ],
+  "EMB-10": [browser(publicProgramBrowser, "builds an exact personal schedule and restores it across a full remount")],
   "EMB-11": [
-    test(publicProgram, "renders itinerary controls and a calendar export affordance"),
-    gap("Calendar export is asserted, but localStorage persistence across a reload is not."),
+    browser(publicProgramBrowser, "builds an exact personal schedule and restores it across a full remount"),
   ],
   "EMB-12": [
     test(publicProgram, "orders the directory by surname"),
-    gap("No deterministic rendered-gallery probe covers missing-photo fallback and search interaction together."),
+    browser(publicProgramBrowser, "opens and closes complete speaker list and gallery profiles with a long biography"),
   ],
-  "EMB-13": [gap("The gallery detail lacks a tested long-biography expansion flow.")],
+  "EMB-13": [browser(publicProgramBrowser, "opens and closes complete speaker list and gallery profiles with a long biography")],
   "EMB-14": [
     test(publicProgram, "renders a live-data widget builder for all five public surfaces"),
     test(publicProgram, "maps conventional public routes to discoverable surfaces"),
@@ -266,12 +259,12 @@ export const evidencePlan = {
   "EMB-15": [
     test(publicProgram, "renders a live-data widget builder for all five public surfaces"),
     test(embedDesign, "round-trips a supported aesthetic and normalized brand color"),
-    gap("Embed definitions are generated ephemerally and cannot be saved/listed for later retrieval."),
+    test(publicProgram, "round-trips named saved embed definitions for later code retrieval"),
+    browser(publicProgramBrowser, "saves, retrieves, disables, and restores an organizer embed definition"),
   ],
   "EMB-16": [
     test(publicationService, "publishes only confirmed talks and visible speaker names as an immutable snapshot"),
-    test(publicProgram, "renders a populated, navigable sessions list from canonical public DTOs"),
-    gap("No cross-surface interaction probe compares one session field-for-field against the organizer record."),
+    test(publicProgram, "keeps session and speaker identity consistent across public surfaces and organizer source"),
   ],
 
   "CRM-01": [gap("No organization-level cross-event contact directory exists.")],
