@@ -781,17 +781,47 @@ export const mailDeliverySnapshots = sqliteTable(
   ],
 );
 
+/** Durable recipient/event identity retained after rendered calendar content is redacted. */
+export const mailCalendarEvents = sqliteTable(
+  "mail_calendar_events",
+  {
+    id: id(),
+    snapshotId: text("snapshot_id").notNull().references(() => mailDeliverySnapshots.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    speakerId: text("speaker_id").notNull(),
+    talkId: text("talk_id").notNull(),
+    calendarUid: text("calendar_uid").notNull(),
+    sequence: integer("sequence").notNull(),
+    publicationRevision: integer("publication_revision").notNull(),
+    status: text("status", { enum: ["confirmed", "cancelled"] }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("mail_calendar_events_snapshot_talk_unique").on(t.snapshotId, t.talkId),
+    index("mail_calendar_events_event_recipient").on(t.eventId, t.speakerId, t.sequence),
+    index("mail_calendar_events_event_talk").on(t.eventId, t.talkId, t.sequence),
+    foreignKey({
+      columns: [t.eventId, t.snapshotId],
+      foreignColumns: [mailDeliverySnapshots.eventId, mailDeliverySnapshots.id],
+      name: "mail_calendar_events_snapshot_event_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    check("mail_calendar_events_sequence_positive", sql`${t.sequence} > 0`),
+    check("mail_calendar_events_publication_revision_positive", sql`${t.publicationRevision} > 0`),
+  ],
+);
+
 export const mailDeliveries = sqliteTable(
   "mail_deliveries",
   {
     id: id(),
     snapshotId: text("snapshot_id").notNull().references(() => mailDeliverySnapshots.id, { onDelete: "cascade", onUpdate: "cascade" }),
     idempotencyKey: text("idempotency_key").notNull(),
-    status: text("status", { enum: ["pending", "claimed", "retry", "sent", "dead_letter", "cancelled"] }).notNull().default("pending"),
+    status: text("status", { enum: ["pending", "claimed", "dispatching", "retry", "sent", "dead_letter", "cancelled"] }).notNull().default("pending"),
     scheduledFor: integer("scheduled_for", { mode: "timestamp_ms" }).notNull(),
     availableAt: integer("available_at", { mode: "timestamp_ms" }).notNull(),
     leaseOwner: text("lease_owner"),
     leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
+    supersededAt: integer("superseded_at", { mode: "timestamp_ms" }),
     attemptCount: integer("attempt_count").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(8),
     provider: text("provider").notNull().default("cloudflare-email"),
