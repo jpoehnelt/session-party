@@ -1,4 +1,4 @@
-import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import type { Principal } from "contracts/principal";
 import {
   events,
@@ -285,5 +285,77 @@ describe("publication boundary", () => {
     );
     expect(stillPublished).toEqual(published);
     expect(JSON.stringify(stillPublished)).not.toContain("Unpublished");
+  });
+
+  it("serves JSON, subscribable ICS, and per-session ICS from the same published revision", async () => {
+    const seeded = await seedPublication("server-feeds");
+    const published = await runAs(
+      seeded.owner,
+      publishAgenda({
+        eventId: seeded.eventId,
+        expectedRevision: 0,
+        expectedWorkspaceVersion: 0,
+        expectedEventVersion: 1,
+        idempotencyKey: "publication-server-feeds-0001",
+      }),
+    );
+
+    const jsonResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.json`,
+    );
+    expect(jsonResponse.status).toBe(200);
+    expect(jsonResponse.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(jsonResponse.headers.get("access-control-allow-origin")).toBe("*");
+    expect(jsonResponse.headers.get("x-session-party-revision")).toBe("1");
+    expect(await jsonResponse.json()).toEqual(published);
+
+    const calendarResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.ics`,
+    );
+    expect(calendarResponse.status).toBe(200);
+    expect(calendarResponse.headers.get("content-type")).toBe("text/calendar; charset=utf-8");
+    expect(calendarResponse.headers.get("cache-control")).toContain("max-age=60");
+    const etag = calendarResponse.headers.get("etag");
+    expect(etag).toBeTruthy();
+    const calendar = await calendarResponse.text();
+    expect(calendar).toContain(`UID:${seeded.confirmedTalkId}@${seeded.eventId}.session-party`);
+    expect(calendar).toContain("SEQUENCE:1");
+    expect(calendar).toContain("SUMMARY:Effects at scale");
+    expect(calendar).not.toContain("Private cancelled talk");
+    expect(calendar).not.toContain("Private Speaker");
+
+    const notModified = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.ics`,
+      { headers: { "If-None-Match": etag! } },
+    );
+    expect(notModified.status).toBe(304);
+    expect(await notModified.text()).toBe("");
+
+    const sessionResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/sessions/${seeded.confirmedTalkId}.ics`,
+    );
+    expect(sessionResponse.status).toBe(200);
+    expect(sessionResponse.headers.get("content-disposition"))
+      .toContain(`${seeded.eventSlug}-session-${seeded.confirmedTalkId}.ics`);
+    expect((await sessionResponse.text()).match(/BEGIN:VEVENT/g)).toHaveLength(1);
+
+    const missingSession = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/sessions/missing-session.ics`,
+    );
+    expect(missingSession.status).toBe(404);
+    expect(await missingSession.json()).toMatchObject({
+      error: "NotFound",
+      message: "Resource not found",
+    });
+  });
+
+  it("keeps stable feed URLs unavailable until the first publication", async () => {
+    const seeded = await seedPublication("unpublished-server-feed");
+    const response = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.ics`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain("Effects at scale");
   });
 });

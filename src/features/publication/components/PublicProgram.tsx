@@ -24,6 +24,12 @@ import {
   normalizeEmbedAccent,
   type EmbedAesthetic,
 } from "../embed-design";
+import {
+  publishedScheduleIcsPath,
+  publishedScheduleJsonPath,
+  publishedSessionIcsPath,
+  renderPublishedCalendar,
+} from "../feeds";
 
 export type PublicProgramSurface =
   | "sessions"
@@ -221,6 +227,12 @@ function SessionDetail({
         <h3 className="mb-3 text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep">Speakers on this cue</h3>
         <SpeakerLines talk={talk} speakers={speakers} />
       </div>
+      <a
+        className="inline-flex min-h-10 items-center border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.075em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5 hover:bg-production-sky focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3"
+        href={publishedSessionIcsPath(agenda.eventSlug, talk.id)}
+      >
+        Add this session (.ics)
+      </a>
     </div>
   );
 }
@@ -520,21 +532,7 @@ function AgendaSurface({
 }
 
 function calendarDataUrl(agenda: PublishedAgenda, talks: readonly PublicAgendaTalk[]): string {
-  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Session Party//Public Schedule//EN"];
-  for (const talk of talks) {
-    const stamp = (value: number) => new Date(value).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-    lines.push(
-      "BEGIN:VEVENT",
-      `UID:${talk.id}@sessionparty`,
-      `DTSTART:${stamp(talk.startsAt)}`,
-      `DTEND:${stamp(endTime(talk))}`,
-      `SUMMARY:${talk.title.replaceAll(",", "\\,")}`,
-      `LOCATION:${(talk.room ?? agenda.location ?? "").replaceAll(",", "\\,")}`,
-      "END:VEVENT",
-    );
-  }
-  lines.push("END:VCALENDAR");
-  return `data:text/calendar;charset=utf-8,${encodeURIComponent(lines.join("\r\n"))}`;
+  return `data:text/calendar;charset=utf-8,${encodeURIComponent(renderPublishedCalendar(agenda, talks))}`;
 }
 
 function ScheduleSurface({
@@ -591,10 +589,16 @@ function ScheduleSurface({
         </Button>
         <a
           className="inline-flex min-h-10 items-center border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.075em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5 hover:bg-production-sky focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3"
-          href={calendarDataUrl(agenda, personalOnly ? savedTalks : visible)}
-          download={`${agenda.eventSlug}-${personalOnly ? "my-schedule" : "schedule"}.ics`}
+          href={personalOnly ? calendarDataUrl(agenda, savedTalks) : publishedScheduleIcsPath(agenda.eventSlug)}
+          download={personalOnly ? `${agenda.eventSlug}-my-schedule.ics` : undefined}
         >
-          Add to calendar (.ics)
+          {personalOnly ? "Add to calendar (.ics)" : "Subscribe / download (.ics)"}
+        </a>
+        <a
+          className="inline-flex min-h-10 items-center border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.075em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5 hover:bg-production-sky focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3"
+          href={publishedScheduleJsonPath(agenda.eventSlug)}
+        >
+          Schedule data (.json)
         </a>
       </div>
       {!personalOnly ? <DayTabs agenda={agenda} value={day} onChange={setSelectedDay} /> : null}

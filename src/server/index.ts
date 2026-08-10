@@ -3,6 +3,7 @@ import { API } from "contracts/routes";
 import { Hono } from "hono";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
+import publicationFeeds from "@/features/publication/feed-api";
 import auth, { apiKeyUserFromRequest, userFromRequest } from "./auth";
 import { runRestOperation, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
@@ -223,6 +224,7 @@ export class SessionPartyMcp extends McpAgent<Env> {
 
 const app = new Hono<{ Bindings: Env }>();
 
+app.route("/", publicationFeeds);
 app.route(`${API}/auth`, auth);
 for (const registration of restRegistrations) {
   const operation = operationById[registration.operationId];
