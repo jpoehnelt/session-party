@@ -14,6 +14,7 @@ pnpm rubric:validate
 pnpm rubric:run
 pnpm rubric:run -- --min-score 70
 pnpm rubric:gate
+pnpm rubric:baseline
 ```
 
 `rubric:run` executes the exact Vitest assertions named in `evidence.ts`. Each
@@ -30,8 +31,16 @@ rubric item is composed from one or more checks:
 The generated `.rubric/report.json` and `.rubric/report.md` contain every
 criterion, check, verdict, area score, and coverage figure. Product gaps do not
 make the runner itself fail. Use `--min-score` when a regression gate is desired.
-`rubric:gate` locks the current deterministic baseline at 64.3%; replacing gaps
-with evidence raises that floor intentionally.
+`rubric/baseline.json` persists the current grade in Git. `rubric:gate` reads that
+floor, while `rubric:baseline` recomputes the report and advances the file; it
+refuses to write a lower score.
+
+Pull-request CI compares the computed head grade with the base commit's persisted
+grade, requires the head's baseline file to equal its computed grade, and fails
+the required `Rubric grade` check on any decrease. The job summary shows the
+base-to-head change and the generated report is retained as a workflow artifact.
+The first rubric PR uses 64.3% as its bootstrap base because `main` does not yet
+contain the baseline file.
 
 ## Adding a capability
 

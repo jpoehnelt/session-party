@@ -55,18 +55,127 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:worker --shard=${{ matrix.shard }}/3
 
+  rubric:
+    name: Rubric grade
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BOOTSTRAP_RUBRIC_SCORE: "64.3"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Test rubric scoring
+        run: pnpm rubric:test
+      - name: Compute base-branch rubric grade
+        id: base
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            persisted_score="$(jq -er '.overallScorePct' rubric/baseline.json)"
+            echo "score=${persisted_score}" >> "${GITHUB_OUTPUT}"
+            echo "label=persisted baseline" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if git show "${BASE_SHA}:rubric/baseline.json" > "${RUNNER_TEMP}/rubric-base.json" 2>/dev/null; then
+            base_score="$(jq -er '.overallScorePct' "${RUNNER_TEMP}/rubric-base.json")"
+            echo "score=${base_score}" >> "${GITHUB_OUTPUT}"
+            echo "label=main (${BASE_SHA:0:7})" >> "${GITHUB_OUTPUT}"
+          else
+            echo "score=${BOOTSTRAP_RUBRIC_SCORE}" >> "${GITHUB_OUTPUT}"
+            echo "label=bootstrap floor" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Run non-decreasing rubric gate
+        env:
+          BASE_SCORE: ${{ steps.base.outputs.score }}
+        run: pnpm rubric:run -- --output .rubric/head --min-score "${BASE_SCORE}"
+      - name: Verify persisted rubric grade
+        shell: bash
+        env:
+          BASE_SCORE: ${{ steps.base.outputs.score }}
+        run: |
+          jq '{
+            schemaVersion: 1,
+            rubricRevision,
+            overallScorePct: (.overallScorePct * 10 | round / 10),
+            overallCoveragePct: (.overallCoveragePct * 10 | round / 10),
+            areas: (.required | map({key: .area, value: (.scorePct * 10 | round / 10)}) | from_entries)
+          }' .rubric/head/report.json > .rubric/expected-baseline.json
+          persisted_score="$(jq -er '.overallScorePct' rubric/baseline.json)"
+          if ! jq -e --slurp '.[0] == .[1]' .rubric/expected-baseline.json rubric/baseline.json >/dev/null; then
+            echo "Persisted rubric baseline must exactly match the computed PR grade." >&2
+            echo "Run pnpm rubric:baseline and commit rubric/baseline.json." >&2
+            exit 1
+          fi
+          if ! jq -en --argjson base "${BASE_SCORE}" --argjson persisted "${persisted_score}" '$persisted >= $base' >/dev/null; then
+            echo "Persisted rubric grade cannot be lower than main (${BASE_SCORE}%)." >&2
+            exit 1
+          fi
+      - name: Publish rubric grade
+        if: always()
+        shell: bash
+        env:
+          BASE_LABEL: ${{ steps.base.outputs.label }}
+          BASE_SCORE: ${{ steps.base.outputs.score }}
+        run: |
+          if [[ -f .rubric/head/report.md ]]; then
+            head_score="$(jq -er '.overallScorePct' .rubric/head/report.json)"
+            persisted_score="$(jq -er '.overallScorePct' rubric/baseline.json)"
+            delta="$(jq -nr --argjson base "${BASE_SCORE}" --argjson head "${head_score}" '$head - $base')"
+            status="$(jq -nr --argjson base "${BASE_SCORE}" --argjson head "${head_score}" 'if $head >= $base then "✅ non-decreasing" else "❌ regression" end')"
+            {
+              echo "# Rubric grade"
+              echo
+              echo "| Base | PR head | Persisted | Change | Status |"
+              echo "|---|---:|---:|---:|---|"
+              printf '| %s: %.1f%% | %.1f%% | %.1f%% | %+.1f | %s |\n' "${BASE_LABEL}" "${BASE_SCORE}" "${head_score}" "${persisted_score}" "${delta}" "${status}"
+              echo
+              cat .rubric/head/report.md
+            } >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "# Deterministic rubric report" >> "${GITHUB_STEP_SUMMARY}"
+            echo >> "${GITHUB_STEP_SUMMARY}"
+            echo "The rubric run did not produce a report." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+      - name: Upload rubric reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rubric-report
+          path: |
+            .rubric/head/report.md
+            .rubric/head/report.json
+            .rubric/expected-baseline.json
+            rubric/baseline.json
+          if-no-files-found: warn
+          retention-days: 30
+
   # Preserve the existing required check and keep preview/deploy behind every shard.
   ci:
     if: always()
-    needs: [checks, worker-tests]
+    needs: [checks, rubric, worker-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
         env:
           CHECKS_RESULT: ${{ needs.checks.result }}
+          RUBRIC_RESULT: ${{ needs.rubric.result }}
           WORKER_TESTS_RESULT: ${{ needs.worker-tests.result }}
         run: |
           test "${CHECKS_RESULT}" = "success"
+          test "${RUBRIC_RESULT}" = "success"
           test "${WORKER_TESTS_RESULT}" = "success"
 
   preview:

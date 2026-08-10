@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import { readBaseline, writeBaseline } from "./rubric/baseline.ts";
 import { evidencePlan } from "./rubric/evidence.ts";
 import { loadManifest, validateEvidencePlan } from "./rubric/manifest.ts";
 import type { EvidencePlan, RubricReport, VitestCheck } from "./rubric/model.ts";
@@ -26,10 +27,13 @@ interface VitestReport {
 const usage = `Usage:
   pnpm rubric:validate
   pnpm rubric:run [--output <directory>] [--min-score <0-100>]
+  pnpm rubric:gate [--output <directory>]
+  pnpm rubric:baseline [--output <directory>]
 
 The run command executes every exact Vitest assertion referenced by the evidence
 plan, derives pass/partial/fail from its sub-checks, and writes stable JSON and
-Markdown reports. Known product gaps are failed checks, not skipped criteria.`;
+Markdown reports. Known product gaps are failed checks, not skipped criteria.
+The gate reads the committed monotonic baseline; the baseline command advances it.`;
 
 const asVitestChecks = (plan: EvidencePlan): readonly VitestCheck[] =>
   Object.values(plan).flatMap((checks) => checks.filter((check): check is VitestCheck => check.kind === "vitest"));
@@ -138,8 +142,10 @@ function printSummary(report: RubricReport): void {
 }
 
 function main(): void {
-  const { command, output, minScore } = parseArgs(process.argv.slice(2));
-  if (command !== "validate" && command !== "run") {
+  const parsed = parseArgs(process.argv.slice(2));
+  const { command, output } = parsed;
+  let { minScore } = parsed;
+  if (command !== "validate" && command !== "run" && command !== "gate" && command !== "baseline") {
     console.log(usage);
     process.exitCode = 2;
     return;
@@ -147,17 +153,26 @@ function main(): void {
   const manifest = loadManifest();
   validateEvidencePlan(manifest, evidencePlan);
   validateFiles(evidencePlan);
+  const baselinePath = resolve("rubric/baseline.json");
   if (command === "validate") {
+    readBaseline(baselinePath, manifest.source.revision);
     const itemCount = manifest.areas.reduce((sum, { items }) => sum + items.length, 0);
     const checkCount = Object.values(evidencePlan).reduce((sum, checks) => sum + checks.length, 0);
     console.log(`Rubric manifest and evidence plan valid: ${itemCount} items, ${checkCount} checks.`);
     return;
+  }
+  if (command === "gate") {
+    minScore = readBaseline(baselinePath, manifest.source.revision).overallScorePct;
   }
 
   const outcomes = runVitest(evidencePlan);
   const report = scoreRubric(manifest, evidencePlan, outcomes);
   writeReport(report, output);
   printSummary(report);
+  if (command === "baseline") {
+    const baseline = writeBaseline(baselinePath, report);
+    console.log(`Rubric baseline advanced to ${baseline.overallScorePct.toFixed(1)}%.`);
+  }
   if (minScore !== null && (report.overallScorePct === null || report.overallScorePct < minScore)) {
     console.error(`Required score is below the ${minScore.toFixed(1)}% gate.`);
     process.exitCode = 1;
