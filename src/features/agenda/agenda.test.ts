@@ -1338,7 +1338,7 @@ describe("agenda service", () => {
     expect(dispatchRace).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
     await expect(seeded.db.select().from(mailDeliverySnapshots)
       .where(eq(mailDeliverySnapshots.eventId, seeded.eventId))).resolves.toHaveLength(2);
-    const claimedLeaseExpiresAt = new Date(FIXED_NOW + 120_000);
+    const claimedLeaseExpiresAt = new Date(Date.now() + 10 * 60_000);
     await seeded.db.update(mailDeliveries).set({
       status: "claimed",
       leaseOwner: "calendar-reissue-claimed-lease",
