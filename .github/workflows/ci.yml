@@ -142,10 +142,10 @@ jobs:
           PREVIEW_URL: ${{ steps.preview.outputs.url }}
         run: |
           curl --fail --silent --show-error \
-            --retry 18 \
+            --retry 72 \
             --retry-all-errors \
             --retry-delay 5 \
-            --retry-max-time 90 \
+            --retry-max-time 360 \
             --max-time 20 \
             "${PREVIEW_URL}/" >/dev/null
       - name: Publish preview link
