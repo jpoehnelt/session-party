@@ -2,6 +2,7 @@ import type { EvidenceCheck, EvidencePlan } from "./model.ts";
 
 const test = (file: string, title: string): EvidenceCheck => ({ kind: "vitest", file, title });
 const gap = (reason: string): EvidenceCheck => ({ kind: "gap", reason });
+const manual = (instructions: string): EvidenceCheck => ({ kind: "manual", instructions });
 
 const formsService = "src/features/forms/forms.test.ts";
 const submitService = "src/features/submit/submit.test.ts";
@@ -21,8 +22,10 @@ const embedDesign = "src/features/publication/embed-design.test.ts";
 
 /**
  * Every rubric item is explicit. A passing test is executable evidence; a gap is
- * a failed sub-check. Mixed evidence derives a partial verdict. Nothing here is
- * allowed to silently inherit the old source-audit score.
+ * a failed capability sub-check but is excluded from deterministic evidence
+ * coverage; and a manual check remains pending/cannot_judge. Mixed test/gap
+ * evidence derives a partial capability verdict. Nothing here silently inherits
+ * the old source-audit score.
  */
 export const evidencePlan = {
   "CFP-01": [
@@ -55,7 +58,11 @@ export const evidencePlan = {
     test(submitRoute, "names drafts by immutable form version and renders the deadline"),
     gap("No deterministic test reloads the public form and proves a partially completed draft is restored."),
   ],
-  "CFP-08": [gap("The submission operation intentionally enqueues no automated confirmation email.")],
+  "CFP-08": [
+    manual(
+      "Submit a proposal using an inbox you can inspect and verify that a confirmation email arrives naming the event and submitted talk title.",
+    ),
+  ],
   "CFP-09": [
     test(submitService, "scopes a speaker dashboard by signed-in email and edits the canonical abstract while the CFP is open"),
   ],
@@ -170,7 +177,11 @@ export const evidencePlan = {
   ],
   "SPK-14": [test(commsService, "accepts the frozen dotted merge contract and rejects unknown or malformed variables")],
   "SPK-15": [test(submitService, "stores immutable answers against the exact existing speaker with actor evidence")],
-  "SPK-16": [gap("Task due dates do not schedule automated incomplete-task reminder emails.")],
+  "SPK-16": [
+    manual(
+      "Assign an incomplete task due within 24–48 hours to a speaker whose inbox you control, wait through the reminder cycle, and verify the reminder names the task and due date.",
+    ),
+  ],
 
   "CNT-01": [
     test(portalService, "performs organizer task and resource CRUD with optimistic versions and iframe policy"),

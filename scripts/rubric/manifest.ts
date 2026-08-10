@@ -118,6 +118,14 @@ export function validateEvidencePlan(manifest: RubricManifest, plan: EvidencePla
     const checks = plan[id];
     if (!checks || checks.length === 0) fail(`evidence plan has no checks for ${id}`);
   }
+  for (const { items } of manifest.areas) {
+    for (const item of items) {
+      const checks = plan[item.id] ?? [];
+      if (item.testability === "manual" && !checks.every(({ kind }) => kind === "manual")) {
+        fail(`manual rubric item ${item.id} must remain manual/cannot_judge`);
+      }
+    }
+  }
   for (const id of planIds) {
     if (!rubricIds.has(id)) fail(`evidence plan references unknown item ${id}`);
   }

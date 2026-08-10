@@ -14,20 +14,24 @@ export function renderMarkdown(report: RubricReport): string {
     "",
     `Rubric revision: \`${report.rubricRevision}\``,
     "",
-    `Required score: **${percent(report.overallScorePct)}** at **${percent(report.overallCoveragePct)} coverage**.`,
+    `Required capability score: **${percent(report.overallScorePct)}**.`,
     "",
-    "| Area | Earned | Score | Coverage | Pass/Partial/Fail/Pending |",
-    "|---|---:|---:|---:|---:|",
+    `Deterministic evidence coverage: **${percent(report.overallEvidenceCoveragePct)}**. Implementation-gap weight: **${percent(report.overallImplementationGapPct)}**.`,
+    "",
+    "| Area | Earned | Score | Evidence coverage | Gap weight | Pass/Partial/Fail/Pending |",
+    "|---|---:|---:|---:|---:|---:|",
   ];
   for (const area of report.required) {
     lines.push(
-      `| ${area.title} | ${area.earned}/${area.judgeable} | ${percent(area.scorePct)} | ${percent(area.coveragePct)} | ${counts(area)} |`,
+      `| ${area.title} | ${area.earned}/${area.judgeable} | ${percent(area.scorePct)} | ${percent(area.evidenceCoveragePct)} | ${percent(area.implementationGapPct)} | ${counts(area)} |`,
     );
   }
   if (report.optional.length > 0) {
     lines.push("", "## Optional areas", "");
     for (const area of report.optional) {
-      lines.push(`- ${area.title}: ${percent(area.scorePct)} at ${percent(area.coveragePct)} coverage.`);
+      lines.push(
+        `- ${area.title}: ${percent(area.scorePct)}; ${percent(area.evidenceCoveragePct)} evidence coverage; ${percent(area.implementationGapPct)} gap weight.`,
+      );
     }
   }
 

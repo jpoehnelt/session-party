@@ -21,16 +21,19 @@ pnpm rubric:baseline
 rubric item is composed from one or more checks:
 
 - a passing Vitest assertion is positive behavioral evidence;
-- a known product or test gap is a failed check;
+- a known product or test gap is a failed capability check but does not count as deterministic evidence coverage;
 - all checks passing derives `pass`;
 - a mix of passing and failing checks derives `partial`;
 - all checks failing derives `fail`;
-- an unresolved real-world/manual check derives `cannot_judge` and is excluded
-  from the judgeable denominator.
+- an unresolved real-world/manual check derives `cannot_judge`, is excluded from
+  the judgeable denominator, and never becomes an implementation failure.
 
 The generated `.rubric/report.json` and `.rubric/report.md` contain every
-criterion, check, verdict, area score, and coverage figure. Product gaps do not
-make the runner itself fail. Use `--min-score` when a regression gate is desired.
+criterion, check, verdict, capability score, deterministic evidence-coverage
+figure, and implementation-gap weight. An item contributes evidence coverage
+only when all its checks are exact executed tests; `gap()` entries remain visible
+in the score without pretending they were exercised. Product gaps do not make
+the runner itself fail. Use `--min-score` when a regression gate is desired.
 `rubric/baseline.json` persists the current grade in Git. `rubric:gate` reads that
 floor, while `rubric:baseline` recomputes the report and advances the file; it
 refuses to write a lower score.

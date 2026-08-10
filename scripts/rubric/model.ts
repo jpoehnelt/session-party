@@ -72,6 +72,8 @@ export interface ItemResult {
   readonly weight: number;
   readonly type: RubricType;
   readonly verdict: Verdict;
+  readonly evidenceBacked: boolean;
+  readonly implementationGap: boolean;
   readonly checks: readonly ResolvedCheck[];
 }
 
@@ -82,17 +84,21 @@ export interface AreaResult {
   readonly areaWeight: number;
   readonly earned: number;
   readonly judgeable: number;
+  readonly evidenceWeight: number;
+  readonly implementationGapWeight: number;
   readonly totalWeight: number;
   readonly scorePct: number | null;
-  readonly coveragePct: number;
+  readonly evidenceCoveragePct: number;
+  readonly implementationGapPct: number;
   readonly items: readonly ItemResult[];
 }
 
 export interface RubricReport {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly rubricRevision: string;
   readonly overallScorePct: number | null;
-  readonly overallCoveragePct: number;
+  readonly overallEvidenceCoveragePct: number;
+  readonly overallImplementationGapPct: number;
   readonly required: readonly AreaResult[];
   readonly optional: readonly AreaResult[];
 }

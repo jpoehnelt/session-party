@@ -59,13 +59,19 @@ function scoreArea(
       weight: item.weight,
       type: item.type,
       verdict: verdict(checks),
+      evidenceBacked: checks.every(({ kind, outcome }) => kind === "vitest" && outcome !== "pending"),
+      implementationGap: checks.some(({ kind }) => kind === "gap"),
       checks,
     };
   });
   let earned = 0;
   let judgeable = 0;
+  let evidenceWeight = 0;
+  let implementationGapWeight = 0;
   const totalWeight = items.reduce((sum, { weight }) => sum + weight, 0);
   for (const item of items) {
+    if (item.evidenceBacked) evidenceWeight += item.weight;
+    if (item.implementationGap) implementationGapWeight += item.weight;
     const factor = verdictFactor(item.verdict);
     if (factor === null) continue;
     earned += item.weight * factor;
@@ -78,9 +84,12 @@ function scoreArea(
     areaWeight: area.areaWeight,
     earned,
     judgeable,
+    evidenceWeight,
+    implementationGapWeight,
     totalWeight,
     scorePct: judgeable === 0 ? null : (earned / judgeable) * 100,
-    coveragePct: totalWeight === 0 ? 0 : (judgeable / totalWeight) * 100,
+    evidenceCoveragePct: totalWeight === 0 ? 0 : (evidenceWeight / totalWeight) * 100,
+    implementationGapPct: totalWeight === 0 ? 0 : (implementationGapWeight / totalWeight) * 100,
     items,
   };
 }
@@ -94,19 +103,22 @@ export function scoreRubric(
   const required = areas.filter(({ optional }) => !optional);
   const optional = areas.filter(({ optional }) => optional);
   let weightedScore = 0;
-  let weightedCoverage = 0;
+  let weightedEvidenceCoverage = 0;
+  let weightedImplementationGap = 0;
   let judgeableAreaWeight = 0;
   for (const area of required) {
-    weightedCoverage += area.areaWeight * (area.coveragePct / 100);
+    weightedEvidenceCoverage += area.areaWeight * (area.evidenceCoveragePct / 100);
+    weightedImplementationGap += area.areaWeight * (area.implementationGapPct / 100);
     if (area.scorePct === null) continue;
     weightedScore += area.areaWeight * area.scorePct;
     judgeableAreaWeight += area.areaWeight;
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     rubricRevision: manifest.source.revision,
     overallScorePct: judgeableAreaWeight === 0 ? null : weightedScore / judgeableAreaWeight,
-    overallCoveragePct: weightedCoverage,
+    overallEvidenceCoveragePct: weightedEvidenceCoverage,
+    overallImplementationGapPct: weightedImplementationGap,
     required,
     optional,
   };

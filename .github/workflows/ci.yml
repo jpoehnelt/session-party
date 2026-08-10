@@ -107,10 +107,11 @@ jobs:
           BASE_SCORE: ${{ steps.base.outputs.score }}
         run: |
           jq '{
-            schemaVersion: 1,
+            schemaVersion: 2,
             rubricRevision,
             overallScorePct: (.overallScorePct * 10 | round / 10),
-            overallCoveragePct: (.overallCoveragePct * 10 | round / 10),
+            overallEvidenceCoveragePct: (.overallEvidenceCoveragePct * 10 | round / 10),
+            overallImplementationGapPct: (.overallImplementationGapPct * 10 | round / 10),
             areas: (.required | map({key: .area, value: (.scorePct * 10 | round / 10)}) | from_entries)
           }' .rubric/head/report.json > .rubric/expected-baseline.json
           persisted_score="$(jq -er '.overallScorePct' rubric/baseline.json)"

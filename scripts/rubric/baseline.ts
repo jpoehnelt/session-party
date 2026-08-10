@@ -3,10 +3,11 @@ import { dirname } from "node:path";
 import type { RubricReport } from "./model.ts";
 
 export interface RubricBaseline {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly rubricRevision: string;
   readonly overallScorePct: number;
-  readonly overallCoveragePct: number;
+  readonly overallEvidenceCoveragePct: number;
+  readonly overallImplementationGapPct: number;
   readonly areas: Readonly<Record<string, number>>;
 }
 
@@ -21,10 +22,11 @@ function assertPct(value: unknown, label: string): asserts value is number {
 export function baselineFromReport(report: RubricReport): RubricBaseline {
   if (report.overallScorePct === null) throw new Error("Cannot persist a rubric baseline without a required score");
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     rubricRevision: report.rubricRevision,
     overallScorePct: roundPct(report.overallScorePct),
-    overallCoveragePct: roundPct(report.overallCoveragePct),
+    overallEvidenceCoveragePct: roundPct(report.overallEvidenceCoveragePct),
+    overallImplementationGapPct: roundPct(report.overallImplementationGapPct),
     areas: Object.fromEntries(
       report.required.map(({ area, scorePct }) => {
         if (scorePct === null) throw new Error(`Cannot persist rubric area ${area} without a score`);
@@ -39,12 +41,13 @@ export function parseBaseline(value: unknown, expectedRevision: string): RubricB
     throw new Error("Rubric baseline must be a JSON object");
   }
   const candidate = value as Partial<RubricBaseline>;
-  if (candidate.schemaVersion !== 1) throw new Error("Rubric baseline schemaVersion must be 1");
+  if (candidate.schemaVersion !== 2) throw new Error("Rubric baseline schemaVersion must be 2");
   if (candidate.rubricRevision !== expectedRevision) {
     throw new Error(`Rubric baseline revision ${String(candidate.rubricRevision)} does not match ${expectedRevision}`);
   }
   assertPct(candidate.overallScorePct, "Rubric baseline overallScorePct");
-  assertPct(candidate.overallCoveragePct, "Rubric baseline overallCoveragePct");
+  assertPct(candidate.overallEvidenceCoveragePct, "Rubric baseline overallEvidenceCoveragePct");
+  assertPct(candidate.overallImplementationGapPct, "Rubric baseline overallImplementationGapPct");
   if (typeof candidate.areas !== "object" || candidate.areas === null || Array.isArray(candidate.areas)) {
     throw new Error("Rubric baseline areas must be an object");
   }

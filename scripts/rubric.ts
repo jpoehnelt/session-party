@@ -131,8 +131,9 @@ function writeReport(report: RubricReport, outputDirectory: string): void {
 
 function printSummary(report: RubricReport): void {
   console.log("");
-  console.log(`Required score: ${report.overallScorePct?.toFixed(1) ?? "n/a"}%`);
-  console.log(`Coverage: ${report.overallCoveragePct.toFixed(1)}%`);
+  console.log(`Required capability score: ${report.overallScorePct?.toFixed(1) ?? "n/a"}%`);
+  console.log(`Deterministic evidence coverage: ${report.overallEvidenceCoveragePct.toFixed(1)}%`);
+  console.log(`Implementation-gap weight: ${report.overallImplementationGapPct.toFixed(1)}%`);
   for (const area of report.required) {
     console.log(`${area.title}: ${area.scorePct?.toFixed(1) ?? "n/a"}% (${area.earned}/${area.judgeable})`);
   }

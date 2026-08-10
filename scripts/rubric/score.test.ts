@@ -38,7 +38,8 @@ test("derives verdicts and weighted area scores from check outcomes", () => {
     new Map([[testKey("pass.test.ts", "passes"), "passed"]]),
   );
   assert.equal(report.overallScorePct, (4 / 6) * 100);
-  assert.equal(report.overallCoveragePct, 100);
+  assert.equal(report.overallEvidenceCoveragePct, 50);
+  assert.equal(report.overallImplementationGapPct, 50);
   assert.deepEqual(report.required[0]?.items.map(({ verdict }) => verdict), ["pass", "partial", "fail"]);
 });
 
@@ -53,6 +54,7 @@ test("withholds pending manual checks from the judgeable denominator", () => {
     new Map([[testKey("pass.test.ts", "passes"), "passed"]]),
   );
   assert.equal(report.required[0]?.judgeable, 5);
-  assert.equal(report.required[0]?.coveragePct, (5 / 6) * 100);
+  assert.equal(report.required[0]?.evidenceCoveragePct, 50);
+  assert.equal(report.required[0]?.implementationGapPct, (2 / 6) * 100);
   assert.equal(report.required[0]?.items[2]?.verdict, "cannot_judge");
 });
