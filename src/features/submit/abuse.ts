@@ -4,6 +4,14 @@ import { Context, Effect } from "effect";
 /** Cloudflare Siteverify rejects tokens over this documented maximum. */
 export const TURNSTILE_TOKEN_MAX_LENGTH = 2_048;
 
+/**
+ * Cloudflare's documented always-pass test key. AppLayer exposes it only for
+ * explicitly fake external services, so the public client can make local/demo
+ * automation deterministic without weakening a real production challenge.
+ */
+export const TURNSTILE_ALWAYS_PASS_SITE_KEY = "1x00000000000000000000AA";
+export const TURNSTILE_DEMO_TOKEN = "session-party-demo-turnstile";
+
 export type PublicSubmissionAbuseAttempt = {
   readonly eventId: string;
   readonly formId: string;
@@ -32,6 +40,6 @@ export const normalizePublicEmail = (value: string): string => value.trim().toLo
 
 /** Deterministic, explicitly injected local-test seam. Never install in production. */
 export const localTestPublicSubmissionAbuse = {
-  turnstileSiteKey: "1x00000000000000000000AA",
+  turnstileSiteKey: TURNSTILE_ALWAYS_PASS_SITE_KEY,
   authorize: (_attempt: PublicSubmissionAbuseAttempt) => Effect.void,
 } as const;

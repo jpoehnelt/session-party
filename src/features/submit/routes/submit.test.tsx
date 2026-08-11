@@ -8,6 +8,7 @@ import PublicSubmitPage, {
   path as publicPath,
   postPublicSubmission,
   draftStorageKey,
+  requiredAnswerErrors,
   restoreDraftAnswers,
   visibleFields,
 } from "./public-submit";
@@ -50,6 +51,16 @@ const publicForm: PublicSubmissionForm = {
         options: [],
         logic: null,
       },
+      {
+        id: "field-format",
+        order: 2,
+        type: "select",
+        label: "Session format",
+        helpText: null,
+        required: true,
+        options: ["Talk", "Workshop"],
+        logic: null,
+      },
     ],
   },
   turnstileSiteKey: "1x00000000000000000000AA",
@@ -88,11 +99,13 @@ describe("public submit route", () => {
     expect(markup).toContain("Architecture Summit");
     expect(markup).toContain("Call for proposals");
     expect(markup).toContain("Proposal title");
+    expect(markup).toContain("Session format");
     expect(markup).toContain("Submit proposal");
     expect(markup).toContain("Save draft");
     expect(markup).toContain("Speaker details");
     expect(markup).toContain("Accounts are not required");
     expect(markup).toContain("Add co-speaker");
+    expect(markup).toContain("Demo verification ready");
     expect(markup).not.toContain("AppShell");
   });
 
@@ -124,6 +137,33 @@ describe("public submit route", () => {
       publicForm.form.versionId,
     )).toContain(publicForm.form.versionId);
   });
+
+  it("reports visible required fields without treating hidden conditional fields as missing", () => {
+    const fields: PublicSubmissionForm["form"]["fields"] = [
+      ...publicForm.form.fields,
+      {
+        id: "field-workshop-plan",
+        order: 3,
+        type: "textarea",
+        label: "Workshop plan",
+        helpText: null,
+        required: true,
+        options: [],
+        logic: {
+          action: "show",
+          mode: "all",
+          conditions: [{ fieldId: "field-format", op: "eq", value: "Workshop" }],
+        },
+      },
+    ];
+
+    const talkAnswers = { "field-title": "A real proposal", "field-format": "Talk" };
+    expect(requiredAnswerErrors(visibleFields(fields, talkAnswers), talkAnswers)).toEqual({});
+    expect(requiredAnswerErrors(visibleFields(fields, {}), {})).toEqual({
+      "field-title": "Proposal title is required.",
+      "field-format": "Session format is required.",
+    });
+  });
   it("uses the frozen public REST read and create endpoints", async () => {
     const created = {
       submissionId: "submission-created",
@@ -139,7 +179,7 @@ describe("public submit route", () => {
       "architecture-summit",
       "form-public",
       "submit-route-test-001",
-      { "field-title": "Effect at the edge" },
+      { "field-title": "Effect at the edge", "field-format": "Talk" },
       "test-turnstile-token",
     );
 
@@ -157,7 +197,10 @@ describe("public submit route", () => {
           "Idempotency-Key": "submit-route-test-001",
         },
         body: JSON.stringify({
-          answers: [{ fieldId: "field-title", value: "Effect at the edge" }],
+          answers: [
+            { fieldId: "field-title", value: "Effect at the edge" },
+            { fieldId: "field-format", value: "Talk" },
+          ],
           turnstileToken: "test-turnstile-token",
         }),
       }),

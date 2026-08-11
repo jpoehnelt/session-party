@@ -127,6 +127,16 @@ const primaryCfpFields: readonly FormFieldDraft[] = [
     logic: null,
     routing: { General: "general" },
   },
+  {
+    type: "select",
+    label: "Session format",
+    semanticKey: null,
+    helpText: "Choose the presentation style that best fits this proposal.",
+    required: true,
+    options: ["Talk", "Workshop", "Panel"],
+    logic: null,
+    routing: {},
+  },
 ];
 
 const additionalFormFields: readonly FormFieldDraft[] = [
