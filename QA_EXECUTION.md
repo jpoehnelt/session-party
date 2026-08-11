@@ -59,7 +59,7 @@ Baseline regression suites also passed before the QA fixes:
 | Agenda speaker links and deep-link close | Speaker links were rendered inside draggable talk-card buttons, producing serious nested-interactive axe failures. Closing a `?talk=` sheet cleared local state before the URL update, so URL synchronization immediately reopened it. | Render speaker links as sibling actions outside the talk button while preserving drag behavior, and make the URL the close source of truth; prove axe, drag, keyboard restoration, close, reload, and canonical cleanup. |
 | Updated-main QA reconciliation | Persisted embeds and exact-assignment reviewer access replaced the transient embed generator and committee-wide reviewer reads, leaving browser assertions bound to removed controls and obsolete authorization semantics. | Exercise the versioned embed create/edit/disable/enable/copy lifecycle and verify organizer-visible recusal evidence with fail-closed unassigned/recused reviewer queue, detail, and write access. |
 | Route metadata | Agenda/communications H1 text could be concatenated in the title; async public routes retained the loading title. | Use rendered heading text and keep route metadata synchronized through async updates. |
-| Error routing | The wildcard route retained stale metadata and had no H1. | Run it through the route coordinator and render the empty-state title as H1. |
+| Error routing | The wildcard route retained stale metadata, had no H1, and later remained a dead end with no recovery action. | Run it through the route coordinator, render the empty-state title as H1, and provide a keyboard-operable Return home action included in the interaction, route, keyboard, pointer, and accessibility inventories. |
 | Public errors | Stable public-program error states had no H1. | Add explicit EmptyState heading levels. |
 | Dialog focus | Mobile navigation and generic modals failed to return focus to their opener. | Capture the opener before the portal moves focus and restore it after close. |
 | Publication IA | Publication rendered both “Publish the run of show” and “Embed & share” as H1. | Support section heading levels and render the embedded builder title as H2. |
@@ -97,7 +97,7 @@ The public subset was also run against `https://sessionparty.com` without fixtur
 
 All three pass in the local matrix with this change set. Login, schedule embed, speaker embed, and invalid reviewer-invitation surfaces passed at both breakpoints.
 
-A fresh header probe also found that the currently deployed static HTML and embed shells do not yet return CSP, HSTS, nosniff, referrer, or permissions-policy headers. The follow-up production-build preview now proves those policies locally, including the frameable embed exception; deployment and a post-deploy probe remain required before marking the production header gate complete.
+A post-deploy probe of merge `e1328afc` now confirms CSP, one-year HSTS, nosniff, strict-origin referrer, permissions, and `X-Frame-Options: DENY` on normal documents. The deployed embed shell retains the application CSP while replacing only the frame policy with `frame-ancestors *` and omitting `X-Frame-Options`. A live desktop/mobile browser spot check also confirms corrected public-route metadata, linked session detail plus Back/Forward recovery, filtering, device-local schedule persistence with cleanup, 320 px reflow without page overflow, and the unknown-route H1/title. That final state exposed one remaining wildcard-route IA defect—no recovery action—which is fixed and covered in the subsequent QA follow-up.
 
 ## Deliberately not executed against production
 
@@ -108,6 +108,6 @@ The production run is read-only. Publishing, imports, member/role changes, key c
 - Real provider email, file-storage, Airtable, Accelevents, retry/dead-letter, and audit evidence.
 - Concurrent stale-version, Party gap recovery, and idempotency-race cases outside the covered forms, event metadata, membership, tasks, resources, communication templates, managed speaker profiles, agenda-offline, and form-session-expiry paths.
 - Screen-reader manual passes, true browser 200% zoom, manual visual review, mobile Safari/device coverage, and moderated IA first-click studies.
-- Production p75 Core Web Vitals/load, broader slow-network/failure injection, post-deploy security-header confirmation, full upload boundary/storage-failure coverage, and third-party redirect behavior beyond the now-proven first-party embed frame-policy boundary.
+- Production p75 Core Web Vitals/load, broader slow-network/failure injection, full upload boundary/storage-failure coverage, and third-party redirect behavior beyond the now-proven first-party embed frame-policy boundary.
 
 Those items remain blockers for claiming the entire `QA_PLAN.md` release gate; they are not silently treated as passes.

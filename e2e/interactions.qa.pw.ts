@@ -54,6 +54,18 @@ test("login validates email and demo personas preserve a safe return path", asyn
   await expect(page.getByRole("button", { name: /Continue as Reviewer/ })).toBeEnabled();
 });
 
+test("unknown routes provide a keyboard-operable recovery path", async ({ page }, testInfo) => {
+  desktopOnly(testInfo);
+  await page.goto("/qa-route-that-does-not-exist");
+  await expect(page.getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
+  const recovery = page.getByRole("button", { name: "Return home" });
+  await recovery.focus();
+  await expect(recovery).toBeFocused();
+  await recovery.press("Enter");
+  await expect(page).toHaveURL("/");
+  await expect(page.locator("h1")).toBeVisible();
+});
+
 test("forms additional-form dialog supports validation, Cancel, and focus return", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/forms");
