@@ -95,12 +95,14 @@ export function sessionMatches(
   talk: PublicAgendaTalk,
   query: string,
   track: string,
+  format: string,
   room: string,
 ): boolean {
   const needle = normalize(query);
   const text = normalize([talk.title, talk.description ?? "", ...talk.speakerNames].join(" "));
   return (!needle || text.includes(needle))
     && (!track || talk.track === track)
+    && (!format || String(talk.durationMin) === format)
     && (!room || talk.room === room);
 }
 
@@ -301,16 +303,18 @@ function SessionsSurface({
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") ?? "";
   const track = searchParams.get("track") ?? "";
+  const format = searchParams.get("format") ?? "";
   const room = searchParams.get("room") ?? "";
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const tracks = [...new Set(agenda.talks.flatMap((talk) => talk.track ? [talk.track] : []))].sort();
+  const formats = [...new Set(agenda.talks.map((talk) => talk.durationMin))].sort((left, right) => left - right);
   const rooms = [...new Set(agenda.talks.flatMap((talk) => talk.room ? [talk.room] : []))].sort();
-  const filtered = agenda.talks.filter((talk) => sessionMatches(talk, query, track, room));
+  const filtered = agenda.talks.filter((talk) => sessionMatches(talk, query, track, format, room));
   const speakers = speakerLookup(gallery);
   const returnContext = Object.fromEntries(
-    Object.entries({ q: query, track, room }).filter((entry): entry is [string, string] => Boolean(entry[1])),
+    Object.entries({ q: query, track, format, room }).filter((entry): entry is [string, string] => Boolean(entry[1])),
   );
-  const updateFilter = (key: "q" | "track" | "room", value: string) => {
+  const updateFilter = (key: "q" | "track" | "format" | "room", value: string) => {
     const next = new URLSearchParams(window.location.search);
     if (value) next.set(key, value);
     else next.delete(key);
@@ -323,9 +327,9 @@ function SessionsSurface({
         eyebrow="Published program"
         title="Sessions"
         titleId="public-sessions-title"
-        description="Search by session or speaker, then narrow by track and room."
+        description="Search by session or speaker, then narrow by track, format, and room."
       />
-      <div className="grid gap-4 border-2 border-line-strong bg-production-sky/30 p-4 shadow-[5px_5px_0_#171714] md:grid-cols-[minmax(0,1fr)_14rem_14rem] sm:p-5">
+      <div className="grid gap-4 border-2 border-line-strong bg-production-sky/30 p-4 shadow-[5px_5px_0_#171714] md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_12rem_12rem_12rem] sm:p-5">
         <Input
           label="Search sessions or speakers"
           type="search"
@@ -336,6 +340,10 @@ function SessionsSurface({
         <Select label="Track" value={track} onChange={(event) => updateFilter("track", event.currentTarget.value)}>
           <option value="">All tracks</option>
           {tracks.map((value) => <option key={value} value={value}>{value}</option>)}
+        </Select>
+        <Select label="Format" value={format} onChange={(event) => updateFilter("format", event.currentTarget.value)}>
+          <option value="">All formats</option>
+          {formats.map((value) => <option key={value} value={String(value)}>{value} minutes</option>)}
         </Select>
         <Select label="Room" value={room} onChange={(event) => updateFilter("room", event.currentTarget.value)}>
           <option value="">All rooms</option>
@@ -802,9 +810,10 @@ export function PublicProgram({
   const returnDay = searchParams.get("day");
   const returnQuery = searchParams.get("q");
   const returnTrack = searchParams.get("track");
+  const returnFormat = searchParams.get("format");
   const returnRoom = searchParams.get("room");
   const detailReturnContext: Readonly<Record<string, string>> = detailReturnSurface === "sessions"
-    ? Object.fromEntries(Object.entries({ q: returnQuery, track: returnTrack, room: returnRoom }).filter((entry): entry is [string, string] => Boolean(entry[1])))
+    ? Object.fromEntries(Object.entries({ q: returnQuery, track: returnTrack, format: returnFormat, room: returnRoom }).filter((entry): entry is [string, string] => Boolean(entry[1])))
     : (detailReturnSurface === "agenda" || detailReturnSurface === "schedule") && returnDay
     ? { day: returnDay }
     : (detailReturnSurface === "speakers" || detailReturnSurface === "gallery") && returnQuery

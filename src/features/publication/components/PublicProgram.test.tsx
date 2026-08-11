@@ -101,10 +101,11 @@ describe("public program", () => {
   });
 
   it("searches sessions by title or speaker and applies facets", () => {
-    expect(sessionMatches(agenda.talks[0]!, "40-minute", "", "")).toBe(true);
-    expect(sessionMatches(agenda.talks[0]!, "priya", "", "")).toBe(true);
-    expect(sessionMatches(agenda.talks[0]!, "priya", "Platform & Infra", "Main Stage")).toBe(true);
-    expect(sessionMatches(agenda.talks[0]!, "priya", "Developer Experience", "")).toBe(false);
+    expect(sessionMatches(agenda.talks[0]!, "40-minute", "", "", "")).toBe(true);
+    expect(sessionMatches(agenda.talks[0]!, "priya", "", "", "")).toBe(true);
+    expect(sessionMatches(agenda.talks[0]!, "priya", "Platform & Infra", "30", "Main Stage")).toBe(true);
+    expect(sessionMatches(agenda.talks[0]!, "priya", "Platform & Infra", "45", "Main Stage")).toBe(false);
+    expect(sessionMatches(agenda.talks[0]!, "priya", "Developer Experience", "", "")).toBe(false);
   });
 
   it("orders the directory by surname", () => {

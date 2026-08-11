@@ -209,6 +209,11 @@ describe("public program rendered interactions", () => {
     expect(container.textContent).toContain("01 session on the board");
     expect(container.textContent).toContain("Docs That Answer Back");
     await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Track"), ""));
+    await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Format"), "30"));
+    expect(container.textContent).toContain("01 session on the board");
+    expect(container.textContent).toContain("Taming 40-Minute CI");
+    expect(container.textContent).not.toContain("Cache Invalidation Without Folklore");
+    await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Format"), ""));
     await act(async () => userEvent.click(byControl("Show more")));
     expect(byControl("Show less").getAttribute("aria-expanded")).toBe("true");
   });

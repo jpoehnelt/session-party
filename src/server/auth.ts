@@ -233,9 +233,90 @@ const issueBrowserSession = async (env: Env, userId: string): Promise<string> =>
   return session;
 };
 
+type DemoSeed = {
+  readonly users: Readonly<Record<DemoPersona, string>>;
+  readonly eventId: string;
+};
+
+type DemoSeedRow = {
+  readonly event_id: string;
+  readonly organizer_id: string;
+  readonly organizer_name: string | null;
+  readonly organizer_role: string | null;
+  readonly speaker_id: string;
+  readonly speaker_name: string | null;
+  readonly reviewer_id: string;
+  readonly reviewer_name: string | null;
+  readonly reviewer_role: string | null;
+};
+
+/**
+ * Demo login is a hot path during evaluator runs. Keep the healthy path to one
+ * read so parallel role switches do not rewrite and serialize on shared rows.
+ */
+const loadDemoSeed = async (env: Env): Promise<DemoSeed | null> => {
+  const row = await env.DB.prepare(
+    `SELECT
+       e.id AS event_id,
+       MAX(CASE WHEN u.email = ? THEN u.id END) AS organizer_id,
+       MAX(CASE WHEN u.email = ? THEN u.name END) AS organizer_name,
+       MAX(CASE WHEN u.email = ? THEN m.role END) AS organizer_role,
+       MAX(CASE WHEN u.email = ? THEN u.id END) AS speaker_id,
+       MAX(CASE WHEN u.email = ? THEN u.name END) AS speaker_name,
+       MAX(CASE WHEN u.email = ? THEN u.id END) AS reviewer_id,
+       MAX(CASE WHEN u.email = ? THEN u.name END) AS reviewer_name,
+       MAX(CASE WHEN u.email = ? THEN m.role END) AS reviewer_role
+     FROM events e
+     CROSS JOIN users u
+     LEFT JOIN event_members m ON m.event_id = e.id AND m.user_id = u.id
+     WHERE e.slug = ? AND u.email IN (?, ?, ?)
+     GROUP BY e.id
+     LIMIT 1`,
+  ).bind(
+    DEMO_IDENTITIES.organizer.email,
+    DEMO_IDENTITIES.organizer.email,
+    DEMO_IDENTITIES.organizer.email,
+    DEMO_IDENTITIES.speaker.email,
+    DEMO_IDENTITIES.speaker.email,
+    DEMO_IDENTITIES.reviewer.email,
+    DEMO_IDENTITIES.reviewer.email,
+    DEMO_IDENTITIES.reviewer.email,
+    DEMO_EVENT.slug,
+    DEMO_IDENTITIES.organizer.email,
+    DEMO_IDENTITIES.speaker.email,
+    DEMO_IDENTITIES.reviewer.email,
+  ).first<DemoSeedRow>();
+
+  if (
+    !row
+    || !row.organizer_id
+    || !row.speaker_id
+    || !row.reviewer_id
+    || row.organizer_name !== DEMO_IDENTITIES.organizer.name
+    || row.speaker_name !== DEMO_IDENTITIES.speaker.name
+    || row.reviewer_name !== DEMO_IDENTITIES.reviewer.name
+    || row.organizer_role !== "owner"
+    || row.reviewer_role !== "reviewer"
+  ) {
+    return null;
+  }
+
+  return {
+    users: {
+      organizer: row.organizer_id,
+      speaker: row.speaker_id,
+      reviewer: row.reviewer_id,
+    },
+    eventId: row.event_id,
+  };
+};
+
 const ensureDemoSeed = async (
   env: Env,
-): Promise<{ readonly users: Readonly<Record<DemoPersona, string>>; readonly eventId: string }> => {
+): Promise<DemoSeed> => {
+  const existing = await loadDemoSeed(env);
+  if (existing) return existing;
+
   const nowMs = Date.now();
   await env.DB.batch(
     Object.values(DEMO_IDENTITIES).map((identity) =>
@@ -245,7 +326,8 @@ const ensureDemoSeed = async (
          ON CONFLICT(email) DO UPDATE SET
            name = excluded.name,
            version = users.version + 1,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at
+         WHERE users.name <> excluded.name OR users.name IS NULL`,
       ).bind(nanoid(), identity.email, identity.name, nowMs, nowMs),
     ),
   );
@@ -298,7 +380,9 @@ const ensureDemoSeed = async (
     ).bind(nanoid(), event.id, demoUsers[persona], role, nowMs, nowMs),
   ));
 
-  return { users: demoUsers, eventId: event.id };
+  const repaired = await loadDemoSeed(env);
+  if (!repaired) throw new Error("Demo seed repair did not produce a valid workspace");
+  return repaired;
 };
 
 export const apiKeyUserFromRequest = async (

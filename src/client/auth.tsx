@@ -12,6 +12,35 @@ const demoPersonas = [
 
 type DemoPersona = (typeof demoPersonas)[number]["persona"];
 type DemoLoginResponse = { readonly returnTo: string };
+type DemoLoginRequest = (
+  path: string,
+  options: { readonly method: string; readonly body: unknown; readonly signal: AbortSignal },
+) => Promise<DemoLoginResponse>;
+
+export const DEMO_LOGIN_TIMEOUT_MS = 10_000;
+const DEMO_LOGIN_TIMEOUT_MESSAGE = "Demo sign-in took too long. Try again.";
+
+export async function requestDemoLogin(
+  persona: DemoPersona,
+  requestedReturnTo: string | undefined,
+  request: DemoLoginRequest = apiFetch,
+  timeoutMs = DEMO_LOGIN_TIMEOUT_MS,
+): Promise<DemoLoginResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await request("/api/v1/auth/demo", {
+      method: "POST",
+      body: { persona, ...(requestedReturnTo ? { returnTo: requestedReturnTo } : {}) },
+      signal: controller.signal,
+    });
+  } catch (cause) {
+    if (controller.signal.aborted) throw new Error(DEMO_LOGIN_TIMEOUT_MESSAGE);
+    throw cause;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 export default function LoginPage() {
   const { search } = useLocation();
@@ -27,13 +56,11 @@ export default function LoginPage() {
     setError(undefined);
     setActiveDemoPersona(persona);
     try {
-      const result = await apiFetch<DemoLoginResponse>("/api/v1/auth/demo", {
-        method: "POST",
-        body: { persona, ...(requestedReturnTo ? { returnTo: requestedReturnTo } : {}) },
-      });
+      const result = await requestDemoLogin(persona, requestedReturnTo);
       window.location.assign(result.returnTo);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to start the demo session.");
+    } finally {
       setActiveDemoPersona(undefined);
     }
   }
