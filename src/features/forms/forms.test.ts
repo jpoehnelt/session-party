@@ -772,6 +772,94 @@ describe("forms service", () => {
     expect(idempotency).toHaveLength(6);
   });
 
+  it("persists and publishes a builder containing every supported field type without exceeding D1 bind limits", async () => {
+    const eventId = "event-full-builder";
+    const db = drizzle(env.DB);
+    const now = new Date(FORMS_FIXTURE_NOW);
+    await db.insert(events).values({
+      id: eventId,
+      slug: "full-builder",
+      name: "Full builder",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const types = [
+      "text",
+      "textarea",
+      "select",
+      "multiselect",
+      "radio",
+      "checkbox",
+      "email",
+      "url",
+      "date",
+      "heading",
+      "html",
+    ] as const;
+    const fields = types.map((type, index) => ({
+      id: `full-builder-field-${index + 1}`,
+      type,
+      label: `Full builder ${type}`,
+      semanticKey: null,
+      helpText: index % 2 === 0 ? "Builder boundary coverage" : null,
+      required: type === "heading" || type === "html" ? false : index % 2 === 0,
+      options: type === "select" || type === "multiselect" || type === "radio"
+        ? ["Alpha", "Beta", "Unicode ✓"]
+        : [],
+      logic: null,
+      routing: {},
+    })) as unknown as CreateFormInput["fields"];
+
+    const created = await runAs(owner, createForm({
+      eventId,
+      purpose: "additional",
+      name: "Every supported field",
+      description: "Exercises D1 variable-limit-safe persistence.",
+      opensAt: null,
+      closesAt: null,
+      fields,
+      idempotencyKey: "forms-full-builder-create",
+    }));
+    expect(created.fields).toHaveLength(types.length);
+
+    const updated = await runAs(owner, updateForm({
+      eventId,
+      formId: created.id,
+      expectedVersion: created.version,
+      name: created.name,
+      description: created.description,
+      opensAt: created.opensAt,
+      closesAt: created.closesAt,
+      fields: created.fields.map((field) => ({
+        id: field.id,
+        type: field.type,
+        label: `${field.label} updated`,
+        semanticKey: field.semanticKey,
+        helpText: field.helpText,
+        required: field.required,
+        options: field.options,
+        logic: field.logic,
+        routing: field.routing,
+      })) as unknown as CreateFormInput["fields"],
+      idempotencyKey: "forms-full-builder-update",
+    }));
+    expect(updated.fields).toHaveLength(types.length);
+    expect(updated.fields.every(({ label }) => label.endsWith(" updated"))).toBe(true);
+
+    const published = await runAs(owner, publishForm({
+      eventId,
+      formId: created.id,
+      expectedVersion: updated.version,
+      idempotencyKey: "forms-full-builder-publish",
+    }));
+    expect(published.publishedVersion?.fields).toHaveLength(types.length);
+    const snapshotRows = await db.select().from(formVersionFields).where(and(
+      eq(formVersionFields.eventId, eventId),
+      eq(formVersionFields.formVersionId, published.publishedVersion!.id),
+    ));
+    expect(snapshotRows).toHaveLength(types.length);
+  });
+
   it("replays the winner of concurrent identical idempotency keys", async () => {
     const eventId = "event-idempotency-race";
     const db = drizzle(env.DB);

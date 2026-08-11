@@ -67,6 +67,139 @@ test("forms additional-form dialog supports validation, Cancel, and focus return
   await expect(trigger).toBeFocused();
 });
 
+test("forms builder creates every supported field type, persists edits, and deletes the disposable draft", async ({ context, page, request, baseURL }, testInfo) => {
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const collectionPath = `/api/v1/events/${EVENT_ID}/forms`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  const runName = `QA builder ${testInfo.project.name} ${Date.now()}`;
+  type FormDetail = Readonly<{
+    id: string;
+    name: string;
+    purpose: string;
+    status: string;
+    version: number;
+    publishedVersion: unknown;
+    fields: readonly Readonly<{ label: string; type: string }>[];
+  }>;
+  const loadCreated = async (): Promise<FormDetail | undefined> => {
+    const list = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(list.status()).toBe(200);
+    const summaries = await list.json() as readonly { readonly id: string; readonly name: string }[];
+    const summary = summaries.find(({ name }) => name === runName);
+    if (!summary) return undefined;
+    const detail = await request.get(`${collectionPath}/${summary.id}`, { headers: ownerHeaders });
+    expect(detail.status()).toBe(200);
+    return detail.json() as Promise<FormDetail>;
+  };
+  const cleanup = async (): Promise<void> => {
+    const current = await loadCreated();
+    if (!current) return;
+    const removed = await request.delete(`${collectionPath}/${current.id}`, {
+      headers: { ...ownerHeaders, "Idempotency-Key": `qa-builder-cleanup-${current.id}-${current.version}`, "If-Match": String(current.version) },
+    });
+    expect(removed.status()).toBe(200);
+  };
+  const formQueueButton = () => page.locator('aside[aria-label="Event forms"] button').filter({ hasText: runName });
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/forms");
+  try {
+    await page.getByRole("button", { name: "New additional form" }).click();
+    const createDialog = page.getByRole("dialog", { name: "Create an additional form" });
+    await createDialog.getByRole("textbox", { name: "Form name" }).fill(runName);
+    await createDialog.getByRole("textbox", { name: "Description" }).fill("Disposable full builder interaction coverage — Unicode ✓");
+    await createDialog.getByRole("button", { name: "Create draft" }).click();
+    await expect(page.getByText("Additional form draft created.", { exact: true }).first()).toBeVisible();
+    await expect(formQueueButton()).toHaveAttribute("aria-current", "page");
+
+    const fieldTypes = [
+      ["text", "QA short text"],
+      ["textarea", "QA long text"],
+      ["select", "QA select"],
+      ["multiselect", "QA multi-select"],
+      ["radio", "QA radio"],
+      ["checkbox", "QA checkbox"],
+      ["email", "QA email"],
+      ["url", "QA URL"],
+      ["date", "QA date"],
+      ["heading", "QA section heading"],
+      ["html", "QA guidance text"],
+    ] as const;
+    await page.getByLabel("Label", { exact: true }).first().fill(fieldTypes[0][1]);
+    for (const [type, label] of fieldTypes.slice(1)) {
+      await page.getByRole("button", { name: "+ Add field" }).click();
+      await page.getByLabel("Label", { exact: true }).last().fill(label);
+      await page.getByLabel("Field type", { exact: true }).last().selectOption(type);
+      if (type === "select" || type === "multiselect" || type === "radio") {
+        const options = page.getByLabel("Ordered options", { exact: true }).last();
+        await options.fill("Alpha\nBeta\nUnicode ✓");
+        await options.blur();
+      }
+    }
+
+    await page.getByRole("button", { name: "+ Add field" }).click();
+    await page.getByLabel("Label", { exact: true }).last().fill("QA removable field");
+    await page.getByRole("button", { name: "Remove", exact: true }).last().click();
+    await expect(page.getByLabel("Label", { exact: true })).toHaveCount(fieldTypes.length);
+
+    const urlMove = page.getByRole("button", { name: "Move QA URL up" });
+    await expect(urlMove).toBeEnabled();
+    await urlMove.click();
+    const labelsAfterMove = await page.getByLabel("Label", { exact: true }).evaluateAll((inputs) =>
+      inputs.map((input) => (input as HTMLInputElement).value));
+    expect(labelsAfterMove.indexOf("QA URL")).toBeLessThan(labelsAfterMove.indexOf("QA email"));
+
+    await page.getByRole("button", { name: "Save draft" }).click();
+    await expect(page.getByText("Draft saved.", { exact: true }).first()).toBeVisible();
+    const saved = await loadCreated();
+    expect(saved).toBeDefined();
+    expect(saved!.fields).toHaveLength(fieldTypes.length);
+    expect(new Set(saved!.fields.map(({ type }) => type))).toEqual(new Set(fieldTypes.map(([type]) => type)));
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("h1").waitFor({ state: "visible" });
+    await formQueueButton().click();
+    await expect(page.getByLabel("Label", { exact: true })).toHaveCount(fieldTypes.length);
+    const reloadedLabels = await page.getByLabel("Label", { exact: true }).evaluateAll((inputs) =>
+      inputs.map((input) => (input as HTMLInputElement).value));
+    expect(reloadedLabels).toContain("QA guidance text");
+
+    await page.getByLabel("Label", { exact: true }).first().fill("QA unsaved before new form");
+    await page.getByRole("button", { name: "New additional form" }).click();
+    await page.getByRole("alertdialog", { name: "Discard unsaved form changes?" }).getByRole("button", { name: "Discard changes" }).click();
+    const protectedCreateDialog = page.getByRole("dialog", { name: "Create an additional form" });
+    await expect(protectedCreateDialog).toBeVisible();
+    await protectedCreateDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByLabel("Label", { exact: true }).first()).toHaveValue("QA short text");
+
+    await page.getByLabel("Label", { exact: true }).first().fill("QA unsaved field edit");
+    const primaryFormButton = page.locator('aside[aria-label="Event forms"] button').filter({ hasText: "Call for proposals" }).first();
+    await primaryFormButton.click();
+    const unsavedDialog = page.getByRole("alertdialog", { name: "Discard unsaved form changes?" });
+    await expect(unsavedDialog).toBeVisible();
+    await unsavedDialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page.getByLabel("Label", { exact: true }).first()).toHaveValue("QA unsaved field edit");
+    await expect(formQueueButton()).toHaveAttribute("aria-current", "page");
+    await primaryFormButton.click();
+    await page.getByRole("alertdialog", { name: "Discard unsaved form changes?" }).getByRole("button", { name: "Discard changes" }).click();
+    await expect(primaryFormButton).toHaveAttribute("aria-current", "page");
+    await formQueueButton().click();
+    await expect(page.getByLabel("Label", { exact: true }).first()).toHaveValue("QA short text");
+
+    await page.getByRole("button", { name: "Delete draft" }).click();
+    const deleteDialog = page.getByRole("alertdialog", { name: `Delete “${runName}”?` });
+    await expect(deleteDialog).toContainText("permanently removes");
+    await deleteDialog.getByRole("button", { name: "Keep draft" }).click();
+    await expect(deleteDialog).toBeHidden();
+    await expect(page.getByRole("button", { name: "Delete draft" })).toBeFocused();
+    await page.getByRole("button", { name: "Delete draft" }).click();
+    await page.getByRole("alertdialog", { name: `Delete “${runName}”?` }).getByRole("button", { name: "Delete draft" }).click();
+    await expect(formQueueButton()).toHaveCount(0);
+    expect(await loadCreated()).toBeUndefined();
+  } finally {
+    await cleanup();
+  }
+});
+
 test("submission filters and pagination update the visible queue without mutation", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/submissions");
