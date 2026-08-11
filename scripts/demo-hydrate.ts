@@ -463,11 +463,13 @@ const claimed = await request<ClaimOutput>(`/events/${eventId}/portal/claim`, {
 if (claimed.speakerId !== accepted.primarySpeakerId || claimed.provisioningId !== accepted.provisioningId) {
   throw new Error("Speaker claim did not resolve the accepted primary speaker");
 }
-await request(`/events/${eventId}/portal/speakers/${encode(accepted.primarySpeakerId)}/provision`, {
-  method: "POST",
-  session: ownerSession,
-  body: { provisioningId: claimed.provisioningId, expectedVersion: claimed.provisioningVersion },
-});
+if (claimed.provisioningStatus !== "provisioned") {
+  await request(`/events/${eventId}/portal/speakers/${encode(accepted.primarySpeakerId)}/provision`, {
+    method: "POST",
+    session: ownerSession,
+    body: { provisioningId: claimed.provisioningId, expectedVersion: claimed.provisioningVersion },
+  });
+}
 
 const acceptedPeople: Array<{
   readonly submission: SubmissionOutput;
@@ -500,11 +502,13 @@ for (let index = 1; index < acceptedSubmissions.length; index += 1) {
   if (claim.speakerId !== acceptance.primarySpeakerId) {
     throw new Error(`Speaker ${index + 1} claimed the wrong accepted profile`);
   }
-  await request(`/events/${eventId}/portal/speakers/${encode(acceptance.primarySpeakerId)}/provision`, {
-    method: "POST",
-    session: ownerSession,
-    body: { provisioningId: claim.provisioningId, expectedVersion: claim.provisioningVersion },
-  });
+  if (claim.provisioningStatus !== "provisioned") {
+    await request(`/events/${eventId}/portal/speakers/${encode(acceptance.primarySpeakerId)}/provision`, {
+      method: "POST",
+      session: ownerSession,
+      body: { provisioningId: claim.provisioningId, expectedVersion: claim.provisioningVersion },
+    });
+  }
   acceptedPeople.push({ submission: candidate, acceptance, claim, speaker });
 }
 
