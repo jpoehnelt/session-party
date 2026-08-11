@@ -668,6 +668,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
   const cancelTalk = async () => {
     if (!selectedTalk) return;
+    if (!window.confirm(`Cancel "${selectedTalk.title}"? It will be removed from the draft schedule but kept in the audit history.`)) return;
     const clientId = clientIntentId();
     try {
       await runMutation(clientId, () => apiFetch<AgendaMutationResult>(

@@ -1065,6 +1065,62 @@ test("agenda card drag-and-drop and keyboard placement move the canonical talk a
   }
 });
 
+test("agenda talk cancellation discloses scope, preserves an aborted draft, and returns the proposal to backlog", async ({ context, page, request, baseURL }, testInfo) => {
+  desktopChromiumOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const agendaPath = `/api/v1/events/${EVENT_ID}/agenda`;
+  const publicAgendaPath = `/api/v1/public/events/${EVENT}/agenda/published`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  type Talk = Readonly<{ id: string; submissionId: string | null; status: "draft" | "confirmed" | "cancelled" }>;
+  type Proposal = Readonly<{ submissionId: string; title: string }>;
+  type Agenda = Readonly<{ backlog: readonly Proposal[]; talks: readonly Talk[] }>;
+  const loadAgenda = async (): Promise<Agenda> => {
+    const response = await request.get(agendaPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<Agenda>;
+  };
+  const loadPublicAgenda = async (): Promise<unknown> => {
+    const response = await request.get(publicAgendaPath);
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const initialAgenda = await loadAgenda();
+  const proposal = initialAgenda.backlog[0];
+  expect(proposal).toBeDefined();
+  const publicBefore = await loadPublicAgenda();
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/agenda");
+  const backlogItem = page.locator("li").filter({ hasText: proposal!.title }).filter({ has: page.getByRole("button", { name: "Create talk" }) }).first();
+  await backlogItem.getByRole("button", { name: "Create talk" }).click();
+  await expect(page.getByText("Talk created", { exact: true }).first()).toBeVisible();
+  const editor = page.getByRole("dialog", { name: proposal!.title });
+  await expect(editor).toBeVisible();
+  const created = (await loadAgenda()).talks.find(({ submissionId, status }) => submissionId === proposal!.submissionId && status === "draft");
+  expect(created).toBeDefined();
+
+  const unsavedTitle = `${proposal!.title} unsaved before cancel`;
+  await editor.getByLabel("Session title").fill(unsavedTitle);
+  let confirmationMessage = "";
+  page.once("dialog", async (dialog) => {
+    confirmationMessage = dialog.message();
+    await dialog.dismiss();
+  });
+  await editor.getByRole("button", { name: "Cancel talk" }).click();
+  expect(confirmationMessage).toBe(`Cancel "${proposal!.title}"? It will be removed from the draft schedule but kept in the audit history.`);
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel("Session title")).toHaveValue(unsavedTitle);
+  expect((await loadAgenda()).talks.find(({ id }) => id === created!.id)?.status).toBe("draft");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await editor.getByRole("button", { name: "Cancel talk" }).click();
+  await expect(page.getByText("Talk cancelled", { exact: true }).first()).toBeVisible();
+  await expect(editor).toBeHidden();
+  await expect.poll(async () => (await loadAgenda()).talks.find(({ id }) => id === created!.id)?.status).toBe("cancelled");
+  await expect.poll(async () => (await loadAgenda()).backlog.some(({ submissionId }) => submissionId === proposal!.submissionId)).toBe(true);
+  await expect(page.locator("li").filter({ hasText: proposal!.title }).filter({ has: page.getByRole("button", { name: "Create talk" }) }).first()).toBeVisible();
+  expect(await loadPublicAgenda()).toEqual(publicBefore);
+});
+
 test("communications protects unsaved edits and rejects a stale template writer without losing its draft", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/comms");
