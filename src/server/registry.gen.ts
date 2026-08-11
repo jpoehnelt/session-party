@@ -4911,7 +4911,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
     ]
   },
   {
-    "description": "List accepted speakers and their communication eligibility.",
+    "description": "List accepted and rejected applicants and their communication eligibility.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -4945,7 +4945,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
       "properties": {
         "dependency": {
           "enum": [
-            "acceptedSpeakers"
+            "decidedApplicants"
           ],
           "type": "string"
         },
@@ -4967,6 +4967,14 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "items": {
             "additionalProperties": false,
             "properties": {
+              "decision": {
+                "enum": [
+                  "accepted",
+                  "rejected",
+                  "mixed"
+                ],
+                "type": "string"
+              },
               "eligibility": {
                 "enum": [
                   "eligible",
@@ -5026,6 +5034,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "userId",
               "name",
               "email",
+              "decision",
               "sessionTitles",
               "eligibility"
             ],
@@ -5517,7 +5526,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
     ]
   },
   {
-    "description": "Render a template locally with accepted-speaker or labeled sample data without sending it.",
+    "description": "Render a template locally with decided-applicant or labeled sample data without sending it.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -5605,7 +5614,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         },
         "mode": {
           "enum": [
-            "acceptedSpeaker",
+            "decidedApplicant",
             "sample"
           ],
           "type": "string"
@@ -26153,7 +26162,7 @@ export const openApi = {
                   "properties": {
                     "dependency": {
                       "enum": [
-                        "acceptedSpeakers"
+                        "decidedApplicants"
                       ],
                       "type": "string"
                     },
@@ -26175,6 +26184,14 @@ export const openApi = {
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "decision": {
+                            "enum": [
+                              "accepted",
+                              "rejected",
+                              "mixed"
+                            ],
+                            "type": "string"
+                          },
                           "eligibility": {
                             "enum": [
                               "eligible",
@@ -26234,6 +26251,7 @@ export const openApi = {
                           "userId",
                           "name",
                           "email",
+                          "decision",
                           "sessionTitles",
                           "eligibility"
                         ],
@@ -26255,7 +26273,7 @@ export const openApi = {
             "description": "Successful operation"
           }
         },
-        "summary": "List accepted-speaker communication recipients",
+        "summary": "List decided-applicant communication recipients",
         "x-authorization": {
           "apiKey": {
             "kind": "api-key",
@@ -27178,7 +27196,7 @@ export const openApi = {
                     },
                     "mode": {
                       "enum": [
-                        "acceptedSpeaker",
+                        "decidedApplicant",
                         "sample"
                       ],
                       "type": "string"
@@ -53308,6 +53326,12 @@ export const openApi = {
                           "description": "a string at most 200 character(s) long",
                           "maxLength": 200,
                           "title": "maxLength(200)",
+                          "type": "string"
+                        },
+                        "roleLabel": {
+                          "description": "a string at most 80 character(s) long",
+                          "maxLength": 80,
+                          "title": "maxLength(80)",
                           "type": "string"
                         },
                         "title": {

@@ -33,7 +33,7 @@ import {
 } from "@/features/agenda/schema";
 import {
   getAgendaDeliveryProjection,
-  getPublishedAgenda,
+  getLatestPublishedAgendaSnapshot,
 } from "@/features/agenda/service";
 import {
   renderCalendar,
@@ -468,6 +468,7 @@ export const updateTemplate = (
 interface AudienceRow {
   readonly submissionId: string;
   readonly sessionTitle: string;
+  readonly decision: "accepted" | "rejected";
   readonly speakerId: string;
   readonly speakerName: string;
   readonly userId: string | null;
@@ -481,6 +482,7 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
       db.select({
         submissionId: submissions.id,
         sessionTitle: submissions.title,
+        decision: sql<"accepted" | "rejected">`${submissions.status}`,
         speakerId: speakers.id,
         speakerName: speakers.displayName,
         userId: speakers.userId,
@@ -500,13 +502,18 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
     for (const row of rows) {
       const existing = bySpeaker.get(row.speakerId);
       if (existing) {
-        bySpeaker.set(row.speakerId, { ...existing, sessionTitles: [...existing.sessionTitles, row.sessionTitle].sort() });
+        bySpeaker.set(row.speakerId, {
+          ...existing,
+          decision: existing.decision === row.decision ? existing.decision : "mixed",
+          sessionTitles: [...existing.sessionTitles, row.sessionTitle].sort(),
+        });
       } else {
         bySpeaker.set(row.speakerId, {
           speakerId: row.speakerId,
           userId: row.userId,
           name: row.speakerName,
           email: row.email,
+          decision: row.decision,
           sessionTitles: [row.sessionTitle],
           eligibility: row.email === null ? "missingEmail" : "eligible",
         });
@@ -517,7 +524,7 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
       eventId,
       recipients,
       eligibleCount: recipients.filter((recipient) => recipient.eligibility === "eligible").length,
-      dependency: "acceptedSpeakers",
+      dependency: "decidedApplicants",
     };
   });
 
@@ -600,11 +607,11 @@ interface PublishedTalksBySpeaker {
 
 const loadPublishedTalks = (
   eventId: string,
-  eventSlug: string,
+  _eventSlug: string,
   speakerIds: readonly string[],
 ): Effect.Effect<PublishedTalksBySpeaker, AppError, Db> =>
   Effect.gen(function* () {
-    const publication = yield* getPublishedAgenda({ eventSlug }).pipe(
+    const publication = yield* getLatestPublishedAgendaSnapshot(eventId).pipe(
       Effect.catchTag("NotFound", (error) =>
         error.entity === "published agenda" ? Effect.succeed(null) : Effect.fail(error)),
     );
@@ -830,7 +837,7 @@ export const previewCommunication = (
       ? null
       : audience.recipients.find((recipient) => recipient.speakerId === input.speakerId) ?? null;
     if (input.speakerId !== null && (!selected || selected.email === null)) {
-      return yield* Effect.fail(new Validation({ message: "Preview speaker must be an accepted speaker with an email address" }));
+      return yield* Effect.fail(new Validation({ message: "Preview speaker must be a decided applicant with an email address" }));
     }
     const published = yield* loadPublishedTalks(
       input.eventId,
@@ -855,7 +862,7 @@ export const previewCommunication = (
       input.htmlBody,
     );
     return {
-      mode: selected ? "acceptedSpeaker" : "sample",
+      mode: selected ? "decidedApplicant" : "sample",
       ...rendered,
       recipientName: personalized.context["speaker.name"],
       recipientEmail: personalized.context["speaker.email"],
@@ -868,7 +875,7 @@ export const previewCommunication = (
       note: unavailable.length > 0
         ? "Rendered locally; unavailable values are labeled and no delivery was attempted."
         : selected
-          ? "Rendered locally with accepted-speaker and confirmed-agenda data. No delivery was attempted."
+          ? "Rendered locally with decided-applicant and confirmed-agenda data. No delivery was attempted."
           : "Rendered locally with clearly labeled sample data. No delivery was attempted.",
     };
   });

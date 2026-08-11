@@ -374,6 +374,14 @@ describe("review workbench route", () => {
       viewerRole: "reviewer",
       viewerUserId: "user_reviewer",
       reviewers: [],
+      queue: workbench.queue.map((submission) => ({
+        ...submission,
+        reviewState: "in_progress" as const,
+        assignedToMe: true,
+        assignmentCount: 1,
+        completedReviewCount: 1,
+        averageScore: 4,
+      })),
       selected: workbench.selected && {
         ...workbench.selected,
         round: workbench.selected.round && {
@@ -453,7 +461,7 @@ describe("review workbench route", () => {
     expect(markup).toContain("Speakers and API keys cannot author");
     expect(markup).toContain("Recusal reason (optional)");
     expect(markup).toContain("Recuse from this submission");
-    expect(markup).toContain("Assignments organize reviewer worklists");
+    expect(markup).toContain("Reviewers can open and score only proposals assigned to them");
     expect(markup).not.toContain("Assign reviewer");
     expect(markup).not.toContain("Accept &amp; provision primary speaker");
     expect(markup).not.toContain("Create round");

@@ -211,12 +211,11 @@ const requireAssignedReviewer = (
           eq(reviewAssignments.reviewerUserId, viewer.userId),
         )),
       );
-      if (
-        !assignments.some(({ status }) => status === "assigned") &&
-        assignments.some(({ status }) => status === "recused")
-      ) {
+      if (assignments.some(({ status }) => status === "assigned")) return;
+      if (assignments.some(({ status }) => status === "recused")) {
         return yield* Effect.fail(new Conflict({ message: "This review assignment has been recused" }));
       }
+      return yield* Effect.fail(new Forbidden({ reason: "This submission is not assigned to the current reviewer" }));
     });
 
 const normalizeRoundRubric = (
@@ -923,7 +922,7 @@ export const getWorkbench = (
         .orderBy(desc(submissions.submittedAt)),
     );
     let submissionRows = allSubmissionRows;
-    if (input.assignedToMe) {
+    if (viewer.role === "reviewer" || input.assignedToMe) {
       submissionRows = submissionRows.filter((submission) => reviewerSubmissionIds.has(submission.id));
     }
     if (input.status) submissionRows = submissionRows.filter((submission) => submission.status === input.status);
@@ -1021,7 +1020,12 @@ export const getWorkbench = (
         ),
         database(() =>
           db
-            .select({ id: speakers.id, displayName: speakers.displayName, isPrimary: submissionSpeakers.isPrimary })
+            .select({
+              id: speakers.id,
+              displayName: speakers.displayName,
+              isPrimary: submissionSpeakers.isPrimary,
+              roleLabel: submissionSpeakers.roleLabel,
+            })
             .from(submissionSpeakers)
             .innerJoin(speakers, eq(speakers.id, submissionSpeakers.speakerId))
             .where(
@@ -1097,7 +1101,7 @@ export const getWorkbench = (
           ? []
           : speakerRows.map((speaker) => ({
             ...speaker,
-            role: speaker.isPrimary ? "Primary presenter" : "Co-presenter",
+            role: speaker.roleLabel ?? (speaker.isPrimary ? "Primary presenter" : "Co-presenter"),
           })),
         round: selectedRound ?? null,
         assignments: detailAssignments,

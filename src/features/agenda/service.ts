@@ -490,6 +490,16 @@ const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | nul
     return yield* decodePublishedAgenda(change.payload);
   });
 
+/** Internal immutable publication record for mail/calendar snapshots and revision reconciliation. */
+export const getLatestPublishedAgendaSnapshot = (
+  eventId: string,
+): Effect.Effect<PublishedAgenda, AppError, Db> =>
+  Effect.gen(function* () {
+    const published = yield* latestPublication(eventId);
+    if (!published) return yield* Effect.fail(new NotFound({ entity: "published agenda", id: eventId }));
+    return published;
+  });
+
 export const getAgendaDeliveryProjection = (
   input: GetAgendaDeliveryProjectionInput,
 ): Effect.Effect<AgendaDeliveryProjection, AppError, Db> =>
@@ -2590,7 +2600,58 @@ export const getPublishedAgenda = (
 ): Effect.Effect<PublishedAgenda, AppError, Db> =>
   Effect.gen(function* () {
     const eventId = yield* resolveEventIdBySlug(input.eventSlug);
-    const published = yield* latestPublication(eventId);
-    if (!published) return yield* Effect.fail(new NotFound({ entity: "published agenda", id: eventId }));
-    return published;
+    const published = yield* getLatestPublishedAgendaSnapshot(eventId);
+    const { db } = yield* Db;
+    const [liveTalks, eventRows, roomRows, trackRows, publicSpeakerRows] = yield* Effect.all([
+      loadTalkRows(eventId),
+      database(() => db.select({
+        name: events.name,
+        slug: events.slug,
+        timezone: events.timezone,
+        location: events.location,
+      }).from(events).where(eq(events.id, eventId)).limit(1)),
+      database(() => db.select({ id: rooms.id, name: rooms.name }).from(rooms).where(eq(rooms.eventId, eventId))),
+      database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(eq(tracks.eventId, eventId))),
+      database(() => db.select({ talkId: talkSpeakers.talkId, name: speakers.displayName })
+        .from(talkSpeakers)
+        .innerJoin(speakers, and(
+          eq(speakers.eventId, talkSpeakers.eventId),
+          eq(speakers.id, talkSpeakers.speakerId),
+        ))
+        .where(and(eq(talkSpeakers.eventId, eventId), eq(speakers.visible, true)))
+        .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id))),
+    ]);
+    const currentEvent = eventRows[0];
+    if (!currentEvent) return yield* Effect.fail(new NotFound({ entity: "event", id: eventId }));
+    const liveById = new Map(liveTalks.map((talk) => [talk.id, talk] as const));
+    const roomNames = new Map(roomRows.map((room) => [room.id, room.name] as const));
+    const trackNames = new Map(trackRows.map((track) => [track.id, track.name] as const));
+    const speakerNames = new Map<string, string[]>();
+    for (const speaker of publicSpeakerRows) {
+      speakerNames.set(speaker.talkId, [...(speakerNames.get(speaker.talkId) ?? []), speaker.name]);
+    }
+    const talks = published.talks.flatMap((snapshot): readonly PublicAgendaTalk[] => {
+      const live = liveById.get(snapshot.id);
+      if (!live || live.status !== "confirmed" || live.startsAt === null || live.roomId === null) return [];
+      const room = roomNames.get(live.roomId);
+      if (!room) return [];
+      return [{
+        id: live.id,
+        title: live.title,
+        description: live.description,
+        track: live.trackId === null ? null : trackNames.get(live.trackId) ?? null,
+        room,
+        startsAt: live.startsAt,
+        durationMin: live.durationMin,
+        speakerNames: speakerNames.get(live.id) ?? [],
+      }];
+    });
+    return {
+      ...published,
+      eventName: currentEvent.name,
+      eventSlug: currentEvent.slug,
+      timezone: currentEvent.timezone,
+      location: currentEvent.location,
+      talks,
+    };
   });

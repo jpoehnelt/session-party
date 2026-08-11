@@ -361,6 +361,7 @@ type ValidatedSubmission = {
 type NormalizedSpeaker = {
   readonly name: string;
   readonly email: string | null;
+  readonly roleLabel: string;
   readonly title: string | null;
   readonly organization: string | null;
 };
@@ -396,6 +397,7 @@ const normalizePublicSpeakers = (
       coSpeakers.push({
         name,
         email: normalizedEmail,
+        roleLabel: normalizeOptionalText(speaker.roleLabel) ?? "Co-presenter",
         title: normalizeOptionalText(speaker.title),
         organization: normalizeOptionalText(speaker.organization),
       });
@@ -722,6 +724,7 @@ export const createPublicSubmission = (
             submissionId: submissions.id,
             speakerId: sql<string>`${speakerId}`.as("speaker_id"),
             isPrimary: sql<boolean>`1`.as("is_primary"),
+            roleLabel: sql<string>`'Primary presenter'`.as("role_label"),
             titleAtTime: publicSpeakers.primary.title === null
               ? sql<string | null>`null`.as("title_at_time")
               : sql<string | null>`${publicSpeakers.primary.title}`.as("title_at_time"),
@@ -772,6 +775,7 @@ export const createPublicSubmission = (
                 submissionId: submissions.id,
                 speakerId: sql<string>`${coSpeakerId}`.as("speaker_id"),
                 isPrimary: sql<boolean>`0`.as("is_primary"),
+                roleLabel: sql<string>`${speaker.roleLabel}`.as("role_label"),
                 titleAtTime: speaker.title === null
                   ? sql<string | null>`null`.as("title_at_time")
                   : sql<string | null>`${speaker.title}`.as("title_at_time"),
@@ -1171,6 +1175,7 @@ export const createTaskSubmission = (
             submissionId: submissions.id,
             speakerId: sql<string>`${actor.speaker.id}`.as("speaker_id"),
             isPrimary: sql<boolean>`1`.as("is_primary"),
+            roleLabel: sql<string>`'Primary presenter'`.as("role_label"),
             titleAtTime: sql<string | null>`${actor.speaker.title}`.as("title_at_time"),
             organizationAtTime: sql<string | null>`${actor.speaker.company}`.as("organization_at_time"),
             createdAt: sql<Date>`${nowMs}`.as("created_at"),
@@ -1588,11 +1593,9 @@ const ownSummary = (
     status: row.status,
     submittedAt: row.submittedAt.getTime(),
     version: row.version,
-    editable: row.status === "accepted" || (
-      availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
+    editable: availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
       && row.status !== "rejected"
-      && row.status !== "withdrawn"
-    ),
+      && row.status !== "withdrawn",
   };
 };
 
@@ -1692,27 +1695,22 @@ export const updateOwnSubmissionAbstract = (
           eq(forms.eventId, submissions.eventId),
           eq(forms.id, submissions.formId),
           eq(forms.kind, "cfp"),
+          eq(forms.status, "open"),
+          or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
+          or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
           or(
-            and(
-              ne(submissions.status, "accepted"),
-              eq(forms.status, "open"),
-              or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
-              or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
-            ),
-            and(
-              eq(submissions.status, "accepted"),
-              exists(db.select({ id: submissionSpeakers.id }).from(submissionSpeakers)
-                .innerJoin(speakers, and(
-                  eq(speakers.eventId, submissionSpeakers.eventId),
-                  eq(speakers.id, submissionSpeakers.speakerId),
-                ))
-                .where(and(
-                  eq(submissionSpeakers.eventId, submissions.eventId),
-                  eq(submissionSpeakers.submissionId, submissions.id),
-                  eq(submissionSpeakers.isPrimary, true),
-                  eq(speakers.userId, owner.userId),
-                ))),
-            ),
+            ne(submissions.status, "accepted"),
+            exists(db.select({ id: submissionSpeakers.id }).from(submissionSpeakers)
+              .innerJoin(speakers, and(
+                eq(speakers.eventId, submissionSpeakers.eventId),
+                eq(speakers.id, submissionSpeakers.speakerId),
+              ))
+              .where(and(
+                eq(submissionSpeakers.eventId, submissions.eventId),
+                eq(submissionSpeakers.submissionId, submissions.id),
+                eq(submissionSpeakers.isPrimary, true),
+                eq(speakers.userId, owner.userId),
+              ))),
           ),
         ))),
       )),

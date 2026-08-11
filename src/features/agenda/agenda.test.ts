@@ -1265,7 +1265,7 @@ describe("agenda service", () => {
     });
   });
 
-  it("successfully publishes an unchanged speaker projection as an immutable revision", async () => {
+  it("keeps an existing published widget consistent with organizer session edits without republishing", async () => {
     const seeded = await seedAgenda("publication", { scheduled: true });
     const before = await runEither(
       seeded.user,
@@ -1307,6 +1307,14 @@ describe("agenda service", () => {
     await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(1);
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(1);
 
+    const edited = await runAs(seeded.user, updateTalkContent({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: "Live organizer title",
+      description: "Live organizer description",
+      expectedVersion: 2,
+      idempotencyKey: "post-publish-content-0001",
+    }));
     await runAs(seeded.user, moveTalk({
       eventId: seeded.eventId,
       talkId: seeded.talkA,
@@ -1314,15 +1322,33 @@ describe("agenda service", () => {
       roomId: seeded.roomB,
       startsAt: FIXED_DAY_START + 7_200_000,
       durationMin: 30,
-      expectedVersion: 2,
+      expectedVersion: edited.talk.version,
       idempotencyKey: "post-publish-move-0001",
     }));
-    const stillPublished = await runAs(
+    const [stillPublished, organizerAgenda] = await Promise.all([
+      runAs(
       seeded.user,
       getPublishedAgenda({ eventSlug: seeded.eventSlug }),
-    );
+      ),
+      runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" })),
+    ]);
+    const organizerTalk = organizerAgenda.talks.find((talk) => talk.id === seeded.talkA)!;
     expect(stillPublished.revision).toBe(1);
-    expect(stillPublished.talks[0]?.startsAt).toBe(FIXED_DAY_START);
+    expect(stillPublished.talks).toEqual([expect.objectContaining({
+      id: organizerTalk.id,
+      title: organizerTalk.title,
+      description: organizerTalk.description,
+      startsAt: organizerTalk.startsAt,
+      durationMin: organizerTalk.durationMin,
+      room: organizerAgenda.rooms.find((room) => room.id === organizerTalk.roomId)?.name,
+      track: organizerAgenda.tracks.find((track) => track.id === organizerTalk.trackId)?.name,
+      speakerNames: organizerTalk.speakerNames,
+    })]);
+    expect(stillPublished.talks[0]).toMatchObject({
+      title: "Live organizer title",
+      room: "Summit",
+      startsAt: FIXED_DAY_START + 7_200_000,
+    });
   });
 
   it("reissues changed published calendars once per prior recipient with stable identity", async () => {
@@ -1908,7 +1934,15 @@ describe("agenda service", () => {
       seeded.user,
       getPublishedAgenda({ eventSlug: seeded.eventSlug }),
     );
-    expect(stillPublished).toEqual(firstPublication);
+    expect(stillPublished).toEqual({
+      ...firstPublication,
+      talks: firstPublication.talks.map((talk) => ({
+        ...talk,
+        room: "Summit",
+        startsAt: FIXED_DAY_START + 7_200_000,
+        durationMin: 30,
+      })),
+    });
     const publicationChanges = await seeded.db.select().from(domainChanges).where(and(
       eq(domainChanges.eventId, seeded.eventId),
       eq(domainChanges.aggregateType, "agenda-publication"),

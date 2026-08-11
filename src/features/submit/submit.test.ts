@@ -589,7 +589,7 @@ describe("public submission creation", () => {
       primarySpeakerTitle: "  Staff Engineer  ",
       primarySpeakerOrganization: "  Open Systems  ",
       coSpeakers: [
-        { name: "  Alex Chen  ", email: " ALEX@example.com ", title: "  Principal  ", organization: "  Acme Labs  " },
+        { name: "  Alex Chen  ", email: " ALEX@example.com ", roleLabel: "  Panel moderator  ", title: "  Principal  ", organization: "  Acme Labs  " },
         { name: "Jordan Patel", title: "Designer", organization: "Studio North" },
       ],
     };
@@ -607,6 +607,7 @@ describe("public submission creation", () => {
         title: speakers.title,
         organization: speakers.company,
         isPrimary: submissionSpeakers.isPrimary,
+        roleLabel: submissionSpeakers.roleLabel,
         titleAtTime: submissionSpeakers.titleAtTime,
         organizationAtTime: submissionSpeakers.organizationAtTime,
       })
@@ -621,6 +622,7 @@ describe("public submission creation", () => {
         title: "Staff Engineer",
         organization: "Open Systems",
         isPrimary: true,
+        roleLabel: "Primary presenter",
         titleAtTime: "Staff Engineer",
         organizationAtTime: "Open Systems",
       }),
@@ -630,6 +632,7 @@ describe("public submission creation", () => {
         title: "Principal",
         organization: "Acme Labs",
         isPrimary: false,
+        roleLabel: "Panel moderator",
         titleAtTime: "Principal",
         organizationAtTime: "Acme Labs",
       }),
@@ -639,6 +642,7 @@ describe("public submission creation", () => {
         title: "Designer",
         organization: "Studio North",
         isPrimary: false,
+        roleLabel: "Co-presenter",
         titleAtTime: "Designer",
         organizationAtTime: "Studio North",
       }),
@@ -732,7 +736,7 @@ describe("public submission creation", () => {
     if (unauthorized._tag === "Left") expect(unauthorized.left._tag).toBe("Forbidden");
   });
 
-  it("allows the exact accepted primary speaker to edit after the CFP deadline", async () => {
+  it("locks an accepted submission after the CFP deadline", async () => {
     const db = drizzle(env.DB);
     const now = new Date();
     const submissionId = "submission-accepted-closed-edit";
@@ -842,21 +846,19 @@ describe("public submission creation", () => {
     expect(before.submissions.find((submission) => submission.id === submissionId)).toMatchObject({
       abstract: "Accepted abstract before the edit.",
       status: "accepted",
-      editable: true,
+      editable: false,
       version: 1,
     });
 
-    const acceptedAttempt = await runAs(submittingSpeaker, updateOwnSubmissionAbstract({
+    const acceptedAttempt = await runEitherAs(submittingSpeaker, updateOwnSubmissionAbstract({
       eventSlug: EVENT_SLUG,
       submissionId,
       abstract: "Accepted abstract after the closed-CFP edit.",
       expectedVersion: 1,
       idempotencyKey: "submit-accepted-closed-update-001",
     }));
-    expect(acceptedAttempt).toMatchObject({
-      submission: { abstract: "Accepted abstract after the closed-CFP edit.", editable: true, version: 2 },
-      idempotent: false,
-    });
+    expect(acceptedAttempt._tag).toBe("Left");
+    if (acceptedAttempt._tag === "Left") expect(acceptedAttempt.left._tag).toBe("Conflict");
 
     const [abstractAnswer, emailAnswer] = await Promise.all([
       db.select({ value: submissionAnswers.value, version: submissionAnswers.version })
@@ -868,7 +870,7 @@ describe("public submission creation", () => {
         .where(eq(submissionAnswers.id, "answer-accepted-closed-email"))
         .get(),
     ]);
-    expect(abstractAnswer).toEqual({ value: "Accepted abstract after the closed-CFP edit.", version: 2 });
+    expect(abstractAnswer).toEqual({ value: "Accepted abstract before the edit.", version: 1 });
     expect(emailAnswer).toEqual({ value: immutableSpeakerEmail, version: 1 });
 
     const sameEmailOutsider: Principal = { ...outsider, email: immutableSpeakerEmail };
@@ -878,7 +880,7 @@ describe("public submission creation", () => {
       eventSlug: EVENT_SLUG,
       submissionId,
       abstract: "An edit by a different browser identity with the immutable email.",
-      expectedVersion: 2,
+      expectedVersion: 1,
       idempotencyKey: "submit-accepted-closed-outsider-001",
     }));
     expect(outsiderAttempt._tag).toBe("Left");
@@ -890,7 +892,7 @@ describe("public submission creation", () => {
         eventSlug: EVENT_SLUG,
         submissionId,
         abstract: `An edit after ${status}.`,
-        expectedVersion: 2,
+        expectedVersion: 1,
         idempotencyKey: `submit-accepted-closed-${status}-001`,
       }));
       expect(denied._tag).toBe("Left");

@@ -429,6 +429,8 @@ export const submissionSpeakers = sqliteTable(
     submissionId: text("submission_id").notNull(),
     speakerId: text("speaker_id").notNull(),
     isPrimary: integer("is_primary", { mode: "boolean" }).notNull().default(false),
+    /** Immutable presenter role supplied with the proposal (for example, facilitator or moderator). */
+    roleLabel: text("role_label"),
     /** Immutable professional context captured when the submission-speaker link is created. */
     titleAtTime: text("title_at_time"),
     organizationAtTime: text("organization_at_time"),

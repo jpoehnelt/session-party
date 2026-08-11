@@ -405,8 +405,35 @@ describe("communications authorization and validation", () => {
     expect(audience.eligibleCount).toBe(2);
   });
 
-  it("includes rejected applicants in bulk communications and queues their outcome email", async () => {
+  it("queues organizer-confirmed acceptance and rejection notification snapshots", async () => {
     const seeded = await seedCommunication("rejected-audience");
+    const mailQueue: MailQueueStub = {
+      appOrigin: "https://events.example.com",
+      fromEmail: "Events <configured@example.com>",
+      wake: () => Effect.void,
+    };
+    const acceptedAudience = await runAs(seeded.owner, listAudience({ eventId: seeded.eventId }));
+    expect(acceptedAudience.recipients).toContainEqual(expect.objectContaining({
+      speakerId: seeded.speakerId,
+      decision: "accepted",
+      eligibility: "eligible",
+    }));
+    const accepted = await runAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      expectedTemplateVersion: 1,
+      recipientSpeakerIds: [seeded.speakerId],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-accepted-audience-001",
+    }), mailQueue);
+    const [acceptedSnapshot] = await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.id, accepted.deliveries[0]!.snapshotId));
+    expect(acceptedSnapshot).toMatchObject({
+      recipientEmail: "speaker-user-comms-rejected-audience@example.com",
+      subject: "Welcome, Accepted Speaker",
+    });
+
     await seeded.db.batch([
       seeded.db.update(submissions).set({ status: "rejected", acceptedAt: null, version: 3, updatedAt: now }).where(eq(submissions.id, "submission-comms-rejected-audience")),
       seeded.db.update(emailTemplates).set({
@@ -421,14 +448,10 @@ describe("communications authorization and validation", () => {
     expect(audience.recipients).toContainEqual(expect.objectContaining({
       speakerId: seeded.speakerId,
       name: "Accepted Speaker",
+      decision: "rejected",
       eligibility: "eligible",
     }));
-    const mailQueue: MailQueueStub = {
-      appOrigin: "https://events.example.com",
-      fromEmail: "Events <configured@example.com>",
-      wake: () => Effect.void,
-    };
-    const queued = await runAs(seeded.owner, enqueueCommunication({
+    const rejected = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
@@ -437,9 +460,9 @@ describe("communications authorization and validation", () => {
       scheduledFor: null,
       idempotencyKey: "comms-rejected-audience-001",
     }), mailQueue);
-    expect(queued.deliveries).toHaveLength(1);
-    const [snapshot] = await seeded.db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.id, queued.deliveries[0]!.snapshotId));
-    expect(snapshot).toMatchObject({
+    expect(rejected.deliveries).toHaveLength(1);
+    const [rejectedSnapshot] = await seeded.db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.id, rejected.deliveries[0]!.snapshotId));
+    expect(rejectedSnapshot).toMatchObject({
       recipientEmail: "speaker-user-comms-rejected-audience@example.com",
       subject: "An update on your Communications rejected-audience proposal",
     });
@@ -942,7 +965,7 @@ describe("communications immutable delivery workflow", () => {
     }), queue);
     const deliveriesAfter = await seeded.db.select().from(mailDeliveries);
     expect(preview).toMatchObject({
-      mode: "acceptedSpeaker",
+      mode: "decidedApplicant",
       subject: "Accepted Speaker — Communications preview",
       recipientEmail: "speaker-user-comms-preview@example.com",
       delivery: "notSent",

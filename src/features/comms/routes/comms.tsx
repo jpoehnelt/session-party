@@ -363,7 +363,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
       const message = error instanceof Error ? error.message : "Could not load communications";
       setLoadError(message);
       setTemplates([]);
-      setAudience({ eventId: event.id, recipients: [], eligibleCount: 0, dependency: "acceptedSpeakers" });
+      setAudience({ eventId: event.id, recipients: [], eligibleCount: 0, dependency: "decidedApplicants" });
       setHistory({ eventId: event.id, deliveries: [], localCaptureCount: 0 });
       toast(message, { tone: "danger" });
     });
@@ -689,8 +689,8 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge tone="accent">Not sent</Badge>
-                    <Badge tone={preview.mode === "acceptedSpeaker" ? "success" : "neutral"}>
-                      {preview.mode === "acceptedSpeaker" ? "Accepted-speaker data" : "Sample data"}
+                    <Badge tone={preview.mode === "decidedApplicant" ? "success" : "neutral"}>
+                      {preview.mode === "decidedApplicant" ? "Decided-applicant data" : "Sample data"}
                     </Badge>
                     {preview.icsStatus === "available" && <Badge tone="success">Confirmed agenda attached</Badge>}
                     {preview.icsStatus === "unavailableAgenda" && <Badge tone="warning">ICS unavailable without a confirmed agenda</Badge>}
@@ -705,7 +705,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
                     <p className="px-4 py-3 font-black tracking-[-0.015em] text-ink">{preview.subject}</p>
                   </div>
                   <div className="whitespace-pre-wrap border-2 border-line-strong bg-surface p-5 text-sm font-medium leading-7 text-ink-secondary shadow-[4px_4px_0_#171714]">{preview.text}</div>
-                  {preview.mode === "acceptedSpeaker" && (
+                  {preview.mode === "decidedApplicant" && (
                     <div className="space-y-3 border-2 border-line-strong bg-surface-muted p-4 shadow-[4px_4px_0_#171714]">
                       <div>
                         <p className="text-sm font-semibold text-ink">Assisted chase</p>
@@ -744,14 +744,16 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
 
       {activeTab === "send" && (
         <div id="comms-send" role="tabpanel" aria-labelledby="comms-send-tab" className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Audience manifest / accepted speakers">
+          <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Decision notification audience">
             {audience.recipients.length === 0 ? (
-              <EmptyState title="No accepted speakers yet" description="Audience selection activates from the append-only acceptance contract." />
+              <EmptyState title="No decided proposals yet" description="Acceptance and rejection recipients appear after organizers record a decision." />
             ) : (
               <div>
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink p-3 text-on-accent">
                   <p className="text-[10px] font-black uppercase tracking-[0.14em]">{selectedCount} selected / {eligibleRecipients.length} ready</p>
                   <div className="flex gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => setSelectedSpeakers(new Set(eligibleRecipients.filter((recipient) => recipient.decision === "accepted").map((recipient) => recipient.speakerId)))}>Select accepted</Button>
+                    <Button size="sm" variant="secondary" onClick={() => setSelectedSpeakers(new Set(eligibleRecipients.filter((recipient) => recipient.decision === "rejected").map((recipient) => recipient.speakerId)))}>Select rejected</Button>
                     <Button size="sm" variant="secondary" onClick={() => setSelectedSpeakers(new Set(eligibleRecipients.map((recipient) => recipient.speakerId)))}>Select ready</Button>
                     <Button size="sm" variant="ghost" className="text-on-accent hover:bg-on-accent/15 hover:text-on-accent" disabled={selectedCount === 0} onClick={() => setSelectedSpeakers(new Set())}>Clear</Button>
                   </div>
@@ -772,6 +774,9 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
                       description={recipient.email ?? "No account email; not eligible for delivery"}
                     />
                     <div className="ml-[3.25rem] sm:ml-0 sm:text-right">
+                      <Badge tone={recipient.decision === "accepted" ? "success" : recipient.decision === "rejected" ? "danger" : "warning"}>
+                        {recipient.decision === "accepted" ? "Accepted" : recipient.decision === "rejected" ? "Rejected" : "Mixed decisions"}
+                      </Badge>{" "}
                       <Badge tone={recipient.eligibility === "eligible" ? "success" : "warning"}>
                         {recipient.eligibility === "eligible" ? "Ready" : "Missing email"}
                       </Badge>

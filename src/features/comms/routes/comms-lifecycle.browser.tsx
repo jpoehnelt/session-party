@@ -31,16 +31,28 @@ const template = {
 
 const audience = {
   eventId: "event-1",
-  recipients: [{
-    speakerId: "speaker-1",
-    userId: "user-1",
-    name: "Ada Speaker",
-    email: "ada@example.com",
-    sessionTitles: ["Reliable systems"],
-    eligibility: "eligible" as const,
-  }],
-  eligibleCount: 1,
-  dependency: "acceptedSpeakers" as const,
+  recipients: [
+    {
+      speakerId: "speaker-1",
+      userId: "user-1",
+      name: "Ada Speaker",
+      email: "ada@example.com",
+      decision: "accepted" as const,
+      sessionTitles: ["Reliable systems"],
+      eligibility: "eligible" as const,
+    },
+    {
+      speakerId: "speaker-2",
+      userId: "user-2",
+      name: "Lin Applicant",
+      email: "lin@example.com",
+      decision: "rejected" as const,
+      sessionTitles: ["Practical queues"],
+      eligibility: "eligible" as const,
+    },
+  ],
+  eligibleCount: 2,
+  dependency: "decidedApplicants" as const,
 };
 
 const enqueueResult = {
@@ -147,5 +159,37 @@ describe("rendered campaign confirmation lifecycle", () => {
     await vi.waitFor(() => expect(enqueueCalls()).toHaveLength(2));
 
     expect(enqueueCalls()[1]?.[1].body).toEqual(firstRequest);
+  });
+
+  it("selects a rejection cohort and visibly confirms the persisted dispatch", async () => {
+    apiMocks.apiFetch.mockImplementation((path: string, options?: { method?: string; body?: unknown }) => {
+      if (options?.method === "POST" && path.endsWith("/deliveries")) return Promise.resolve(enqueueResult);
+      if (path.endsWith("/templates")) return Promise.resolve([template]);
+      if (path.endsWith("/audience")) return Promise.resolve(audience);
+      if (path.endsWith("/deliveries")) return Promise.resolve({ eventId: "event-1", deliveries: [], localCaptureCount: 0 });
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+    await act(async () => {
+      root.render(
+        <CommunicationsWorkspace
+          event={{ id: "event-1", name: "Summit", slug: "summit", timezone: "America/Los_Angeles" }}
+        />,
+      );
+    });
+    await vi.waitFor(() => expect(buttonNamed("02 / Audience & queue")).toBeTruthy());
+    await act(async () => userEvent.click(buttonNamed("02 / Audience & queue")));
+    await vi.waitFor(() => expect(buttonNamed("Select rejected")).toBeTruthy());
+    expect(document.body.textContent).toContain("Accepted");
+    expect(document.body.textContent).toContain("Rejected");
+    await act(async () => userEvent.click(buttonNamed("Select rejected")));
+    await act(async () => userEvent.click(checkboxNamed("Authorize Session Party to send")));
+    await act(async () => userEvent.click(buttonNamed("Queue immutable deliveries")));
+    await vi.waitFor(() => expect(buttonNamed("Queue deliveries")).toBeTruthy());
+    await act(async () => userEvent.click(buttonNamed("Queue deliveries")));
+    await vi.waitFor(() => expect(document.body.textContent).toContain("1 deliveries persisted"));
+    const enqueueCall = apiMocks.apiFetch.mock.calls.find(
+      ([path, options]) => options?.method === "POST" && path.endsWith("/deliveries"),
+    );
+    expect(enqueueCall?.[1].body).toMatchObject({ recipientSpeakerIds: ["speaker-2"] });
   });
 });

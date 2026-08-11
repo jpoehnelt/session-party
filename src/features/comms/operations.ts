@@ -110,11 +110,11 @@ export const listAudienceOperation = {
     method: "get",
     path: "/events/:eventId/comms/audience",
     input: { path: ["eventId"] },
-    summary: "List accepted-speaker communication recipients",
+    summary: "List decided-applicant communication recipients",
   },
   mcp: {
     name: "comms_list_audience",
-    description: "List accepted speakers and their communication eligibility.",
+    description: "List accepted and rejected applicants and their communication eligibility.",
   },
   idempotency: "none",
   concurrency: "none",
@@ -136,7 +136,7 @@ export const previewCommunicationOperation = {
   },
   mcp: {
     name: "comms_preview_communication",
-    description: "Render a template locally with accepted-speaker or labeled sample data without sending it.",
+    description: "Render a template locally with decided-applicant or labeled sample data without sending it.",
   },
   idempotency: "none",
   concurrency: "none",

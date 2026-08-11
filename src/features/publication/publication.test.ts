@@ -312,7 +312,7 @@ describe("publication boundary", () => {
     expect(JSON.stringify(result)).not.toContain("Private cancelled talk");
   });
 
-  it("publishes only confirmed talks and visible speaker names as an immutable snapshot", async () => {
+  it("publishes only confirmed talks and keeps existing public widgets live with organizer edits", async () => {
     const seeded = await seedPublication("immutable-publication");
     const published = await runAs(
       seeded.owner,
@@ -362,8 +362,16 @@ describe("publication boundary", () => {
       seeded.owner,
       getPublishedAgenda({ eventSlug: seeded.eventSlug }),
     );
-    expect(stillPublished).toEqual(published);
-    expect(JSON.stringify(stillPublished)).not.toContain("Unpublished");
+    expect(stillPublished).toEqual({
+      ...published,
+      talks: published.talks.map((talk) => ({
+        ...talk,
+        title: "Unpublished agenda edit",
+        startsAt: STARTS_AT + 7_200_000,
+        speakerNames: ["Unpublished speaker edit"],
+      })),
+    });
+    expect(JSON.stringify(stillPublished)).not.toContain("Private Speaker");
   });
 
   it("serves JSON, subscribable ICS, and per-session ICS from the same published revision", async () => {
@@ -446,6 +454,23 @@ describe("publication boundary", () => {
     expect(sessionResponse.headers.get("content-disposition"))
       .toContain(`${seeded.eventSlug}-session-${seeded.confirmedTalkId}.ics`);
     expect((await sessionResponse.text()).match(/BEGIN:VEVENT/g)).toHaveLength(1);
+
+    const originalJsonEtag = jsonResponse.headers.get("etag");
+    await seeded.db.update(talks).set({
+      title: "Live feed title",
+      version: 2,
+      updatedAt: new Date(FIXED_NOW + 2_000),
+    }).where(eq(talks.id, seeded.confirmedTalkId));
+    const refreshedJson = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.json`,
+      { headers: { "If-None-Match": originalJsonEtag! } },
+    );
+    expect(refreshedJson.status).toBe(200);
+    expect(refreshedJson.headers.get("etag")).not.toBe(originalJsonEtag);
+    expect(await refreshedJson.json()).toEqual(expect.objectContaining({
+      revision: 1,
+      talks: [expect.objectContaining({ title: "Live feed title" })],
+    }));
 
     const missingSession = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/sessions/missing-session.ics`,

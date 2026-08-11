@@ -280,11 +280,12 @@ function LoadingPage() {
 type CoSpeakerDraft = {
   readonly name: string;
   readonly email: string;
+  readonly roleLabel: string;
   readonly title: string;
   readonly organization: string;
 };
 
-const emptyCoSpeaker = (): CoSpeakerDraft => ({ name: "", email: "", title: "", organization: "" });
+const emptyCoSpeaker = (): CoSpeakerDraft => ({ name: "", email: "", roleLabel: "Co-presenter", title: "", organization: "" });
 
 type TurnstileApi = {
   render: (container: HTMLElement, options: {
@@ -616,6 +617,16 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                         value={speaker.email}
                         onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
                           currentIndex === index ? { ...item, email: event.currentTarget.value } : item))}
+                      />
+                      <Input
+                        id={`co-speaker-${index}-role`}
+                        label="Presenter role"
+                        maxLength={80}
+                        required
+                        disabled={!accepting || submitting}
+                        value={speaker.roleLabel}
+                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
+                          currentIndex === index ? { ...item, roleLabel: event.currentTarget.value } : item))}
                       />
                       <Input
                         id={`co-speaker-${index}-title`}

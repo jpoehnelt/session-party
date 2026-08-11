@@ -65,12 +65,15 @@ export type UpdateTemplateInput = typeof UpdateTemplateInput.Type;
 
 export const AudienceEligibility = Schema.Literal("eligible", "missingEmail");
 export type AudienceEligibility = typeof AudienceEligibility.Type;
+export const AudienceDecision = Schema.Literal("accepted", "rejected", "mixed");
+export type AudienceDecision = typeof AudienceDecision.Type;
 
 export const AudienceRecipient = Schema.Struct({
   speakerId: EntityId,
   userId: Schema.Union(EntityId, Schema.Null),
   name: Schema.String,
   email: Schema.Union(Mailbox, Schema.Null),
+  decision: AudienceDecision,
   sessionTitles: Schema.Array(Schema.String),
   eligibility: AudienceEligibility,
 });
@@ -80,14 +83,14 @@ export const AudienceSnapshot = Schema.Struct({
   eventId: EntityId,
   recipients: Schema.Array(AudienceRecipient),
   eligibleCount: Schema.Int.pipe(Schema.nonNegative()),
-  dependency: Schema.Literal("acceptedSpeakers"),
+  dependency: Schema.Literal("decidedApplicants"),
 });
 export type AudienceSnapshot = typeof AudienceSnapshot.Type;
 
 export const ListAudienceInput = Schema.Struct({ eventId: EntityId });
 export type ListAudienceInput = typeof ListAudienceInput.Type;
 
-export const PreviewMode = Schema.Literal("acceptedSpeaker", "sample");
+export const PreviewMode = Schema.Literal("decidedApplicant", "sample");
 export type PreviewMode = typeof PreviewMode.Type;
 
 export const PreviewCommunicationInput = Schema.Struct({

@@ -85,11 +85,13 @@ export type SubmissionAnswer = typeof SubmissionAnswer.Type;
 const SpeakerName = Schema.String.pipe(Schema.maxLength(200));
 const SpeakerEmail = Schema.String.pipe(Schema.maxLength(320));
 const SpeakerProfileText = Schema.String.pipe(Schema.maxLength(200));
+const SpeakerRoleLabel = Schema.String.pipe(Schema.maxLength(80));
 
 /** A public co-speaker never needs an account to be recorded against a CFP submission. */
 export const PublicCoSpeaker = Schema.Struct({
   name: SpeakerName,
   email: Schema.optional(SpeakerEmail),
+  roleLabel: Schema.optional(SpeakerRoleLabel),
   title: Schema.optional(SpeakerProfileText),
   organization: Schema.optional(SpeakerProfileText),
 });

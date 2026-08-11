@@ -22,6 +22,22 @@ const CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300";
 const requestIdFor = (c: FeedContext): string =>
   c.req.header("x-request-id") ?? crypto.randomUUID();
 
+const contentFingerprint = (agenda: PublishedAgendaType): string => {
+  const source = JSON.stringify({
+    eventName: agenda.eventName,
+    eventSlug: agenda.eventSlug,
+    timezone: agenda.timezone,
+    location: agenda.location,
+    talks: agenda.talks,
+  });
+  let hash = 2_166_136_261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+};
+
 const publicError = (
   c: FeedContext,
   error: NotFound | Validation,
@@ -57,7 +73,7 @@ const feedHeaders = (
     "Content-Type": kind === "calendar"
       ? "text/calendar; charset=utf-8"
       : "application/json; charset=utf-8",
-    ETag: `"${agenda.eventId}:r${agenda.revision}:${suffix}:${extension}${track ? `:track:${encodeURIComponent(track)}` : ""}:fields:${[...fields].sort().join(".")}"`,
+    ETag: `"${agenda.eventId}:r${agenda.revision}:c${contentFingerprint(agenda)}:${suffix}:${extension}${track ? `:track:${encodeURIComponent(track)}` : ""}:fields:${[...fields].sort().join(".")}"`,
     "Last-Modified": new Date(agenda.publishedAt).toUTCString(),
     "X-Content-Type-Options": "nosniff",
     "X-Session-Party-Revision": String(agenda.revision),
