@@ -4,8 +4,15 @@ import type {
   ReviewerRoundProgress,
   SubmissionRoundProgress,
 } from "../schema";
+import { organizerReviewSubmissionPath } from "../links";
 
-export function ReviewProgressPanel({ progress }: { readonly progress: ReviewRoundProgress }) {
+export function ReviewProgressPanel({
+  progress,
+  eventSlug,
+}: {
+  readonly progress: ReviewRoundProgress;
+  readonly eventSlug?: string;
+}) {
   const percent = progress.assignedReviewCount === 0
     ? 0
     : Math.round((progress.completedReviewCount / progress.assignedReviewCount) * 100);
@@ -54,7 +61,18 @@ export function ReviewProgressPanel({ progress }: { readonly progress: ReviewRou
           ) : (
             <Table
               columns={[
-                { key: "submission", header: "Submission", render: (submission: SubmissionRoundProgress) => <span className="font-bold">{submission.title}</span> },
+                {
+                  key: "submission",
+                  header: "Submission",
+                  render: (submission: SubmissionRoundProgress) => eventSlug ? (
+                    <a
+                      className="font-bold underline decoration-2 underline-offset-3 hover:text-accent-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      href={organizerReviewSubmissionPath(eventSlug, submission.submissionId)}
+                    >
+                      {submission.title}
+                    </a>
+                  ) : <span className="font-bold">{submission.title}</span>,
+                },
                 { key: "coverage", header: "Coverage", render: (submission: SubmissionRoundProgress) => `${submission.completedReviewCount} / ${submission.assignedReviewCount}` },
                 { key: "blocker", header: "Blocker", render: (submission: SubmissionRoundProgress) => submission.needsReviewer
                   ? <Badge tone="danger">Needs reviewer</Badge>

@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
 import type { AgendaCollaborator, PresenceUser } from "contracts/protocol";
 import { Badge, Button, Card, EmptyState, Table } from "@/ui";
+import { organizerReviewSubmissionPath } from "@/features/review/links";
 import type {
   AgendaSnapshot,
   AgendaTalk,
@@ -457,7 +458,16 @@ export function AgendaBoard({
             <ol className="space-y-3">
               {agenda.backlog.map((proposal) => (
                 <li key={proposal.submissionId} className="border-2 border-line-strong bg-production-yellow/25 p-3 shadow-[3px_3px_0_#171714] odd:bg-production-sky/35">
-                  <p className="text-sm font-black leading-snug tracking-[-0.015em] text-ink">{proposal.title}</p>
+                  <p className="text-sm font-black leading-snug tracking-[-0.015em] text-ink">
+                    {eventSlug ? (
+                      <a
+                        className="underline decoration-2 underline-offset-3 hover:text-accent-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        href={organizerReviewSubmissionPath(eventSlug, proposal.submissionId)}
+                      >
+                        {proposal.title}
+                      </a>
+                    ) : proposal.title}
+                  </p>
                   <p className="mt-1.5 text-xs font-semibold text-ink-secondary">
                     {proposal.primarySpeakerName}{proposal.category ? ` · ${proposal.category}` : ""}
                   </p>

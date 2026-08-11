@@ -294,6 +294,7 @@ describe("review workbench route", () => {
     const loaded = await loadReviewWorkbench("summit-2026");
     const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
       workbench: loaded.workbench,
+      eventSlug: "summit/2026",
       onSelectSubmission: () => undefined,
     }));
 
@@ -310,6 +311,7 @@ describe("review workbench route", () => {
     expect(markup).toContain("review progress");
     expect(markup).toContain("1 / 2");
     expect(markup).toContain("Needs reviewer");
+    expect(markup).toContain("/e/summit%2F2026/review?selectedSubmissionId=submission_authoritative");
     expect(markup).toContain("Reviewer invitations");
     expect(markup).toContain("Invite reviewer");
     expect(markup).toContain("Request AI suggestion");

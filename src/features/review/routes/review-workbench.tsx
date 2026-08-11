@@ -713,7 +713,7 @@ export function ReviewWorkbenchContent({
             rounds={workbench.rounds}
             onMutationCommitted={onMutationCommitted}
           />
-          {workbench.progress ? <ReviewProgressPanel progress={workbench.progress} /> : null}
+          {workbench.progress ? <ReviewProgressPanel progress={workbench.progress} eventSlug={eventSlug} /> : null}
           <ReviewerInvitations eventId={workbench.eventId} />
         </section>
       )}
