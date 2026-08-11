@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Session Party</title>
+  <rect width="64" height="64" rx="8" fill="#896aff"/>
+  <path d="M19 13v38" stroke="#171714" stroke-width="6" stroke-linecap="square"/>
+  <path d="M19 20h29v10H19z" fill="#fffdf7" stroke="#171714" stroke-width="4"/>
+  <path d="M19 38h21v10H19z" fill="#caff4a" stroke="#171714" stroke-width="4"/>
+  <circle cx="19" cy="33" r="4" fill="#ff714f" stroke="#171714" stroke-width="3"/>
+</svg>
