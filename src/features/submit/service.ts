@@ -20,7 +20,7 @@ import {
   submissions,
 } from "contracts/schema";
 import type { AnswerValue } from "contracts/types";
-import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { AirtableSync, Authorizer, CurrentUser, Db, MailQueue, Rooms } from "@/server/services";
@@ -1688,30 +1688,33 @@ export const updateOwnSubmissionAbstract = (
         eq(submissions.id, input.submissionId),
         eq(submissions.version, input.expectedVersion),
         inArray(submissions.status, ["submitted", "in_review", "waitlist", "accepted"]),
-        or(
-          exists(db.select({ id: forms.id }).from(forms).where(and(
-            eq(forms.eventId, submissions.eventId),
-            eq(forms.id, submissions.formId),
-            eq(forms.kind, "cfp"),
-            eq(forms.status, "open"),
-            or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
-            or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
-          ))),
-          and(
-            eq(submissions.status, "accepted"),
-            exists(db.select({ id: submissionSpeakers.id }).from(submissionSpeakers)
-              .innerJoin(speakers, and(
-                eq(speakers.eventId, submissionSpeakers.eventId),
-                eq(speakers.id, submissionSpeakers.speakerId),
-              ))
-              .where(and(
-                eq(submissionSpeakers.eventId, submissions.eventId),
-                eq(submissionSpeakers.submissionId, submissions.id),
-                eq(submissionSpeakers.isPrimary, true),
-                eq(speakers.userId, owner.userId),
-              ))),
+        exists(db.select({ id: forms.id }).from(forms).where(and(
+          eq(forms.eventId, submissions.eventId),
+          eq(forms.id, submissions.formId),
+          eq(forms.kind, "cfp"),
+          or(
+            and(
+              ne(submissions.status, "accepted"),
+              eq(forms.status, "open"),
+              or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
+              or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
+            ),
+            and(
+              eq(submissions.status, "accepted"),
+              exists(db.select({ id: submissionSpeakers.id }).from(submissionSpeakers)
+                .innerJoin(speakers, and(
+                  eq(speakers.eventId, submissionSpeakers.eventId),
+                  eq(speakers.id, submissionSpeakers.speakerId),
+                ))
+                .where(and(
+                  eq(submissionSpeakers.eventId, submissions.eventId),
+                  eq(submissionSpeakers.submissionId, submissions.id),
+                  eq(submissionSpeakers.isPrimary, true),
+                  eq(speakers.userId, owner.userId),
+                ))),
+            ),
           ),
-        ),
+        ))),
       )),
       db.update(submissionAnswers).set({ value: abstract, version: abstractAnswer.version + 1, updatedAt: savedAt }).where(and(
         eq(submissionAnswers.id, abstractAnswer.id),
