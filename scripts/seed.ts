@@ -17,6 +17,8 @@ const corePersonas = [
   ["demo-owner", "sbek-organizer@example.com", "Jordan Alvarez", "demo-owner-session", expiresAt],
   ["demo-admin", "admin@sessionparty.local", "Amari Admin", "demo-admin-session", expiresAt],
   ["demo-reviewer", "sbek-reviewer@example.com", "Sam Whitfield", "demo-reviewer-session", expiresAt],
+  ["demo-reviewer-unassigned", "unassigned-reviewer@sessionparty.local", "Uma Unassigned", "demo-reviewer-unassigned-session", expiresAt],
+  ["demo-reviewer-recused", "recused-reviewer@sessionparty.local", "Riley Recused", "demo-reviewer-recused-session", expiresAt],
   ["demo-speaker", "sbek-speaker@example.com", "Priya Raman", "demo-speaker-session", expiresAt],
   ["demo-observer", "observer@sessionparty.local", "Owen Observer", "demo-observer-session", expiresAt],
   ["demo-expired", "expired@sessionparty.local", "Emery Expired", "demo-expired-session", expiredAt],
@@ -64,6 +66,7 @@ const rubric = {
 
 const sql = `
 DELETE FROM events WHERE id = 'demo-event';
+DELETE FROM events WHERE id = 'demo-other-event';
 DELETE FROM auth_tokens WHERE user_id IN (${personas.map(([id]) => quote(id)).join(", ")});
 DELETE FROM users WHERE id IN (${personas.map(([id]) => quote(id)).join(", ")});
 
@@ -84,13 +87,21 @@ VALUES (
   'A deterministic end-to-end conference production workspace.', 'Pier 27, San Francisco',
   'America/Los_Angeles', ${eventStartsAt}, ${eventEndsAt}, NULL, '#635BFF', 1,
   ${createdAt}, ${createdAt}
+), (
+  'demo-other-event', 'other-event-sandbox', 'Other Event Sandbox',
+  'An isolation fixture that must never grant access to AI Engineer Sandbox.', 'Remote',
+  'UTC', ${eventStartsAt}, ${eventEndsAt}, NULL, '#171714', 1,
+  ${createdAt}, ${createdAt}
 );
 
 INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)
 VALUES
   ('demo-member-owner', 'demo-event', 'demo-owner', 'owner', 1, ${createdAt}, ${createdAt}),
   ('demo-member-admin', 'demo-event', 'demo-admin', 'admin', 1, ${createdAt}, ${createdAt}),
-  ('demo-member-reviewer', 'demo-event', 'demo-reviewer', 'reviewer', 1, ${createdAt}, ${createdAt});
+  ('demo-member-reviewer', 'demo-event', 'demo-reviewer', 'reviewer', 1, ${createdAt}, ${createdAt}),
+  ('demo-member-reviewer-unassigned', 'demo-event', 'demo-reviewer-unassigned', 'reviewer', 1, ${createdAt}, ${createdAt}),
+  ('demo-member-reviewer-recused', 'demo-event', 'demo-reviewer-recused', 'reviewer', 1, ${createdAt}, ${createdAt}),
+  ('demo-member-other-event', 'demo-other-event', 'demo-observer', 'owner', 1, ${createdAt}, ${createdAt});
 
 INSERT INTO review_rounds (id, event_id, name, \`order\`, status, rubric, version, created_at, updated_at)
 VALUES

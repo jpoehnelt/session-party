@@ -7,9 +7,11 @@ export interface EmptyStateProps {
   description?: string;
   action?: ReactNode;
   className?: string;
+  headingLevel?: 1 | 2 | 3;
 }
 
-export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
+export function EmptyState({ icon, title, description, action, className, headingLevel = 3 }: EmptyStateProps) {
+  const headingClassName = "text-xl font-black tracking-[-0.03em] text-ink";
   return (
     <div
       className={cx(
@@ -22,7 +24,11 @@ export function EmptyState({ icon, title, description, action, className }: Empt
           {icon}
         </div>
       )}
-      <h3 className="text-xl font-black tracking-[-0.03em] text-ink">{title}</h3>
+      {headingLevel === 1
+        ? <h1 className={headingClassName}>{title}</h1>
+        : headingLevel === 2
+          ? <h2 className={headingClassName}>{title}</h2>
+          : <h3 className={headingClassName}>{title}</h3>}
       {description && (
         <p className="mt-2 max-w-sm text-sm font-medium leading-relaxed text-ink-faint">{description}</p>
       )}

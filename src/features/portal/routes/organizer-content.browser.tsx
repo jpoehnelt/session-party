@@ -129,4 +129,37 @@ describe("organizer content library rendered interactions", () => {
     expect(onDownloadZip.mock.calls[0]?.[0].map((asset) => asset.id)).toEqual(["river-current", "jamie-current"]);
     expect(container.textContent).toContain("ZIP download started for 2 latest files.");
   });
+
+  it("preserves rejected comments, resets accepted comments, and reports ZIP failure", async () => {
+    const onComment = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const onDownloadZip = vi.fn(async () => false);
+    await act(async () => root.render(
+      <OrganizerContentLibrary
+        library={{ ...library, assets: [library.assets[0]!] }}
+        onComment={onComment}
+        onRestore={() => undefined}
+        onDownload={() => undefined}
+        onDownloadZip={onDownloadZip}
+      />,
+    ));
+
+    await act(async () => userEvent.click(document.querySelector("summary")!));
+    const comment = fieldNamed<HTMLInputElement>("Add comment");
+    await act(async () => userEvent.fill(comment, "Retain this rejected review"));
+    await act(async () => userEvent.click(byButton("Comment")!));
+    await vi.waitFor(() => expect(onComment).toHaveBeenCalledTimes(1));
+    expect(comment.value).toBe("Retain this rejected review");
+
+    await act(async () => userEvent.click(byButton("Comment")!));
+    await vi.waitFor(() => expect(onComment).toHaveBeenCalledTimes(2));
+    expect(comment.value).toBe("");
+
+    await act(async () => userEvent.click(byButton("Select current results")!));
+    await act(async () => userEvent.click(byButton("Download selected ZIP")!));
+    await vi.waitFor(() => expect(onDownloadZip).toHaveBeenCalledOnce());
+    expect(container.textContent).toContain("ZIP generation failed. Try again.");
+    expect(container.textContent).not.toContain("ZIP download started");
+  });
 });

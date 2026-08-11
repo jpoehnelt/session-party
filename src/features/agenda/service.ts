@@ -38,6 +38,11 @@ import {
   stableCalendarUid,
   type CalendarEventSnapshot,
 } from "@/features/comms/calendar";
+import { eligiblePublicSpeakerIds } from "@/features/portal/service";
+import {
+  PublishedSpeakerGallerySnapshot as PublishedSpeakerGallerySnapshotSchema,
+  type PublishedSpeakerGallerySnapshot,
+} from "@/features/portal/schema";
 import {
   AgendaDeliveryProjection as AgendaDeliveryProjectionSchema,
   PublishedAgenda as PublishedAgendaSchema,
@@ -79,6 +84,7 @@ const PUBLIC_AUDIENCE = [{ kind: "public" }] as const;
 const TALK_CHANGE_EVENT = "agenda.talk_changed";
 const AGENDA_SNAPSHOT_MAX_ATTEMPTS = 3;
 const PUBLICATION_EVENT = "agenda/published";
+const SPEAKER_PUBLICATION_EVENT = "portal/speakers-published";
 const DELIVERY_PROJECTION_EVENT = "agenda/delivery-published";
 const SETUP_WRITE_AUTHORIZATION = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
@@ -157,11 +163,6 @@ const calendarProjectionRevision = (
   eventVersion: number,
   ...collections: readonly (readonly { readonly version: number }[])[]
 ): number => Math.max(1, eventVersion + collections.flat().reduce((total, row) => total + row.version, 0));
-
-const calendarProjectionUpdatedAt = (
-  publishedAt: number,
-  ...collections: readonly (readonly { readonly updatedAt: Date }[])[]
-): number => Math.max(publishedAt, ...collections.flat().map(({ updatedAt }) => updatedAt.getTime()));
 
 const actorColumns = (principal: Principal) =>
   principal.kind === "api-key"
@@ -1715,7 +1716,8 @@ export const publishAgenda = (
         message: "Agenda publication requires the event end time to be after the start time",
       }));
     }
-    const [agendaTalks, trackRows, roomRows, speakerRows, pendingPublicationRows] = yield* Effect.all([
+    const eligibleSpeakerIds = yield* eligiblePublicSpeakerIds([input.eventId]);
+    const [agendaTalks, trackRows, roomRows, speakerRows, pendingPublicationRows, gallerySpeakerRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
       database(() => db.select({ id: tracks.id, name: tracks.name, version: tracks.version, updatedAt: tracks.updatedAt }).from(tracks).where(eq(tracks.eventId, input.eventId))),
       database(() => db.select({ id: rooms.id, name: rooms.name, version: rooms.version, updatedAt: rooms.updatedAt }).from(rooms).where(eq(rooms.eventId, input.eventId))),
@@ -1747,6 +1749,19 @@ export const publishAgenda = (
         eq(airtablePendingEdits.status, "pending"),
         inArray(airtablePendingEdits.fieldKey, ["title", "description"]),
       ))),
+      eligibleSpeakerIds.size === 0 ? Effect.succeed([]) : database(() => db.select({
+        id: speakers.id,
+        displayName: speakers.displayName,
+        title: speakers.title,
+        company: speakers.company,
+        bio: speakers.bio,
+        headshotAssetId: speakers.headshotAssetId,
+        links: speakers.links,
+      }).from(speakers).where(and(
+        eq(speakers.eventId, input.eventId),
+        eq(speakers.visible, true),
+        inArray(speakers.id, [...eligibleSpeakerIds]),
+      )).orderBy(asc(speakers.displayName), asc(speakers.id))),
     ]);
     if (pendingPublicationRows.length > 0) {
       return yield* Effect.fail(new Validation({
@@ -1835,6 +1850,28 @@ export const publishAgenda = (
       calendarUpdatedAt: prepared.now.getTime(),
       talks: publicTalks,
     });
+    const publishedSpeakers: PublishedSpeakerGallerySnapshot = yield* Schema.decodeUnknown(PublishedSpeakerGallerySnapshotSchema)({
+      event: {
+        id: event.id,
+        slug: event.slug,
+        name: event.name,
+        description: event.description,
+        location: event.location,
+        timezone: event.timezone,
+        startsAt: timestamp(event.startsAt),
+        endsAt: timestamp(event.endsAt),
+        bannerAssetId: event.bannerAssetId,
+        accentColor: event.accentColor,
+      },
+      revision,
+      publishedAt: prepared.now.getTime(),
+      speakers: gallerySpeakerRows.map((speaker) => ({
+        ...speaker,
+        links: speaker.links ?? [],
+      })),
+    }).pipe(
+      Effect.mapError(() => new External({ service: "database", detail: "Published speaker gallery is invalid" })),
+    );
     const deliveryProjection = yield* decodeAgendaDeliveryProjection({
       eventId: event.id,
       revision,
@@ -2430,6 +2467,7 @@ export const publishAgenda = (
         }`;
     const actor = actorColumns(principal);
     const changeId = nanoid();
+    const speakerChangeId = nanoid();
     const deliveryChangeId = nanoid();
     const auditId = nanoid();
     const completedIdempotency = idempotencyInsert(
@@ -2522,6 +2560,20 @@ export const publishAgenda = (
         eventType: PUBLICATION_EVENT,
         audiences: PUBLIC_AUDIENCE,
         payload: published,
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
+      db.insert(domainChanges).values({
+        id: speakerChangeId,
+        eventId: input.eventId,
+        aggregateType: "speaker-publication",
+        aggregateId: input.eventId,
+        aggregateVersion: publishedSpeakers.revision,
+        eventType: SPEAKER_PUBLICATION_EVENT,
+        audiences: PUBLIC_AUDIENCE,
+        payload: publishedSpeakers,
         ...actor,
         requestId: prepared.requestId,
         idempotencyRecordId: prepared.id,
@@ -2621,86 +2673,5 @@ export const getPublishedAgenda = (
 ): Effect.Effect<PublishedAgenda, AppError, Db> =>
   Effect.gen(function* () {
     const eventId = yield* resolveEventIdBySlug(input.eventSlug);
-    const published = yield* getLatestPublishedAgendaSnapshot(eventId);
-    const { db } = yield* Db;
-    const [liveTalks, talkUpdateRows, eventRows, roomRows, trackRows, speakerRows] = yield* Effect.all([
-      loadTalkRows(eventId),
-      database(() => db.select({ version: talks.version, updatedAt: talks.updatedAt }).from(talks).where(eq(talks.eventId, eventId))),
-      database(() => db.select({
-        name: events.name,
-        slug: events.slug,
-        timezone: events.timezone,
-        location: events.location,
-        version: events.version,
-        updatedAt: events.updatedAt,
-      }).from(events).where(eq(events.id, eventId)).limit(1)),
-      database(() => db.select({ id: rooms.id, name: rooms.name, version: rooms.version, updatedAt: rooms.updatedAt }).from(rooms).where(eq(rooms.eventId, eventId))),
-      database(() => db.select({ id: tracks.id, name: tracks.name, version: tracks.version, updatedAt: tracks.updatedAt }).from(tracks).where(eq(tracks.eventId, eventId))),
-      database(() => db.select({
-        talkId: talkSpeakers.talkId,
-        name: speakers.displayName,
-        visible: speakers.visible,
-        version: speakers.version,
-        updatedAt: speakers.updatedAt,
-      })
-        .from(talkSpeakers)
-        .innerJoin(speakers, and(
-          eq(speakers.eventId, talkSpeakers.eventId),
-          eq(speakers.id, talkSpeakers.speakerId),
-        ))
-        .where(eq(talkSpeakers.eventId, eventId))
-        .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id))),
-    ]);
-    const currentEvent = eventRows[0];
-    if (!currentEvent) return yield* Effect.fail(new NotFound({ entity: "event", id: eventId }));
-    const publishedTalkIds = new Set(published.talks.map(({ id }) => id));
-    const relevantSpeakerRows = speakerRows.filter(({ talkId }) => publishedTalkIds.has(talkId));
-    const liveById = new Map(liveTalks.map((talk) => [talk.id, talk] as const));
-    const roomNames = new Map(roomRows.map((room) => [room.id, room.name] as const));
-    const trackNames = new Map(trackRows.map((track) => [track.id, track.name] as const));
-    const speakerNames = new Map<string, string[]>();
-    for (const speaker of relevantSpeakerRows) {
-      if (!speaker.visible) continue;
-      speakerNames.set(speaker.talkId, [...(speakerNames.get(speaker.talkId) ?? []), speaker.name]);
-    }
-    const publicTalks = published.talks.flatMap((snapshot): readonly PublicAgendaTalk[] => {
-      const live = liveById.get(snapshot.id);
-      if (!live || live.status !== "confirmed" || live.startsAt === null || live.roomId === null) return [];
-      const room = roomNames.get(live.roomId);
-      if (!room) return [];
-      return [{
-        id: live.id,
-        title: live.title,
-        description: live.description,
-        trackId: live.trackId,
-        track: live.trackId === null ? null : trackNames.get(live.trackId) ?? null,
-        room,
-        startsAt: live.startsAt,
-        durationMin: live.durationMin,
-        speakerNames: speakerNames.get(live.id) ?? [],
-      }];
-    });
-    return {
-      ...published,
-      eventName: currentEvent.name,
-      eventSlug: currentEvent.slug,
-      timezone: currentEvent.timezone,
-      location: currentEvent.location,
-      calendarRevision: calendarProjectionRevision(
-        currentEvent.version,
-        liveTalks,
-        trackRows,
-        roomRows,
-        relevantSpeakerRows,
-      ),
-      calendarUpdatedAt: calendarProjectionUpdatedAt(
-        published.publishedAt,
-        [currentEvent],
-        talkUpdateRows,
-        trackRows,
-        roomRows,
-        relevantSpeakerRows,
-      ),
-      talks: publicTalks,
-    };
+    return yield* getLatestPublishedAgendaSnapshot(eventId);
   });

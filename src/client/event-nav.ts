@@ -13,6 +13,7 @@ const candidates: readonly EventNavItem[] = [
   { label: "Speakers", path: "/e/:eventSlug/speakers", segment: "speakers" },
   { label: "Tasks", path: "/e/:eventSlug/tasks", segment: "tasks" },
   { label: "Resources", path: "/e/:eventSlug/resources", segment: "resources" },
+  { label: "Content", path: "/e/:eventSlug/content", segment: "content" },
   { label: "Agenda", path: "/e/:eventSlug/agenda", segment: "agenda" },
   { label: "Communications", path: "/e/:eventSlug/comms", segment: "comms" },
   { label: "Publication", path: "/e/:eventSlug/publication", segment: "publication" },

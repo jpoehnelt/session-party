@@ -244,7 +244,14 @@ export function EventsWorkspace({ access, now = new Date() }: { access: readonly
                   <p className="text-4xl font-black tracking-[-0.05em]">{setup.complete}/5</p>
                   <p className="pb-1 text-[10px] font-black uppercase tracking-[0.1em] text-white/55">details ready</p>
                 </div>
-                <div className="mt-4 h-3 border-2 border-white bg-white/15" aria-label={`${setup.complete} of 5 event details ready`}>
+                <div
+                  className="mt-4 h-3 border-2 border-white bg-white/15"
+                  role="progressbar"
+                  aria-label="Event details ready"
+                  aria-valuemin={0}
+                  aria-valuemax={5}
+                  aria-valuenow={setup.complete}
+                >
                   <div className="h-full bg-production-lime" style={{ width: setupPercent }} />
                 </div>
 

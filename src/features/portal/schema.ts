@@ -556,3 +556,22 @@ export const PublicSpeakerGallery = Schema.Struct({
   speakers: Schema.Array(PublicSpeaker),
 });
 export type PublicSpeakerGallery = typeof PublicSpeakerGallery.Type;
+
+export const PublishedSpeakerSnapshot = Schema.Struct({
+  id: EntityId,
+  displayName: Schema.String,
+  title: NullableText,
+  company: NullableText,
+  bio: NullableText,
+  headshotAssetId: Schema.NullOr(EntityId),
+  links: SpeakerLinks,
+});
+export type PublishedSpeakerSnapshot = typeof PublishedSpeakerSnapshot.Type;
+
+export const PublishedSpeakerGallerySnapshot = Schema.Struct({
+  event: PublicPortalEvent,
+  revision: Schema.Int.pipe(Schema.positive()),
+  publishedAt: Timestamp,
+  speakers: Schema.Array(PublishedSpeakerSnapshot),
+});
+export type PublishedSpeakerGallerySnapshot = typeof PublishedSpeakerGallerySnapshot.Type;

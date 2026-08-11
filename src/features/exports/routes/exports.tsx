@@ -86,6 +86,7 @@ export default function ExportsRoute() {
   if (state.status === "error") {
     return (
       <EmptyState
+        headingLevel={1}
         title="Archive unavailable"
         description={state.message}
         action={<Button onClick={() => setRequest((value) => value + 1)}>Try again</Button>}

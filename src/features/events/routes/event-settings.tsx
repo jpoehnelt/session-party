@@ -57,6 +57,20 @@ export function fetchEventMembers(eventId: string): Promise<readonly EventMember
   return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/members`, { schema: Schema.Array(EventMember) });
 }
 
+export async function fetchCurrentUserId(): Promise<string> {
+  const response = await apiFetch<{ readonly user?: { readonly userId?: string }; readonly userId?: string }>("/api/v1/auth/me");
+  const userId = response.user?.userId ?? response.userId;
+  if (!userId) throw new Error("The current session did not identify its user");
+  return userId;
+}
+
+export function canManageMember(
+  actorRole: EventMemberRecord["role"] | null,
+  targetRole: EventMemberRecord["role"],
+): boolean {
+  return actorRole === "owner" || (actorRole === "admin" && targetRole === "reviewer");
+}
+
 async function addExistingMember(eventId: string, email: string, role: EventMemberRecord["role"]) {
   return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/members`, {
     method: "POST", body: { email, role, idempotencyKey: idempotencyKey() }, schema: AddEventMemberOutput,
@@ -217,7 +231,7 @@ export function ApiAccessPanel({ eventId, initialApiKeys }: ApiAccessPanelProps)
       <div className="mt-4 border-2 border-line-strong bg-surface-muted p-4">
         <p className="text-[11px] font-black uppercase tracking-[0.08em]">MCP endpoint</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs">{endpoint}</code>
+          <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs" tabIndex={0}>{endpoint}</code>
           <Button type="button" size="sm" variant="secondary" onClick={() => void copyText(endpoint, "Endpoint")}>Copy endpoint</Button>
         </div>
       </div>
@@ -245,7 +259,7 @@ export function ApiAccessPanel({ eventId, initialApiKeys }: ApiAccessPanelProps)
             <Button type="button" size="sm" variant="ghost" onClick={() => setCreated(null)}>Dismiss</Button>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs" data-testid="api-key-secret">{created.secret}</code>
+            <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs" data-testid="api-key-secret" tabIndex={0}>{created.secret}</code>
             <Button type="button" size="sm" variant="secondary" onClick={() => void copyText(created.secret, "Secret")}>Copy secret</Button>
           </div>
           <p className="mt-4 text-[11px] font-black uppercase tracking-[0.08em]">Client configuration</p>
@@ -386,6 +400,7 @@ export function buildEventPatch(values: EventFormValues, originalEvent?: EventMe
     return parseDateTimeInTimezone(value, timezone, label);
   };
   const patch = {
+    expectedVersion: originalEvent?.version ?? 1,
     name: values.name.trim(),
     slug: values.slug,
     description: values.description === "" ? null : values.description,
@@ -491,6 +506,7 @@ export default function EventSettingsPage({
       return (
         <>
           <EmptyState
+            headingLevel={1}
             title="Sign in to manage this event"
             description="Sign in to continue to this event's settings."
             action={
@@ -508,6 +524,7 @@ export default function EventSettingsPage({
     return (
       <>
         <EmptyState
+          headingLevel={1}
           title={failed ? "Could not load event settings" : "Event not found"}
           description={failed ? loadError.message : "The event may have moved or been removed."}
           action={
@@ -568,6 +585,7 @@ export function EventSettingsForm({
   const [saveError, setSaveError] = useState<string | null>(initialSaveError);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [members, setMembers] = useState<readonly EventMemberRecord[] | null>(null);
+  const [actorUserId, setActorUserId] = useState<string | null>(null);
   const [memberEmail, setMemberEmail] = useState("");
   const [memberRole, setMemberRole] = useState<EventMemberRecord["role"]>("reviewer");
   const [memberError, setMemberError] = useState<string | null>(null);
@@ -577,9 +595,13 @@ export function EventSettingsForm({
 
   const refreshMembers = () => {
     setMembers(null);
-    void fetchEventMembers(event.id).then(setMembers).catch((error) => {
+    void Promise.all([fetchEventMembers(event.id), fetchCurrentUserId()]).then(([nextMembers, userId]) => {
+      setActorUserId(userId);
+      setMembers(nextMembers);
+    }).catch((error) => {
       const message = error instanceof Error ? error.message : "Could not load event members";
       setMemberError(message);
+      setActorUserId(null);
       setMembers([]);
     });
   };
@@ -676,6 +698,9 @@ export function EventSettingsForm({
     }
   };
 
+  const actorRole = members?.find((member) => member.userId === actorUserId)?.role ?? null;
+  const ownerCount = members?.filter((member) => member.role === "owner").length ?? 0;
+
   return (
     <div className="space-y-6">
     <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Event metadata">
@@ -742,8 +767,8 @@ export function EventSettingsForm({
         />
         <Select label="Role" value={memberRole} onChange={(change) => setMemberRole(change.target.value as EventMemberRecord["role"])}>
           <option value="reviewer">Reviewer</option>
-          <option value="admin">Admin</option>
-          <option value="owner">Owner</option>
+          {actorRole === "owner" ? <option value="admin">Admin</option> : null}
+          {actorRole === "owner" ? <option value="owner">Owner</option> : null}
         </Select>
         <Button type="submit" loading={memberSaving} className="min-h-11">Add member</Button>
       </form>
@@ -756,21 +781,30 @@ export function EventSettingsForm({
             columns={[
               { key: "person", header: "Person", render: (member: EventMemberRecord) => <span>{member.name ?? member.email}<span className="block text-xs text-ink-faint">{member.email}</span></span> },
               { key: "role", header: "Role", render: (member: EventMemberRecord) => <Badge>{member.role}</Badge> },
-              { key: "actions", header: "Manage", render: (member: EventMemberRecord) => (
-                <div className="flex min-w-56 items-end gap-2">
-                  <Select aria-label={`Role for ${member.email}`} value={pendingRoles[member.id] ?? member.role} onChange={(change) => setPendingRoles((current) => ({ ...current, [member.id]: change.target.value as EventMemberRecord["role"] }))}>
-                    <option value="reviewer">Reviewer</option><option value="admin">Admin</option><option value="owner">Owner</option>
-                  </Select>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild><Button type="button" size="sm" disabled={!pendingRoles[member.id] || pendingRoles[member.id] === member.role} loading={memberMutationId === member.id}>Change role</Button></AlertDialogTrigger>
-                    <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Change {member.name ?? member.email} to {pendingRoles[member.id]}?</AlertDialogTitle><AlertDialogDescription>This changes {member.email} from {member.role} to {pendingRoles[member.id]}. Their event permissions change immediately.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep current role</AlertDialogCancel><AlertDialogAction onClick={() => void handleRoleChange(member, pendingRoles[member.id] ?? member.role)}>Change role</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
-                  </AlertDialog>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" loading={memberMutationId === member.id}>Remove</Button></AlertDialogTrigger>
-                    <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remove {member.name ?? member.email}?</AlertDialogTitle><AlertDialogDescription>{member.email} will lose their {member.role} access to this event immediately.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep member</AlertDialogCancel><AlertDialogAction onClick={() => void handleRemove(member)}>Remove member</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
-                  </AlertDialog>
-                </div>
-              ) },
+              { key: "actions", header: "Manage", render: (member: EventMemberRecord) => {
+                const manageable = canManageMember(actorRole, member.role);
+                const lastOwner = member.role === "owner" && ownerCount <= 1;
+                if (!manageable) return <span className="text-xs text-ink-secondary">Owner access required</span>;
+                return (
+                  <div className="flex min-w-56 items-end gap-2">
+                    {actorRole === "owner" ? (
+                      <>
+                        <Select aria-label={`Role for ${member.email}`} value={pendingRoles[member.id] ?? member.role} onChange={(change) => setPendingRoles((current) => ({ ...current, [member.id]: change.target.value as EventMemberRecord["role"] }))}>
+                          <option value="reviewer" disabled={lastOwner}>Reviewer</option><option value="admin" disabled={lastOwner}>Admin</option><option value="owner">Owner</option>
+                        </Select>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild><Button type="button" size="sm" disabled={!pendingRoles[member.id] || pendingRoles[member.id] === member.role} loading={memberMutationId === member.id}>Change role</Button></AlertDialogTrigger>
+                          <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Change {member.name ?? member.email} to {pendingRoles[member.id]}?</AlertDialogTitle><AlertDialogDescription>This changes {member.email} from {member.role} to {pendingRoles[member.id]}. Their event permissions change immediately.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep current role</AlertDialogCancel><AlertDialogAction onClick={() => void handleRoleChange(member, pendingRoles[member.id] ?? member.role)}>Change role</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+                        </AlertDialog>
+                      </>
+                    ) : null}
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={lastOwner} title={lastOwner ? "An event must retain at least one owner" : undefined} loading={memberMutationId === member.id}>Remove</Button></AlertDialogTrigger>
+                      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remove {member.name ?? member.email}?</AlertDialogTitle><AlertDialogDescription>{member.email} will lose their {member.role} access to this event immediately.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep member</AlertDialogCancel><AlertDialogAction onClick={() => void handleRemove(member)}>Remove member</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                );
+              } },
             ]}
             rows={[...members]}
             rowKey={(member) => member.id}

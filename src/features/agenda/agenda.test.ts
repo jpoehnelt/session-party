@@ -1265,7 +1265,7 @@ describe("agenda service", () => {
     });
   });
 
-  it("keeps an existing published widget consistent with organizer session edits without republishing", async () => {
+  it("keeps an existing published widget immutable while organizer drafts continue changing", async () => {
     const seeded = await seedAgenda("publication", { scheduled: true });
     const before = await runEither(
       seeded.user,
@@ -1333,22 +1333,13 @@ describe("agenda service", () => {
       runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" })),
     ]);
     const organizerTalk = organizerAgenda.talks.find((talk) => talk.id === seeded.talkA)!;
-    expect(stillPublished.revision).toBe(1);
-    expect(stillPublished.talks).toEqual([expect.objectContaining({
-      id: organizerTalk.id,
-      title: organizerTalk.title,
-      description: organizerTalk.description,
-      startsAt: organizerTalk.startsAt,
-      durationMin: organizerTalk.durationMin,
-      room: organizerAgenda.rooms.find((room) => room.id === organizerTalk.roomId)?.name,
-      track: organizerAgenda.tracks.find((track) => track.id === organizerTalk.trackId)?.name,
-      speakerNames: organizerTalk.speakerNames,
-    })]);
-    expect(stillPublished.talks[0]).toMatchObject({
+    expect(organizerTalk).toMatchObject({
       title: "Live organizer title",
-      room: "Summit",
+      roomId: seeded.roomB,
       startsAt: FIXED_DAY_START + 7_200_000,
     });
+    expect(stillPublished).toEqual(published);
+    expect(JSON.stringify(stillPublished)).not.toContain("Live organizer");
   });
 
   it("reissues changed published calendars once per prior recipient with stable identity", async () => {
@@ -1783,7 +1774,20 @@ describe("agenda service", () => {
       .where(eq(domainChanges.eventId, seeded.eventId));
     const publicChange = changes.find(({ aggregateType }) => aggregateType === "agenda-publication");
     const deliveryChange = changes.find(({ aggregateType }) => aggregateType === "agenda-delivery");
-    expect(changes).toHaveLength(2);
+    const speakerChange = changes.find(({ aggregateType }) => aggregateType === "speaker-publication");
+    expect(changes).toHaveLength(3);
+    expect(speakerChange).toMatchObject({
+      aggregateId: seeded.eventId,
+      aggregateVersion: published.revision,
+      eventType: "portal/speakers-published",
+      audiences: [{ kind: "public" }],
+      payload: expect.objectContaining({
+        revision: published.revision,
+        event: expect.objectContaining({ id: seeded.eventId }),
+      }),
+      requestId: publicChange?.requestId,
+      idempotencyRecordId: publicChange?.idempotencyRecordId,
+    });
     expect(deliveryChange).toMatchObject({
       aggregateId: seeded.eventId,
       aggregateVersion: published.revision,
@@ -1934,16 +1938,7 @@ describe("agenda service", () => {
       seeded.user,
       getPublishedAgenda({ eventSlug: seeded.eventSlug }),
     );
-    expect(stillPublished).toMatchObject({
-      revision: firstPublication.revision,
-      talks: firstPublication.talks.map((talk) => ({
-        ...talk,
-        room: "Summit",
-        startsAt: FIXED_DAY_START + 7_200_000,
-        durationMin: 30,
-      })),
-    });
-    expect(stillPublished.calendarRevision).toBeGreaterThan(firstPublication.calendarRevision!);
+    expect(stillPublished).toEqual(firstPublication);
     const publicationChanges = await seeded.db.select().from(domainChanges).where(and(
       eq(domainChanges.eventId, seeded.eventId),
       eq(domainChanges.aggregateType, "agenda-publication"),
@@ -2017,6 +2012,7 @@ describe("agenda service", () => {
       await runEventAs(
         seeded.user,
         updateEvent(seeded.eventId, {
+          expectedVersion: 1,
           name: "Conference publication-event-race updated",
         }),
       );
@@ -2026,8 +2022,12 @@ describe("agenda service", () => {
 
     const result = await stalePublication;
     expect(result).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
-    await expect(seeded.db.select().from(domainChanges).where(eq(domainChanges.eventId, seeded.eventId))).resolves.toHaveLength(0);
-    await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(domainChanges).where(eq(domainChanges.eventId, seeded.eventId))).resolves.toEqual([
+      expect.objectContaining({ eventType: "events.updated", aggregateVersion: 2 }),
+    ]);
+    await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toEqual([
+      expect.objectContaining({ action: "events.update", resourceType: "event" }),
+    ]);
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(0);
   });
 

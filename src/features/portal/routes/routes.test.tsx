@@ -638,12 +638,34 @@ describe("organizer content and workflows", () => {
   });
 
   it("renders direct speaker creation, CSV import, workflow editing, messaging, and headshot controls", () => {
+    const managedDirectory: SpeakerDirectory = {
+      ...directory,
+      speakers: [
+        ...directory.speakers,
+        {
+          ...directory.speakers[0]!,
+          speaker: {
+            ...directory.speakers[0]!.speaker,
+            id: "speaker-managed",
+            displayName: "Dana Operations",
+            contactEmail: "dana@example.com",
+          },
+          submission: null,
+          source: "manual",
+          acceptanceEventId: null,
+          provisioningId: null,
+          provisioningStatus: "manual",
+          provisioningVersion: 0,
+          provisionedAt: null,
+        },
+      ],
+    };
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null,
       createElement(OrganizerSpeakersContent, {
-        directory,
+        directory: managedDirectory,
         onProvision: noop,
         onVisibility: noop,
-        onCreate: noop,
+        onCreate: () => true,
         onUpdate: noop,
         onImportCsv: noop,
         onMessage: noop,
@@ -657,6 +679,7 @@ describe("organizer content and workflows", () => {
     expect(markup).toContain("Remind outstanding");
     expect(markup).toContain("Replace headshot");
     expect(markup).toContain("Edit profile");
+    expect(markup).toContain("Profile details are managed by this accepted speaker in their portal.");
   });
 
   it("filters a large speaker directory by search text and operational state", () => {
@@ -742,6 +765,15 @@ describe("organizer content and workflows", () => {
     expect(taskMarkup).toContain("Save changes");
     expect(taskMarkup).toContain("Delete task");
     expect(taskMarkup).toContain("Review speaker profile");
+    expect(taskMarkup).not.toContain('name="formId"');
+
+    const formTaskMarkup = renderToStaticMarkup(createElement(OrganizerTasksContent, {
+      tasks: [{ ...task, id: "task-form", kind: "form", formId: "form-travel", name: "Travel details" }],
+      onCreate: noop,
+      onUpdate: noop,
+      onDelete: noop,
+    }));
+    expect(formTaskMarkup).toMatch(/<input[^>]*required=""[^>]*name="formId"|<input[^>]*name="formId"[^>]*required=""/);
 
     const resourceMarkup = renderToStaticMarkup(createElement(OrganizerResourcesContent, {
       resources: [resource],

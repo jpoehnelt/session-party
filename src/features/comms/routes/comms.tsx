@@ -55,6 +55,10 @@ export const contentWidth = "canvas" as const;
 type EventIdentity = Readonly<{ id: string; name: string; slug: string; timezone: string }>;
 type WorkspaceTab = "templates" | "send" | "history";
 type SendMode = "now" | "scheduled";
+type PendingDraftDestination =
+  | Readonly<{ kind: "tab"; tab: WorkspaceTab }>
+  | Readonly<{ kind: "template"; template: CommunicationTemplateValue }>
+  | Readonly<{ kind: "new" }>;
 type TemplateDraft = Readonly<{
   id: string | null;
   name: string;
@@ -304,6 +308,7 @@ export default function CommunicationsPage() {
     return (
       <>
         <EmptyState
+          headingLevel={1}
           title={unauthorized ? "Sign in to manage communications" : eventError ? "Could not load event" : "Event not found"}
           description={unauthorized ? "Use an organizer account to continue." : eventError ?? "The event may have moved or been removed."}
           action={
@@ -336,6 +341,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
   const [busy, setBusy] = useState<"save" | "preview" | "enqueue" | `retry:${string}` | null>(null);
   const [queueResult, setQueueResult] = useState<EnqueueCommunicationResultValue | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [pendingDraftDestination, setPendingDraftDestination] = useState<PendingDraftDestination | null>(null);
   const [refresh, setRefresh] = useState(0);
   const campaignEnqueue = useRef(createCampaignEnqueueCoordinator()).current;
 
@@ -372,6 +378,10 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
 
   const eligibleRecipients = audience?.recipients.filter((recipient) => recipient.eligibility === "eligible") ?? [];
   const selectedTemplate = templates?.find((template) => template.id === selectedTemplateId) ?? null;
+  const persistedDraft = draft.id ? templates?.find((template) => template.id === draft.id) : undefined;
+  const draftDirty = persistedDraft
+    ? JSON.stringify(draft) !== JSON.stringify(asDraft(persistedDraft))
+    : draft.name !== "" || draft.subject !== "" || draft.textBody !== "" || draft.htmlBody !== "" || draft.attachIcs;
   const selectedCount = [...selectedRecipients].filter((recipientKey) =>
     eligibleRecipients.some((recipient) => recipient.recipientKey === recipientKey)).length;
   const confirmationIdentity = campaignConfirmationIdentity({
@@ -384,6 +394,29 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
     scheduledWallTime,
     timezone: event.timezone,
   });
+
+  const applyDraftDestination = (destination: PendingDraftDestination, discardCurrent = false) => {
+    if (destination.kind === "tab") {
+      if (discardCurrent) {
+        setDraft(persistedDraft ? asDraft(persistedDraft) : emptyDraft);
+        setPreview(null);
+      }
+      setActiveTab(destination.tab);
+      return;
+    }
+    setDraft(destination.kind === "template" ? asDraft(destination.template) : emptyDraft);
+    setPreview(null);
+  };
+
+  const requestDraftDestination = (destination: PendingDraftDestination) => {
+    if (destination.kind === "tab" && destination.tab === activeTab) return;
+    if (destination.kind === "template" && destination.template.id === draft.id) return;
+    if (draftDirty) {
+      setPendingDraftDestination(destination);
+      return;
+    }
+    applyDraftDestination(destination);
+  };
 
 
   const saveTemplate = async (event_: FormEvent) => {
@@ -560,9 +593,9 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
         className="border-[3px] border-line-strong bg-ink p-5 text-on-accent shadow-[7px_7px_0_#7857ff] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-[0.88] [&_h1]:tracking-[-0.055em] [&_h1]:text-on-accent sm:[&_h1]:text-5xl [&_p]:mt-4 [&_p]:max-w-2xl [&_p]:font-semibold [&_p]:text-on-accent/70"
         actions={(
           <div className="border-2 border-line-strong bg-production-lime px-4 py-3 text-ink shadow-[4px_4px_0_#fffdf7]">
-            <p className="text-3xl font-black leading-none tracking-[-0.06em]">{eligibleRecipients.length}</p>
-            <p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em]">Speakers on comms</p>
-            <p className="mt-2 text-[9px] font-black uppercase tracking-[0.12em] opacity-70">{history.localCaptureCount} local captures</p>
+            <p className="text-3xl font-black leading-none tracking-[-0.06em] !text-ink">{eligibleRecipients.length}</p>
+            <p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em] !text-ink">Speakers on comms</p>
+            <p className="mt-2 text-[9px] font-black uppercase tracking-[0.12em] !text-ink">{history.localCaptureCount} local captures</p>
           </div>
         )}
       />
@@ -581,7 +614,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
         ))}
       </dl>
 
-      <Tabs tabs={tabs} active={activeTab} onChange={(value) => setActiveTab(value as WorkspaceTab)} className="mb-7 max-w-3xl" />
+      <Tabs tabs={tabs} active={activeTab} onChange={(value) => requestDraftDestination({ kind: "tab", tab: value as WorkspaceTab })} className="mb-7 max-w-3xl" />
 
       {loadError && (
         <Alert tone="danger" className="mb-6">
@@ -595,7 +628,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
           <Card
             className="h-fit rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink"
             title="Template roll"
-            footer={<Button variant="secondary" className="w-full rounded-none bg-production-lime" onClick={() => { setDraft(emptyDraft); setPreview(null); }}>+ New template</Button>}
+            footer={<Button variant="secondary" className="w-full rounded-none bg-production-lime" onClick={() => requestDraftDestination({ kind: "new" })}>+ New template</Button>}
           >
             {templates.length === 0 ? (
               <p className="text-sm text-ink-faint">Create the first reusable message.</p>
@@ -607,7 +640,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
                     variant="ghost"
                     aria-current={draft.id === template.id ? "page" : undefined}
                     className={`h-auto w-full justify-start whitespace-normal rounded-none border-2 border-line-strong px-3 py-3 text-left shadow-[3px_3px_0_#171714] ${draft.id === template.id ? "bg-accent text-ink hover:bg-accent-hover hover:text-ink" : "bg-canvas hover:bg-production-lime"}`}
-                    onClick={() => { setDraft(asDraft(template)); setPreview(null); }}
+                    onClick={() => requestDraftDestination({ kind: "template", template })}
                   >
                     <span className="grid w-full grid-cols-[2rem_minmax(0,1fr)] gap-2">
                       <span className={`text-[10px] font-black tracking-[0.1em] ${draft.id === template.id ? "text-ink" : "text-accent-deep"}`}>{String(index + 1).padStart(2, "0")}</span>
@@ -910,6 +943,28 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
           />
         </div>
       )}
+      <AlertDialog open={pendingDraftDestination !== null} onOpenChange={(open) => { if (!open) setPendingDraftDestination(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved template changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your edits have not been saved. Stay here to keep editing, or discard them and continue.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const destination = pendingDraftDestination;
+                setPendingDraftDestination(null);
+                if (destination) applyDraftDestination(destination, true);
+              }}
+            >
+              Discard changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Toaster />
       </div>
     </div>

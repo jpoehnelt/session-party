@@ -72,6 +72,7 @@ import {
   type PortalTask,
   type PortalTaskDefinition,
   type ProvisionSpeakerInput,
+  PublishedSpeakerGallerySnapshot as PublishedSpeakerGallerySnapshotSchema,
   type PublicSpeakerGallery,
   type PublicSpeakersInput,
   type ReadinessSummary,
@@ -264,7 +265,7 @@ const speakerView = (
   pendingSyncFields: PROFILE_SYNC_FIELDS.filter((field) => pending.has(field)),
 });
 
-const eligibleProvisionedSpeakerIds = (
+export const eligiblePublicSpeakerIds = (
   eventIds: readonly string[],
 ): Effect.Effect<ReadonlySet<string>, External, Db> => Effect.gen(function* () {
   if (eventIds.length === 0) return new Set<string>();
@@ -745,7 +746,7 @@ const uploadPolicy = (
   purpose: UploadPortalAssetInput["purpose"],
   contentType: string,
   filename: string,
-  size: number,
+  data: Uint8Array,
 ) => {
   const extension = filename.toLowerCase().split(".").pop() ?? "";
   const allowed: Readonly<Record<string, readonly string[]>> = purpose === "headshot"
@@ -766,8 +767,39 @@ const uploadPolicy = (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ["docx"],
       };
   const maxSize = PORTAL_UPLOAD_MAX_BYTES[purpose];
-  if (!allowed[contentType as keyof typeof allowed]?.includes(extension) || size === 0 || size > maxSize) {
-    return new Validation({ message: `Invalid ${purpose} file type, extension, or size` });
+  const startsWith = (signature: readonly number[]) =>
+    data.length >= signature.length && signature.every((byte, index) => data[index] === byte);
+  const endsWith = (signature: readonly number[]) => {
+    const offset = data.length - signature.length;
+    return offset >= 0 && signature.every((byte, index) => data[offset + index] === byte);
+  };
+  const containsAscii = (value: string) => {
+    const signature = [...value].map((character) => character.charCodeAt(0));
+    outer: for (let offset = 0; offset <= data.length - signature.length; offset += 1) {
+      for (let index = 0; index < signature.length; index += 1) {
+        if (data[offset + index] !== signature[index]) continue outer;
+      }
+      return true;
+    }
+    return false;
+  };
+  const contentMatches = contentType === "image/png"
+    ? startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) && containsAscii("IEND")
+    : contentType === "image/jpeg"
+      ? startsWith([0xff, 0xd8, 0xff]) && endsWith([0xff, 0xd9])
+      : contentType === "image/webp"
+        ? startsWith([0x52, 0x49, 0x46, 0x46]) && data.length >= 12 && data.slice(8, 12).every((byte, index) => byte === [0x57, 0x45, 0x42, 0x50][index])
+        : contentType === "application/pdf"
+          ? startsWith([0x25, 0x50, 0x44, 0x46, 0x2d]) && containsAscii("%%EOF")
+          : contentType === "application/vnd.ms-powerpoint" || contentType === "application/msword"
+            ? data.length >= 512 && startsWith([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
+            : contentType === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+              ? startsWith([0x50, 0x4b, 0x03, 0x04]) && containsAscii("ppt/") && containsAscii("PK\u0005\u0006")
+              : contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                ? startsWith([0x50, 0x4b, 0x03, 0x04]) && containsAscii("word/") && containsAscii("PK\u0005\u0006")
+                : false;
+  if (!allowed[contentType as keyof typeof allowed]?.includes(extension) || data.byteLength === 0 || data.byteLength > maxSize || !contentMatches) {
+    return new Validation({ message: `Invalid ${purpose} file content, type, extension, or size` });
   }
   return null;
 };
@@ -2068,7 +2100,7 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
     input.purpose,
     input.contentType,
     input.filename,
-    data.byteLength,
+    data,
   );
   if (policyError) return yield* Effect.fail(policyError);
 
@@ -3045,7 +3077,7 @@ export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.E
 export const uploadManagedSpeakerHeadshot = (input: UploadManagedSpeakerHeadshotInput): Effect.Effect<ContentAsset, AppError, Db | CurrentUser | Authorizer | Files> => Effect.gen(function* () {
   const actor = yield* organizer(input.eventId, "content:write");
   const data = yield* decodeBase64(input.contentBase64, "headshot");
-  const policyError = uploadPolicy("headshot", input.contentType, input.filename, data.byteLength);
+  const policyError = uploadPolicy("headshot", input.contentType, input.filename, data);
   if (policyError) return yield* Effect.fail(policyError);
   const { db } = yield* Db;
   const contentHash = yield* sha256(input.contentBase64);
@@ -3305,7 +3337,7 @@ export const sendSpeakerMessages = (input: SendSpeakerMessagesInput): Effect.Eff
   ]);
   const event = eventRows[0];
   if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
-  const eligibleSpeakerIds = yield* eligibleProvisionedSpeakerIds([input.eventId]);
+  const eligibleSpeakerIds = yield* eligiblePublicSpeakerIds([input.eventId]);
   const assignmentSet = new Set(assignments.map((assignment) => `${assignment.speakerId}\u0000${assignment.taskId}`));
   const completionSet = new Set(completions.map((completion) => `${completion.speakerId}\u0000${completion.taskId}`));
   const recipients = speakerRows.flatMap(({ speaker, userEmail, userName }) => {
@@ -3398,7 +3430,7 @@ export const enqueueAutomatedDueTaskReminders = (runAt = now()): Effect.Effect<{
       .leftJoin(users, eq(users.id, speakers.userId)).where(inArray(speakers.eventId, eventIds))),
     database(() => db.select().from(taskAssignments).where(inArray(taskAssignments.taskId, taskIds))),
     database(() => db.select({ speakerId: taskCompletions.speakerId, taskId: taskCompletions.taskId }).from(taskCompletions).where(inArray(taskCompletions.taskId, taskIds))),
-    eligibleProvisionedSpeakerIds(eventIds),
+    eligiblePublicSpeakerIds(eventIds),
   ]);
   const eventById = new Map(eventRows.map((event) => [event.id, event]));
   const assignmentSet = new Set(assignments.map((assignment) => `${assignment.speakerId}\u0000${assignment.taskId}`));
@@ -3768,34 +3800,37 @@ export const getPublicSpeakers = (input: PublicSpeakersInput): Effect.Effect<Pub
   const { db } = yield* Db;
   const [event] = yield* database(() => db.select().from(events).where(eq(events.slug, input.eventSlug)).limit(1));
   if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventSlug }));
-  const [rows, provisionedSpeakerIds, linkedSpeakerRows] = yield* Effect.all([
-    database(() => db.select({ speaker: speakers, asset: assets }).from(speakers)
-      .leftJoin(assets, and(eq(assets.eventId, speakers.eventId), eq(assets.id, speakers.headshotAssetId)))
-      .where(and(eq(speakers.eventId, event.id), eq(speakers.visible, true)))
-      .orderBy(asc(speakers.displayName), asc(speakers.id))),
-    eligibleProvisionedSpeakerIds([event.id]),
-    database(() => db.select({ speakerId: submissionSpeakers.speakerId }).from(submissionSpeakers)
-      .where(eq(submissionSpeakers.eventId, event.id))),
-  ]);
-  const linkedSpeakerIds = new Set(linkedSpeakerRows.map((row) => row.speakerId));
+  const [publication] = yield* database(() => db.select({ payload: domainChanges.payload }).from(domainChanges).where(and(
+    eq(domainChanges.eventId, event.id),
+    eq(domainChanges.aggregateType, "speaker-publication"),
+    eq(domainChanges.aggregateId, event.id),
+  )).orderBy(desc(domainChanges.aggregateVersion)).limit(1));
+  if (!publication) return yield* Effect.fail(new NotFound({ entity: "published speaker gallery", id: event.id }));
+  const snapshot = yield* Schema.decodeUnknown(PublishedSpeakerGallerySnapshotSchema)(publication.payload).pipe(
+    Effect.mapError(() => new External({ service: "database", detail: "Published speaker gallery is invalid" })),
+  );
+  const assetIds = snapshot.speakers.flatMap(({ headshotAssetId }) => headshotAssetId === null ? [] : [headshotAssetId]);
+  const assetRows = assetIds.length === 0 ? [] : yield* database(() => db.select().from(assets).where(and(
+    eq(assets.eventId, event.id),
+    inArray(assets.id, assetIds),
+  )));
+  const assetById = new Map(assetRows.map((asset) => [asset.id, asset] as const));
   const { get } = yield* Files;
-  const publicSpeakers = yield* Effect.forEach(rows.filter((row) =>
-    provisionedSpeakerIds.has(row.speaker.id) || !linkedSpeakerIds.has(row.speaker.id)
-  ), (row) => Effect.gen(function* () {
+  const publicSpeakers = yield* Effect.forEach(snapshot.speakers, (speaker) => Effect.gen(function* () {
     let headshotUrl: string | null = null;
-    if (row.asset && ["image/jpeg", "image/png", "image/webp"].includes(row.asset.contentType)) {
-      const object = yield* get(assetKey(event.id, row.asset.id));
+    const asset = speaker.headshotAssetId === null ? undefined : assetById.get(speaker.headshotAssetId);
+    if (asset && ["image/jpeg", "image/png", "image/webp"].includes(asset.contentType)) {
+      const object = yield* get(assetKey(event.id, asset.id));
       if (object) {
         const bytes = new Uint8Array(yield* fileEffect(() => object.arrayBuffer()));
         let binary = "";
         for (let offset = 0; offset < bytes.length; offset += 32_768) {
           binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
         }
-        headshotUrl = `data:${row.asset.contentType};base64,${btoa(binary)}`;
+        headshotUrl = `data:${asset.contentType};base64,${btoa(binary)}`;
       }
     }
-    return { id: row.speaker.id, displayName: row.speaker.displayName, title: row.speaker.title, company: row.speaker.company, bio: row.speaker.bio, headshotUrl, links: (row.speaker.links ?? []).filter((link) => safeHttpUrl(link.url)) };
+    return { id: speaker.id, displayName: speaker.displayName, title: speaker.title, company: speaker.company, bio: speaker.bio, headshotUrl, links: speaker.links.filter((link) => safeHttpUrl(link.url)) };
   }));
-  const unique = new Map(publicSpeakers.map((speaker) => [speaker.id, speaker]));
-  return { event: eventView(event), speakers: [...unique.values()] };
+  return { event: snapshot.event, speakers: publicSpeakers };
 });

@@ -113,6 +113,13 @@
       "when": 1786436618133,
       "tag": "0015_embed_track_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1786461225435,
+      "tag": "0016_backfill_speaker_publications",
+      "breakpoints": true
     }
   ]
 }

@@ -208,6 +208,7 @@ export default function AgendaPage() {
       return (
         <>
           <EmptyState
+            headingLevel={1}
             title="Sign in to view this event"
             description="Sign in to continue to this event agenda."
             action={
@@ -228,6 +229,7 @@ export default function AgendaPage() {
     return (
       <>
         <EmptyState
+          headingLevel={1}
           title={recoverable ? "Could not load event" : "Event not found"}
           description={eventError ?? "The event may have moved or been removed."}
           action={
@@ -420,6 +422,48 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     () => agenda?.talks.find(({ id }) => id === selectedTalkId) ?? null,
     [agenda, selectedTalkId],
   );
+  const talkDirty = useMemo(() => selectedTalk !== null && (
+    form.title !== selectedTalk.title
+    || form.description !== (selectedTalk.description ?? "")
+    || form.trackId !== (selectedTalk.trackId ?? "")
+    || form.roomId !== (selectedTalk.roomId ?? "")
+    || form.startsAt !== localInputValue(selectedTalk.startsAt, event.timezone)
+    || form.durationMin !== String(selectedTalk.durationMin)
+  ), [event.timezone, form, selectedTalk]);
+  const setupDirty = useMemo(() => {
+    const trackChanged = trackDraft.id === null
+      ? trackDraft.name !== "" || trackDraft.color !== "" || trackDraft.order !== "0"
+      : (() => {
+          const track = agenda?.tracks.find(({ id }) => id === trackDraft.id);
+          return !track
+            || trackDraft.name !== track.name
+            || trackDraft.color !== (track.color ?? "")
+            || trackDraft.order !== String(track.order);
+        })();
+    const roomChanged = roomDraft.id === null
+      ? roomDraft.name !== "" || roomDraft.capacity !== "" || roomDraft.order !== "0"
+      : (() => {
+          const agendaRoom = agenda?.rooms.find(({ id }) => id === roomDraft.id);
+          return !agendaRoom
+            || roomDraft.name !== agendaRoom.name
+            || roomDraft.capacity !== (agendaRoom.capacity === null ? "" : String(agendaRoom.capacity))
+            || roomDraft.order !== String(agendaRoom.order);
+        })();
+    return trackChanged || roomChanged;
+  }, [agenda?.rooms, agenda?.tracks, roomDraft, trackDraft]);
+
+  const closeSetup = useCallback(() => {
+    if (setupDirty && !window.confirm("Discard unsaved track or room changes?")) return;
+    setSetupOpen(false);
+    setTrackDraft(emptyTrackDraft());
+    setRoomDraft(emptyRoomDraft());
+  }, [setupDirty]);
+
+  const closeTalkEditor = useCallback(() => {
+    if (talkDirty && !window.confirm("Discard unsaved talk changes?")) return;
+    room.send({ t: "agenda/focus", talkId: null });
+    closeTalkSheet();
+  }, [closeTalkSheet, room, talkDirty]);
 
   const selectTalk = (talk: AgendaTalk, message: string | null = null) => {
     room.send({ t: "agenda/focus", talkId: talk.id });
@@ -624,6 +668,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
   const cancelTalk = async () => {
     if (!selectedTalk) return;
+    if (!window.confirm(`Cancel "${selectedTalk.title}"? It will be removed from the draft schedule but kept in the audit history.`)) return;
     const clientId = clientIntentId();
     try {
       await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
@@ -802,6 +847,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     ({ startsAt, status }) => startsAt !== null && status !== "cancelled",
   ).length;
   const confirmedTalkCount = agenda.talks.filter(({ status }) => status === "confirmed").length;
+  const mutationsDisabled = busy || refresh.status !== "idle" || intent.connection === "offline";
 
   return (
     <>
@@ -833,13 +879,13 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
             </Button>
             <Button
               variant="secondary"
-              disabled={busy || refresh.status !== "idle"}
+              disabled={mutationsDisabled}
               onClick={() => setSetupOpen(true)}
             >
               Tracks & rooms
             </Button>
             <Button
-              disabled={busy || refresh.status !== "idle"}
+              disabled={mutationsDisabled}
               loading={busy && intent.acknowledgement === "pending"}
               onClick={() => void publish()}
             >
@@ -924,7 +970,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           selectedTalkId={selectedTalkId}
           collaborators={collaborators}
           presence={presence}
-          disabled={busy || refresh.status !== "idle" || intent.connection === "offline"}
+          disabled={mutationsDisabled}
           onCreateTalk={(proposal) => void createTalk(proposal)}
           onSelectTalk={selectTalk}
           onMoveTalk={(talk, target) => void moveTalk(talk, target)}
@@ -938,7 +984,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
       <Sheet
         open={setupOpen}
-        onClose={() => setSetupOpen(false)}
+        onClose={closeSetup}
         title="Tracks and rooms"
         size="lg"
       >
@@ -957,7 +1003,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                       <p className="truncate text-sm font-black text-ink">{track.name}</p>
                       <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-ink-secondary">Order {track.order} · Version {track.version}{track.color ? ` · ${track.color}` : ""}</p>
                     </div>
-                    <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => editTrack(track)}>Edit</Button>
+                    <Button type="button" size="sm" variant="secondary" aria-label={`Edit track ${track.name}`} disabled={busy} onClick={() => editTrack(track)}>Edit</Button>
                   </li>
                 ))}
               </ul>
@@ -989,7 +1035,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               </div>
               <div className="flex items-center justify-end gap-2">
                 {trackDraft.id && <Button type="button" variant="secondary" disabled={busy} onClick={() => setTrackDraft(emptyTrackDraft())}>Cancel edit</Button>}
-                <Button type="submit" loading={busy}>{trackDraft.id ? "Update track" : "Create track"}</Button>
+                <Button type="submit" loading={busy} disabled={mutationsDisabled}>{trackDraft.id ? "Update track" : "Create track"}</Button>
               </div>
             </form>
           </section>
@@ -1008,7 +1054,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                       <p className="truncate text-sm font-black text-ink">{room.name}</p>
                       <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-ink-secondary">Order {room.order} · Version {room.version}{room.capacity === null ? "" : ` · ${room.capacity} seats`}</p>
                     </div>
-                    <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => editRoom(room)}>Edit</Button>
+                    <Button type="button" size="sm" variant="secondary" aria-label={`Edit room ${room.name}`} disabled={busy} onClick={() => editRoom(room)}>Edit</Button>
                   </li>
                 ))}
               </ul>
@@ -1043,7 +1089,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               </div>
               <div className="flex items-center justify-end gap-2">
                 {roomDraft.id && <Button type="button" variant="secondary" disabled={busy} onClick={() => setRoomDraft(emptyRoomDraft())}>Cancel edit</Button>}
-                <Button type="submit" loading={busy}>{roomDraft.id ? "Update room" : "Create room"}</Button>
+                <Button type="submit" loading={busy} disabled={mutationsDisabled}>{roomDraft.id ? "Update room" : "Create room"}</Button>
               </div>
             </form>
           </section>
@@ -1052,17 +1098,14 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
       <Sheet
         open={selectedTalk !== null}
-        onClose={() => {
-          room.send({ t: "agenda/focus", talkId: null });
-          closeTalkSheet();
-        }}
+        onClose={closeTalkEditor}
         title={selectedTalk?.title ?? "Talk details"}
         size="lg"
         footer={
           selectedTalk ? (
             <div className="flex w-full items-center justify-between gap-3">
-              <Button variant="danger" disabled={busy || refresh.status !== "idle"} onClick={() => void cancelTalk()}>Cancel talk</Button>
-              <Button form="agenda-move-form" type="submit" loading={busy} disabled={refresh.status !== "idle"}>Save schedule</Button>
+              <Button variant="danger" disabled={mutationsDisabled} onClick={() => void cancelTalk()}>Cancel talk</Button>
+              <Button form="agenda-move-form" type="submit" loading={busy} disabled={mutationsDisabled}>Save schedule</Button>
             </div>
           ) : null
         }
@@ -1094,7 +1137,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                 value={form.description}
                 onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
               />
-              <Button type="button" variant="secondary" disabled={busy} onClick={() => void saveTalkContent()}>
+              <Button type="button" variant="secondary" disabled={mutationsDisabled} onClick={() => void saveTalkContent()}>
                 Save session content
               </Button>
             </section>
@@ -1103,7 +1146,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                 <p className="font-black text-ink">Assisted placement</p>
                 <p className="text-xs text-ink-secondary">Find the first room and time without room or speaker overlap.</p>
               </div>
-              <Button type="button" variant="secondary" disabled={busy} onClick={() => void autoPlaceSelectedTalk()}>
+              <Button type="button" variant="secondary" disabled={mutationsDisabled} onClick={() => void autoPlaceSelectedTalk()}>
                 Auto-place talk
               </Button>
             </div>

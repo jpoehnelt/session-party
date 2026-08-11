@@ -346,8 +346,7 @@ export function SpeakerPortalContent({
         <div className="min-w-0 space-y-9">
           {snapshot.submission && (
             <section className="relative overflow-hidden border-[3px] border-[#171714] bg-[#ff714f] p-5 shadow-[7px_7px_0_#171714] sm:p-7" aria-labelledby="accepted-session-title">
-              <span aria-hidden="true" className="absolute -right-6 -top-8 text-8xl font-black tracking-[-0.08em] opacity-10">ON</span>
-              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#171714]/65">Accepted session / Cleared for production</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#171714]">Accepted session / Cleared for production</p>
               <h2 id="accepted-session-title" className="mt-3 max-w-2xl text-2xl font-black leading-tight tracking-[-0.04em] text-[#171714] sm:text-3xl">
                 {snapshot.submission.title}
               </h2>
@@ -648,7 +647,7 @@ function UploadWorkspace({
   return (
     <section className={`space-y-5 border-[3px] border-[#171714] bg-[#fffdf7] p-5 shadow-[7px_7px_0_#ff714f] sm:p-7 ${productionFormClass}`} aria-labelledby="uploads-heading">
       <div>
-        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#ff714f]">Asset drop / Final files</p>
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#171714]">Asset drop / Final files</p>
         <h2 id="uploads-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Production files</h2>
         <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">
           Upload final production files: headshots up to 10 MiB, slides up to 100 MiB, and documents up to 25 MiB.
@@ -734,7 +733,7 @@ export function ResourceList({ resources }: { readonly resources: readonly Porta
                   src={embedUrl}
                   title={resource.title}
                   loading="lazy"
-                  sandbox="allow-scripts allow-same-origin allow-presentation"
+                  sandbox="allow-scripts allow-same-origin"
                   referrerPolicy="no-referrer"
                   allow="fullscreen"
                 />

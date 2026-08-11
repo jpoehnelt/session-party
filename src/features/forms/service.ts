@@ -566,6 +566,19 @@ const fieldRows = (eventId: string, formId: string, fields: readonly FormField[]
     updatedAt: now,
   }));
 
+// D1's SQLite variable ceiling applies to each prepared statement. Form fields
+// are intentionally rich rows, so a legitimate builder containing every field
+// type can exceed that ceiling when emitted as one multi-row INSERT.
+const FIELD_INSERT_CHUNK_SIZE = 4;
+
+const chunkRows = <T>(rows: readonly T[]): readonly T[][] => {
+  const chunks: T[][] = [];
+  for (let offset = 0; offset < rows.length; offset += FIELD_INSERT_CHUNK_SIZE) {
+    chunks.push(rows.slice(offset, offset + FIELD_INSERT_CHUNK_SIZE));
+  }
+  return chunks;
+};
+
 export const listForms = (
   input: ListFormsInput,
 ): Effect.Effect<readonly FormSummary[], AppError, Db | CurrentUser> =>
@@ -683,6 +696,7 @@ export const createForm = (
           payload: { formId },
         }
       : null;
+    const draftRows = fieldRows(input.eventId, formId, normalizedFields, now);
     return yield* commitCommand(
       () => db.batch([
         db.insert(idempotencyRecords).values(evidence.idempotency),
@@ -699,7 +713,7 @@ export const createForm = (
           createdAt: now,
           updatedAt: now,
         }),
-        db.insert(formFields).values(fieldRows(input.eventId, formId, normalizedFields, now)),
+        ...chunkRows(draftRows).map((rows) => db.insert(formFields).values(rows)),
         db.insert(domainChanges).values(evidence.versionClaim),
         ...(primaryClaim ? [db.insert(domainChanges).values(primaryClaim)] : []),
         db.insert(domainChanges).values(evidence.change),
@@ -886,6 +900,7 @@ export const updateForm = (
       after,
       now,
     );
+    const draftRows = fieldRows(input.eventId, input.formId, normalizedFields, now);
     return yield* commitCommand(
       () => db.batch([
         db.insert(idempotencyRecords).values(evidence.idempotency),
@@ -898,7 +913,7 @@ export const updateForm = (
           updatedAt: now,
         }).where(and(eq(forms.eventId, input.eventId), eq(forms.id, input.formId), eq(forms.version, input.expectedVersion))),
         db.delete(formFields).where(and(eq(formFields.eventId, input.eventId), eq(formFields.formId, input.formId))),
-        db.insert(formFields).values(fieldRows(input.eventId, input.formId, normalizedFields, now)),
+        ...chunkRows(draftRows).map((rows) => db.insert(formFields).values(rows)),
         db.insert(domainChanges).values(evidence.versionClaim),
         db.insert(domainChanges).values(evidence.change),
         db.insert(auditLog).values(evidence.audit),
@@ -969,6 +984,14 @@ export const publishForm = (
       after,
       now,
     );
+    const versionFieldRows = snapshotFields.map((field) => ({
+      ...field,
+      eventId: input.eventId,
+      formVersionId: versionId,
+      logic: field.logic === null ? null : JSON.stringify(field.logic),
+      routing: Object.keys(field.routing).length === 0 ? null : JSON.stringify(field.routing),
+      createdAt: now,
+    }));
     return yield* commitCommand(
       () => db.batch([
         db.insert(idempotencyRecords).values(evidence.idempotency),
@@ -988,14 +1011,7 @@ export const publishForm = (
           retiredAt: null,
           createdAt: now,
         }),
-        db.insert(formVersionFields).values(snapshotFields.map((field) => ({
-          ...field,
-          eventId: input.eventId,
-          formVersionId: versionId,
-          logic: field.logic === null ? null : JSON.stringify(field.logic),
-          routing: Object.keys(field.routing).length === 0 ? null : JSON.stringify(field.routing),
-          createdAt: now,
-        }))),
+        ...chunkRows(versionFieldRows).map((rows) => db.insert(formVersionFields).values(rows)),
         db.update(forms).set({ status: "open", version: after.version, updatedAt: now }).where(and(
           eq(forms.eventId, input.eventId),
           eq(forms.id, input.formId),

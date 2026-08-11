@@ -7,6 +7,7 @@ const eventId = "demo-event";
 const eventSlug = "ai-engineer-sandbox";
 const ownerSession = "demo-owner-session";
 const reviewerSession = "demo-reviewer-session";
+const recusedReviewerSession = "demo-reviewer-recused-session";
 const speakerSession = "demo-speaker-session";
 const DAY_MS = 86_400_000;
 
@@ -52,6 +53,13 @@ interface Workbench {
     readonly id: string;
     readonly version: number;
     readonly speakers: readonly { readonly id: string; readonly isPrimary: boolean }[];
+  };
+}
+
+interface AssignmentOutput {
+  readonly assignment: {
+    readonly id: string;
+    readonly version: number;
   };
 }
 
@@ -363,6 +371,33 @@ if (!submission || acceptedSubmissions.length !== 30 || submittedBacklog.length 
   throw new Error("Deterministic CFP scale did not create 30 accepted candidates and 30 backlog submissions");
 }
 
+const recusalSubmission = submittedBacklog[0];
+if (!recusalSubmission) throw new Error("Deterministic CFP scale did not create a recusal fixture submission");
+const recusalAssignment = await request<AssignmentOutput>(`/events/${eventId}/review/assignments`, {
+  method: "POST",
+  session: ownerSession,
+  expectedStatus: 201,
+  headers: { "x-request-id": "demo-review-recusal-assignment-v1" },
+  body: {
+    roundId: "demo-review-round-active",
+    submissionId: recusalSubmission.submissionId,
+    reviewerUserId: "demo-reviewer-recused",
+    expectedVersion: 0,
+  },
+});
+await request(`/events/${eventId}/review/assignments/${encode(recusalAssignment.assignment.id)}/recusal`, {
+  method: "POST",
+  session: recusedReviewerSession,
+  headers: {
+    "idempotency-key": "demo-review-recusal-v1",
+    "x-request-id": "demo-review-recusal-request-v1",
+  },
+  body: {
+    expectedVersion: recusalAssignment.assignment.version,
+    reason: "Topic creates a prior-work conflict for this reviewer.",
+  },
+});
+
 let workbench = await request<Workbench>(
   `/events/${eventId}/review?selectedSubmissionId=${encode(submission.submissionId)}`,
   { session: ownerSession },
@@ -462,6 +497,22 @@ for (let index = 1; index < acceptedSubmissions.length; index += 1) {
   acceptedPeople.push({ submission: candidate, acceptance });
 }
 
+const managedSpeaker = await request<SpeakerProfile>(`/events/${eventId}/portal/speakers`, {
+  method: "POST",
+  session: ownerSession,
+  expectedStatus: 201,
+  body: {
+    displayName: "Dana Operations",
+    contactEmail: "dana.operations@sessionparty.local",
+    title: "Developer Experience Lead",
+    company: "Session Party Labs",
+    bio: "A directly managed speaker fixture for reversible organizer workflow testing.",
+    workflowStatus: "Invited",
+    visible: false,
+    idempotencyKey: "demo-create-managed-speaker-v1",
+  },
+});
+
 const tasks = await Promise.all([
   ["Complete your speaker profile", "Add a biography and public link.", "profile", null, 1],
   ["Upload a headshot", "PNG, JPEG, or WebP.", "upload", null, 2],
@@ -540,7 +591,7 @@ for (const [purpose, filename, key, taskId] of [
       purpose,
       filename,
       contentType: "application/pdf",
-      contentBase64: "JVBERi0xLjQKJSBkZXRlcm1pbmlzdGljIGRlbW8K",
+      contentBase64: "JVBERi0xLjQKJSBkZXRlcm1pbmlzdGljIGRlbW8KJSVFT0Y=",
       expectedVersion: taskId ? materialsVersion : 0,
       idempotencyKey: key,
     },
@@ -701,9 +752,9 @@ const [publicSpeakers, publicAgenda] = await Promise.all([
   request<{ readonly speakers: readonly unknown[] }>(`/public/events/${eventSlug}/speakers`),
   request<{ readonly revision: number; readonly talks: readonly unknown[] }>(`/public/events/${eventSlug}/agenda/published`),
 ]);
-if (publicSpeakers.speakers.length !== 32 || publicAgenda.talks.length !== 18) {
+if (publicSpeakers.speakers.length !== 30 || publicAgenda.talks.length !== 18) {
   throw new Error(
-    `Public demo scale mismatch: expected 32 speakers and 18 talks, received ${publicSpeakers.speakers.length} speakers and ${publicAgenda.talks.length} talks`,
+    `Public demo scale mismatch: expected 30 published speakers and 18 talks, received ${publicSpeakers.speakers.length} speakers and ${publicAgenda.talks.length} talks`,
   );
 }
 
@@ -715,6 +766,7 @@ console.log(JSON.stringify({
   forms: { cfp: publishedCfp.id, task: publishedTaskForm.id },
   submission: submission.submissionId,
   speaker: accepted.primarySpeakerId,
+  managedSpeaker: managedSpeaker.id,
   provisioning: accepted.provisioningId,
   tasks: tasks.map(({ id }) => id),
   scale: {

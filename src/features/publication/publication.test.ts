@@ -3,6 +3,7 @@ import type { Principal } from "contracts/principal";
 import {
   events,
   eventMembers,
+  managedSpeakerEmails,
   rooms,
   speakers,
   talkSpeakers,
@@ -21,6 +22,7 @@ import {
   publishAgendaOperation,
 } from "@/features/agenda/operations";
 import { getPublishedAgenda, publishAgenda } from "@/features/agenda/service";
+import { getPublicSpeakers } from "@/features/portal/service";
 import { AppLayer, type Authorizer, CurrentUser, Db } from "@/server/services";
 import { filterPublishedAgenda } from "./embed-content";
 import { createEmbed, getPublicEmbed, listEmbeds, updateEmbed } from "./service";
@@ -133,6 +135,24 @@ const seedPublication = async (name: string) => {
         eventId,
         displayName: "Private Speaker",
         visible: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]),
+    db.insert(managedSpeakerEmails).values([
+      {
+        id: id("managed-visible"),
+        eventId,
+        normalizedEmail: `${visibleSpeakerId}@example.com`,
+        speakerId: visibleSpeakerId,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: id("managed-hidden"),
+        eventId,
+        normalizedEmail: `${hiddenSpeakerId}@example.com`,
+        speakerId: hiddenSpeakerId,
         createdAt: now,
         updatedAt: now,
       },
@@ -334,8 +354,13 @@ describe("publication boundary", () => {
     expect(JSON.stringify(result)).not.toContain("Private cancelled talk");
   });
 
-  it("publishes only confirmed talks and keeps existing public widgets live with organizer edits", async () => {
+  it("publishes only confirmed talks and keeps public projections immutable until republished", async () => {
     const seeded = await seedPublication("immutable-publication");
+    const unpublishedGallery = await Effect.runPromise(getPublicSpeakers({ eventSlug: seeded.eventSlug }).pipe(
+      Effect.either,
+      Effect.provide(AppLayer(env)),
+    ));
+    expect(unpublishedGallery).toMatchObject({ _tag: "Left", left: { _tag: "NotFound" } });
     const published = await runAs(
       seeded.owner,
       publishAgenda({
@@ -361,6 +386,13 @@ describe("publication boundary", () => {
     expect(JSON.stringify(published)).not.toContain("Private cancelled talk");
     expect(published.talks[0]).not.toHaveProperty("submissionId");
     expect(published.talks[0]).not.toHaveProperty("version");
+    const publishedGallery = await Effect.runPromise(getPublicSpeakers({ eventSlug: seeded.eventSlug }).pipe(
+      Effect.provide(AppLayer(env)),
+    ));
+    expect(publishedGallery.speakers).toEqual([expect.objectContaining({
+      id: seeded.visibleSpeakerId,
+      displayName: "Ada Rivera",
+    })]);
 
     await seeded.db
       .update(talks)
@@ -384,17 +416,11 @@ describe("publication boundary", () => {
       seeded.owner,
       getPublishedAgenda({ eventSlug: seeded.eventSlug }),
     );
-    expect(stillPublished).toMatchObject({
-      revision: published.revision,
-      talks: published.talks.map((talk) => ({
-        ...talk,
-        title: "Unpublished agenda edit",
-        startsAt: STARTS_AT + 7_200_000,
-        speakerNames: ["Unpublished speaker edit"],
-      })),
-    });
-    expect(stillPublished.calendarRevision).toBeGreaterThan(published.calendarRevision!);
-    expect(JSON.stringify(stillPublished)).not.toContain("Private Speaker");
+    expect(stillPublished).toEqual(published);
+    expect(JSON.stringify(stillPublished)).not.toContain("Unpublished");
+    expect(await Effect.runPromise(getPublicSpeakers({ eventSlug: seeded.eventSlug }).pipe(
+      Effect.provide(AppLayer(env)),
+    ))).toEqual(publishedGallery);
   });
 
   it("serves JSON, subscribable ICS, and per-session ICS from the same published revision", async () => {
@@ -488,22 +514,17 @@ describe("publication boundary", () => {
       `https://example.test/events/${seeded.eventSlug}/schedule.json`,
       { headers: { "If-None-Match": originalJsonEtag! } },
     );
-    expect(refreshedJson.status).toBe(200);
-    expect(refreshedJson.headers.get("etag")).not.toBe(originalJsonEtag);
-    expect(await refreshedJson.json()).toEqual(expect.objectContaining({
-      revision: 1,
-      talks: [expect.objectContaining({ title: "Live feed title" })],
-    }));
+    expect(refreshedJson.status).toBe(304);
+    expect(refreshedJson.headers.get("etag")).toBe(originalJsonEtag);
+    expect(await refreshedJson.text()).toBe("");
     const refreshedCalendar = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/schedule.ics`,
       { headers: { "If-None-Match": etag! } },
     );
-    expect(refreshedCalendar.status).toBe(200);
-    expect(refreshedCalendar.headers.get("etag")).not.toBe(etag);
-    expect(refreshedCalendar.headers.get("last-modified")).not.toBe(calendarResponse.headers.get("last-modified"));
-    const refreshedCalendarBody = await refreshedCalendar.text();
-    expect(refreshedCalendarBody).toContain(`SEQUENCE:${published.calendarRevision! + 1}`);
-    expect(refreshedCalendarBody).toContain("SUMMARY:Live feed title");
+    expect(refreshedCalendar.status).toBe(304);
+    expect(refreshedCalendar.headers.get("etag")).toBe(etag);
+    expect(refreshedCalendar.headers.get("last-modified")).toBe(calendarResponse.headers.get("last-modified"));
+    expect(await refreshedCalendar.text()).toBe("");
 
     const missingSession = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/sessions/missing-session.ics`,

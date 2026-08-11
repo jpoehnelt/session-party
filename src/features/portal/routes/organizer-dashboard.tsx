@@ -57,8 +57,10 @@ function LiveOrganizerDashboard({
       });
       toast("Contact logged", { tone: "success" });
       refresh();
+      return true;
     } catch (error) {
       toast(error instanceof Error ? error.message : "Contact could not be logged", { tone: "danger" });
+      return false;
     } finally {
       setBusySpeakerId(null);
     }
@@ -69,11 +71,11 @@ function LiveOrganizerDashboard({
 export function OrganizerDashboardContent({
   dashboard,
   busySpeakerId = null,
-  onLogContact = () => undefined,
+  onLogContact = () => false,
 }: {
   readonly dashboard: PortalDashboard;
   readonly busySpeakerId?: string | null;
-  readonly onLogContact?: (speakerId: string, medium: SpeakerContactMedium, note: string) => void;
+  readonly onLogContact?: (speakerId: string, medium: SpeakerContactMedium, note: string) => boolean | Promise<boolean>;
 }) {
   const [needsAttentionOnly, setNeedsAttentionOnly] = useState(false);
   const speakers = useMemo(
@@ -147,7 +149,14 @@ export function OrganizerDashboardContent({
               render: (item) => (
                 <div className="min-w-32">
                   <p className="font-medium text-ink">{item.readiness.tasksDone} / {item.readiness.tasksTotal}</p>
-                  <div className="mt-2 flex gap-1" aria-label={`${item.readiness.tasksDone} of ${item.readiness.tasksTotal} tasks complete`}>
+                  <div
+                    className="mt-2 flex gap-1"
+                    role="progressbar"
+                    aria-label="Tasks complete"
+                    aria-valuemin={0}
+                    aria-valuemax={item.readiness.tasksTotal}
+                    aria-valuenow={item.readiness.tasksDone}
+                  >
                     {Array.from({ length: item.readiness.tasksTotal }, (_, index) => (
                       <span
                         key={index}
@@ -226,17 +235,18 @@ function ContactLogForm({
 }: {
   readonly item: SpeakerDirectoryItem;
   readonly busy: boolean;
-  readonly onLogContact: (speakerId: string, medium: SpeakerContactMedium, note: string) => void;
+  readonly onLogContact: (speakerId: string, medium: SpeakerContactMedium, note: string) => boolean | Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
-    onLogContact(
+    const saved = await onLogContact(
       item.speaker.id,
       String(values.get("medium")) as SpeakerContactMedium,
       String(values.get("note") ?? ""),
     );
+    if (saved) setOpen(false);
   }
   if (!open) return <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>Log contact</Button>;
   return (

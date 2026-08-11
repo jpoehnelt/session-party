@@ -11,6 +11,7 @@ import FormsPage, {
   fetchFormSummaries,
   FormPresenceNotice,
   FormsWorkspace,
+  hasUnsavedFormChanges,
   path,
   publishFormDraft,
   selectedFormForRender,
@@ -266,6 +267,16 @@ describe("forms organizer route", () => {
     expect(shouldApplyReturnedForm(formDetail.id, formDetail.id)).toBe(true);
     expect(shouldApplyReturnedForm("form_other", formDetail.id)).toBe(false);
     expect(shouldApplyReturnedForm("form_other", formDetail.id, true)).toBe(true);
+  });
+
+  it("distinguishes editable draft changes from server-only metadata", () => {
+    expect(hasUnsavedFormChanges(formDetail, formDetail)).toBe(false);
+    expect(hasUnsavedFormChanges({ ...formDetail, updatedAt: formDetail.updatedAt + 1 }, formDetail)).toBe(false);
+    expect(hasUnsavedFormChanges({ ...formDetail, name: "Unsaved name" }, formDetail)).toBe(true);
+    expect(hasUnsavedFormChanges({
+      ...formDetail,
+      fields: formDetail.fields.map((field, index) => index === 0 ? { ...field, label: "Unsaved field" } : field),
+    }, formDetail)).toBe(true);
   });
 
   it("shows presence only for people viewing the selected form", () => {

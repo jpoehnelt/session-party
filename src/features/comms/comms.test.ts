@@ -2,6 +2,7 @@ import { applyD1Migrations, env, runInDurableObject, type D1Migration } from "cl
 import type { Principal } from "contracts/principal";
 import {
   acceptanceEvents,
+  auditLog,
   domainChanges,
   emailTemplates,
   eventMembers,
@@ -359,6 +360,49 @@ describe("communications authorization and validation", () => {
       expiresAt: now.getTime() + 86_400_000,
     };
     await expect(runAs(scopedApiKey, listTemplates({ eventId: seeded.eventId }))).resolves.toHaveLength(1);
+  });
+
+  it("commits exactly one competing template writer and records evidence only for the winner", async () => {
+    const seeded = await seedCommunication("template-concurrency");
+    const update = (subject: string, idempotencyKey: string) => runEitherAs(seeded.owner, updateTemplate({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      name: "Acceptance note",
+      subject,
+      textBody: "Your session {{talk.title}} is accepted for {{event.name}} at {{event.location}}.",
+      htmlBody: "<p>Your session {{talk.title}} is accepted for {{event.name}} at {{event.location}}.</p>",
+      attachIcs: false,
+      expectedVersion: 1,
+      idempotencyKey,
+    }));
+
+    const results = await Promise.all([
+      update("Writer A won", "comms-template-concurrency-a"),
+      update("Writer B won", "comms-template-concurrency-b"),
+    ]);
+    expect(results.filter(({ _tag }) => _tag === "Right")).toHaveLength(1);
+    expect(results.filter(({ _tag }) => _tag === "Left")).toHaveLength(1);
+    const failure = results.find(({ _tag }) => _tag === "Left");
+    if (failure?._tag === "Left") expect(failure.left).toMatchObject({ _tag: "Conflict" });
+
+    const [current] = await seeded.db.select().from(emailTemplates).where(eq(emailTemplates.id, seeded.templateId));
+    expect(current).toMatchObject({ version: 2 });
+    expect(["Writer A won", "Writer B won"]).toContain(current!.subject);
+    await expect(seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId),
+      eq(domainChanges.aggregateId, seeded.templateId),
+      eq(domainChanges.eventType, "comms.template.updated"),
+    ))).resolves.toHaveLength(1);
+    await expect(seeded.db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, seeded.eventId),
+      eq(auditLog.resourceId, seeded.templateId),
+      eq(auditLog.action, "comms.template.update"),
+    ))).resolves.toHaveLength(1);
+    await expect(seeded.db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, seeded.eventId),
+      eq(idempotencyRecords.operationId, "comms.updateTemplate"),
+      eq(idempotencyRecords.status, "completed"),
+    ))).resolves.toHaveLength(1);
   });
 
   it("uses an event-scoped contact address when an accepted speaker has no account", async () => {

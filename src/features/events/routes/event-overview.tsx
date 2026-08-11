@@ -136,6 +136,7 @@ export default function EventOverviewPage() {
         <Skeleton />
       ) : loadError?.kind === "unauthenticated" ? (
         <EmptyState
+          headingLevel={1}
           title="Sign in to view this event"
           description="Sign in to continue to this event."
           action={
@@ -148,9 +149,10 @@ export default function EventOverviewPage() {
           }
         />
       ) : loadError?.kind === "not-found" ? (
-        <EmptyState title="Event not found" description="This event may have moved or been removed." />
+        <EmptyState headingLevel={1} title="Event not found" description="This event may have moved or been removed." />
       ) : loadError?.kind === "failed" ? (
         <EmptyState
+          headingLevel={1}
           title="Could not load event"
           description={loadError.message}
           action={
@@ -160,7 +162,7 @@ export default function EventOverviewPage() {
           }
         />
       ) : overview === null ? (
-        <EmptyState title="Event not found" description="This event may have moved or been removed." />
+        <EmptyState headingLevel={1} title="Event not found" description="This event may have moved or been removed." />
       ) : (
         <EventOverviewContent
           overview={overview}

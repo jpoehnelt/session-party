@@ -8,6 +8,7 @@ screenshots-pages/
 .regconfig.storybook.json
 .regconfig.pages.json
 playwright-report/
+playwright-report-qa/
 test-results/
 .rubric/
 vitest-rubric.json

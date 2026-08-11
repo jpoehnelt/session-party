@@ -83,8 +83,10 @@ export default function OrganizerSpeakersRoute() {
       await action();
       toast(success, { tone: "success" });
       retry();
+      return true;
     } catch (error) {
       toast(error instanceof Error ? error.message : "Speaker could not be updated", { tone: "danger" });
+      return false;
     } finally {
       setBusySpeakerId(null);
     }
@@ -184,7 +186,7 @@ export function OrganizerSpeakersContent({
   readonly busySpeakerId?: string | null;
   readonly onProvision: (speaker: SpeakerDirectoryItem) => void;
   readonly onVisibility: (speaker: SpeakerDirectoryItem, visible: boolean) => void;
-  readonly onCreate?: (form: HTMLFormElement) => void;
+  readonly onCreate?: (form: HTMLFormElement) => boolean | Promise<boolean>;
   readonly onUpdate?: (speaker: SpeakerDirectoryItem, form: HTMLFormElement) => void;
   readonly onImportCsv?: (csv: string) => void;
   readonly onMessage?: (speakerIds: readonly string[], kind: "invite" | "reminder") => void;
@@ -232,7 +234,11 @@ export function OrganizerSpeakersContent({
         <div className="grid gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
           {onCreate ? (
             <Card title="Add speaker directly">
-              <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onCreate(event.currentTarget); }}>
+              <form className="space-y-4" onSubmit={async (event) => {
+                event.preventDefault();
+                const form = event.currentTarget;
+                if (await onCreate(form)) form.reset();
+              }}>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Input name="displayName" label="Display name" required />
                   <Input name="contactEmail" type="email" label="Contact email" required />
@@ -242,7 +248,10 @@ export function OrganizerSpeakersContent({
                   <Checkbox name="visible" label="Visible when published" defaultChecked />
                 </div>
                 <Textarea name="bio" label="Biography" />
-                <Button type="submit" loading={busySpeakerId === "new"}>Add speaker</Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" loading={busySpeakerId === "new"}>Add speaker</Button>
+                  <Button type="reset" variant="ghost" disabled={busySpeakerId === "new"}>Reset</Button>
+                </div>
               </form>
             </Card>
           ) : null}
@@ -439,7 +448,7 @@ export function OrganizerSpeakersContent({
                 ) : (
                   <Button size="sm" variant="secondary" className={productionButtonClass} loading={busySpeakerId === item.speaker.id} onClick={() => onProvision(item)}>Provision</Button>
                 )}
-                {onUpdate ? (
+                {onUpdate && item.source === "manual" ? (
                   <details>
                     <summary className="cursor-pointer text-xs font-bold underline">Edit profile</summary>
                     <form className="mt-3 min-w-72 space-y-3" onSubmit={(event) => { event.preventDefault(); onUpdate(item, event.currentTarget); }}>
@@ -454,6 +463,8 @@ export function OrganizerSpeakersContent({
                       <Button size="sm" type="submit" loading={busySpeakerId === item.speaker.id}>Save speaker</Button>
                     </form>
                   </details>
+                ) : item.source === "accepted" ? (
+                  <p className="max-w-48 text-xs text-ink-faint">Profile details are managed by this accepted speaker in their portal.</p>
                 ) : null}
               </div>
             ),

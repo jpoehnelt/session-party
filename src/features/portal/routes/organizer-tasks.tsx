@@ -219,16 +219,19 @@ function TaskFields({
   readonly deleteAction?: ReactNode;
 }) {
   const dateValue = localDateTimeValue(task?.dueAt);
+  const [kind, setKind] = useState<PortalTaskKind>(task?.kind ?? "confirm");
   return (
     <form className={`space-y-4 ${productionFormClass}`} onSubmit={onSubmit}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Input name="name" label="Task name" required defaultValue={task?.name ?? ""} />
-        <Select name="kind" label="Task type" defaultValue={task?.kind ?? "confirm"}>
+        <Select name="kind" label="Task type" value={kind} onChange={(event) => setKind(event.currentTarget.value as PortalTaskKind)}>
           {taskKinds.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
         </Select>
         <Input name="order" label="Order" type="number" required defaultValue={task?.order ?? 0} />
         <Input name="dueAt" label="Due date" type="datetime-local" step={1} defaultValue={dateValue} />
-        <Input name="formId" label="Form ID" hint="Required only for form tasks." defaultValue={task?.formId ?? ""} />
+        {kind === "form" && (
+          <Input name="formId" label="Form ID" hint="Required for form tasks." required defaultValue={task?.formId ?? ""} />
+        )}
       </div>
       <Textarea name="description" label="Instructions" defaultValue={task?.description ?? ""} />
       <fieldset className="space-y-2 border-2 border-[#171714] bg-[#fffdf7] p-3">

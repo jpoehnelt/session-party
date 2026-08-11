@@ -221,7 +221,7 @@ export const evidencePlan = {
   "CNT-09": [test(agendaService, "edits the organizer session title and abstract with versioned evidence")],
   "CNT-10": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
   "CNT-11": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
-  "CNT-12": [test(publicationService, "publishes only confirmed talks and keeps existing public widgets live with organizer edits")],
+  "CNT-12": [test(publicationService, "publishes only confirmed talks and keeps public projections immutable until republished")],
   "CNT-13": [
     browser(portalContentBrowser, "shows session and version metadata and confirms a latest-only multi-file ZIP"),
   ],
@@ -242,7 +242,7 @@ export const evidencePlan = {
     test(agendaService, "creates, schedules, moves, replays idempotently, and cancels a talk with evidence"),
     test(agendaService, "saves TBD placement through the versioned move operation and defers completeness to publication"),
   ],
-  "AIA-07": [test(agendaService, "keeps an existing published widget consistent with organizer session edits without republishing")],
+  "AIA-07": [test(agendaService, "keeps an existing published widget immutable while organizer drafts continue changing")],
   "AIA-08": [test(agendaService, "auto-places an unplaced talk into the first conflict-free event slot")],
 
   "EMB-01": [browser(publicProgramBrowser, "proves complete session cards, title and speaker search, facets, and description expansion")],
@@ -281,8 +281,8 @@ export const evidencePlan = {
     test(publicationService, "persists versioned embeds and makes disabling the stable URL real"),
   ],
   "EMB-16": [
-    test(agendaService, "keeps an existing published widget consistent with organizer session edits without republishing"),
-    test(publicationService, "publishes only confirmed talks and keeps existing public widgets live with organizer edits"),
+    test(agendaService, "keeps an existing published widget immutable while organizer drafts continue changing"),
+    test(publicationService, "publishes only confirmed talks and keeps public projections immutable until republished"),
     test(publicProgram, "keeps session and speaker identity consistent across public surfaces and organizer source"),
   ],
 

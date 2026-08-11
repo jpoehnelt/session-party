@@ -8,6 +8,14 @@ import { useEventRoom } from "@/client/socket";
 import {
   Alert,
   AlertDescription,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   AlertTitle,
   Badge,
   Button,
@@ -144,6 +152,22 @@ const draftFields = (form: FormDetail): readonly FormFieldDraft[] => form.fields
   logic: field.logic,
   routing: field.routing,
 }));
+
+export function hasUnsavedFormChanges(draft: FormDetail, persisted: FormDetail): boolean {
+  return JSON.stringify({
+    name: draft.name,
+    description: draft.description,
+    opensAt: draft.opensAt,
+    closesAt: draft.closesAt,
+    fields: draftFields(draft),
+  }) !== JSON.stringify({
+    name: persisted.name,
+    description: persisted.description,
+    opensAt: persisted.opensAt,
+    closesAt: persisted.closesAt,
+    fields: draftFields(persisted),
+  });
+}
 
 async function mutationResponse(response: Response): Promise<FormDetail> {
   const payload: unknown = await response.json().catch(() => null);
@@ -343,6 +367,10 @@ type MutationState = Readonly<{
   message: string | null;
 }>;
 
+type PendingFormDestination =
+  | Readonly<{ kind: "selection"; formId: string }>
+  | Readonly<{ kind: "create" }>;
+
 function LoadingRegion({ label }: { readonly label: string }) {
   return (
     <>
@@ -419,6 +447,7 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
         <>
           <Card className="rounded-none border-[3px] border-[#171714] bg-[#caff4a] shadow-[8px_8px_0_#171714]">
             <EmptyState
+              headingLevel={1}
               title="Sign in to view this event"
               description="Sign in to continue to this event's forms."
               action={
@@ -438,6 +467,7 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
       <>
         <Card className="rounded-none border-[3px] border-[#171714] bg-[#ff714f] shadow-[8px_8px_0_#171714]">
           <EmptyState
+            headingLevel={1}
             title={recoverable ? "Could not load event" : "Event not found"}
             description={eventError ?? "The event may have moved or been removed."}
             action={
@@ -500,22 +530,64 @@ export function FormsWorkspace({
   const [createAdditionalOpen, setCreateAdditionalOpen] = useState(false);
   const [additionalName, setAdditionalName] = useState("");
   const [additionalDescription, setAdditionalDescription] = useState("");
+  const [pendingFormDestination, setPendingFormDestination] = useState<PendingFormDestination | null>(null);
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const [realtimeReady, setRealtimeReady] = useState(false);
+  const createAdditionalTriggerRef = useRef<HTMLButtonElement>(null);
+  const createAdditionalWasOpenRef = useRef(false);
   const selectedIdRef = useRef<string | null>(initialSelectedId);
+  const persistedFormsRef = useRef(new Map<string, FormDetail>(
+    initialSelectedForm ? [[initialSelectedForm.id, initialSelectedForm]] : [],
+  ));
   selectedIdRef.current = selectedId;
 
   useEffect(() => {
     setRealtimeReady(true);
   }, []);
 
-  const selectForm = useCallback((formId: string | null) => {
+  useEffect(() => {
+    if (createAdditionalWasOpenRef.current && !createAdditionalOpen) {
+      createAdditionalTriggerRef.current?.focus();
+    }
+    createAdditionalWasOpenRef.current = createAdditionalOpen;
+  }, [createAdditionalOpen]);
+
+  const applyFormSelection = useCallback((formId: string | null) => {
     selectedIdRef.current = formId;
     setSelectedId(formId);
     setSelectedForm(formId ? undefined : null);
     setDetailError(null);
   }, []);
 
+  const discardCurrentDraft = useCallback(() => {
+    const persisted = selectedIdRef.current ? persistedFormsRef.current.get(selectedIdRef.current) : undefined;
+    if (persisted) {
+      setSelectedForm(persisted);
+      setEditorEpoch((value) => value + 1);
+    }
+  }, []);
+
+  const applyFormDestination = useCallback((destination: PendingFormDestination, discardCurrent = false) => {
+    if (discardCurrent) discardCurrentDraft();
+    if (destination.kind === "create") {
+      setCreateAdditionalOpen(true);
+      return;
+    }
+    applyFormSelection(destination.formId);
+  }, [applyFormSelection, discardCurrentDraft]);
+
+  const requestFormDestination = useCallback((destination: PendingFormDestination) => {
+    if (destination.kind === "selection" && destination.formId === selectedIdRef.current) return;
+    const persisted = selectedIdRef.current ? persistedFormsRef.current.get(selectedIdRef.current) : undefined;
+    if (selectedForm && persisted && hasUnsavedFormChanges(selectedForm, persisted)) {
+      setPendingFormDestination(destination);
+      return;
+    }
+    applyFormDestination(destination);
+  }, [applyFormDestination, selectedForm]);
+
   const applyDetail = useCallback((form: FormDetail, forceSelection = false) => {
+    persistedFormsRef.current.set(form.id, form);
     if (shouldApplyReturnedForm(selectedIdRef.current, form.id, forceSelection)) {
       selectedIdRef.current = form.id;
       setSelectedId(form.id);
@@ -567,7 +639,8 @@ export function FormsWorkspace({
       await deleteFormDraft(event.id, draft.id, draft.version, mutationKey("forms-delete-draft"));
       const remaining = (summaries ?? []).filter((form) => form.id !== draft.id);
       setSummaries(remaining);
-      selectForm(remaining[0]?.id ?? null);
+      persistedFormsRef.current.delete(draft.id);
+      applyFormSelection(remaining[0]?.id ?? null);
       setMutation({ action: null, tone: "success", message: "Unpublished draft deleted." });
       toast("Draft deleted.", { tone: "success" });
     } catch (error) {
@@ -664,7 +737,10 @@ export function FormsWorkspace({
     setDetailError(null);
     void fetchFormDetail(event.id, selectedId)
       .then((loaded) => {
-        if (active) setSelectedForm(loaded);
+        if (active) {
+          persistedFormsRef.current.set(loaded.id, loaded);
+          setSelectedForm(loaded);
+        }
       })
       .catch((error) => {
         if (!active) return;
@@ -713,11 +789,12 @@ export function FormsWorkspace({
         className="border-[3px] border-[#171714] bg-[#896aff] p-5 text-[#171714] shadow-[7px_7px_0_#171714] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-none [&_h1]:tracking-[-0.055em] [&_h1]:text-[#171714] sm:[&_h1]:text-5xl [&_p]:mt-3 [&_p]:max-w-xl [&_p]:font-semibold [&_p]:text-[#171714]"
         actions={summaries.length > 0 ? (
           <Button
+            ref={createAdditionalTriggerRef}
             className="min-h-11 rounded-none border-2 border-[#171714] bg-[#caff4a] px-5 text-xs font-black uppercase tracking-[0.1em] text-[#171714] shadow-[4px_4px_0_#171714] hover:bg-[#d7ff78]"
             loading={mutation.action === "create"}
             onClick={() => {
               if (summaries.some((form) => form.purpose === "primary-cfp")) {
-                setCreateAdditionalOpen(true);
+                requestFormDestination({ kind: "create" });
               } else {
                 void handleCreate("primary-cfp");
               }
@@ -786,7 +863,7 @@ export function FormsWorkspace({
                       key={form.id}
                       variant={active ? "secondary" : "ghost"}
                       aria-current={active ? "page" : undefined}
-                      onClick={() => selectForm(form.id)}
+                      onClick={() => requestFormDestination({ kind: "selection", formId: form.id })}
                       className={`h-auto w-full flex-col items-stretch whitespace-normal rounded-none border-2 border-[#171714] px-3 py-3 text-left transition-transform hover:-translate-y-0.5 ${
                         active ? "bg-[#896aff] text-[#171714] shadow-[3px_3px_0_#171714]" : "bg-[#f3efe3] hover:bg-[#caff4a]"
                       }`}
@@ -838,7 +915,7 @@ export function FormsWorkspace({
               </Card>
             ) : (
               <FormBuilder
-                key={`${visibleSelectedForm.id}:${visibleSelectedForm.version}`}
+                key={`${visibleSelectedForm.id}:${visibleSelectedForm.version}:${editorEpoch}`}
                 form={visibleSelectedForm}
                 busyAction={mutation.action}
                 onChange={setSelectedForm}
@@ -863,6 +940,7 @@ export function FormsWorkspace({
       )}
       <Modal
         open={createAdditionalOpen}
+        returnFocusRef={createAdditionalTriggerRef}
         onClose={() => {
           if (mutation.action !== "create") setCreateAdditionalOpen(false);
         }}
@@ -913,6 +991,28 @@ export function FormsWorkspace({
           />
         </form>
       </Modal>
+      <AlertDialog open={pendingFormDestination !== null} onOpenChange={(open) => { if (!open) setPendingFormDestination(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved form changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your draft edits have not been saved. Stay here to keep editing, or discard them and continue.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const destination = pendingFormDestination;
+                setPendingFormDestination(null);
+                if (destination) applyFormDestination(destination, true);
+              }}
+            >
+              Discard changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Toaster />
       </div>
     </div>

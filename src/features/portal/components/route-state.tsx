@@ -54,6 +54,7 @@ export function RouteFailure({ message, onRetry }: { readonly message: string; r
   return (
     <Card className={productionCardClass}>
       <EmptyState
+        headingLevel={1}
         title="Portal could not load"
         description={message}
         action={<Button className={`${productionButtonClass} bg-[#ff714f] text-[#171714]`} onClick={onRetry}>Try again</Button>}

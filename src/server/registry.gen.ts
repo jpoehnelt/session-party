@@ -536,6 +536,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
   {
     "input": {
       "body": [
+        "expectedVersion",
         "name",
         "slug",
         "description",
@@ -49921,6 +49922,12 @@ export const openApi = {
                       }
                     ]
                   },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/Int",
+                    "description": "a positive number",
+                    "exclusiveMinimum": 0,
+                    "title": "positive"
+                  },
                   "location": {
                     "anyOf": [
                       {
@@ -49963,7 +49970,9 @@ export const openApi = {
                     "type": "string"
                   }
                 },
-                "required": [],
+                "required": [
+                  "expectedVersion"
+                ],
                 "type": "object"
               }
             }
@@ -50092,8 +50101,10 @@ export const openApi = {
         "x-authorization": {
           "kind": "authenticated"
         },
-        "x-concurrency": "none",
-        "x-emits": [],
+        "x-concurrency": "required",
+        "x-emits": [
+          "events.updated"
+        ],
         "x-idempotency": "none",
         "x-operation-kind": "command"
       }
