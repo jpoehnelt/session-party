@@ -6,6 +6,7 @@ import type { PublishedAgenda } from "@/features/agenda/schema";
 import type { PublicSpeakerGallery } from "@/features/portal/schema";
 import {
   PublicProgram,
+  publicDetailFromSplat,
   publicSurfaceFromSplat,
   sessionMatches,
   sortPublicSpeakers,
@@ -82,9 +83,9 @@ const gallery: PublicSpeakerGallery = {
   ],
 };
 
-const render = (surface: Parameters<typeof PublicProgram>[0]["surface"]) =>
+const render = (surface: Parameters<typeof PublicProgram>[0]["surface"], detail?: Parameters<typeof PublicProgram>[0]["detail"]) =>
   renderToStaticMarkup(createElement(MemoryRouter, {
-    children: createElement(PublicProgram, { agenda, gallery, surface }),
+    children: createElement(PublicProgram, { agenda, gallery, surface, detail }),
   }));
 
 describe("public program", () => {
@@ -93,6 +94,8 @@ describe("public program", () => {
     expect(publicSurfaceFromSplat("agenda")).toBe("agenda");
     expect(publicSurfaceFromSplat("schedule/details")).toBe("schedule");
     expect(publicSurfaceFromSplat("unknown")).toBe("sessions");
+    expect(publicDetailFromSplat("sessions/talk-ci")).toEqual({ sessionId: "talk-ci" });
+    expect(publicDetailFromSplat("speakers/speaker-marcus")).toEqual({ speakerId: "speaker-marcus" });
   });
 
   it("searches sessions by title or speaker and applies facets", () => {
@@ -120,6 +123,20 @@ describe("public program", () => {
     expect(markup).toContain("Format · 30 minutes");
     expect(markup).toContain("Show more");
     expect(markup).toContain("2 sessions");
+    expect(markup).toContain('href="/event/devflow-conf-2027/sessions/talk-ci"');
+    expect(markup).toContain('href="/event/devflow-conf-2027/speakers/speaker-marcus"');
+  });
+
+  it("renders bookmarkable session and event-speaker detail pages", () => {
+    const sessionMarkup = render("sessions", { sessionId: "talk-ci" });
+    expect(sessionMarkup).toContain("Session detail");
+    expect(sessionMarkup).toContain("Back to sessions");
+    expect(sessionMarkup).not.toContain("Retrieval-grounded");
+
+    const speakerMarkup = render("speakers", { speakerId: "speaker-marcus" });
+    expect(speakerMarkup).toContain("Speaker detail");
+    expect(speakerMarkup).toContain("Docs That Answer Back");
+    expect(speakerMarkup).toContain('href="/event/devflow-conf-2027/sessions/talk-docs"');
   });
 
   it("renders itinerary controls and a calendar export affordance", () => {

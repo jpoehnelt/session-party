@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router";
 import { Avatar, EmptyState } from "@/ui";
 import { RouteFailure, RouteLoading, useRouteLoad } from "@/features/portal/components/route-state";
 import type { PublicProfileAppearance } from "../schema";
+import { publicSessionPath } from "@/features/publication/links";
 import { getPublicProfile } from "./api";
 
 export const path = "/speakers/:speakerSlug";
@@ -47,16 +48,16 @@ export default function PublicProfileRoute() {
                 <li className="border-2 border-line-strong bg-surface p-6 shadow-card" key={appearance.eventId}>
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
-                      <h3 className="text-2xl font-black tracking-[-0.035em]">{appearance.eventName}</h3>
+                      <h3 className="text-2xl font-black tracking-[-0.035em]"><Link className="underline decoration-2 underline-offset-4 hover:text-accent-deep" to={`/event/${encodeURIComponent(appearance.eventSlug)}/sessions`}>{appearance.eventName}</Link></h3>
                       <p className="mt-1 text-sm font-medium text-ink-secondary">{[eventDate(appearance), appearance.location].filter(Boolean).join(" · ")}</p>
                     </div>
-                    <Link className="inline-flex h-10 items-center border-2 border-line-strong bg-surface px-4 text-sm font-black uppercase tracking-[0.075em] text-ink shadow-button" to={`/embed/${appearance.eventSlug}/speakers`}>Event speakers</Link>
+                    <Link className="inline-flex h-10 items-center border-2 border-line-strong bg-surface px-4 text-sm font-black uppercase tracking-[0.075em] text-ink shadow-button" to={`/event/${encodeURIComponent(appearance.eventSlug)}/speakers`}>Event speakers</Link>
                   </div>
                   {appearance.talks.length > 0 && (
                     <ul className="mt-5 grid gap-3 border-t border-line pt-5">
                       {appearance.talks.map((talk) => (
                         <li key={talk.id}>
-                          <p className="font-bold">{talk.title}</p>
+                          <Link className="font-bold underline decoration-2 underline-offset-3 hover:text-accent-deep" to={publicSessionPath(appearance.eventSlug, talk.id)}>{talk.title}</Link>
                           <p className="mt-1 text-xs font-medium uppercase tracking-[0.08em] text-ink-faint">{[talk.track, talk.room].filter(Boolean).join(" · ")}</p>
                         </li>
                       ))}

@@ -456,6 +456,10 @@ export const ContentAsset = Schema.Struct({
   speakerName: NonEmptyText,
   speakerVersion: Schema.Int.pipe(Schema.positive()),
   sessionTitles: Schema.Array(NonEmptyText),
+  sessionLinks: Schema.optional(Schema.Array(Schema.Struct({
+    id: EntityId,
+    title: NonEmptyText,
+  }))),
   versionCount: Schema.Int.pipe(Schema.positive()),
   current: Schema.Boolean,
   supersedesAssetId: Schema.NullOr(EntityId),

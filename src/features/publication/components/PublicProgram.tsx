@@ -12,7 +12,6 @@ import {
   Card,
   EmptyState,
   Input,
-  Modal,
   Select,
   SpeakerGallery,
   Tabs,
@@ -23,6 +22,7 @@ import {
   publishedSessionIcsPath,
   renderPublishedCalendar,
 } from "../feeds";
+import { publicEventSpeakerPath, publicSessionPath } from "../links";
 
 export type PublicProgramSurface =
   | "sessions"
@@ -53,6 +53,19 @@ export function publicSurfaceFromSplat(value: string | undefined): PublicProgram
   return SURFACES.some(({ id }) => id === segment)
     ? segment as PublicProgramSurface
     : "sessions";
+}
+
+export interface PublicProgramDetail {
+  readonly sessionId?: string;
+  readonly speakerId?: string;
+}
+
+export function publicDetailFromSplat(value: string | undefined): PublicProgramDetail {
+  const [surface, id] = value?.split("/").filter(Boolean) ?? [];
+  if (!id) return {};
+  if (surface === "sessions") return { sessionId: id };
+  if (surface === "speakers" || surface === "gallery") return { speakerId: id };
+  return {};
 }
 
 export function sessionMatches(
@@ -166,10 +179,12 @@ function talksForSpeaker(
 function SpeakerLines({
   talk,
   speakers,
+  eventSlug,
   className,
 }: {
   readonly talk: PublicAgendaTalk;
   readonly speakers?: ReadonlyMap<string, PublicSpeaker>;
+  readonly eventSlug: string;
   readonly className?: string;
 }) {
   return (
@@ -177,12 +192,16 @@ function SpeakerLines({
       {talk.speakerNames.map((name) => {
         const speaker = speakers?.get(normalize(name));
         const publishedProfile = talk.speakerProfiles?.find((candidate) => candidate.name === name);
-        const publicProfileSlug = speaker?.publicProfileSlug ?? publishedProfile?.slug;
+        const href = speaker
+          ? publicEventSpeakerPath(eventSlug, speaker)
+          : publishedProfile?.slug
+            ? `/speakers/${encodeURIComponent(publishedProfile.slug)}`
+            : undefined;
         const identity = [speaker?.title, speaker?.company].filter(Boolean).join(" at ");
         return (
           <li key={name}>
-            {publicProfileSlug ? (
-              <a className="font-black text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(publicProfileSlug)}`}>{name}</a>
+            {href ? (
+              <a className="font-black text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={href}>{name}</a>
             ) : <span className="font-black text-ink">{name}</span>}
             {identity ? ` — ${identity}` : ""}
           </li>
@@ -222,7 +241,7 @@ function SessionDetail({
       </p>
       <div>
         <h3 className="mb-3 text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep">Speakers on this cue</h3>
-        <SpeakerLines talk={talk} speakers={speakers} />
+        <SpeakerLines talk={talk} speakers={speakers} eventSlug={agenda.eventSlug} />
       </div>
       <a
         className="inline-flex min-h-10 items-center border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.075em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5 hover:bg-production-sky focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3"
@@ -237,11 +256,9 @@ function SessionDetail({
 function SessionsSurface({
   agenda,
   gallery,
-  onSelect,
 }: {
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
-  readonly onSelect: (talk: PublicAgendaTalk) => void;
 }) {
   const [query, setQuery] = useState("");
   const [track, setTrack] = useState("");
@@ -295,13 +312,13 @@ function SessionsSurface({
                     <p className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-secondary">
                       {formatDateTime(talk.startsAt, agenda.timezone)}
                     </p>
-                    <button type="button" className="mt-2 text-left" onClick={() => onSelect(talk)}>
+                    <Link className="mt-2 block text-left" to={publicSessionPath(agenda.eventSlug, talk.id)}>
                       <h2 className="text-xl font-black leading-tight tracking-[-0.03em] text-ink underline-offset-4 hover:underline">{talk.title}</h2>
-                    </button>
+                    </Link>
                   </div>
                   <div className="flex flex-1 flex-col gap-4 px-4 py-4">
                     <SessionBadges talk={talk} />
-                    <SpeakerLines talk={talk} speakers={speakers} />
+                    <SpeakerLines talk={talk} speakers={speakers} eventSlug={agenda.eventSlug} />
                     <div className="mt-auto border-t-2 border-line-strong pt-4">
                       <p className={isExpanded || !canExpand ? "text-sm font-medium leading-6 text-ink-secondary" : "line-clamp-3 text-sm font-medium leading-6 text-ink-secondary"}>
                         {description}
@@ -387,7 +404,7 @@ function SpeakerDetail({
           <ul className="mt-3 divide-y-2 divide-line-strong border-2 border-line-strong shadow-[3px_3px_0_#171714]">
             {sessions.map((talk) => (
               <li key={talk.id} className="bg-surface p-3 odd:bg-production-lime/25">
-                <p className="font-black text-ink">{talk.title}</p>
+                <Link className="font-black text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" to={publicSessionPath(agenda.eventSlug, talk.id)}>{talk.title}</Link>
                 <p className="mt-1 text-xs text-ink-faint">
                   {formatDateTime(talk.startsAt, agenda.timezone)} · {talk.room ?? "Room to be announced"}
                 </p>
@@ -404,12 +421,10 @@ function SpeakersSurface({
   agenda,
   gallery,
   mode,
-  onSelect,
 }: {
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
   readonly mode: "list" | "gallery";
-  readonly onSelect: (speaker: PublicSpeaker) => void;
 }) {
   const [query, setQuery] = useState("");
   const filtered = sortPublicSpeakers(gallery.speakers).filter((speaker) =>
@@ -450,12 +465,8 @@ function SpeakersSurface({
             bio: speaker.bio ?? undefined,
             headshotUrl: speaker.headshotUrl ?? undefined,
             links: speaker.links,
-            profileUrl: speaker.publicProfileSlug ? `/speakers/${encodeURIComponent(speaker.publicProfileSlug)}` : undefined,
+            profileUrl: publicEventSpeakerPath(agenda.eventSlug, speaker),
           }))}
-          onSelect={(item) => {
-            const speaker = filtered.find(({ id }) => id === item.id);
-            if (speaker) onSelect(speaker);
-          }}
         />
       ) : (
         <ul className="divide-y-2 divide-line-strong border-2 border-line-strong bg-surface shadow-[6px_6px_0_#171714]">
@@ -466,19 +477,18 @@ function SpeakersSurface({
                 <div className={`flex min-h-24 w-full flex-wrap items-center gap-4 px-4 py-4 text-left transition-colors ${index % 2 === 0 ? "bg-surface hover:bg-production-sky/35" : "bg-production-lime/20 hover:bg-production-lime/45"}`}>
                   <Avatar name={speaker.displayName} src={speaker.headshotUrl ?? undefined} size="md" />
                   <span className="min-w-48 flex-1">
-                    {speaker.publicProfileSlug ? (
-                      <a className="block text-lg font-black tracking-[-0.025em] text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(speaker.publicProfileSlug)}`}>{speaker.displayName}</a>
-                    ) : (
-                      <span className="block text-lg font-black tracking-[-0.025em] text-ink">{speaker.displayName}</span>
-                    )}
+                    <Link className="block text-lg font-black tracking-[-0.025em] text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" to={publicEventSpeakerPath(agenda.eventSlug, speaker)}>{speaker.displayName}</Link>
                     <span className="block text-sm text-ink-secondary">
                       {[speaker.title, speaker.company].filter(Boolean).join(" at ") || "Profile details coming soon"}
                     </span>
                   </span>
                   <Badge tone={sessions.length > 0 ? "accent" : "neutral"}>{sessions.length} {sessions.length === 1 ? "session" : "sessions"}</Badge>
-                  <Button type="button" size="sm" variant="secondary" onClick={() => onSelect(speaker)}>
+                  <Link
+                    className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-control border-2 border-line-strong bg-surface px-3 text-[13px] font-black uppercase tracking-[0.075em] text-ink shadow-button transition-transform hover:-translate-y-0.5 hover:bg-production-sky focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3"
+                    to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers/${encodeURIComponent(speaker.id)}`}
+                  >
                     <span className="sr-only">{speaker.displayName} </span>Event details
-                  </Button>
+                  </Link>
                 </div>
               </li>
             );
@@ -509,16 +519,17 @@ function DayTabs({
 
 function AgendaSurface({
   agenda,
-  onSelect,
+  gallery,
 }: {
   readonly agenda: PublishedAgenda;
-  readonly onSelect: (talk: PublicAgendaTalk) => void;
+  readonly gallery: PublicSpeakerGallery;
 }) {
   const days = [...new Set(agenda.talks.map((talk) => localDayKey(talk.startsAt, agenda.timezone)))];
   const [selectedDay, setSelectedDay] = useState(days[0] ?? "");
   const day = days.includes(selectedDay) ? selectedDay : days[0] ?? "";
   const talks = agenda.talks.filter((talk) => localDayKey(talk.startsAt, agenda.timezone) === day);
   const times = [...new Set(talks.map((talk) => talk.startsAt))].sort((a, b) => a - b);
+  const speakers = speakerByName(gallery);
 
   return (
     <section className="space-y-6" aria-labelledby="public-agenda-title">
@@ -537,10 +548,10 @@ function AgendaSurface({
               {talks.filter((talk) => talk.startsAt === time).map((talk, index) => (
                 <div key={talk.id} className="text-left">
                   <Card className={`h-full rounded-none transition-transform hover:-translate-y-1 [&>div]:border-t-8 ${index % 2 === 0 ? "[&>div]:border-production-sky" : "[&>div]:border-production-coral"}`}>
-                    <button type="button" className="text-left" onClick={() => onSelect(talk)}>
+                    <Link className="block text-left" to={publicSessionPath(agenda.eventSlug, talk.id)}>
                       <span className="text-lg font-black leading-tight tracking-[-0.025em] text-ink underline-offset-2 hover:underline">{talk.title}</span>
-                    </button>
-                    <SpeakerLines className="mt-2 text-sm text-ink-secondary" talk={talk} />
+                    </Link>
+                    <SpeakerLines className="mt-2 text-sm text-ink-secondary" talk={talk} speakers={speakers} eventSlug={agenda.eventSlug} />
                     <p className="mt-3 border-t-2 border-line-strong pt-2 text-[10px] font-black uppercase tracking-[0.1em] text-ink-faint">{talk.room ?? "Room TBA"} · {talk.track ?? "General"}</p>
                   </Card>
                 </div>
@@ -643,11 +654,13 @@ function ScheduleSurface({
                   </div>
                   <div className="space-y-3 p-4">
                     <SessionBadges talk={talk} />
-                    <h2 className="text-xl font-black leading-tight tracking-[-0.025em] text-ink">{talk.title}</h2>
+                    <h2 className="text-xl font-black leading-tight tracking-[-0.025em] text-ink">
+                      <Link className="underline decoration-2 underline-offset-3 hover:text-accent-deep" to={publicSessionPath(agenda.eventSlug, talk.id)}>{talk.title}</Link>
+                    </h2>
                     <p className="text-sm leading-6 text-ink-secondary">
                       {talk.description ?? "A description has not been published for this session yet."}
                     </p>
-                    <SpeakerLines talk={talk} speakers={speakers} />
+                    <SpeakerLines talk={talk} speakers={speakers} eventSlug={agenda.eventSlug} />
                   </div>
                   <Button
                     className="m-4 self-start rounded-none md:ml-0"
@@ -673,14 +686,20 @@ export function PublicProgram({
   agenda,
   gallery,
   surface,
+  detail = {},
 }: {
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
   readonly surface: PublicProgramSurface;
+  readonly detail?: PublicProgramDetail;
 }) {
-  const [selectedTalk, setSelectedTalk] = useState<PublicAgendaTalk | null>(null);
-  const [selectedSpeaker, setSelectedSpeaker] = useState<PublicSpeaker | null>(null);
   const speakers = useMemo(() => speakerByName(gallery), [gallery]);
+  const selectedTalk = detail.sessionId
+    ? agenda.talks.find(({ id }) => id === detail.sessionId)
+    : undefined;
+  const selectedSpeaker = detail.speakerId
+    ? gallery.speakers.find(({ id }) => id === detail.speakerId)
+    : undefined;
   const publishedAt = new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
@@ -728,11 +747,28 @@ export function PublicProgram({
         </div>
       </header>
       <div id="public-program-content" tabIndex={-1} className="mx-auto max-w-7xl px-4 py-9 sm:px-6 sm:py-12 lg:px-8 lg:py-14">
-        {surface === "sessions" ? <SessionsSurface agenda={agenda} gallery={gallery} onSelect={setSelectedTalk} /> : null}
-        {surface === "speakers" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="list" onSelect={setSelectedSpeaker} /> : null}
-        {surface === "agenda" ? <AgendaSurface agenda={agenda} onSelect={setSelectedTalk} /> : null}
+        {detail.sessionId ? (
+          selectedTalk ? (
+            <section className="space-y-6" aria-labelledby="public-session-detail-title">
+              <Link className="font-black text-accent-deep underline decoration-2 underline-offset-4" to={`/event/${encodeURIComponent(agenda.eventSlug)}/sessions`}>Back to sessions</Link>
+              <SurfaceIntro eyebrow="Session detail" title={selectedTalk.title} titleId="public-session-detail-title" description="Published timing, room, description, and speakers for this session." />
+              <SessionDetail talk={selectedTalk} agenda={agenda} speakers={speakers} />
+            </section>
+          ) : <EmptyState title="Session not found" description="This session is not part of the published program." action={<Link className="font-black underline" to={`/event/${encodeURIComponent(agenda.eventSlug)}/sessions`}>Back to sessions</Link>} />
+        ) : detail.speakerId ? (
+          selectedSpeaker ? (
+            <section className="space-y-6" aria-labelledby="public-speaker-detail-title">
+              <Link className="font-black text-accent-deep underline decoration-2 underline-offset-4" to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers`}>Back to speakers</Link>
+              <SurfaceIntro eyebrow="Speaker detail" title={selectedSpeaker.displayName} titleId="public-speaker-detail-title" description="Published event profile and sessions for this speaker." />
+              <SpeakerDetail speaker={selectedSpeaker} agenda={agenda} />
+            </section>
+          ) : <EmptyState title="Speaker not found" description="This speaker is not part of the published program." action={<Link className="font-black underline" to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers`}>Back to speakers</Link>} />
+        ) : null}
+        {!detail.sessionId && !detail.speakerId && surface === "sessions" ? <SessionsSurface agenda={agenda} gallery={gallery} /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "speakers" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="list" /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "agenda" ? <AgendaSurface agenda={agenda} gallery={gallery} /> : null}
         {surface === "schedule" ? <ScheduleSurface agenda={agenda} gallery={gallery} /> : null}
-        {surface === "gallery" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="gallery" onSelect={setSelectedSpeaker} /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "gallery" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="gallery" /> : null}
       </div>
       <footer className="mt-4 border-t-2 border-line-strong bg-ink text-on-accent">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
@@ -740,22 +776,6 @@ export function PublicProgram({
           <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-white/60">Schedule revision {agenda.revision} · Published {publishedAt}</p>
         </div>
       </footer>
-      <Modal
-        open={selectedTalk !== null}
-        onClose={() => setSelectedTalk(null)}
-        title={selectedTalk?.title ?? "Session details"}
-        size="lg"
-      >
-        {selectedTalk ? <SessionDetail talk={selectedTalk} agenda={agenda} speakers={speakers} /> : null}
-      </Modal>
-      <Modal
-        open={selectedSpeaker !== null}
-        onClose={() => setSelectedSpeaker(null)}
-        title={selectedSpeaker?.displayName ?? "Speaker details"}
-        size="lg"
-      >
-        {selectedSpeaker ? <SpeakerDetail speaker={selectedSpeaker} agenda={agenda} /> : null}
-      </Modal>
     </main>
   );
 }

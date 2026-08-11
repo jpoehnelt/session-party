@@ -7,6 +7,7 @@ import type {
 } from "@/features/agenda/schema";
 import type { EmbedAesthetic } from "../embed-design";
 import { SCHEDULE_EMBED_FIELDS, type ScheduleEmbedField } from "../embed-content";
+import { publicSessionPath } from "../links";
 
 export interface PublishedScheduleProps {
   readonly agenda: PublishedAgenda;
@@ -230,6 +231,7 @@ export function PublishedSchedule({
               talks={group.talks.map((talk) => ({
                 id: talk.id,
                 title: talk.title,
+                url: publicSessionPath(agenda.eventSlug, talk.id),
                 startsAt: new Date(talk.startsAt).toISOString(),
                 durationMin: talk.durationMin,
                 speakerNames: talk.speakerNames,

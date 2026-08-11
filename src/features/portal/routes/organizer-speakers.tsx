@@ -4,6 +4,7 @@ import { Avatar, Badge, Button, Card, Checkbox, Input, ReadinessThread, Select, 
 import type { CreateManagedSpeakerInput, SendSpeakerMessagesInput, SpeakerDirectory, SpeakerDirectoryItem, UpdateManagedSpeakerInput } from "../schema";
 import { createManagedSpeaker, getSpeakerDirectory, importSpeakersCsv, provisionSpeaker, reviewSpeakerProfile, sendSpeakerMessages, updateManagedSpeaker, updateSpeakerPublication, uploadManagedSpeakerHeadshot } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
+import { organizerAgendaTalkPath } from "@/features/agenda/links";
 import {
   ProductionHeader,
   ProductionSectionLabel,
@@ -407,7 +408,7 @@ export function OrganizerSpeakersContent({
                 {item.submission.category && <p className="text-xs text-ink-faint">{item.submission.category}</p>}
               </div>
             ) : item.sessions.length > 0 ? (
-              <ul className="space-y-1 text-sm">{item.sessions.map((session) => <li key={session.id}><strong>{session.title}</strong>{session.startsAt ? ` · ${new Date(session.startsAt).toLocaleString()}` : ""}</li>)}</ul>
+              <ul className="space-y-1 text-sm">{item.sessions.map((session) => <li key={session.id}><a className="font-bold underline decoration-2 underline-offset-3 hover:text-accent-deep" href={organizerAgendaTalkPath(directory.event.slug, session.id)}>{session.title}</a>{session.startsAt ? ` · ${new Date(session.startsAt).toLocaleString()}` : ""}</li>)}</ul>
             ) : <span className="text-ink-faint">Not linked</span>,
           },
           {

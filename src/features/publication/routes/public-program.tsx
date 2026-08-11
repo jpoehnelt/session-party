@@ -7,6 +7,7 @@ import { Button, EmptyState, Skeleton } from "@/ui";
 import { getPublicSchedule } from "../api";
 import {
   PublicProgram,
+  publicDetailFromSplat,
   publicSurfaceFromSplat,
 } from "../components/PublicProgram";
 
@@ -92,6 +93,7 @@ export default function PublicProgramRoute() {
       agenda={state.agenda}
       gallery={state.gallery}
       surface={publicSurfaceFromSplat(splat)}
+      detail={publicDetailFromSplat(splat)}
     />
   );
 }
