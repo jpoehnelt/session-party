@@ -25,7 +25,7 @@ import {
 import { AgendaSnapshot, PublishedAgenda } from "@/features/agenda/schema";
 import { EventOutput } from "@/features/events/schema";
 import { PublishedSchedule } from "../components/PublishedSchedule";
-import { WidgetBuilder } from "../components/PublicProgram";
+import { EmbedManager } from "../components/EmbedManager";
 import { getPublicSchedule } from "../api";
 
 export const path = "/e/:eventSlug/publication";
@@ -283,7 +283,7 @@ export default function PublicationPage() {
       </div>
       {published ? (
         <div className="mt-8 border-t-4 border-line-strong pt-8">
-          <WidgetBuilder agenda={published} />
+          <EmbedManager agenda={published} />
         </div>
       ) : null}
       <Toaster />

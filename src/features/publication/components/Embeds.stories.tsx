@@ -5,7 +5,7 @@ import type { PublishedAgenda } from "@/features/agenda/schema";
 import { ProductionBareFrame } from "@/features/portal/components/production-ui";
 import { PublicSpeakerEmbedContent } from "@/features/portal/routes/public-speakers";
 import type { PublicSpeakerGallery } from "@/features/portal/schema";
-import { PublicProgram } from "./PublicProgram";
+import { EmbedManager } from "./EmbedManager";
 import { ScheduleEmbedContent } from "../routes/schedule-embed";
 import {
   embedDesignStyle,
@@ -137,19 +137,18 @@ export const WidgetBuilderConfiguration: Story = {
   render: () => (
     <MemoryRouter>
       <div className="min-h-dvh bg-canvas p-6">
-        <PublicProgram agenda={agenda} gallery={gallery} surface="widgets" />
+        <EmbedManager agenda={agenda} />
       </div>
     </MemoryRouter>
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.selectOptions(canvas.getByLabelText("Design aesthetic"), "minimal");
+    await userEvent.selectOptions(canvas.getByLabelText("Widget"), "speakerGallery");
     fireEvent.change(canvas.getByLabelText("Brand color"), { target: { value: "#0a6b58" } });
 
     await waitFor(() => {
-      const generated = canvas.getByLabelText("Generated share URL or code") as HTMLTextAreaElement;
-      expect(generated.value).toContain("aesthetic=minimal&accent=%230A6B58");
-      expect(generated.value).toContain("border-top:4px solid #0A6B58");
+      expect(canvas.getByLabelText("Preset")).toHaveValue("speakerList");
+      expect(canvas.getByText("Feeds & integrations")).toBeVisible();
     });
   },
 };

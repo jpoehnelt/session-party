@@ -285,7 +285,6 @@ const publicSurfaceLabels: Readonly<Record<string, string>> = {
   agenda: "Agenda",
   schedule: "Schedule itinerary",
   gallery: "Speaker gallery",
-  widgets: "Embed & share",
 };
 
 export function publicProgramMetadata(pathname: string, eventName: string, canonicalUrl: string) {
@@ -327,6 +326,20 @@ async function fetchPublicProgram(request: Request, env: Env): Promise<Response>
     .transform(shell);
 }
 
+async function fetchEmbedShell(request: Request, env: Env): Promise<Response> {
+  const assets = Reflect.get(env, "ASSETS") as Fetcher | undefined;
+  const response = assets ? await assets.fetch(request) : await app.fetch(request, env);
+  const headers = new Headers(response.headers);
+  const contentSecurityPolicy = (headers.get("Content-Security-Policy") ?? "")
+    .split(";")
+    .map((directive) => directive.trim())
+    .filter((directive) => directive && !directive.toLowerCase().startsWith("frame-ancestors"));
+  headers.set("Content-Security-Policy", [...contentSecurityPolicy, "frame-ancestors *"].join("; "));
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.delete("X-Frame-Options");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 export const recoverMailScheduler = async (env: Env): Promise<void> => {
   const schedulerId = env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME);
   const response = await env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
@@ -349,6 +362,8 @@ export default {
       ? fetchMcp(request, env, ctx)
       : pathname.startsWith("/event/")
         ? fetchPublicProgram(request, env)
+      : pathname.startsWith("/embed/")
+        ? fetchEmbedShell(request, env)
       : app.fetch(request, env, ctx);
   },
   scheduled(controller, env, ctx) {
