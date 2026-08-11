@@ -202,6 +202,31 @@ describe("hackathon demo authentication", () => {
     });
   });
 
+  it("does not rewrite the healthy demo seed on repeated login", async () => {
+    const login = () => SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "organizer" }),
+    });
+    expect((await login()).status).toBe(200);
+
+    const versions = () => env.DB.prepare(
+      `SELECT email, version, updated_at
+       FROM users
+       WHERE email IN (?, ?, ?)
+       ORDER BY email`,
+    ).bind(
+      "sbek-organizer@example.com",
+      "sbek-reviewer@example.com",
+      "sbek-speaker@example.com",
+    ).all();
+    const before = await versions();
+
+    const responses = await Promise.all(Array.from({ length: 6 }, () => login()));
+    expect(responses.map(({ status }) => status)).toEqual([200, 200, 200, 200, 200, 200]);
+    expect((await versions()).results).toEqual(before.results);
+  });
+
   it("normalizes unsafe return paths", async () => {
     const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
       method: "POST",
