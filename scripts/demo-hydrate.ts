@@ -7,6 +7,7 @@ const eventId = "demo-event";
 const eventSlug = "ai-engineer-sandbox";
 const ownerSession = "demo-owner-session";
 const reviewerSession = "demo-reviewer-session";
+const recusedReviewerSession = "demo-reviewer-recused-session";
 const speakerSession = "demo-speaker-session";
 const DAY_MS = 86_400_000;
 
@@ -52,6 +53,13 @@ interface Workbench {
     readonly id: string;
     readonly version: number;
     readonly speakers: readonly { readonly id: string; readonly isPrimary: boolean }[];
+  };
+}
+
+interface AssignmentOutput {
+  readonly assignment: {
+    readonly id: string;
+    readonly version: number;
   };
 }
 
@@ -362,6 +370,33 @@ const submission = acceptedSubmissions[0];
 if (!submission || acceptedSubmissions.length !== 30 || submittedBacklog.length !== 30) {
   throw new Error("Deterministic CFP scale did not create 30 accepted candidates and 30 backlog submissions");
 }
+
+const recusalSubmission = submittedBacklog[0];
+if (!recusalSubmission) throw new Error("Deterministic CFP scale did not create a recusal fixture submission");
+const recusalAssignment = await request<AssignmentOutput>(`/events/${eventId}/review/assignments`, {
+  method: "POST",
+  session: ownerSession,
+  expectedStatus: 201,
+  headers: { "x-request-id": "demo-review-recusal-assignment-v1" },
+  body: {
+    roundId: "demo-review-round-active",
+    submissionId: recusalSubmission.submissionId,
+    reviewerUserId: "demo-reviewer-recused",
+    expectedVersion: 0,
+  },
+});
+await request(`/events/${eventId}/review/assignments/${encode(recusalAssignment.assignment.id)}/recusal`, {
+  method: "POST",
+  session: recusedReviewerSession,
+  headers: {
+    "idempotency-key": "demo-review-recusal-v1",
+    "x-request-id": "demo-review-recusal-request-v1",
+  },
+  body: {
+    expectedVersion: recusalAssignment.assignment.version,
+    reason: "Topic creates a prior-work conflict for this reviewer.",
+  },
+});
 
 let workbench = await request<Workbench>(
   `/events/${eventId}/review?selectedSubmissionId=${encode(submission.submissionId)}`,
