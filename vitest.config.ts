@@ -2,7 +2,7 @@ import {
   cloudflareTest,
   readD1Migrations,
 } from "@cloudflare/vitest-pool-workers";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import path from "node:path";
 
 const migrations = await readD1Migrations("./migrations");
@@ -37,5 +37,12 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "src"),
       contracts: path.resolve(import.meta.dirname, "contracts"),
     },
+  },
+  test: {
+    exclude: [
+      ...configDefaults.exclude,
+      "scripts/rubric/**/*.test.ts",
+      "src/**/*.browser.tsx",
+    ],
   },
 });

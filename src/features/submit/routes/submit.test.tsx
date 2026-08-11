@@ -8,6 +8,7 @@ import PublicSubmitPage, {
   path as publicPath,
   postPublicSubmission,
   draftStorageKey,
+  restoreDraftAnswers,
   visibleFields,
 } from "./public-submit";
 import MySubmissionsPage, { path as mySubmissionsPath } from "./my-submissions";
@@ -108,6 +109,20 @@ describe("public submit route", () => {
     );
     expect(markup).toContain("Deadline");
     expect(markup).toContain("August 31, 2026");
+  });
+
+  it("restores a partially completed draft after the public form reloads", () => {
+    const stored = JSON.stringify({
+      "field-title": "A resilient draft",
+      "field-from-another-version": "must not leak",
+    });
+    const restored = restoreDraftAnswers(stored, publicForm.form.fields);
+    expect(restored).toEqual({ "field-title": "A resilient draft" });
+    expect(draftStorageKey(
+      publicForm.event.slug,
+      publicForm.form.id,
+      publicForm.form.versionId,
+    )).toContain(publicForm.form.versionId);
   });
   it("uses the frozen public REST read and create endpoints", async () => {
     const created = {

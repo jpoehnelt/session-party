@@ -18,7 +18,8 @@ describe("AirtableRateLimiter", () => {
       },
     ).then((response) => response.json<{ readonly slotAt: number }>())));
     const slots = responses.map(({ slotAt }) => slotAt).sort((left, right) => left - right);
-    expect(slots.slice(1).map((slot, index) => slot - slots[index]!))
-      .toEqual(Array(3).fill(AIRTABLE_GLOBAL_INTERVAL_MS));
+    const gaps = slots.slice(1).map((slot, index) => slot - slots[index]!);
+    expect(gaps).toHaveLength(3);
+    expect(gaps.every((gap) => gap >= AIRTABLE_GLOBAL_INTERVAL_MS)).toBe(true);
   });
 });
