@@ -211,13 +211,31 @@ const requireAssignedReviewer = (
           eq(reviewAssignments.reviewerUserId, viewer.userId),
         )),
       );
-      if (
-        !assignments.some(({ status }) => status === "assigned") &&
-        assignments.some(({ status }) => status === "recused")
-      ) {
+      if (assignments.some(({ status }) => status === "assigned")) return;
+      if (assignments.some(({ status }) => status === "recused")) {
         return yield* Effect.fail(new Conflict({ message: "This review assignment has been recused" }));
       }
+      return yield* Effect.fail(new Forbidden({ reason: "This submission is not assigned to the current reviewer" }));
     });
+
+const assignedReviewerAudienceIds = (
+  eventId: string,
+  roundId: string,
+  submissionId: string,
+): Effect.Effect<readonly string[], AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const rows = yield* database(() => db.select({ userId: reviewAssignments.reviewerUserId })
+      .from(reviewAssignments)
+      .where(and(
+        eq(reviewAssignments.eventId, eventId),
+        eq(reviewAssignments.roundId, roundId),
+        eq(reviewAssignments.submissionId, submissionId),
+        eq(reviewAssignments.status, "assigned"),
+      ))
+      .orderBy(asc(reviewAssignments.reviewerUserId)));
+    return [...new Set(rows.map(({ userId }) => userId))];
+  });
 
 const normalizeRoundRubric = (
   rubric: ReviewRubricType,
@@ -923,7 +941,7 @@ export const getWorkbench = (
         .orderBy(desc(submissions.submittedAt)),
     );
     let submissionRows = allSubmissionRows;
-    if (input.assignedToMe) {
+    if (viewer.role === "reviewer" || input.assignedToMe) {
       submissionRows = submissionRows.filter((submission) => reviewerSubmissionIds.has(submission.id));
     }
     if (input.status) submissionRows = submissionRows.filter((submission) => submission.status === input.status);
@@ -1021,7 +1039,12 @@ export const getWorkbench = (
         ),
         database(() =>
           db
-            .select({ id: speakers.id, displayName: speakers.displayName, isPrimary: submissionSpeakers.isPrimary })
+            .select({
+              id: speakers.id,
+              displayName: speakers.displayName,
+              isPrimary: submissionSpeakers.isPrimary,
+              roleLabel: submissionSpeakers.roleLabel,
+            })
             .from(submissionSpeakers)
             .innerJoin(speakers, eq(speakers.id, submissionSpeakers.speakerId))
             .where(
@@ -1097,7 +1120,7 @@ export const getWorkbench = (
           ? []
           : speakerRows.map((speaker) => ({
             ...speaker,
-            role: speaker.isPrimary ? "Primary presenter" : "Co-presenter",
+            role: speaker.roleLabel ?? (speaker.isPrimary ? "Primary presenter" : "Co-presenter"),
           })),
         round: selectedRound ?? null,
         assignments: detailAssignments,
@@ -2035,12 +2058,9 @@ export const saveScore = (
     const version = (existing?.version ?? 0) + 1;
     const score = averageScore(round.rubric, scoreRecord);
     const persistedScore = score ?? 0;
-    const [reviewerName, committeeReviewers] = yield* Effect.all([
+    const [reviewerName, assignedReviewerIds] = yield* Effect.all([
       database(() => db.select({ name: users.name }).from(users).where(eq(users.id, viewer.userId)).limit(1)),
-      database(() => db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(
-        eq(eventMembers.eventId, input.eventId),
-        eq(eventMembers.role, "reviewer"),
-      ))),
+      assignedReviewerAudienceIds(input.eventId, input.roundId, input.submissionId),
     ]);
     const review: HumanReview = {
       id: reviewId,
@@ -2061,7 +2081,7 @@ export const saveScore = (
         db.insert(domainChanges).values({
           id: id("change"), eventId: input.eventId, aggregateType: "review", aggregateId: reviewId,
           aggregateVersion: version, eventType: "review.score.saved",
-          audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: committeeReviewers.map((member) => member.userId) }],
+          audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: assignedReviewerIds }],
           payload: { submissionId: input.submissionId, roundId: input.roundId, score },
           actorUserId: viewer.actorUserId, requestId: input.requestId, occurredAt: savedAt,
         }),
@@ -2095,11 +2115,11 @@ export const appendReviewComment = (
     if (!body) return yield* Effect.fail(new Validation({ message: "Committee comments cannot be blank" }));
 
     const { db } = yield* Db;
+    const [activeRound] = yield* database(() => db.select({ id: reviewRounds.id }).from(reviewRounds).where(and(
+      eq(reviewRounds.eventId, input.eventId),
+      eq(reviewRounds.status, "active"),
+    )).limit(1));
     if (viewer.role === "reviewer") {
-      const [activeRound] = yield* database(() => db.select({ id: reviewRounds.id }).from(reviewRounds).where(and(
-        eq(reviewRounds.eventId, input.eventId),
-        eq(reviewRounds.status, "active"),
-      )).limit(1));
       if (!activeRound) {
         return yield* Effect.fail(new Forbidden({ reason: "Committee comments require an active review round" }));
       }
@@ -2148,12 +2168,11 @@ export const appendReviewComment = (
     const replay = yield* readReplay();
     if (replay) return replay;
 
-    const [authorRows, committeeReviewerRows] = yield* Effect.all([
+    const [authorRows, assignedReviewerIds] = yield* Effect.all([
       database(() => db.select({ name: users.name }).from(users).where(eq(users.id, viewer.userId)).limit(1)),
-      database(() => db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(
-        eq(eventMembers.eventId, input.eventId),
-        eq(eventMembers.role, "reviewer"),
-      )).orderBy(asc(eventMembers.userId))),
+      activeRound
+        ? assignedReviewerAudienceIds(input.eventId, activeRound.id, input.submissionId)
+        : Effect.succeed([] as readonly string[]),
     ]);
     const createdAt = now();
     const commentId = id("review_comment");
@@ -2199,7 +2218,7 @@ export const appendReviewComment = (
         eventType: "review.comment.created",
         audiences: [
           { kind: "admins" },
-          { kind: "reviewers", reviewerUserIds: committeeReviewerRows.map((member) => member.userId) },
+          { kind: "reviewers", reviewerUserIds: assignedReviewerIds },
         ],
         payload: { submissionId: input.submissionId, comment },
         actorUserId: viewer.actorUserId,
@@ -2306,11 +2325,10 @@ export const requestAiSuggestion = (
     const suggestionId = id("review_ai");
     const score = averageScore(round.rubric, scoreRecord);
     const persistedScore = score ?? 0;
-    const committeeReviewerIds = yield* database(() =>
-      db.select({ reviewerUserId: eventMembers.userId }).from(eventMembers).where(and(
-        eq(eventMembers.eventId, input.eventId),
-        eq(eventMembers.role, "reviewer"),
-      )),
+    const assignedReviewerIds = yield* assignedReviewerAudienceIds(
+      input.eventId,
+      input.roundId,
+      input.submissionId,
     );
     yield* database(() =>
       db.batch([
@@ -2318,7 +2336,7 @@ export const requestAiSuggestion = (
         db.insert(domainChanges).values({
           id: id("change"), eventId: input.eventId, aggregateType: "reviewAiSuggestion", aggregateId: suggestionId,
           aggregateVersion: 1, eventType: "review.aiSuggestion.created",
-          audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: committeeReviewerIds.map((row) => row.reviewerUserId) }],
+          audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: assignedReviewerIds }],
           payload: { submissionId: input.submissionId, roundId: input.roundId, inputFields: ["title", "abstract", "rubric"] },
           actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId, requestId: input.requestId, occurredAt: createdAt,
         }),

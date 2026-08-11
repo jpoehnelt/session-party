@@ -269,7 +269,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
       "body": [
         "templateId",
         "expectedTemplateVersion",
-        "recipientSpeakerIds",
+        "recipientKeys",
         "replyToEmail",
         "scheduledFor",
         "idempotencyKey"
@@ -323,7 +323,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
         "textBody",
         "htmlBody",
         "attachIcs",
-        "speakerId"
+        "recipientKey"
       ],
       "path": [
         "eventId"
@@ -1263,6 +1263,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
         "preset",
         "aesthetic",
         "accent",
+        "trackId",
         "track",
         "fields",
         "enabled"
@@ -1308,6 +1309,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
         "preset",
         "aesthetic",
         "accent",
+        "trackId",
         "track",
         "fields",
         "enabled"
@@ -3711,6 +3713,18 @@ export const mcpTools: readonly McpToolDescriptor[] = [
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "calendarRevision": {
+          "$ref": "#/$defs/Int",
+          "description": "a positive number",
+          "exclusiveMinimum": 0,
+          "title": "positive"
+        },
+        "calendarUpdatedAt": {
+          "description": "a non-negative number",
+          "minimum": 0,
+          "title": "nonNegative",
+          "type": "integer"
+        },
         "eventId": {
           "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
           "maxLength": 128,
@@ -3803,6 +3817,21 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "track": {
                 "anyOf": [
                   {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "trackId": {
+                "anyOf": [
+                  {
+                    "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "title": "maxLength(128)",
                     "type": "string"
                   },
                   {
@@ -4724,13 +4753,11 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "title": "maxLength(200)",
           "type": "string"
         },
-        "recipientSpeakerIds": {
+        "recipientKeys": {
           "items": {
-            "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-            "maxLength": 128,
+            "description": "a string at least 1 character(s) long",
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9_-]+$",
-            "title": "maxLength(128)",
+            "title": "minLength(1)",
             "type": "string"
           },
           "minItems": 1,
@@ -4776,7 +4803,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "eventId",
         "templateId",
         "expectedTemplateVersion",
-        "recipientSpeakerIds",
+        "recipientKeys",
         "replyToEmail",
         "scheduledFor",
         "idempotencyKey"
@@ -4911,7 +4938,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
     ]
   },
   {
-    "description": "List accepted speakers and their communication eligibility.",
+    "description": "List accepted and rejected applicants and their communication eligibility.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -4945,7 +4972,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
       "properties": {
         "dependency": {
           "enum": [
-            "acceptedSpeakers"
+            "decidedApplicants"
           ],
           "type": "string"
         },
@@ -4967,6 +4994,13 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "items": {
             "additionalProperties": false,
             "properties": {
+              "decision": {
+                "enum": [
+                  "accepted",
+                  "rejected"
+                ],
+                "type": "string"
+              },
               "eligibility": {
                 "enum": [
                   "eligible",
@@ -4989,6 +5023,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 ]
               },
               "name": {
+                "type": "string"
+              },
+              "recipientKey": {
+                "description": "a string at least 1 character(s) long",
+                "minLength": 1,
+                "title": "minLength(1)",
                 "type": "string"
               },
               "sessionTitles": {
@@ -5022,10 +5062,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               }
             },
             "required": [
+              "recipientKey",
               "speakerId",
               "userId",
               "name",
               "email",
+              "decision",
               "sessionTitles",
               "eligibility"
             ],
@@ -5517,7 +5559,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
     ]
   },
   {
-    "description": "Render a template locally with accepted-speaker or labeled sample data without sending it.",
+    "description": "Render a template locally with decided-applicant or labeled sample data without sending it.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -5540,14 +5582,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "title": "maxLength(20000)",
           "type": "string"
         },
-        "speakerId": {
+        "recipientKey": {
           "anyOf": [
             {
-              "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-              "maxLength": 128,
+              "description": "a string at least 1 character(s) long",
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "maxLength(128)",
+              "title": "minLength(1)",
               "type": "string"
             },
             {
@@ -5576,7 +5616,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "textBody",
         "htmlBody",
         "attachIcs",
-        "speakerId"
+        "recipientKey"
       ],
       "type": "object"
     },
@@ -5605,7 +5645,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         },
         "mode": {
           "enum": [
-            "acceptedSpeaker",
+            "decidedApplicant",
             "sample"
           ],
           "type": "string"
@@ -22383,6 +22423,18 @@ export const openApi = {
                   "$schema": "https://json-schema.org/draft/2020-12/schema",
                   "additionalProperties": false,
                   "properties": {
+                    "calendarRevision": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a positive number",
+                      "exclusiveMinimum": 0,
+                      "title": "positive"
+                    },
+                    "calendarUpdatedAt": {
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative",
+                      "type": "integer"
+                    },
                     "eventId": {
                       "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
                       "maxLength": 128,
@@ -22475,6 +22527,21 @@ export const openApi = {
                           "track": {
                             "anyOf": [
                               {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "trackId": {
+                            "anyOf": [
+                              {
+                                "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9_-]+$",
+                                "title": "maxLength(128)",
                                 "type": "string"
                               },
                               {
@@ -26153,7 +26220,7 @@ export const openApi = {
                   "properties": {
                     "dependency": {
                       "enum": [
-                        "acceptedSpeakers"
+                        "decidedApplicants"
                       ],
                       "type": "string"
                     },
@@ -26175,6 +26242,13 @@ export const openApi = {
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "decision": {
+                            "enum": [
+                              "accepted",
+                              "rejected"
+                            ],
+                            "type": "string"
+                          },
                           "eligibility": {
                             "enum": [
                               "eligible",
@@ -26197,6 +26271,12 @@ export const openApi = {
                             ]
                           },
                           "name": {
+                            "type": "string"
+                          },
+                          "recipientKey": {
+                            "description": "a string at least 1 character(s) long",
+                            "minLength": 1,
+                            "title": "minLength(1)",
                             "type": "string"
                           },
                           "sessionTitles": {
@@ -26230,10 +26310,12 @@ export const openApi = {
                           }
                         },
                         "required": [
+                          "recipientKey",
                           "speakerId",
                           "userId",
                           "name",
                           "email",
+                          "decision",
                           "sessionTitles",
                           "eligibility"
                         ],
@@ -26255,7 +26337,7 @@ export const openApi = {
             "description": "Successful operation"
           }
         },
-        "summary": "List accepted-speaker communication recipients",
+        "summary": "List decided-applicant communication recipients",
         "x-authorization": {
           "apiKey": {
             "kind": "api-key",
@@ -26690,13 +26772,11 @@ export const openApi = {
                     "title": "maxLength(200)",
                     "type": "string"
                   },
-                  "recipientSpeakerIds": {
+                  "recipientKeys": {
                     "items": {
-                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                      "maxLength": 128,
+                      "description": "a string at least 1 character(s) long",
                       "minLength": 1,
-                      "pattern": "^[A-Za-z0-9_-]+$",
-                      "title": "maxLength(128)",
+                      "title": "minLength(1)",
                       "type": "string"
                     },
                     "minItems": 1,
@@ -26741,7 +26821,7 @@ export const openApi = {
                 "required": [
                   "templateId",
                   "expectedTemplateVersion",
-                  "recipientSpeakerIds",
+                  "recipientKeys",
                   "replyToEmail",
                   "scheduledFor",
                   "idempotencyKey"
@@ -27108,14 +27188,12 @@ export const openApi = {
                     "title": "maxLength(20000)",
                     "type": "string"
                   },
-                  "speakerId": {
+                  "recipientKey": {
                     "anyOf": [
                       {
-                        "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                        "maxLength": 128,
+                        "description": "a string at least 1 character(s) long",
                         "minLength": 1,
-                        "pattern": "^[A-Za-z0-9_-]+$",
-                        "title": "maxLength(128)",
+                        "title": "minLength(1)",
                         "type": "string"
                       },
                       {
@@ -27143,7 +27221,7 @@ export const openApi = {
                   "textBody",
                   "htmlBody",
                   "attachIcs",
-                  "speakerId"
+                  "recipientKey"
                 ],
                 "type": "object"
               }
@@ -27178,7 +27256,7 @@ export const openApi = {
                     },
                     "mode": {
                       "enum": [
-                        "acceptedSpeaker",
+                        "decidedApplicant",
                         "sample"
                       ],
                       "type": "string"
@@ -27975,6 +28053,21 @@ export const openApi = {
                           }
                         ]
                       },
+                      "trackId": {
+                        "anyOf": [
+                          {
+                            "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9_-]+$",
+                            "title": "maxLength(128)",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "updatedAt": {
                         "description": "a non-negative number",
                         "minimum": 0,
@@ -28004,6 +28097,7 @@ export const openApi = {
                       "preset",
                       "aesthetic",
                       "accent",
+                      "trackId",
                       "track",
                       "fields",
                       "enabled",
@@ -28119,6 +28213,21 @@ export const openApi = {
                         "description": "a string at most 100 character(s) long",
                         "maxLength": 100,
                         "title": "maxLength(100)",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "trackId": {
+                    "anyOf": [
+                      {
+                        "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_-]+$",
+                        "title": "maxLength(128)",
                         "type": "string"
                       },
                       {
@@ -28243,6 +28352,21 @@ export const openApi = {
                         }
                       ]
                     },
+                    "trackId": {
+                      "anyOf": [
+                        {
+                          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9_-]+$",
+                          "title": "maxLength(128)",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "updatedAt": {
                       "description": "a non-negative number",
                       "minimum": 0,
@@ -28272,6 +28396,7 @@ export const openApi = {
                     "preset",
                     "aesthetic",
                     "accent",
+                    "trackId",
                     "track",
                     "fields",
                     "enabled",
@@ -28415,6 +28540,21 @@ export const openApi = {
                       }
                     ]
                   },
+                  "trackId": {
+                    "anyOf": [
+                      {
+                        "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_-]+$",
+                        "title": "maxLength(128)",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "widget": {
                     "enum": [
                       "schedule",
@@ -28533,6 +28673,21 @@ export const openApi = {
                         }
                       ]
                     },
+                    "trackId": {
+                      "anyOf": [
+                        {
+                          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9_-]+$",
+                          "title": "maxLength(128)",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "updatedAt": {
                       "description": "a non-negative number",
                       "minimum": 0,
@@ -28562,6 +28717,7 @@ export const openApi = {
                     "preset",
                     "aesthetic",
                     "accent",
+                    "trackId",
                     "track",
                     "fields",
                     "enabled",
@@ -52474,6 +52630,18 @@ export const openApi = {
                   "$schema": "https://json-schema.org/draft/2020-12/schema",
                   "additionalProperties": false,
                   "properties": {
+                    "calendarRevision": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a positive number",
+                      "exclusiveMinimum": 0,
+                      "title": "positive"
+                    },
+                    "calendarUpdatedAt": {
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative",
+                      "type": "integer"
+                    },
                     "eventId": {
                       "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
                       "maxLength": 128,
@@ -52566,6 +52734,21 @@ export const openApi = {
                           "track": {
                             "anyOf": [
                               {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "trackId": {
+                            "anyOf": [
+                              {
+                                "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9_-]+$",
+                                "title": "maxLength(128)",
                                 "type": "string"
                               },
                               {
@@ -52738,6 +52921,21 @@ export const openApi = {
                         }
                       ]
                     },
+                    "trackId": {
+                      "anyOf": [
+                        {
+                          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9_-]+$",
+                          "title": "maxLength(128)",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "updatedAt": {
                       "description": "a non-negative number",
                       "minimum": 0,
@@ -52767,6 +52965,7 @@ export const openApi = {
                     "preset",
                     "aesthetic",
                     "accent",
+                    "trackId",
                     "track",
                     "fields",
                     "enabled",
@@ -53308,6 +53507,12 @@ export const openApi = {
                           "description": "a string at most 200 character(s) long",
                           "maxLength": 200,
                           "title": "maxLength(200)",
+                          "type": "string"
+                        },
+                        "roleLabel": {
+                          "description": "a string at most 80 character(s) long",
+                          "maxLength": 80,
+                          "title": "maxLength(80)",
                           "type": "string"
                         },
                         "title": {

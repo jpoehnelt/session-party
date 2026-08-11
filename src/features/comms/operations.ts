@@ -110,11 +110,11 @@ export const listAudienceOperation = {
     method: "get",
     path: "/events/:eventId/comms/audience",
     input: { path: ["eventId"] },
-    summary: "List accepted-speaker communication recipients",
+    summary: "List decided-applicant communication recipients",
   },
   mcp: {
     name: "comms_list_audience",
-    description: "List accepted speakers and their communication eligibility.",
+    description: "List accepted and rejected applicants and their communication eligibility.",
   },
   idempotency: "none",
   concurrency: "none",
@@ -131,12 +131,12 @@ export const previewCommunicationOperation = {
   rest: {
     method: "post",
     path: "/events/:eventId/comms/preview",
-    input: { path: ["eventId"], body: ["subject", "textBody", "htmlBody", "attachIcs", "speakerId"] },
+    input: { path: ["eventId"], body: ["subject", "textBody", "htmlBody", "attachIcs", "recipientKey"] },
     summary: "Render a local communication preview",
   },
   mcp: {
     name: "comms_preview_communication",
-    description: "Render a template locally with accepted-speaker or labeled sample data without sending it.",
+    description: "Render a template locally with decided-applicant or labeled sample data without sending it.",
   },
   idempotency: "none",
   concurrency: "none",
@@ -155,7 +155,7 @@ export const enqueueCommunicationOperation = {
     path: "/events/:eventId/comms/deliveries",
     input: {
       path: ["eventId"],
-      body: ["templateId", "expectedTemplateVersion", "recipientSpeakerIds", "replyToEmail", "scheduledFor", "idempotencyKey"],
+      body: ["templateId", "expectedTemplateVersion", "recipientKeys", "replyToEmail", "scheduledFor", "idempotencyKey"],
     },
     summary: "Durably enqueue immutable communication deliveries",
     description: "Persists immutable delivery snapshots and outbox rows, then requests canonical Scheduler dispatch.",

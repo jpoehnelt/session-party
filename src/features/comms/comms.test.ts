@@ -405,8 +405,35 @@ describe("communications authorization and validation", () => {
     expect(audience.eligibleCount).toBe(2);
   });
 
-  it("includes rejected applicants in bulk communications and queues their outcome email", async () => {
+  it("queues organizer-confirmed acceptance and rejection notification snapshots", async () => {
     const seeded = await seedCommunication("rejected-audience");
+    const mailQueue: MailQueueStub = {
+      appOrigin: "https://events.example.com",
+      fromEmail: "Events <configured@example.com>",
+      wake: () => Effect.void,
+    };
+    const acceptedAudience = await runAs(seeded.owner, listAudience({ eventId: seeded.eventId }));
+    expect(acceptedAudience.recipients).toContainEqual(expect.objectContaining({
+      speakerId: seeded.speakerId,
+      decision: "accepted",
+      eligibility: "eligible",
+    }));
+    const accepted = await runAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      expectedTemplateVersion: 1,
+      recipientKeys: [seeded.speakerId],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-accepted-audience-001",
+    }), mailQueue);
+    const [acceptedSnapshot] = await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.id, accepted.deliveries[0]!.snapshotId));
+    expect(acceptedSnapshot).toMatchObject({
+      recipientEmail: "speaker-user-comms-rejected-audience@example.com",
+      subject: "Welcome, Accepted Speaker",
+    });
+
     await seeded.db.batch([
       seeded.db.update(submissions).set({ status: "rejected", acceptedAt: null, version: 3, updatedAt: now }).where(eq(submissions.id, "submission-comms-rejected-audience")),
       seeded.db.update(emailTemplates).set({
@@ -421,28 +448,106 @@ describe("communications authorization and validation", () => {
     expect(audience.recipients).toContainEqual(expect.objectContaining({
       speakerId: seeded.speakerId,
       name: "Accepted Speaker",
+      decision: "rejected",
       eligibility: "eligible",
     }));
-    const mailQueue: MailQueueStub = {
-      appOrigin: "https://events.example.com",
-      fromEmail: "Events <configured@example.com>",
-      wake: () => Effect.void,
-    };
-    const queued = await runAs(seeded.owner, enqueueCommunication({
+    const rejected = await runAs(seeded.owner, enqueueCommunication({
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
       idempotencyKey: "comms-rejected-audience-001",
     }), mailQueue);
-    expect(queued.deliveries).toHaveLength(1);
-    const [snapshot] = await seeded.db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.id, queued.deliveries[0]!.snapshotId));
-    expect(snapshot).toMatchObject({
+    expect(rejected.deliveries).toHaveLength(1);
+    const [rejectedSnapshot] = await seeded.db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.id, rejected.deliveries[0]!.snapshotId));
+    expect(rejectedSnapshot).toMatchObject({
       recipientEmail: "speaker-user-comms-rejected-audience@example.com",
       subject: "An update on your Communications rejected-audience proposal",
     });
+  });
+
+  it("keeps one speaker in both accepted and rejected decision cohorts", async () => {
+    const seeded = await seedCommunication("mixed-decisions");
+    const rejectedSubmissionId = "submission-comms-mixed-decisions-rejected";
+    await seeded.db.batch([
+      seeded.db.insert(submissions).values({
+        id: rejectedSubmissionId,
+        eventId: seeded.eventId,
+        formId: "form-comms-mixed-decisions",
+        formVersionId: "form-version-comms-mixed-decisions",
+        title: "A second proposal",
+        status: "rejected",
+        submittedAt: new Date(now.getTime() + 1_000),
+        version: 2,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      seeded.db.insert(submissionSpeakers).values({
+        id: "association-comms-mixed-decisions-rejected",
+        eventId: seeded.eventId,
+        submissionId: rejectedSubmissionId,
+        speakerId: seeded.speakerId,
+        isPrimary: true,
+        createdAt: now,
+      }),
+    ]);
+
+    const audience = await runAs(seeded.owner, listAudience({ eventId: seeded.eventId }));
+    const speakerRecipients = audience.recipients.filter(({ speakerId }) => speakerId === seeded.speakerId);
+    expect(speakerRecipients).toMatchObject([
+      { recipientKey: `${seeded.speakerId}:accepted`, decision: "accepted", sessionTitles: ["Durable systems without surprises"] },
+      { recipientKey: `${seeded.speakerId}:rejected`, decision: "rejected", sessionTitles: ["A second proposal"] },
+    ]);
+
+    const queue: MailQueueStub = {
+      appOrigin: "https://events.example.com",
+      fromEmail: "Events <configured@example.com>",
+      wake: () => Effect.void,
+    };
+    const rejectedPreview = await runAs(seeded.owner, previewCommunication({
+      eventId: seeded.eventId,
+      subject: "{{talk.title}}",
+      textBody: "{{talk.title}}",
+      htmlBody: "<p>{{talk.title}}</p>",
+      attachIcs: false,
+      recipientKey: `${seeded.speakerId}:rejected`,
+    }), queue);
+    expect(rejectedPreview.text).toContain("A second proposal");
+    expect(rejectedPreview.text).not.toContain("Durable systems without surprises");
+    const accepted = await runAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      expectedTemplateVersion: 1,
+      recipientKeys: [`${seeded.speakerId}:accepted`],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-mixed-accepted-001",
+    }), queue);
+    await seeded.db.update(emailTemplates).set({
+      subject: "A decision on your proposal",
+      body: "Thank you for submitting.",
+      version: 2,
+      updatedAt: now,
+    }).where(eq(emailTemplates.id, seeded.templateId));
+    const rejected = await runAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      expectedTemplateVersion: 2,
+      recipientKeys: [`${seeded.speakerId}:rejected`],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-mixed-rejected-001",
+    }), queue);
+    expect(accepted.deliveries).toHaveLength(1);
+    expect(rejected.deliveries).toHaveLength(1);
+    const snapshots = await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId));
+    expect(snapshots.map(({ subject }) => subject).sort()).toEqual([
+      "A decision on your proposal",
+      "Welcome, Accepted Speaker",
+    ]);
   });
 
   it("accepts the frozen dotted merge contract and rejects unknown or malformed variables", async () => {
@@ -507,7 +612,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 1,
-      recipientSpeakerIds: [seeded.speakerId] as [string],
+      recipientKeys: [seeded.speakerId] as [string],
       replyToEmail: "team@example.com",
       scheduledFor: null,
       idempotencyKey: "comms-enqueue-immutable-001",
@@ -585,7 +690,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 1,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
       idempotencyKey: "comms-stale-template-001",
@@ -615,7 +720,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 1,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
       idempotencyKey: "comms-failed-wake-001",
@@ -667,7 +772,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor,
       idempotencyKey: "comms-calendar-reminder-001",
@@ -741,7 +846,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor,
       idempotencyKey: "comms-calendar-reminder-002",
@@ -770,7 +875,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor,
       idempotencyKey: "comms-calendar-reminder-003",
@@ -833,7 +938,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor,
       idempotencyKey: "comms-calendar-reminder-004",
@@ -868,7 +973,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 1,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
       idempotencyKey: "comms-retry-source-001",
@@ -938,11 +1043,11 @@ describe("communications immutable delivery workflow", () => {
       textBody: "{{talk.title}} starts at {{talk.time}} in {{talk.room}}. Portal: {{portal.url}}",
       htmlBody: "<p>{{talk.title}} starts at {{talk.time}} in {{talk.room}}. Portal: {{portal.url}}</p>",
       attachIcs: true,
-      speakerId: seeded.speakerId,
+      recipientKey: seeded.speakerId,
     }), queue);
     const deliveriesAfter = await seeded.db.select().from(mailDeliveries);
     expect(preview).toMatchObject({
-      mode: "acceptedSpeaker",
+      mode: "decidedApplicant",
       subject: "Accepted Speaker — Communications preview",
       recipientEmail: "speaker-user-comms-preview@example.com",
       delivery: "notSent",
@@ -998,7 +1103,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
       idempotencyKey: "comms-portal-url-enqueue-001",
@@ -1038,7 +1143,7 @@ describe("communications immutable delivery workflow", () => {
       textBody: "Join us at {{event.location}} on {{event.dates}}.",
       htmlBody: "<p>Join us at {{event.location}} on {{event.dates}}.</p>",
       attachIcs: false,
-      speakerId: seeded.speakerId,
+      recipientKey: seeded.speakerId,
     }));
     expect(preview.text).toContain("Location to be announced");
     expect(preview.text).toContain("Dates to be announced");
@@ -1048,7 +1153,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
       idempotencyKey: "comms-unavailable-enqueue-001",
@@ -1095,7 +1200,7 @@ describe("communications immutable delivery workflow", () => {
       textBody: "Event dates: {{event.dates}}",
       htmlBody: "<p>Event dates: {{event.dates}}</p>",
       attachIcs: false,
-      speakerId: seeded.speakerId,
+      recipientKey: seeded.speakerId,
     }));
     expect(preview.text).toContain("Event dates: Aug 12, 2026 – Aug 12, 2026");
     expect(preview.text).not.toContain("Sep 20, 2026");
@@ -1105,7 +1210,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
       idempotencyKey: "comms-published-dates-enqueue-001",
@@ -1139,7 +1244,7 @@ describe("communications immutable delivery workflow", () => {
       textBody: "{{talk.time}}",
       htmlBody: "<p>{{talk.time}}</p>",
       attachIcs: true,
-      speakerId: seeded.speakerId,
+      recipientKey: seeded.speakerId,
     }));
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
@@ -1182,7 +1287,7 @@ describe("communications immutable delivery workflow", () => {
       textBody: "{{talk.time}}",
       htmlBody: "<p>{{talk.time}}</p>",
       attachIcs: true,
-      speakerId: seeded.speakerId,
+      recipientKey: seeded.speakerId,
     }));
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
@@ -1215,7 +1320,7 @@ describe("communications immutable delivery workflow", () => {
       eventId: seeded.eventId,
       templateId: seeded.templateId,
       expectedTemplateVersion: 2,
-      recipientSpeakerIds: [seeded.speakerId],
+      recipientKeys: [seeded.speakerId],
       replyToEmail: null,
       scheduledFor: null,
       idempotencyKey: "comms-rendered-subject-001",

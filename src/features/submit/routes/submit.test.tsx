@@ -181,7 +181,7 @@ describe("public submit route", () => {
       {
         primarySpeakerTitle: "Staff Engineer",
         primarySpeakerOrganization: "Open Systems",
-        coSpeakers: [{ name: "Alex Chen", email: "alex@example.com", title: "Principal", organization: "Acme Labs" }],
+        coSpeakers: [{ name: "Alex Chen", email: "alex@example.com", roleLabel: "Panel moderator", title: "Principal", organization: "Acme Labs" }],
       },
     );
 
@@ -193,7 +193,7 @@ describe("public submit route", () => {
           turnstileToken: "test-turnstile-token",
           primarySpeakerTitle: "Staff Engineer",
           primarySpeakerOrganization: "Open Systems",
-          coSpeakers: [{ name: "Alex Chen", email: "alex@example.com", title: "Principal", organization: "Acme Labs" }],
+          coSpeakers: [{ name: "Alex Chen", email: "alex@example.com", roleLabel: "Panel moderator", title: "Principal", organization: "Acme Labs" }],
         }),
       }),
     );

@@ -65,12 +65,19 @@ export type UpdateTemplateInput = typeof UpdateTemplateInput.Type;
 
 export const AudienceEligibility = Schema.Literal("eligible", "missingEmail");
 export type AudienceEligibility = typeof AudienceEligibility.Type;
+export const AudienceDecision = Schema.Literal("accepted", "rejected");
+export type AudienceDecision = typeof AudienceDecision.Type;
+
+export const audienceRecipientKey = (speakerId: string, decision: AudienceDecision): string =>
+  `${speakerId}:${decision}`;
 
 export const AudienceRecipient = Schema.Struct({
+  recipientKey: Schema.String.pipe(Schema.minLength(1)),
   speakerId: EntityId,
   userId: Schema.Union(EntityId, Schema.Null),
   name: Schema.String,
   email: Schema.Union(Mailbox, Schema.Null),
+  decision: AudienceDecision,
   sessionTitles: Schema.Array(Schema.String),
   eligibility: AudienceEligibility,
 });
@@ -80,14 +87,14 @@ export const AudienceSnapshot = Schema.Struct({
   eventId: EntityId,
   recipients: Schema.Array(AudienceRecipient),
   eligibleCount: Schema.Int.pipe(Schema.nonNegative()),
-  dependency: Schema.Literal("acceptedSpeakers"),
+  dependency: Schema.Literal("decidedApplicants"),
 });
 export type AudienceSnapshot = typeof AudienceSnapshot.Type;
 
 export const ListAudienceInput = Schema.Struct({ eventId: EntityId });
 export type ListAudienceInput = typeof ListAudienceInput.Type;
 
-export const PreviewMode = Schema.Literal("acceptedSpeaker", "sample");
+export const PreviewMode = Schema.Literal("decidedApplicant", "sample");
 export type PreviewMode = typeof PreviewMode.Type;
 
 export const PreviewCommunicationInput = Schema.Struct({
@@ -96,7 +103,7 @@ export const PreviewCommunicationInput = Schema.Struct({
   textBody: TemplateBody,
   htmlBody: TemplateBody,
   attachIcs: Schema.Boolean,
-  speakerId: Schema.Union(EntityId, Schema.Null),
+  recipientKey: Schema.Union(Schema.String.pipe(Schema.minLength(1)), Schema.Null),
 });
 export type PreviewCommunicationInput = typeof PreviewCommunicationInput.Type;
 
@@ -181,7 +188,7 @@ export const EnqueueCommunicationInput = Schema.Struct({
   eventId: EntityId,
   templateId: EntityId,
   expectedTemplateVersion: ExpectedVersion,
-  recipientSpeakerIds: Schema.NonEmptyArray(EntityId),
+  recipientKeys: Schema.NonEmptyArray(Schema.String.pipe(Schema.minLength(1))),
   replyToEmail: NullableMailbox,
   scheduledFor: Schema.Union(UnixTimestampMs, Schema.Null),
   idempotencyKey: IdempotencyKey,

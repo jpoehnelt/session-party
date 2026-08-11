@@ -298,6 +298,7 @@ beforeAll(async () => {
     submissionId: submission.id,
     speakerId: fixturePrimarySpeakerId,
     isPrimary: true,
+    roleLabel: index === 4 ? "Session moderator" : null,
     createdAt,
   }));
   for (const seed of speakerLinkSeeds) await db.insert(submissionSpeakers).values(seed);
@@ -739,7 +740,7 @@ describe("review and acceptance slice", () => {
   });
 
 
-  it("returns the committee queue to reviewers and keeps assignments as an optional worklist filter", async () => {
+  it("restricts reviewer queues and proposal access to exact active assignments", async () => {
     const organizerView = await runAs(owner, getWorkbench({ eventId: fixtureEventId, page: 1, pageSize: 60 }));
     expect(organizerView.queue).toHaveLength(60);
     expect(organizerView.order).toBe("coverage");
@@ -760,13 +761,16 @@ describe("review and acceptance slice", () => {
       page: 1,
       pageSize: 60,
     }));
-    expect(reviewerView.queue).toHaveLength(60);
+    expect(reviewerView.queue).toHaveLength(12);
     expect(reviewerView.selected?.assignments.map((assignment) => assignment.reviewerUserId).sort()).toEqual([
       "user_reviewer_dev",
       fixtureReviewerId,
     ].sort());
     expect(reviewerView.selected?.reviews).toEqual([
       expect.objectContaining({ reviewerUserId: "user_reviewer_dev", reviewerName: "Dev Shah", comment: "Dev private comment" }),
+    ]);
+    expect(reviewerView.selected?.speakers).toEqual([
+      expect.objectContaining({ displayName: "Jordan Lee", role: "Session moderator" }),
     ]);
     const assignedToMe = await runAs(reviewer, getWorkbench({
       eventId: fixtureEventId,
@@ -776,6 +780,15 @@ describe("review and acceptance slice", () => {
     }));
     expect(assignedToMe.queue).toHaveLength(12);
     expect(assignedToMe.queue.every((submission) => submission.assignedToMe)).toBe(true);
+
+    const unassignedSelection = await runEitherAs(reviewer, getWorkbench({
+      eventId: fixtureEventId,
+      selectedSubmissionId: "submission_60",
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(unassignedSelection._tag).toBe("Left");
+    if (unassignedSelection._tag === "Left") expect(unassignedSelection.left._tag).toBe("NotFound");
 
     const forbidden = await runEitherAs(speakerOnly, getWorkbench({ eventId: fixtureEventId, page: 1, pageSize: 60 }));
     expect(forbidden._tag).toBe("Left");
@@ -951,7 +964,7 @@ describe("review and acceptance slice", () => {
     expect(changes[0]).toMatchObject({ eventType: "review.comment.created", aggregateType: "reviewComment" });
     expect(changes[0]?.audiences).toEqual([
       { kind: "admins" },
-      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId, "user_reviewer_dev"] },
+      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId] },
     ]);
     expect(audits).toHaveLength(2);
     expect(audits[0]).toMatchObject({ action: "review.appendComment", actorUserId: fixtureReviewerId });
@@ -1511,7 +1524,7 @@ describe("review and acceptance slice", () => {
     if (completedAi._tag === "Left") expect(completedAi.left._tag).toBe("Conflict");
   });
 
-  it("lets an event reviewer save complete bounded 1–5 scores without requiring assignment or changing status", async () => {
+  it("requires an exact assignment before a reviewer can save complete bounded 1–5 scores", async () => {
     const decoded = Schema.decodeUnknownEither(SaveScoreInput)({
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
@@ -1526,7 +1539,7 @@ describe("review and acceptance slice", () => {
     });
     expect(decoded._tag).toBe("Left");
 
-    const saved = await runAs(reviewer, saveScore({
+    const unassigned = await runEitherAs(reviewer, saveScore({
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
       submissionId: "submission_30",
@@ -1539,8 +1552,41 @@ describe("review and acceptance slice", () => {
       comment: "Human-confirmed review",
       requestId: "request_unassigned_score_allowed",
     }));
+    expect(unassigned._tag).toBe("Left");
+    if (unassigned._tag === "Left") expect(unassigned.left._tag).toBe("Forbidden");
+
+    await db.insert(reviewAssignments).values({
+      id: "assignment_score_submission_30",
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_30",
+      reviewerUserId: fixtureReviewerId,
+      createdAt: new Date(fixtureClock),
+      updatedAt: new Date(fixtureClock),
+    });
+    const saved = await runAs(reviewer, saveScore({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_30",
+      expectedVersion: 0,
+      scores: [
+        { criterionKey: "relevance", score: 5 },
+        { criterionKey: "specificity", score: 4 },
+        { criterionKey: "delivery", score: 3 },
+      ],
+      comment: "Human-confirmed review",
+      requestId: "request_assigned_score_allowed",
+    }));
     expect(saved.review.score).toBe(4);
     expect(saved.submissionStatus).not.toBe("accepted");
+    const [scoreChange] = await db.select().from(domainChanges).where(eq(
+      domainChanges.requestId,
+      "request_assigned_score_allowed",
+    ));
+    expect(scoreChange?.audiences).toEqual([
+      { kind: "admins" },
+      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId] },
+    ]);
     const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_30"));
     expect(submission?.status).toBe("submitted");
   });
@@ -1680,6 +1726,11 @@ describe("review and acceptance slice", () => {
     expect(result.submissionStatus).not.toBe("accepted");
     const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_31"));
     expect(submission?.status).toBe("submitted");
+    const [change] = await db.select().from(domainChanges).where(eq(domainChanges.requestId, "request_ai_01"));
+    expect(change?.audiences).toEqual([
+      { kind: "admins" },
+      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId] },
+    ]);
   });
 
   it("queues idempotent reminders only for reviewers with outstanding assignments", async () => {

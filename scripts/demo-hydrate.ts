@@ -1,3 +1,4 @@
+import type { EnqueueCommunicationInput } from "../src/features/comms/schema";
 import { resolveLocalRuntime } from "./local-runtime";
 
 const { origin } = resolveLocalRuntime();
@@ -665,11 +666,11 @@ await request(`/events/${eventId}/comms/deliveries`, {
   body: {
     templateId: template.id,
     expectedTemplateVersion: template.version,
-    recipientSpeakerIds: [accepted.primarySpeakerId],
+    recipientKeys: [`${accepted.primarySpeakerId}:accepted`],
     replyToEmail: "program@sessionparty.local",
     scheduledFor: null,
     idempotencyKey: "demo-enqueue-speaker-mail-v1",
-  },
+  } satisfies Omit<EnqueueCommunicationInput, "eventId">,
 });
 
 let deliveryHistory: DeliveryHistory | undefined;

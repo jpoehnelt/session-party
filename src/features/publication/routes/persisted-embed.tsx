@@ -83,6 +83,7 @@ export default function PersistedEmbedRoute() {
   const agenda = filterPublishedAgenda(
     state.content as Awaited<ReturnType<typeof getPublicSchedule>>,
     state.definition.track,
+    state.definition.trackId,
   );
   return (
     <ScheduleEmbedContent

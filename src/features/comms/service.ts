@@ -33,7 +33,7 @@ import {
 } from "@/features/agenda/schema";
 import {
   getAgendaDeliveryProjection,
-  getPublishedAgenda,
+  getLatestPublishedAgendaSnapshot,
 } from "@/features/agenda/service";
 import {
   renderCalendar,
@@ -42,6 +42,7 @@ import {
 } from "./calendar";
 
 import {
+  audienceRecipientKey,
   AudienceSnapshot,
   CommunicationPreview,
   CommunicationTemplate,
@@ -468,6 +469,7 @@ export const updateTemplate = (
 interface AudienceRow {
   readonly submissionId: string;
   readonly sessionTitle: string;
+  readonly decision: "accepted" | "rejected";
   readonly speakerId: string;
   readonly speakerName: string;
   readonly userId: string | null;
@@ -481,6 +483,7 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
       db.select({
         submissionId: submissions.id,
         sessionTitle: submissions.title,
+        decision: sql<"accepted" | "rejected">`${submissions.status}`,
         speakerId: speakers.id,
         speakerName: speakers.displayName,
         userId: speakers.userId,
@@ -496,28 +499,37 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
         .where(and(eq(submissions.eventId, eventId), inArray(submissions.status, ["accepted", "rejected"])))
         .orderBy(asc(submissions.submittedAt), asc(submissions.id), asc(speakers.id)),
     );
-    const bySpeaker = new Map<string, AudienceRecipient>();
+    const byDecisionRecipient = new Map<string, AudienceRecipient>();
     for (const row of rows) {
-      const existing = bySpeaker.get(row.speakerId);
+      const recipientKey = audienceRecipientKey(row.speakerId, row.decision);
+      const existing = byDecisionRecipient.get(recipientKey);
       if (existing) {
-        bySpeaker.set(row.speakerId, { ...existing, sessionTitles: [...existing.sessionTitles, row.sessionTitle].sort() });
+        byDecisionRecipient.set(recipientKey, {
+          ...existing,
+          sessionTitles: [...existing.sessionTitles, row.sessionTitle].sort(),
+        });
       } else {
-        bySpeaker.set(row.speakerId, {
+        byDecisionRecipient.set(recipientKey, {
+          recipientKey,
           speakerId: row.speakerId,
           userId: row.userId,
           name: row.speakerName,
           email: row.email,
+          decision: row.decision,
           sessionTitles: [row.sessionTitle],
           eligibility: row.email === null ? "missingEmail" : "eligible",
         });
       }
     }
-    const recipients = [...bySpeaker.values()].sort((left, right) => left.name.localeCompare(right.name) || left.speakerId.localeCompare(right.speakerId));
+    const recipients = [...byDecisionRecipient.values()].sort((left, right) =>
+      left.name.localeCompare(right.name)
+      || left.speakerId.localeCompare(right.speakerId)
+      || left.decision.localeCompare(right.decision));
     return {
       eventId,
       recipients,
       eligibleCount: recipients.filter((recipient) => recipient.eligibility === "eligible").length,
-      dependency: "acceptedSpeakers",
+      dependency: "decidedApplicants",
     };
   });
 
@@ -600,11 +612,11 @@ interface PublishedTalksBySpeaker {
 
 const loadPublishedTalks = (
   eventId: string,
-  eventSlug: string,
+  _eventSlug: string,
   speakerIds: readonly string[],
 ): Effect.Effect<PublishedTalksBySpeaker, AppError, Db> =>
   Effect.gen(function* () {
-    const publication = yield* getPublishedAgenda({ eventSlug }).pipe(
+    const publication = yield* getLatestPublishedAgendaSnapshot(eventId).pipe(
       Effect.catchTag("NotFound", (error) =>
         error.entity === "published agenda" ? Effect.succeed(null) : Effect.fail(error)),
     );
@@ -826,11 +838,15 @@ export const previewCommunication = (
     const queue = yield* MailQueue;
     const event = yield* eventIdentity(input.eventId);
     const audience = yield* loadAudience(input.eventId);
-    const selected = input.speakerId === null
+    const selected = input.recipientKey === null
       ? null
-      : audience.recipients.find((recipient) => recipient.speakerId === input.speakerId) ?? null;
-    if (input.speakerId !== null && (!selected || selected.email === null)) {
-      return yield* Effect.fail(new Validation({ message: "Preview speaker must be an accepted speaker with an email address" }));
+      : audience.recipients.find((recipient) => recipient.recipientKey === input.recipientKey)
+        ?? (() => {
+          const legacyMatches = audience.recipients.filter((recipient) => recipient.speakerId === input.recipientKey);
+          return legacyMatches.length === 1 ? legacyMatches[0]! : null;
+        })();
+    if (input.recipientKey !== null && (!selected || selected.email === null)) {
+      return yield* Effect.fail(new Validation({ message: "Preview speaker must be a decided applicant with an email address" }));
     }
     const published = yield* loadPublishedTalks(
       input.eventId,
@@ -840,7 +856,12 @@ export const previewCommunication = (
     const eventAtPublication = publicationEventIdentity(event, published.publication, published.delivery);
     const portalUrl = speakerPortalUrl(queue.appOrigin, eventAtPublication.slug);
     const personalized = selected
-      ? personalizedContext(selected, eventAtPublication, portalUrl, published.talks.get(selected.speakerId) ?? [])
+      ? personalizedContext(
+          selected,
+          eventAtPublication,
+          portalUrl,
+          selected.decision === "accepted" ? published.talks.get(selected.speakerId) ?? [] : [],
+        )
       : sampleContext(eventAtPublication, portalUrl);
     const rendered = renderCommunication(
       input.subject.trim(),
@@ -855,7 +876,7 @@ export const previewCommunication = (
       input.htmlBody,
     );
     return {
-      mode: selected ? "acceptedSpeaker" : "sample",
+      mode: selected ? "decidedApplicant" : "sample",
       ...rendered,
       recipientName: personalized.context["speaker.name"],
       recipientEmail: personalized.context["speaker.email"],
@@ -868,7 +889,7 @@ export const previewCommunication = (
       note: unavailable.length > 0
         ? "Rendered locally; unavailable values are labeled and no delivery was attempted."
         : selected
-          ? "Rendered locally with accepted-speaker and confirmed-agenda data. No delivery was attempted."
+          ? "Rendered locally with decided-applicant and confirmed-agenda data. No delivery was attempted."
           : "Rendered locally with clearly labeled sample data. No delivery was attempted.",
     };
   });
@@ -877,7 +898,7 @@ export const enqueueCommunication = (
   input: EnqueueCommunicationInput,
 ): Effect.Effect<EnqueueCommunicationResult, AppError, Authorizer | CurrentUser | Db | MailQueue> =>
   Effect.gen(function* () {
-    const normalizedRequest = { ...input, recipientSpeakerIds: [...input.recipientSpeakerIds].sort() };
+    const normalizedRequest = { ...input, recipientKeys: [...input.recipientKeys].sort() };
     const prepared = yield* prepareCommand(
       "comms.enqueueCommunication",
       input.eventId,
@@ -892,11 +913,11 @@ export const enqueueCommunication = (
       return prepared.replay;
     }
     const { db } = yield* Db;
-    const uniqueSpeakerIds = [...new Set(input.recipientSpeakerIds)];
-    if (uniqueSpeakerIds.length !== input.recipientSpeakerIds.length) {
-      return yield* Effect.fail(new Validation({ message: "Each audience speaker may be selected only once" }));
+    const uniqueRecipientKeys = [...new Set(input.recipientKeys)];
+    if (uniqueRecipientKeys.length !== input.recipientKeys.length) {
+      return yield* Effect.fail(new Validation({ message: "Each decision recipient may be selected only once" }));
     }
-    if (uniqueSpeakerIds.length > 500) {
+    if (uniqueRecipientKeys.length > 500) {
       return yield* Effect.fail(new Validation({
         message: "At most 500 recipients may be queued in one request; Scheduler dispatch budgets govern sending",
       }));
@@ -923,12 +944,18 @@ export const enqueueCommunication = (
     );
     const event = yield* eventIdentity(input.eventId);
     const audience = yield* loadAudience(input.eventId);
-    const audienceBySpeaker = new Map(audience.recipients.map((recipient) => [recipient.speakerId, recipient]));
-    const selected = uniqueSpeakerIds.map((speakerId) => audienceBySpeaker.get(speakerId));
+    const audienceByKey = new Map(audience.recipients.map((recipient) => [recipient.recipientKey, recipient]));
+    const selected = uniqueRecipientKeys.map((recipientKey) => {
+      const exact = audienceByKey.get(recipientKey);
+      if (exact) return exact;
+      const legacyMatches = audience.recipients.filter((recipient) => recipient.speakerId === recipientKey);
+      return legacyMatches.length === 1 ? legacyMatches[0] : undefined;
+    });
     if (selected.some((recipient) => !recipient || recipient.email === null)) {
       return yield* Effect.fail(new Validation({ message: "Audience must contain only accepted or rejected applicants with email addresses" }));
     }
     const recipients = selected as readonly (AudienceRecipient & { readonly email: string })[];
+    const uniqueSpeakerIds = [...new Set(recipients.map((recipient) => recipient.speakerId))];
     const published = yield* loadPublishedTalks(input.eventId, event.slug, uniqueSpeakerIds);
     const eventAtPublication = publicationEventIdentity(event, published.publication, published.delivery);
     const portalUrl = speakerPortalUrl(queue.appOrigin, eventAtPublication.slug);
@@ -938,7 +965,7 @@ export const enqueueCommunication = (
         recipient,
         eventAtPublication,
         portalUrl,
-        published.talks.get(recipient.speakerId) ?? [],
+        recipient.decision === "accepted" ? published.talks.get(recipient.speakerId) ?? [] : [],
       ),
     }));
     for (const item of personalized) {
@@ -955,7 +982,7 @@ export const enqueueCommunication = (
       }
       if (unavailable.includes("talk.time") || unavailable.includes("talk.room")) {
         return yield* Effect.fail(new Conflict({
-          message: `Accepted speaker '${item.recipient.name}' has no confirmed agenda talk with a start time and room`,
+          message: `Recipient '${item.recipient.name}' has no confirmed agenda talk with a start time and room`,
         }));
       }
       if (template.attachIcs && item.prepared.talks.length === 0) {

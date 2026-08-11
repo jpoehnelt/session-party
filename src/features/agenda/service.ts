@@ -153,6 +153,16 @@ const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
 
 const timestamp = (value: Date | null): number | null => value?.getTime() ?? null;
 
+const calendarProjectionRevision = (
+  eventVersion: number,
+  ...collections: readonly (readonly { readonly version: number }[])[]
+): number => Math.max(1, eventVersion + collections.flat().reduce((total, row) => total + row.version, 0));
+
+const calendarProjectionUpdatedAt = (
+  publishedAt: number,
+  ...collections: readonly (readonly { readonly updatedAt: Date }[])[]
+): number => Math.max(publishedAt, ...collections.flat().map(({ updatedAt }) => updatedAt.getTime()));
+
 const actorColumns = (principal: Principal) =>
   principal.kind === "api-key"
     ? { actorUserId: null, actorApiKeyId: principal.apiKeyId }
@@ -488,6 +498,16 @@ const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | nul
     );
     if (!change) return null;
     return yield* decodePublishedAgenda(change.payload);
+  });
+
+/** Internal immutable publication record for mail/calendar snapshots and revision reconciliation. */
+export const getLatestPublishedAgendaSnapshot = (
+  eventId: string,
+): Effect.Effect<PublishedAgenda, AppError, Db> =>
+  Effect.gen(function* () {
+    const published = yield* latestPublication(eventId);
+    if (!published) return yield* Effect.fail(new NotFound({ entity: "published agenda", id: eventId }));
+    return published;
   });
 
 export const getAgendaDeliveryProjection = (
@@ -1697,8 +1717,8 @@ export const publishAgenda = (
     }
     const [agendaTalks, trackRows, roomRows, speakerRows, pendingPublicationRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
-      database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(eq(tracks.eventId, input.eventId))),
-      database(() => db.select({ id: rooms.id, name: rooms.name }).from(rooms).where(eq(rooms.eventId, input.eventId))),
+      database(() => db.select({ id: tracks.id, name: tracks.name, version: tracks.version, updatedAt: tracks.updatedAt }).from(tracks).where(eq(tracks.eventId, input.eventId))),
+      database(() => db.select({ id: rooms.id, name: rooms.name, version: rooms.version, updatedAt: rooms.updatedAt }).from(rooms).where(eq(rooms.eventId, input.eventId))),
       database(() =>
         db
           .select({
@@ -1707,6 +1727,7 @@ export const publishAgenda = (
             name: speakers.displayName,
             visible: speakers.visible,
             version: speakers.version,
+            updatedAt: speakers.updatedAt,
           })
           .from(talkSpeakers)
           .innerJoin(
@@ -1787,6 +1808,7 @@ export const publishAgenda = (
       id: talk.id,
       title: talk.title,
       description: talk.description,
+      trackId: talk.trackId,
       track: talk.trackId === null ? null : trackNames.get(talk.trackId) ?? null,
       room: talk.roomId === null ? null : roomNames.get(talk.roomId) ?? null,
       startsAt: talk.startsAt,
@@ -1794,6 +1816,13 @@ export const publishAgenda = (
       speakerNames: visibleSpeakerNames.get(talk.id) ?? [],
     }));
     const revision = currentRevision + 1;
+    const calendarRevision = calendarProjectionRevision(
+      event.version,
+      agendaTalks,
+      trackRows,
+      roomRows,
+      speakerRows,
+    );
     const published = yield* decodePublishedAgenda({
       eventId: event.id,
       eventName: event.name,
@@ -1802,6 +1831,8 @@ export const publishAgenda = (
       location: event.location,
       revision,
       publishedAt: prepared.now.getTime(),
+      calendarRevision,
+      calendarUpdatedAt: prepared.now.getTime(),
       talks: publicTalks,
     });
     const deliveryProjection = yield* decodeAgendaDeliveryProjection({
@@ -2590,7 +2621,86 @@ export const getPublishedAgenda = (
 ): Effect.Effect<PublishedAgenda, AppError, Db> =>
   Effect.gen(function* () {
     const eventId = yield* resolveEventIdBySlug(input.eventSlug);
-    const published = yield* latestPublication(eventId);
-    if (!published) return yield* Effect.fail(new NotFound({ entity: "published agenda", id: eventId }));
-    return published;
+    const published = yield* getLatestPublishedAgendaSnapshot(eventId);
+    const { db } = yield* Db;
+    const [liveTalks, talkUpdateRows, eventRows, roomRows, trackRows, speakerRows] = yield* Effect.all([
+      loadTalkRows(eventId),
+      database(() => db.select({ version: talks.version, updatedAt: talks.updatedAt }).from(talks).where(eq(talks.eventId, eventId))),
+      database(() => db.select({
+        name: events.name,
+        slug: events.slug,
+        timezone: events.timezone,
+        location: events.location,
+        version: events.version,
+        updatedAt: events.updatedAt,
+      }).from(events).where(eq(events.id, eventId)).limit(1)),
+      database(() => db.select({ id: rooms.id, name: rooms.name, version: rooms.version, updatedAt: rooms.updatedAt }).from(rooms).where(eq(rooms.eventId, eventId))),
+      database(() => db.select({ id: tracks.id, name: tracks.name, version: tracks.version, updatedAt: tracks.updatedAt }).from(tracks).where(eq(tracks.eventId, eventId))),
+      database(() => db.select({
+        talkId: talkSpeakers.talkId,
+        name: speakers.displayName,
+        visible: speakers.visible,
+        version: speakers.version,
+        updatedAt: speakers.updatedAt,
+      })
+        .from(talkSpeakers)
+        .innerJoin(speakers, and(
+          eq(speakers.eventId, talkSpeakers.eventId),
+          eq(speakers.id, talkSpeakers.speakerId),
+        ))
+        .where(eq(talkSpeakers.eventId, eventId))
+        .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id))),
+    ]);
+    const currentEvent = eventRows[0];
+    if (!currentEvent) return yield* Effect.fail(new NotFound({ entity: "event", id: eventId }));
+    const publishedTalkIds = new Set(published.talks.map(({ id }) => id));
+    const relevantSpeakerRows = speakerRows.filter(({ talkId }) => publishedTalkIds.has(talkId));
+    const liveById = new Map(liveTalks.map((talk) => [talk.id, talk] as const));
+    const roomNames = new Map(roomRows.map((room) => [room.id, room.name] as const));
+    const trackNames = new Map(trackRows.map((track) => [track.id, track.name] as const));
+    const speakerNames = new Map<string, string[]>();
+    for (const speaker of relevantSpeakerRows) {
+      if (!speaker.visible) continue;
+      speakerNames.set(speaker.talkId, [...(speakerNames.get(speaker.talkId) ?? []), speaker.name]);
+    }
+    const publicTalks = published.talks.flatMap((snapshot): readonly PublicAgendaTalk[] => {
+      const live = liveById.get(snapshot.id);
+      if (!live || live.status !== "confirmed" || live.startsAt === null || live.roomId === null) return [];
+      const room = roomNames.get(live.roomId);
+      if (!room) return [];
+      return [{
+        id: live.id,
+        title: live.title,
+        description: live.description,
+        trackId: live.trackId,
+        track: live.trackId === null ? null : trackNames.get(live.trackId) ?? null,
+        room,
+        startsAt: live.startsAt,
+        durationMin: live.durationMin,
+        speakerNames: speakerNames.get(live.id) ?? [],
+      }];
+    });
+    return {
+      ...published,
+      eventName: currentEvent.name,
+      eventSlug: currentEvent.slug,
+      timezone: currentEvent.timezone,
+      location: currentEvent.location,
+      calendarRevision: calendarProjectionRevision(
+        currentEvent.version,
+        liveTalks,
+        trackRows,
+        roomRows,
+        relevantSpeakerRows,
+      ),
+      calendarUpdatedAt: calendarProjectionUpdatedAt(
+        published.publishedAt,
+        [currentEvent],
+        talkUpdateRows,
+        trackRows,
+        roomRows,
+        relevantSpeakerRows,
+      ),
+      talks: publicTalks,
+    };
   });

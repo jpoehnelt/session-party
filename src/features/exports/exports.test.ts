@@ -1,6 +1,20 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import type { Principal } from "contracts/principal";
-import { eventMembers, events, speakerContacts, speakers, talkSpeakers, talks, taskCompletions, tasks, users } from "contracts/schema";
+import {
+  eventMembers,
+  events,
+  forms,
+  formVersions,
+  speakerContacts,
+  speakers,
+  submissionSpeakers,
+  submissions,
+  talkSpeakers,
+  talks,
+  taskCompletions,
+  tasks,
+  users,
+} from "contracts/schema";
 import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
@@ -55,6 +69,9 @@ const seed = async (name: string) => {
   const speakerId = id("speaker");
   const talkId = id("talk");
   const taskId = id("task");
+  const formId = id("form");
+  const formVersionId = id("form-version");
+  const submissionId = id("submission");
   const rows: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
     db.insert(users).values([
       { id: ownerId, email: `${ownerId}@example.com`, name: "Archive Owner", createdAt: now, updatedAt: now },
@@ -83,9 +100,51 @@ const seed = async (name: string) => {
       createdAt: now,
       updatedAt: now,
     }),
+    db.insert(forms).values({
+      id: formId,
+      eventId,
+      kind: "cfp",
+      name: "Archive CFP",
+      status: "closed",
+      createdAt: now,
+      updatedAt: now,
+    }),
+    db.insert(formVersions).values({
+      id: formVersionId,
+      eventId,
+      formId,
+      versionNumber: 1,
+      name: "Archive CFP",
+      publishedAt: now,
+      createdAt: now,
+    }),
+    db.insert(submissions).values({
+      id: submissionId,
+      eventId,
+      formId,
+      formVersionId,
+      title: "Institutional memory",
+      status: "accepted",
+      submittedAt: now,
+      acceptedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    }),
+    db.insert(submissionSpeakers).values({
+      id: id("submission-speaker"),
+      eventId,
+      submissionId,
+      speakerId,
+      isPrimary: true,
+      roleLabel: "Session moderator",
+      titleAtTime: "Director",
+      organizationAtTime: "Durable Systems",
+      createdAt: now,
+    }),
     db.insert(talks).values({
       id: talkId,
       eventId,
+      submissionId,
       title: "Institutional memory",
       startsAt: new Date(now.getTime() + 86_400_000),
       durationMin: 45,
@@ -137,7 +196,7 @@ const seed = async (name: string) => {
 };
 
 describe("institutional archive", () => {
-  it("exports stable entity IDs and onboarding evidence in deterministic projections", async () => {
+  it("exports stable entity IDs, presenter role labels, and onboarding evidence in deterministic projections", async () => {
     const seeded = await seed("archive-stable");
     const archive = await runAs(seeded.owner, getInstitutionalArchive({ eventId: seeded.eventId }));
 
@@ -145,6 +204,10 @@ describe("institutional archive", () => {
       format: "session-party.archive.v1",
       event: { id: seeded.eventId, name: "Archive Summit" },
       speakers: [{ id: seeded.speakerId, title: "Director", organization: "Durable Systems" }],
+      submissions: [{
+        id: expect.any(String),
+        speakers: [{ speakerId: seeded.speakerId, roleLabel: "Session moderator" }],
+      }],
       sessions: [{ id: seeded.talkId, speakerIds: [seeded.speakerId] }],
       tasks: [{ id: seeded.taskId, name: "Employer approval", kind: "confirm" }],
       taskCompletions: [{ taskId: seeded.taskId, speakerId: seeded.speakerId }],

@@ -408,7 +408,7 @@ export function SubmissionReviewPane({
       </Card>
 
       <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Reviewer assignments">
-        <p className="mb-3 text-sm text-ink-secondary">Assignments organize reviewer worklists; every event reviewer can open and score committee proposals unless they recuse. Owners and admins retain committee-wide access.</p>
+        <p className="mb-3 text-sm text-ink-secondary">Reviewers can open and score only proposals assigned to them. Owners and admins retain committee-wide access, and recusal preserves the assignment history.</p>
         {submission.assignments.length === 0 ? (
           <p className="text-sm text-ink-faint">No reviewers are assigned in this round.</p>
         ) : (

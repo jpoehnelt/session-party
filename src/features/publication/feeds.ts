@@ -54,12 +54,14 @@ const renderPublishedEvent = (
 ): readonly string[] => {
   const description = descriptionFor(talk, visible);
   const location = visible.has("room") ? locationFor(agenda, talk) : null;
+  const calendarUpdatedAt = agenda.calendarUpdatedAt ?? agenda.publishedAt;
+  const calendarRevision = agenda.calendarRevision ?? agenda.revision;
   return [
     "BEGIN:VEVENT",
     `UID:${escapeCalendarText(stableCalendarUid(agenda.eventId, talk.id))}`,
-    `DTSTAMP:${calendarTimestamp(agenda.publishedAt)}`,
-    `LAST-MODIFIED:${calendarTimestamp(agenda.publishedAt)}`,
-    `SEQUENCE:${agenda.revision}`,
+    `DTSTAMP:${calendarTimestamp(calendarUpdatedAt)}`,
+    `LAST-MODIFIED:${calendarTimestamp(calendarUpdatedAt)}`,
+    `SEQUENCE:${calendarRevision}`,
     ...(visible.has("time") ? [
       `DTSTART:${calendarTimestamp(talk.startsAt)}`,
       `DTEND:${calendarTimestamp(talk.startsAt + talk.durationMin * 60_000)}`,

@@ -310,7 +310,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(14);
+    expect(migrations).toHaveLength(16);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -325,7 +325,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(14);
+    expect(migrations).toHaveLength(16);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -368,7 +368,22 @@ describe("baseline migration parity", () => {
     expect((await db.prepare("PRAGMA foreign_key_check").all()).results).toEqual([]);
     await db.prepare("DELETE FROM form_versions WHERE id = 'legacy-v1_legacy-form'").run();
 
-    await applyOneByOne(db, migrations.slice(2));
+    await applyOneByOne(db, migrations.slice(2, 15));
+    await db.batch([
+      db.prepare(
+        "INSERT INTO tracks (id, event_id, name, `order`, version, created_at, updated_at) VALUES ('legacy-embed-track', 'legacy-event', 'Systems', 0, 1, 1700000000000, 1700000000000)",
+      ),
+      db.prepare(
+        `INSERT INTO embeds
+          (id, event_id, name, widget, preset, aesthetic, accent, track, fields, enabled, version, created_at, updated_at)
+         VALUES
+          ('legacy-embed-definition', 'legacy-event', 'Systems schedule', 'schedule', 'agenda', 'minimal', '#005A9C', 'Systems', '["title"]', 1, 1, 1700000000000, 1700000000000)`,
+      ),
+    ]);
+    await applyOneByOne(db, migrations.slice(15));
+    await expect(db.prepare(
+      "SELECT track_id, track FROM embeds WHERE id = 'legacy-embed-definition'",
+    ).first()).resolves.toEqual({ track_id: "legacy-embed-track", track: "Systems" });
 
     await assertDatabaseIntegrity(db);
     const event = await db.prepare(
@@ -486,7 +501,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(14);
+    expect(migrations).toHaveLength(16);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -584,7 +599,7 @@ describe("baseline migration parity", () => {
   it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(14);
+    expect(migrations).toHaveLength(16);
     await applyOneByOne(db, migrations.slice(0, 11));
     const now = 1_700_000_000_000;
     await db.batch([
@@ -641,7 +656,7 @@ describe("baseline migration parity", () => {
   it("repairs duplicate current asset lineages before enforcing uniqueness", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(14);
+    expect(migrations).toHaveLength(16);
     const lineageMigration = migrations.find(({ name }) => name.startsWith("0012_groovy_epoch"));
     if (!lineageMigration) throw new Error("Asset-lineage migration is unavailable");
     await applyOneByOne(db, migrations.filter((migration) => migration !== lineageMigration));

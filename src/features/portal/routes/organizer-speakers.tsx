@@ -345,9 +345,12 @@ export function OrganizerSpeakersContent({
               <Checkbox
                 label={`Select ${item.speaker.displayName}`}
                 checked={selectedSpeakerIds.includes(item.speaker.id)}
-                onChange={(event) => setSelectedSpeakerIds((selected) => event.currentTarget.checked
-                  ? [...selected, item.speaker.id]
-                  : selected.filter((id) => id !== item.speaker.id))}
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
+                  setSelectedSpeakerIds((selected) => checked
+                    ? [...selected, item.speaker.id]
+                    : selected.filter((id) => id !== item.speaker.id));
+                }}
               />
             ),
           },

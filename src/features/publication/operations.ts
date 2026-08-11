@@ -26,7 +26,7 @@ const createEmbedOperation = {
   rest: {
     method: "post",
     path: "/events/:eventId/embeds",
-    input: { path: ["eventId"], body: ["name", "widget", "preset", "aesthetic", "accent", "track", "fields", "enabled"] },
+    input: { path: ["eventId"], body: ["name", "widget", "preset", "aesthetic", "accent", "trackId", "track", "fields", "enabled"] },
     summary: "Create a stable public embed definition",
     successStatus: 201,
   },
@@ -83,7 +83,7 @@ const updateEmbedOperation = {
   rest: {
     method: "put",
     path: "/events/:eventId/embeds/:embedId",
-    input: { path: ["eventId", "embedId"], body: ["expectedVersion", "name", "widget", "preset", "aesthetic", "accent", "track", "fields", "enabled"] },
+    input: { path: ["eventId", "embedId"], body: ["expectedVersion", "name", "widget", "preset", "aesthetic", "accent", "trackId", "track", "fields", "enabled"] },
     summary: "Update or disable a versioned embed definition",
     successStatus: 200,
   },

@@ -3,7 +3,7 @@
 Open-source Sessionboard replacement for the “Kill My SaaS” competition.
 
 - Deadline: **Wednesday, August 12, 10 PM PT**
-- Evaluation: nine brief feature areas, a deployed testable site and walkthrough, and real use by non-technical event-production staff; the competition rubric treats the aggregate onboarding dashboard as best-effort, while product prioritization promotes it based on longitudinal organizer feedback
+- Evaluation: the locked `killmysaas-evals` rubric revision `2b0f7956ab0c6f4868d41356e495b3a225badaab` is the primary acceptance specification; this plan must conform to it and cannot waive a scored criterion
 - Product direction: Sessionboard capabilities with Luma’s calm, event-first public UX and a denser operations cockpit
 - Authority: **the user is final authority**; Main coordinates and recommends; Sol, Ops, advisors, and subagents are advisory or scoped executors
 - Current scope: local implementation is authorized; external provisioning, migration, deployment, secrets, routes, DNS, and production promotion remain separately gated
@@ -48,7 +48,7 @@ The aggregate onboarding/chase dashboard is product-critical even though the com
 | Working database | D1 + Drizzle |
 | Airtable bonus authority | **Field-scoped if enabled:** every mapped field is declared Airtable-authoritative or D1-authoritative; there is no global winner |
 | D1 role | Fast transactional working copy, pending-edit overlay, outbox/event log, and read cache; D1 owns app workflow fields unless explicitly mapped |
-| Agenda publication | Latest immutable `domainChanges` snapshot (`agenda-publication` / event ID / `agenda/published`) is the P0 public projection; payload is validated and contains only confirmed scheduled talks plus visible speaker data |
+| Agenda publication | Latest immutable `domainChanges` snapshot (`agenda-publication` / event ID / `agenda/published`) fixes public membership and revision history. Public widgets overlay the current organizer-owned event/session fields for those published talk IDs, omit talks that are no longer confirmed and scheduled, and change cache validators when live content changes; organizer edits therefore propagate without republishing |
 | Agenda drafting | Draft talks may remain unplaced or partially specified and conflicts save as named warnings; publication, not drafting, enforces completeness and conflict resolution |
 | Files | R2 |
 | Scheduling | Native Durable Object alarms through `Scheduler`; no `partywhen` dependency |
@@ -62,8 +62,8 @@ The aggregate onboarding/chase dashboard is product-critical even though the com
 | Form semantic roles | Draft and immutable form fields carry optional `semanticKey`: `submissionTitle`, `submissionAbstract`, `speakerName`, or `speakerEmail`; keys are unique per form/version, and primary CFP publication requires exactly one title and abstract key |
 | Legacy form semantics | Upgrade migration preserves legacy semantic keys as `null`; it never guesses from labels. Historical data stays readable, but explicit organizer assignment is required before republish/new submit-review activation |
 | AI review identity | AI suggestions are `reviews` rows with `ai=true` and no reviewer; only a separate human-authored row enters human evidence. Event-scoped MCP/API keys may request labeled AI suggestions with `reviews:write`, but never human-score, accept, or act on behalf of a reviewer |
-| Committee review | Event reviewers see the event's proposals and append-only per-submission committee thread by default; assignment is an optional worklist filter, while speaker and cross-event access remain forbidden. Organizer progress is derived from assignments and human reviews. Recusal is a versioned assignment state with preserved reason/history and permits a later replacement assignment. Rubric score rationale and conversation messages remain distinct records |
-| Institutional memory | Stable IDs survive every JSON projection; submission-speaker links freeze nullable title/organization-at-time for new records, legacy links remain null rather than guessed, and the organizer archive includes speakers, submissions, answers, sessions, reviews, decisions, and onboarding evidence |
+| Committee review | Reviewers see and mutate only proposals with an exact active assignment in the selected round; owner/admin retain committee-wide access. Organizer progress is derived from assignments and human reviews. Recusal is a versioned assignment state with preserved reason/history and permits a later replacement assignment. Rubric score rationale and conversation messages remain distinct records |
+| Institutional memory | Stable IDs survive every JSON projection; submission-speaker links freeze the submitted presenter role plus nullable title/organization-at-time for new records, legacy links receive truthful primary/co-presenter fallbacks rather than guessed custom roles, and the organizer archive includes speakers, submissions, answers, sessions, reviews, decisions, and onboarding evidence |
 | Internal contention records | `forms.primaryClaim` and `forms.versionClaim` are approved internal-only `domainChanges` records committed atomically with idempotency/audit evidence; they are not semantic operation emits and are never broadcast |
 | Cloudflare account | `jpoehnelt` (`9cfedefc6185f3dad8ab91241b401135`) |
 | Airtable bonus target | Base `apphFjgebe5pq9gez`; initial table `tblA29jIMOPD42pDj`; optional view `viwsCbJ68dks4nb0s` |
@@ -219,7 +219,7 @@ The existing prototype is not safe to freeze. Phase 0 must establish:
    - composite same-event foreign keys/uniques where D1 permits them
    - IDs are locators, never authority
 2. **Role-filtered realtime**
-   - one event coordination object, but recipient/audience filtering for admin, event reviewer, optional assignment filters, speaker-self, and public data
+   - one event coordination object, with recipient/audience filtering for admin, exact reviewer assignments, speaker-self, and public data
    - replay applies the same authorization as live delivery
 3. **Credential safety**
    - hash magic-link/session/API-key bearer values
@@ -242,7 +242,7 @@ The existing prototype is not safe to freeze. Phase 0 must establish:
    - verified submission ownership and versioned edits after acceptance
    - one-primary-speaker invariant; invitation/accept/revoke state is required only when independent co-speaker accounts ship
 8. **Publication**
-   - explicit draft versus public revision; embeds read only the published projection
+   - explicit draft versus public revision; embeds retain published membership while reading current organizer session fields for those published talk IDs
 9. **Integrations**
    - external identity mappings, per-run/per-item evidence, sync checkpoints, secret references
 10. **Abuse controls**
@@ -251,13 +251,15 @@ The existing prototype is not safe to freeze. Phase 0 must establish:
 Organizer-locked product behavior:
 
 - the primary CFP is one form with one-or-more track options and routing; organizers may create additional forms
-- accepted speakers may continue editing their submission; an optional future lock time is not required for the deadline
+- every proposal, including accepted proposals, becomes read-only when the CFP closes
 - independent co-speaker portal accounts are P1/nice-to-have; the primary speaker portal is P0
+- co-presenters are repeatable submission participants with a persisted presenter role label visible in organizer review and archive/results projections
 - calendar invites contain no video link and include room details only when assigned; reissue an updated ICS when scheduling details change
 
 Security defaults adopted by authorization “according to PLAN.md” unless the user overrides:
 
-- **Review:** reviewers see all submissions and committee comments for events where they are members; assignment remains an optional filter. Speakers never see reviewer identities, comments, or scores.
+- **Review:** reviewers see and score only their exact active assignments. Owners/admins retain committee-wide access. Speakers never see reviewer identities, comments, or scores.
+- **Decision notifications:** accepted and rejected cohorts are selectable separately; dispatch requires explicit review/authorization of exact template, audience, reply-to, and timing, then shows durable queue confirmation.
 - **Public projection:** event name/description/dates/timezone/location/banner/accent; visible speaker name/title/company/bio/headshot/approved links; published talk title/description/time/duration/room/track/public speaker names. Never expose email, form answers, reviews, tasks, assets not explicitly public, audit, or integration state.
 - **Embeds:** sandboxed iframes from `youtube-nocookie.com`, `youtube.com`, `player.vimeo.com`, and `docs.google.com`; no scripts, raw same-origin HTML, or arbitrary providers.
 - **Uploads:** headshots JPEG/PNG/WebP ≤10 MB; slides PDF/PPT/PPTX ≤100 MB; supporting docs PDF/DOC/DOCX ≤25 MB; reject HTML/SVG/executables and serve documents as attachments.
@@ -366,8 +368,8 @@ One feature directory owns each route and operation prefix. A producer may serve
 | `events` | `/`, `/e/:eventSlug`, `/e/:eventSlug/settings`, `/reviewer-invitations/accept` | `events.*` | `/events`, `/events/:idOrSlug`, `/events/:eventId/reviewer-invitations`, `/reviewer-invitations/accept` | event member; organizer shell. Reviewer invitation acceptance uses the existing browser-session/magic-link path and grants only event reviewer membership |
 | `forms` | `/e/:eventSlug/forms` | `forms.*` | `/events/:eventId/forms/**` | owner/admin or scoped API key; organizer shell |
 | `submissions` | `/e/:eventSlug/submissions`, `/submit/:eventSlug/:formId` | `submissions.*` | `/events/:eventId/submissions/**`; public read/create at `/public/events/:eventSlug/forms/:formId` and `/public/events/:eventSlug/forms/:formId/submissions` | organizer queue uses owner/admin/reviewer policy; CFP is anonymous, Turnstile/rate-limited, and `layout = "bare"` |
-| `review` | `/e/:eventSlug/review` | `review.*` | `/events/:eventId/review/**`, `/events/:eventId/submissions/:submissionId/acceptance` | every event reviewer can participate; assignments are optional filters; owner/admin retain decision authority; organizer shell |
-| `agenda` | `/e/:eventSlug/agenda`, `/e/:eventSlug/publication`, `/embed/:eventSlug/schedule` | `agenda.*` | `/events/:eventId/agenda/**`; public slug read at `/public/events/:eventSlug/agenda/published` | agenda/publication use owner/admin or scoped API key and organizer shell; schedule embed is public, immutable-published data only, and bare |
+| `review` | `/e/:eventSlug/review` | `review.*` | `/events/:eventId/review/**`, `/events/:eventId/submissions/:submissionId/acceptance` | reviewers are restricted to exact active assignments; owner/admin retain committee-wide decision authority; organizer shell |
+| `agenda` | `/e/:eventSlug/agenda`, `/e/:eventSlug/publication`, `/embed/:eventSlug/schedule` | `agenda.*` | `/events/:eventId/agenda/**`; public slug read at `/public/events/:eventSlug/agenda/published` | agenda/publication use owner/admin or scoped API key and organizer shell; schedule embed is public and bare, retains published talk membership, and overlays current organizer fields without republishing |
 | `speakers` | `/e/:eventSlug/speakers`, `/embed/:eventSlug/speakers` | `speakers.*` | `/events/:eventId/speakers/**`; public read at `/public/events/:eventSlug/speakers` | directory uses owner/admin or scoped API key and organizer shell; embed is public projection only and bare |
 | `tasks` | `/e/:eventSlug/tasks` | `tasks.*` | `/events/:eventId/tasks/**`, `/events/:eventId/speakers/:speakerId/task-completions/**` | definitions use owner/admin; completion requires exact speaker-self proof; organizer shell |
 | `resources` | `/e/:eventSlug/resources` | `resources.*` | `/events/:eventId/resources/**` | owner/admin writes; exact event speaker reads; organizer management route |
@@ -376,7 +378,7 @@ One feature directory owns each route and operation prefix. A producer may serve
 | `comms` | `/e/:eventSlug/comms` | `comms.*` | `/events/:eventId/comms/**` | owner/admin or communications scope; accepted only with scheduled personalized text/HTML, confirmed-agenda ICS, durable dispatch, and recipient-visible delivery evidence |
 | `integrations` | `/e/:eventSlug/integrations` | `integrations.*` | `/events/:eventId/integrations/**` | owner/admin or integrations scope; Accelevents one-way import is required and fixture/live modes are explicit; Airtable administration is bonus |
 
-The public CFP operations above are the only anonymous submission producer. The agenda owner is the only schedule-publication producer and serves the schedule embed from its immutable published projection. The speakers owner is the only public-speaker projection producer. Portal/tasks/resources must expose readiness without depending on the optional dashboard. Central navigation is updated once after accepted routes exist, never by a slice writer.
+The public CFP operations above are the only anonymous submission producer. The agenda owner is the only schedule-publication producer; its immutable publication records control public membership/revision history while all public schedule surfaces overlay current organizer fields for those talk IDs. The speakers owner is the only public-speaker projection producer. Portal/tasks/resources must expose readiness without depending on the optional dashboard. Central navigation is updated once after accepted routes exist, never by a slice writer.
 
 ### Signature interaction
 
@@ -634,7 +636,7 @@ The review route is always `writer → Main intake → read-only commit reviewer
 | `BaselineGreen` | current schema migrates from blank and legacy D1; auth is tenant-safe; REST/MCP/Party errors and audiences agree; local reset/smoke is deterministic | registry freshness, strict types, Workers suite, build, fresh/upgrade migration proof, local API/MCP/DO smoke | this SHA becomes the only producer base for feature activation |
 | `forms` | organizer builds conditional fields and track routing; publish produces an immutable version and a readable routing summary | focused forms service/operation/UI test | publishes the forms operation artifact; it does not substitute for the public `submit` producer |
 | `submit` | public user renders the published mobile form, creates one routed submission, cannot submit when closed, and receives idempotent replay | focused public-CFP contract/security test and route smoke | produces the submission artifact consumed by review |
-| `review` + acceptance | event reviewers record bounded rubric scores and append committee discussion by round; assignments narrow the queue without restricting participation; acceptance is auditable and yields a provisionable speaker contract | focused review/acceptance service/operation/UI test | produces the acceptance artifact consumed by portal and agenda |
+| `review` + acceptance | assigned reviewers record bounded rubric scores and append committee discussion by round; exact active assignments gate reviewer queue/detail/write access; acceptance is auditable and yields a provisionable speaker contract | focused review/acceptance service/operation/UI test | produces the acceptance artifact consumed by portal and agenda |
 | `agenda` | operator assigns accepted talks by room/time, sees speaker/room conflicts, and can complete the workflow without pointer-only drag | focused agenda service/operation/UI/accessibility test | produces the scheduled-talk artifact consumed by ICS comms and public schedule |
 
 #### Current candidate ledger — 2026-08-08
@@ -712,7 +714,7 @@ The nine brief feature areas define scope, with the dashboard explicitly best-ef
 
 1. **CFP forms — required:** one primary form with one-or-more track options/routing, optional additional forms, conditional fields, public mobile submission, closed-state and idempotency proof
 2. **Speaker portal — required:** primary-speaker account; accepted submission/profile/tasks together; bio/headshot/slides/supporting docs; task-linked forms; speaker-only resources/wiki with safe embeds; independent co-speaker accounts are P1
-3. **Communications — required:** immutable personalized text/HTML, scheduled reminders, auditable actual dispatch, valid confirmed-agenda ICS with no video link, room details when assigned, and updated invite after schedule changes
+3. **Communications — required:** accepted/rejected cohort notifications plus bulk outstanding-task reminders; organizers review the exact audience/template/timing and see durable queue confirmation; immutable personalized text/HTML, scheduled reminders, auditable actual dispatch, valid confirmed-agenda ICS with no video link, room details when assigned, and updated invite after schedule changes
 4. **Reviews — required:** rounds, assignments, bounded rubric scores, optional labeled AI assist
 5. **Agenda — required:** backlog, drag/move alternative, room/speaker conflicts, list/day/week/track/room views
 6. **Onboarding visibility — required in portal/tasks; aggregate dashboard optional:** speakers and organizers can observe real task completion state; realtime dashboard aggregation is best-effort
@@ -789,7 +791,7 @@ A deterministic fake-backed external adapter is the reliable critical path, but 
 | Airtable connector metadata (bonus) | `SessionPartyId`, `sp_revision`, `sp_hash`, `sp_origin` retained with scoped semantics above |
 | Status cadence (if bonus enabled) | every 30 minutes |
 | CFP shape | one form with one-or-more track options/routing; additional forms supported |
-| Accepted edits | speakers may edit after acceptance; edit-lock time deferred |
+| Accepted edits | accepted proposals follow the CFP window and lock when the CFP closes |
 | Co-speaker portals | P1/nice-to-have; primary-speaker portal is P0 |
 | Calendar invite | no video link; room when assigned; updated ICS after scheduling changes |
 | Accelevents demo fallback | truthful fixture uses the production adapter interface; live credentials are optional enhanced proof |

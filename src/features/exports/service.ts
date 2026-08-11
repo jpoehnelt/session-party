@@ -145,6 +145,7 @@ export const getInstitutionalArchive = (
           id: association.id,
           speakerId: association.speakerId,
           isPrimary: association.isPrimary,
+          roleLabel: association.roleLabel ?? (association.isPrimary ? "Primary presenter" : "Co-presenter"),
           titleAtTime: association.titleAtTime,
           organizationAtTime: association.organizationAtTime,
           linkedAt: millis(association.createdAt),

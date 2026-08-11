@@ -516,6 +516,7 @@ const readiness = (
   completions: readonly (typeof taskCompletions.$inferSelect)[],
 ): ReadinessSummary => {
   const completedTaskIds = new Set(completions.map((completion) => completion.taskId));
+  const taskOrder = new Map(definitions.map((task) => [task.id, task.order]));
   const currentTime = Date.now();
   const outstandingDefinitions = definitions.filter((task) => !completedTaskIds.has(task.id));
   const outstandingTaskIds = outstandingDefinitions.map((task) => task.id);
@@ -542,6 +543,7 @@ const readiness = (
   });
   missingItems.sort((left, right) => Number(right.overdue) - Number(left.overdue)
     || (left.dueAt ?? Number.MAX_SAFE_INTEGER) - (right.dueAt ?? Number.MAX_SAFE_INTEGER)
+    || (taskOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (taskOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
     || left.id.localeCompare(right.id));
   return {
     tasksTotal,
