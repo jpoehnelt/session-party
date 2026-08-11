@@ -13,9 +13,10 @@ const successfulExecution: VitestExecution = {
   stderr: "",
 };
 
-test("rejects failed or unhandled Vitest executions", () => {
+test("accepts assertion failures but rejects infrastructure and unhandled Vitest executions", () => {
   assert.doesNotThrow(() => assertVitestExecution(successfulExecution));
-  assert.throws(() => assertVitestExecution({ ...successfulExecution, status: 1 }), /status 1/);
+  assert.doesNotThrow(() => assertVitestExecution({ ...successfulExecution, status: 1 }));
+  assert.throws(() => assertVitestExecution({ ...successfulExecution, status: 2 }), /infrastructure status 2/);
   assert.throws(() => assertVitestExecution({ ...successfulExecution, status: null }), /did not exit normally/);
   assert.throws(
     () => assertVitestExecution({ ...successfulExecution, stderr: "EnvironmentTeardownError: pending RPC" }),
@@ -23,7 +24,7 @@ test("rejects failed or unhandled Vitest executions", () => {
   );
 });
 
-test("requires a successful complete JSON assertion report", () => {
+test("scores complete failed assertions but rejects incomplete JSON reports", () => {
   const directory = mkdtempSync(join(tmpdir(), "session-party-rubric-test-"));
   const path = join(directory, "vitest.json");
   const check = { kind: "vitest" as const, file: "example.test.ts", title: "proves behavior" };
@@ -37,10 +38,19 @@ test("requires a successful complete JSON assertion report", () => {
     }));
     assert.equal(readVitestOutcomes(path, [check]).get(testKey(check.file, check.title)), "passed");
 
-    writeFileSync(path, JSON.stringify({ success: false, testResults: [] }));
-    assert.throws(() => readVitestOutcomes(path, [check]), /did not complete successfully/);
+    writeFileSync(path, JSON.stringify({
+      success: false,
+      testResults: [{
+        name: resolve(check.file),
+        assertionResults: [{ title: check.title, status: "failed" }],
+      }],
+    }));
+    assert.equal(readVitestOutcomes(path, [check]).get(testKey(check.file, check.title)), "failed");
 
-    writeFileSync(path, JSON.stringify({ success: true, testResults: [] }));
+    writeFileSync(path, JSON.stringify({ testResults: [] }));
+    assert.throws(() => readVitestOutcomes(path, [check]), /no completion status/);
+
+    writeFileSync(path, JSON.stringify({ success: false, testResults: [] }));
     assert.throws(() => readVitestOutcomes(path, [check]), /assertions were not found/);
 
     writeFileSync(path, JSON.stringify({ success: true, unhandledErrors: [{}], testResults: [] }));

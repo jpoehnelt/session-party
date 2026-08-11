@@ -21,6 +21,7 @@ const publicProgram = "src/features/publication/components/PublicProgram.test.ts
 const publishedSchedule = "src/features/publication/components/PublishedSchedule.test.tsx";
 const embedDesign = "src/features/publication/embed-design.test.ts";
 const submitDraftBrowser = "src/features/submit/routes/submit-draft.browser.tsx";
+const portalContentBrowser = "src/features/portal/routes/organizer-content.browser.tsx";
 const agendaBoardBrowser = "src/features/agenda/components/agenda-board.browser.tsx";
 const publicProgramBrowser = "src/features/publication/components/public-program.browser.tsx";
 
@@ -170,7 +171,7 @@ export const evidencePlan = {
   ],
   "SPK-10": [
     test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits"),
-    test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download"),
+    test(portalRoute, "renders content metadata, selection controls, history, comments, and a ZIP affordance"),
   ],
   "SPK-11": [
     test(portalRoute, "renders profile editing, accepted submission, one task checklist, files, and resources"),
@@ -207,18 +208,23 @@ export const evidencePlan = {
     test(portalRoute, "applies purpose-specific upload limits before reading or encoding files"),
   ],
   "CNT-07": [
-    test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download"),
+    test(portalRoute, "renders content metadata, selection controls, history, comments, and a ZIP affordance"),
   ],
   "CNT-08": [
-    test(portalService, "queues messages only for speakers with an accepted provisioned portal"),
+    test(portalService, "queues messages for accepted and directly managed portal speakers"),
     gap("No focused organizer UI assertion proves bulk reminder selection and a visible send confirmation."),
   ],
   "CNT-09": [test(agendaService, "edits the organizer session title and abstract with versioned evidence")],
   "CNT-10": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
   "CNT-11": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
   "CNT-12": [test(publicationService, "publishes only confirmed talks and visible speaker names as an immutable snapshot")],
-  "CNT-13": [test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download")],
-  "CNT-14": [test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download")],
+  "CNT-13": [
+    browser(portalContentBrowser, "shows session and version metadata and confirms a latest-only multi-file ZIP"),
+  ],
+  "CNT-14": [
+    browser(portalContentBrowser, "shows session and version metadata and confirms a latest-only multi-file ZIP"),
+    test(portalRoute, "builds standards-compliant stored ZIP archives"),
+  ],
 
   "AIA-01": [
     test(agendaService, "covers every required deterministic scenario"),
@@ -235,31 +241,31 @@ export const evidencePlan = {
   "AIA-07": [test(agendaService, "successfully publishes an unchanged speaker projection as an immutable revision")],
   "AIA-08": [test(agendaService, "auto-places an unplaced talk into the first conflict-free event slot")],
 
-  "EMB-01": [browser(publicProgramBrowser, "searches and facets session cards while expanding the complete description")],
-  "EMB-02": [browser(publicProgramBrowser, "searches and facets session cards while expanding the complete description")],
-  "EMB-03": [browser(publicProgramBrowser, "searches and facets session cards while expanding the complete description")],
+  "EMB-01": [browser(publicProgramBrowser, "proves complete session cards, title and speaker search, facets, and description expansion")],
+  "EMB-02": [browser(publicProgramBrowser, "proves complete session cards, title and speaker search, facets, and description expansion")],
+  "EMB-03": [browser(publicProgramBrowser, "proves complete session cards, title and speaker search, facets, and description expansion")],
   "EMB-04": [
     test(publicProgram, "orders the directory by surname"),
     test(publicProgram, "renders a populated, navigable sessions list from canonical public DTOs"),
   ],
-  "EMB-05": [browser(publicProgramBrowser, "opens and closes complete speaker list and gallery profiles with a long biography")],
+  "EMB-05": [browser(publicProgramBrowser, "opens and closes a complete searchable speaker list profile")],
   "EMB-06": [test(publishedSchedule, "renders the public day view from the canonical published DTO")],
   "EMB-07": [
     browser(publicProgramBrowser, "switches agenda days and restores the agenda after closing complete session detail"),
   ],
   "EMB-08": [browser(publicProgramBrowser, "switches agenda days and restores the agenda after closing complete session detail")],
   "EMB-09": [
-    browser(publicProgramBrowser, "builds an exact personal schedule and restores it across a full remount"),
+    browser(publicProgramBrowser, "renders a complete chronological itinerary and persists an exact personal schedule across remount"),
   ],
-  "EMB-10": [browser(publicProgramBrowser, "builds an exact personal schedule and restores it across a full remount")],
+  "EMB-10": [browser(publicProgramBrowser, "renders a complete chronological itinerary and persists an exact personal schedule across remount")],
   "EMB-11": [
-    browser(publicProgramBrowser, "builds an exact personal schedule and restores it across a full remount"),
+    browser(publicProgramBrowser, "renders a complete chronological itinerary and persists an exact personal schedule across remount"),
   ],
   "EMB-12": [
     test(publicProgram, "orders the directory by surname"),
-    browser(publicProgramBrowser, "opens and closes complete speaker list and gallery profiles with a long biography"),
+    browser(publicProgramBrowser, "renders complete gallery cards, fallbacks, and speaker detail"),
   ],
-  "EMB-13": [browser(publicProgramBrowser, "opens and closes complete speaker list and gallery profiles with a long biography")],
+  "EMB-13": [browser(publicProgramBrowser, "renders complete gallery cards, fallbacks, and speaker detail")],
   "EMB-14": [
     test(publicProgram, "renders a live-data widget builder for all five public surfaces"),
     test(publicProgram, "maps conventional public routes to discoverable surfaces"),

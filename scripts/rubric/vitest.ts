@@ -41,7 +41,9 @@ export function assertVitestExecution(result: VitestExecution): void {
   if (result.status === null) {
     throw new Error(`Vitest did not exit normally${result.signal ? ` (signal ${result.signal})` : ""}`);
   }
-  if (result.status !== 0) throw new Error(`Vitest exited with status ${result.status}`);
+  if (result.status !== 0 && result.status !== 1) {
+    throw new Error(`Vitest exited with infrastructure status ${result.status}`);
+  }
 
   const diagnostics = `${outputText(result.stdout)}\n${outputText(result.stderr)}`;
   if (/Unhandled Error|EnvironmentTeardownError|Unhandled Rejection|Uncaught Exception/i.test(diagnostics)) {
@@ -51,7 +53,9 @@ export function assertVitestExecution(result: VitestExecution): void {
 
 export function readVitestOutcomes(path: string, checks: readonly RubricVitestCheck[]): TestOutcomes {
   const report = JSON.parse(readFileSync(path, "utf8")) as VitestReport;
-  if (report.success !== true) throw new Error("Vitest JSON report did not complete successfully");
+  if (typeof report.success !== "boolean") {
+    throw new Error("Vitest JSON report has no completion status");
+  }
   if (Array.isArray(report.errors) && report.errors.length > 0) {
     throw new Error("Vitest JSON report contains errors");
   }
