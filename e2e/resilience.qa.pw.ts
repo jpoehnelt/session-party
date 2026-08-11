@@ -14,10 +14,27 @@ test("deployed static document responses carry baseline browser security headers
     const response = await request.get(path);
     expect(response.status(), path).toBe(200);
     const headers = response.headers();
+    expect(headers["content-security-policy"], path).toContain("default-src 'self'");
+    expect(headers["content-security-policy"], path).toContain("frame-ancestors 'none'");
+    expect(headers["strict-transport-security"], path).toBe("max-age=31536000");
+    expect(headers["x-frame-options"], path).toBe("DENY");
     expect(headers["x-content-type-options"], path).toBe("nosniff");
     expect(headers["referrer-policy"], path).toBe("strict-origin-when-cross-origin");
     expect(headers["permissions-policy"], path).toBe("camera=(), geolocation=(), microphone=()");
   }
+});
+
+test("deployed embed shells remain frameable while retaining the application CSP", async ({ baseURL, request }, testInfo) => {
+  chromiumOnly(testInfo);
+  test.skip(new URL(baseURL ?? "http://127.0.0.1").hostname === "127.0.0.1", "Cloudflare applies public/_headers at build preview and deploy time, not Vite dev time");
+  const response = await request.get(`/embed/${EVENT}/embed_schedule`);
+  expect(response.status()).toBe(200);
+  const headers = response.headers();
+  expect(headers["content-security-policy"]).toContain("default-src 'self'");
+  expect(headers["content-security-policy"]).toContain("frame-ancestors *");
+  expect(headers["content-security-policy"]).not.toContain("frame-ancestors 'none'");
+  expect(headers["x-frame-options"]).toBeUndefined();
+  expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
 });
 
 test("an organizer event-load failure renders a usable retry state and recovers", async ({ page }, testInfo) => {

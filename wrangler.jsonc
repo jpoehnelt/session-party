@@ -7,7 +7,7 @@
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/mcp", "/parties/*", "/event/*"]
+    "run_worker_first": ["/api/*", "/mcp", "/parties/*", "/event/*", "/embed/*"]
   },
   "observability": { "enabled": true },
   "triggers": { "crons": ["* * * * *"] },
