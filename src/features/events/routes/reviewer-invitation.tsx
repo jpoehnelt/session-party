@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { Schema } from "effect";
-import { ApiError, apiFetch } from "@/client/api";
+import { ApiError, apiFetch, decodeApiResponse } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { Button, Card, EmptyState, PageHeader, Skeleton } from "@/ui";
 import {
@@ -32,7 +31,7 @@ export async function acceptReviewerInvitationToken(token: string, idempotencyKe
     body: JSON.stringify({ token }),
   });
   if (!response.ok) throw new ApiError(response.status, await responseMessage(response));
-  return Schema.decodeUnknownSync(AcceptReviewerInvitationOutput)(await response.json());
+  return decodeApiResponse(response, AcceptReviewerInvitationOutput);
 }
 
 type PageState = "checking" | "signed-out" | "ready";

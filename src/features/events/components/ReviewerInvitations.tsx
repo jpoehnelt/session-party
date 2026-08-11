@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Schema } from "effect";
-import { ApiError, apiFetch } from "@/client/api";
+import { ApiError, apiFetch, decodeApiResponse } from "@/client/api";
 import { Badge, Button, Card, Input, Skeleton, Table } from "@/ui";
 import {
   CreateReviewerInvitationOutput,
@@ -36,7 +36,7 @@ export async function inviteReviewer(eventId: string, email: string, idempotency
     body: JSON.stringify({ email }),
   });
   if (!response.ok) throw new ApiError(response.status, await responseMessage(response));
-  return Schema.decodeUnknownSync(CreateReviewerInvitationOutput)(await response.json());
+  return decodeApiResponse(response, CreateReviewerInvitationOutput);
 }
 
 const statusTone = {

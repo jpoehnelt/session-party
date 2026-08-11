@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import type { AnswerValue } from "contracts/types";
-import { Schema } from "effect";
+import { decodeApiPayload, decodeApiResponse } from "@/client/api";
 import {
   Alert,
   AlertDescription,
@@ -55,7 +55,7 @@ export async function fetchPublicSubmissionForm(
   if (!response.ok) {
     throw new Error(response.status === 404 ? "Submission form not found" : "Could not load submission form");
   }
-  return Schema.decodeUnknownSync(PublicSubmissionForm)(await response.json());
+  return decodeApiResponse(response, PublicSubmissionForm);
 }
 
 export async function postPublicSubmission(
@@ -98,7 +98,7 @@ export async function postPublicSubmission(
       : "Could not submit this form";
     throw new Error(message);
   }
-  return Schema.decodeUnknownSync(CreatePublicSubmissionOutput)(payload);
+  return decodeApiPayload(CreatePublicSubmissionOutput, payload);
 }
 
 const conditionMatches = (
