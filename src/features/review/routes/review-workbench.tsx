@@ -212,6 +212,7 @@ export function ReviewLoadFailure({
     return (
       <div className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
         <EmptyState
+          headingLevel={1}
           title="Sign in to review proposals"
           description="Sign in to continue to this event review workspace."
           action={<Button className="min-h-11" onClick={onSignIn}>Sign in</Button>}
@@ -223,7 +224,7 @@ export function ReviewLoadFailure({
   if (error.kind === "event-not-found") {
     return (
       <div className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
-        <EmptyState title="Event not found" description="This event may have moved or been removed." />
+        <EmptyState headingLevel={1} title="Event not found" description="This event may have moved or been removed." />
       </div>
     );
   }
@@ -231,7 +232,7 @@ export function ReviewLoadFailure({
   if (error.kind === "review-not-found") {
     return (
       <div className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
-        <EmptyState title="Review workspace unavailable" description="Review is not available for this event." />
+        <EmptyState headingLevel={1} title="Review workspace unavailable" description="Review is not available for this event." />
       </div>
     );
   }
@@ -240,6 +241,7 @@ export function ReviewLoadFailure({
     <div className="production-grid min-h-screen bg-canvas p-4 sm:p-6">
       <Card>
         <EmptyState
+          headingLevel={1}
           title="Review queue could not load"
           description={error.message}
           action={<Button className="min-h-11" onClick={onRetry}>Try again</Button>}

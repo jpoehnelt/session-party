@@ -2,7 +2,7 @@ import { expect, test, type BrowserContext, type Page, type TestInfo } from "@pl
 import axe from "axe-core";
 import { installDeterministicBrowser } from "./helpers/visual-readiness";
 
-type Persona = "public" | "owner" | "reviewer" | "speaker";
+type Persona = "public" | "owner" | "admin" | "reviewer" | "speaker";
 
 interface RouteTarget {
   readonly name: string;
@@ -23,6 +23,7 @@ interface ControlRecord {
 const EVENT_SLUG = "ai-engineer-sandbox";
 const SESSION_BY_PERSONA: Partial<Record<Persona, string>> = {
   owner: "demo-owner-session",
+  admin: "demo-admin-session",
   reviewer: "demo-reviewer-session",
   speaker: "demo-speaker-session",
 };
@@ -44,6 +45,10 @@ const ORGANIZER_ROUTES: readonly RouteTarget[] = [
   { name: "settings", path: `/e/${EVENT_SLUG}/settings`, persona: "owner", appShell: true },
 ] as const;
 
+const ADMIN_ROUTES: readonly RouteTarget[] = ORGANIZER_ROUTES
+  .filter(({ name }) => name !== "review")
+  .map((target) => ({ ...target, name: `admin-${target.name}`, persona: "admin" as const }));
+
 const PUBLIC_AND_PORTAL_ROUTES: readonly RouteTarget[] = [
   { name: "landing", path: "/", persona: "public" },
   { name: "login", path: "/login", persona: "public" },
@@ -59,7 +64,7 @@ const PUBLIC_AND_PORTAL_ROUTES: readonly RouteTarget[] = [
   { name: "not-found", path: "/qa-route-that-does-not-exist", persona: "public", appShell: true },
 ] as const;
 
-const ALL_ROUTES = [...ORGANIZER_ROUTES, ...PUBLIC_AND_PORTAL_ROUTES] as const;
+const ALL_ROUTES = [...ORGANIZER_ROUTES, ...ADMIN_ROUTES, ...PUBLIC_AND_PORTAL_ROUTES] as const;
 
 async function authenticate(context: BrowserContext, persona: Persona, baseURL: string): Promise<void> {
   const session = SESSION_BY_PERSONA[persona];

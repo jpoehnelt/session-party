@@ -218,3 +218,51 @@ test("public program navigation, session detail, and personal schedule controls 
   await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/schedule$`));
   await expect(page.getByRole("button", { name: /^My schedule \(\d+\)$/i })).toBeVisible();
 });
+
+test("public CFP supports conditional fields, co-speaker controls, validation, and local draft recovery", async ({ context, page, request }) => {
+  const formsResponse = await request.get(`/api/v1/events/demo-event/forms`, {
+    headers: { Cookie: `sp_session=${OWNER_SESSION}` },
+  });
+  expect(formsResponse.status()).toBe(200);
+  const forms = await formsResponse.json() as readonly {
+    readonly id: string;
+    readonly purpose: string;
+  }[];
+  const cfp = forms.find(({ purpose }) => purpose === "primary-cfp");
+  expect(cfp, "hydrated event must expose its primary CFP").toBeDefined();
+
+  await context.clearCookies();
+  await installDeterministicBrowser(page);
+  await page.goto(`/submit/${EVENT}/${cfp!.id}`);
+  await page.getByRole("heading", { level: 1 }).waitFor({ state: "visible" });
+
+  const conditional = page.getByRole("textbox", { name: "Workshop exercise plan" });
+  await expect(conditional).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Best-fit track" }).selectOption("Developer tools");
+  await expect(conditional).toBeVisible();
+
+  await page.getByRole("textbox", { name: "Session title" }).fill("QA conditional draft — 東京");
+  await page.getByRole("textbox", { name: "Session abstract" }).fill("A deterministic draft for browser recovery.");
+  await page.getByRole("textbox", { name: "Speaker name" }).fill("QA Speaker");
+  await page.getByRole("textbox", { name: "Speaker email" }).fill("qa-speaker@example.test");
+  await conditional.fill("Build, test, and explain the result.");
+
+  await page.getByRole("button", { name: "Add co-speaker" }).click();
+  const coSpeaker = page.getByRole("region", { name: "Co-speaker 1" });
+  await coSpeaker.getByRole("textbox", { name: "Name" }).fill("QA Collaborator");
+  const coSpeakerEmail = coSpeaker.getByRole("textbox", { name: "Email" });
+  await coSpeakerEmail.fill("not-an-email");
+  expect(await coSpeakerEmail.evaluate((field: HTMLInputElement) => field.validity.typeMismatch)).toBe(true);
+  await coSpeaker.getByRole("button", { name: "Remove" }).click();
+  await expect(coSpeaker).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved");
+  await page.reload();
+  await expect(page.getByRole("status")).toContainText("Draft restored");
+  await expect(page.getByRole("textbox", { name: "Session title" })).toHaveValue("QA conditional draft — 東京");
+  await expect(page.getByRole("textbox", { name: "Workshop exercise plan" })).toHaveValue("Build, test, and explain the result.");
+
+  await page.getByRole("combobox", { name: "Best-fit track" }).selectOption("AI systems");
+  await expect(page.getByRole("textbox", { name: "Workshop exercise plan" })).toHaveCount(0);
+});

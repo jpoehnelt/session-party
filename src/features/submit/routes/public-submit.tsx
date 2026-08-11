@@ -606,8 +606,11 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                         required
                         disabled={!accepting || submitting}
                         value={speaker.name}
-                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
-                          currentIndex === index ? { ...item, name: event.currentTarget.value } : item))}
+                        onChange={(event) => {
+                          const name = event.currentTarget.value;
+                          setCoSpeakers((current) => current.map((item, currentIndex) =>
+                            currentIndex === index ? { ...item, name } : item));
+                        }}
                       />
                       <Input
                         id={`co-speaker-${index}-email`}
@@ -615,8 +618,11 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                         label="Email"
                         disabled={!accepting || submitting}
                         value={speaker.email}
-                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
-                          currentIndex === index ? { ...item, email: event.currentTarget.value } : item))}
+                        onChange={(event) => {
+                          const email = event.currentTarget.value;
+                          setCoSpeakers((current) => current.map((item, currentIndex) =>
+                            currentIndex === index ? { ...item, email } : item));
+                        }}
                       />
                       <Input
                         id={`co-speaker-${index}-role`}
@@ -633,16 +639,22 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                         label="Title"
                         disabled={!accepting || submitting}
                         value={speaker.title}
-                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
-                          currentIndex === index ? { ...item, title: event.currentTarget.value } : item))}
+                        onChange={(event) => {
+                          const title = event.currentTarget.value;
+                          setCoSpeakers((current) => current.map((item, currentIndex) =>
+                            currentIndex === index ? { ...item, title } : item));
+                        }}
                       />
                       <Input
                         id={`co-speaker-${index}-organization`}
                         label="Organization"
                         disabled={!accepting || submitting}
                         value={speaker.organization}
-                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
-                          currentIndex === index ? { ...item, organization: event.currentTarget.value } : item))}
+                        onChange={(event) => {
+                          const organization = event.currentTarget.value;
+                          setCoSpeakers((current) => current.map((item, currentIndex) =>
+                            currentIndex === index ? { ...item, organization } : item));
+                        }}
                       />
                     </div>
                   </section>

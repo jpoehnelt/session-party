@@ -491,6 +491,7 @@ export default function EventSettingsPage({
       return (
         <>
           <EmptyState
+            headingLevel={1}
             title="Sign in to manage this event"
             description="Sign in to continue to this event's settings."
             action={
@@ -508,6 +509,7 @@ export default function EventSettingsPage({
     return (
       <>
         <EmptyState
+          headingLevel={1}
           title={failed ? "Could not load event settings" : "Event not found"}
           description={failed ? loadError.message : "The event may have moved or been removed."}
           action={

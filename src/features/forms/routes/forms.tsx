@@ -419,6 +419,7 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
         <>
           <Card className="rounded-none border-[3px] border-[#171714] bg-[#caff4a] shadow-[8px_8px_0_#171714]">
             <EmptyState
+              headingLevel={1}
               title="Sign in to view this event"
               description="Sign in to continue to this event's forms."
               action={
@@ -438,6 +439,7 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
       <>
         <Card className="rounded-none border-[3px] border-[#171714] bg-[#ff714f] shadow-[8px_8px_0_#171714]">
           <EmptyState
+            headingLevel={1}
             title={recoverable ? "Could not load event" : "Event not found"}
             description={eventError ?? "The event may have moved or been removed."}
             action={

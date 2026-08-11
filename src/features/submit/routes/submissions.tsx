@@ -189,6 +189,7 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
     return (
       <>
         <EmptyState
+          headingLevel={1}
           title={unauthenticated ? "Sign in to view submissions" : "Event unavailable"}
           description={unauthenticated ? "Organizer access is required for the submission queue." : eventError ?? "The event may have moved."}
           action={unauthenticated ? <Button onClick={() => navigate(loginPathForLocation(location))}>Sign in</Button> : undefined}

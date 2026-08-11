@@ -304,6 +304,7 @@ export default function CommunicationsPage() {
     return (
       <>
         <EmptyState
+          headingLevel={1}
           title={unauthorized ? "Sign in to manage communications" : eventError ? "Could not load event" : "Event not found"}
           description={unauthorized ? "Use an organizer account to continue." : eventError ?? "The event may have moved or been removed."}
           action={

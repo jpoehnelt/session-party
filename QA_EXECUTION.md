@@ -8,14 +8,16 @@ Specification: `QA_PLAN.md`
 
 `pnpm test:qa` starts a clean local Worker, hydrates the deterministic AI Engineer Sandbox fixture, and runs the Playwright matrix in Desktop Chrome and a Pixel 7 viewport.
 
-- 26 organizer, portal, public, embed, authentication, invitation, and error routes at both breakpoints.
+- 39 owner, admin, reviewer, speaker, public, embed, authentication, invitation, and error routes at both breakpoints.
 - Runtime discovery and JSON evidence for links, buttons, inputs, selects, textareas, summaries, and explicit ARIA roles.
 - Accessible-name, single-H1, document-title, canonical-URL, current-navigation, horizontal-overflow, browser-error, and HTTP-document assertions.
 - Axe WCAG 2.0/2.1/2.2 A/AA scans; serious and critical violations fail the run.
 - Skip-link, mobile navigation, Escape close, focus restoration, client-route focus, title, and canonical behavior.
-- Safe interaction scenarios for login validation, modal validation/cancel, submission filters and pagination, review filters, contact editing, speaker selection, destructive-dialog cancellation, agenda views/setup/live show, communication tabs/template editing, publish/import confirmation, membership-role cancellation, and public-program mobile navigation/session details/schedule controls.
+- Safe interaction scenarios for login validation, modal validation/cancel, submission filters and pagination, review filters, contact editing, speaker selection, destructive-dialog cancellation, agenda views/setup/live show, communication tabs/template editing, publish/import confirmation, membership-role cancellation, public-program mobile navigation/session details/schedule controls, and the public CFP's conditional fields, validation, co-speaker controls, Unicode local-draft save, and reload recovery.
+- Authorization checks for signed-out, expired, malformed, cross-event, owner, admin, reviewer, and speaker identities at both the REST and organizer-UI boundaries.
+- Public-projection privacy assertions, immutable publication-revision reconciliation, and hostile login return-target containment.
 
-Latest local result: **69 passed, 13 intentionally skipped, 0 failed**. The skips avoid duplicating desktop-only interaction scenarios on mobile and mobile-only scenarios on desktop; route, layout, control, and accessibility coverage still runs at both breakpoints.
+Latest local result: **104 passed, 20 intentionally skipped, 0 failed**. The skips avoid duplicating desktop-only interaction and transport-level security scenarios on mobile and mobile-only scenarios on desktop; route, layout, control, and accessibility coverage still runs at both breakpoints.
 
 Baseline regression suites also passed before the QA fixes:
 
@@ -36,6 +38,8 @@ Baseline regression suites also passed before the QA fixes:
 | ARIA | Onboarding and event-setup visual meters used `aria-label` on generic divs. | Expose native progressbar semantics and numeric values. |
 | Contrast | Forms, review, communications, landing, integrations, checkbox help, and speaker-portal text produced serious contrast violations. | Replace opacity/faint tokens with passing semantic text colors. |
 | Keyboard access | The horizontally scrollable MCP endpoint was not keyboard focusable on mobile. | Make scrollable code regions focusable. |
+| Public CFP stability | Editing co-speaker fields crashed the React route because a deferred state updater dereferenced a cleared event target. | Capture each input value synchronously before updating the co-speaker collection; verify all four fields plus draft recovery on desktop and mobile. |
+| Signed-out semantics | Twelve private organizer routes rendered access failures without a top-level heading. | Promote route-level failure titles to H1 and scan every signed-out state with axe. |
 
 ## Deployed read-only reconciliation
 
@@ -51,7 +55,7 @@ All three pass in the local matrix with this change set. Login, schedule embed, 
 
 The production run is read-only. Publishing, imports, member/role changes, key creation/revocation, deletes, outbound communication, uploads, acceptance decisions, and other mutating/destructive actions remain limited to the deterministic local sandbox. The following plan areas still require dedicated controlled environments or human sessions before a full release sign-off:
 
-- Admin/unassigned/recused/cross-event personas and live API-key authorization boundaries.
+- Unassigned/recused personas, live API-key lifecycle authorization, and mutation-level role checks.
 - Real provider email, file-storage, Airtable, Accelevents, retry/dead-letter, and audit evidence.
 - Concurrent stale-version, offline/reconnect, Party gap recovery, idempotency-race, and session-expiry cases.
 - Screen-reader manual passes, 200% zoom/high-contrast/manual visual review, non-Chromium browser coverage, and moderated IA first-click studies.

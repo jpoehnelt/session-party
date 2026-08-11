@@ -791,6 +791,7 @@ export default function IntegrationsPage() {
       return (
         <>
           <EmptyState
+            headingLevel={1}
             title="Sign in to view integrations"
             description="Sign in with organizer access to view this event's provider configuration."
             action={<Button onClick={() => navigate(loginPathForLocation(location))}>Sign in</Button>}
@@ -802,6 +803,7 @@ export default function IntegrationsPage() {
     return (
       <>
         <EmptyState
+          headingLevel={1}
           title={error ? "Integrations could not be loaded" : "Event not found"}
           description={error ?? "The event may have moved or been removed."}
           action={error ? <Button onClick={reload}>Try again</Button> : undefined}

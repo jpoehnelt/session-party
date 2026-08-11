@@ -208,6 +208,7 @@ export default function AgendaPage() {
       return (
         <>
           <EmptyState
+            headingLevel={1}
             title="Sign in to view this event"
             description="Sign in to continue to this event agenda."
             action={
@@ -228,6 +229,7 @@ export default function AgendaPage() {
     return (
       <>
         <EmptyState
+          headingLevel={1}
           title={recoverable ? "Could not load event" : "Event not found"}
           description={eventError ?? "The event may have moved or been removed."}
           action={
