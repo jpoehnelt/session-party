@@ -298,14 +298,24 @@ function SessionsSurface({
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
 }) {
-  const [query, setQuery] = useState("");
-  const [track, setTrack] = useState("");
-  const [room, setRoom] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get("q") ?? "";
+  const track = searchParams.get("track") ?? "";
+  const room = searchParams.get("room") ?? "";
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const tracks = [...new Set(agenda.talks.flatMap((talk) => talk.track ? [talk.track] : []))].sort();
   const rooms = [...new Set(agenda.talks.flatMap((talk) => talk.room ? [talk.room] : []))].sort();
   const filtered = agenda.talks.filter((talk) => sessionMatches(talk, query, track, room));
   const speakers = speakerLookup(gallery);
+  const returnContext = Object.fromEntries(
+    Object.entries({ q: query, track, room }).filter((entry): entry is [string, string] => Boolean(entry[1])),
+  );
+  const updateFilter = (key: "q" | "track" | "room", value: string) => {
+    const next = new URLSearchParams(window.location.search);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <section className="space-y-6" aria-labelledby="public-sessions-title">
@@ -320,14 +330,14 @@ function SessionsSurface({
           label="Search sessions or speakers"
           type="search"
           value={query}
-          onChange={(event) => setQuery(event.currentTarget.value)}
+          onChange={(event) => updateFilter("q", event.currentTarget.value)}
           placeholder="Session title or speaker name"
         />
-        <Select label="Track" value={track} onChange={(event) => setTrack(event.currentTarget.value)}>
+        <Select label="Track" value={track} onChange={(event) => updateFilter("track", event.currentTarget.value)}>
           <option value="">All tracks</option>
           {tracks.map((value) => <option key={value} value={value}>{value}</option>)}
         </Select>
-        <Select label="Room" value={room} onChange={(event) => setRoom(event.currentTarget.value)}>
+        <Select label="Room" value={room} onChange={(event) => updateFilter("room", event.currentTarget.value)}>
           <option value="">All rooms</option>
           {rooms.map((value) => <option key={value} value={value}>{value}</option>)}
         </Select>
@@ -352,7 +362,7 @@ function SessionsSurface({
                     </p>
                     <Link
                       className="mt-2 block text-left"
-                      to={detailPathWithReturn(publicSessionPath(agenda.eventSlug, talk.id), "sessions")}
+                      to={detailPathWithReturn(publicSessionPath(agenda.eventSlug, talk.id), "sessions", returnContext)}
                     >
                       <h2 className="text-xl font-black leading-tight tracking-[-0.03em] text-ink underline-offset-4 hover:underline">{talk.title}</h2>
                     </Link>
@@ -462,15 +472,14 @@ function SpeakersSurface({
   agenda,
   gallery,
   mode,
-  initialQuery,
 }: {
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
   readonly mode: "list" | "gallery";
-  readonly initialQuery: string;
 }) {
   const navigate = useNavigate();
-  const [query, setQuery] = useState(initialQuery);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get("q") ?? "";
   const filtered = sortPublicSpeakers(gallery.speakers).filter((speaker) =>
     normalize([speaker.displayName, speaker.title ?? "", speaker.company ?? ""].join(" "))
       .includes(normalize(query))
@@ -478,6 +487,12 @@ function SpeakersSurface({
   const heading = mode === "gallery" ? "Speaker gallery" : "Speakers";
   const sourceSurface: PublicProgramSurface = mode === "gallery" ? "gallery" : "speakers";
   const returnContext: Readonly<Record<string, string>> = query ? { q: query } : {};
+  const updateQuery = (value: string) => {
+    const next = new URLSearchParams(window.location.search);
+    if (value) next.set("q", value);
+    else next.delete("q");
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <section className="space-y-6" aria-labelledby="public-speakers-title">
@@ -492,7 +507,7 @@ function SpeakersSurface({
           label="Search speakers"
           type="search"
           value={query}
-          onChange={(event) => setQuery(event.currentTarget.value)}
+          onChange={(event) => updateQuery(event.currentTarget.value)}
           placeholder="Name, title, or company"
         />
       </div>
@@ -582,18 +597,22 @@ function DayTabs({
 function AgendaSurface({
   agenda,
   gallery,
-  initialDay,
 }: {
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
-  readonly initialDay: string;
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const days = [...new Set(agenda.talks.map((talk) => localDayKey(talk.startsAt, agenda.timezone)))];
-  const [selectedDay, setSelectedDay] = useState(initialDay || days[0] || "");
+  const selectedDay = searchParams.get("day") ?? "";
   const day = days.includes(selectedDay) ? selectedDay : days[0] ?? "";
   const talks = agenda.talks.filter((talk) => localDayKey(talk.startsAt, agenda.timezone) === day);
   const times = [...new Set(talks.map((talk) => talk.startsAt))].sort((a, b) => a - b);
   const speakers = speakerLookup(gallery);
+  const updateDay = (value: string) => {
+    const next = new URLSearchParams(window.location.search);
+    next.set("day", value);
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <section className="space-y-6" aria-labelledby="public-agenda-title">
@@ -603,7 +622,7 @@ function AgendaSurface({
         titleId="public-agenda-title"
         description="Sessions organized by day, time, and room."
       />
-      <DayTabs agenda={agenda} value={day} onChange={setSelectedDay} />
+      <DayTabs agenda={agenda} value={day} onChange={updateDay} />
       <div role="region" aria-label={`${day} agenda`} className="space-y-8">
         {times.map((time) => (
           <section key={time} className="grid items-start gap-4 md:grid-cols-[9rem_minmax(0,1fr)]">
@@ -646,11 +665,12 @@ function ScheduleSurface({
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const storageKey = `session-party:${agenda.eventSlug}:personal-schedule`;
   const [saved, setSaved] = useState<ReadonlySet<string>>(new Set());
   const [personalOnly, setPersonalOnly] = useState(false);
   const days = [...new Set(agenda.talks.map((talk) => localDayKey(talk.startsAt, agenda.timezone)))];
-  const [selectedDay, setSelectedDay] = useState(days[0] ?? "");
+  const selectedDay = searchParams.get("day") ?? "";
   const day = days.includes(selectedDay) ? selectedDay : days[0] ?? "";
   const speakers = speakerLookup(gallery);
 
@@ -675,6 +695,11 @@ function ScheduleSurface({
     window.localStorage.setItem(storageKey, JSON.stringify([...next]));
     return next;
   });
+  const updateDay = (value: string) => {
+    const next = new URLSearchParams(window.location.search);
+    next.set("day", value);
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <section className="space-y-6" aria-labelledby="public-schedule-title">
@@ -705,7 +730,7 @@ function ScheduleSurface({
           Schedule data (.json)
         </a>
       </div>
-      {!personalOnly ? <DayTabs agenda={agenda} value={day} onChange={setSelectedDay} /> : null}
+      {!personalOnly ? <DayTabs agenda={agenda} value={day} onChange={updateDay} /> : null}
       {visible.length === 0 ? (
         <EmptyState
           title={personalOnly ? "Your schedule is empty" : "No sessions this day"}
@@ -726,7 +751,7 @@ function ScheduleSurface({
                   <div className="space-y-3 p-4">
                     <SessionBadges talk={talk} />
                     <h2 className="text-xl font-black leading-tight tracking-[-0.025em] text-ink">
-                      <Link className="underline decoration-2 underline-offset-3 hover:text-accent-deep" to={publicSessionPath(agenda.eventSlug, talk.id)}>{talk.title}</Link>
+                      <Link className="underline decoration-2 underline-offset-3 hover:text-accent-deep" to={detailPathWithReturn(publicSessionPath(agenda.eventSlug, talk.id), "schedule", { day })}>{talk.title}</Link>
                     </h2>
                     <p className="text-sm leading-6 text-ink-secondary">
                       {talk.description ?? "A description has not been published for this session yet."}
@@ -776,7 +801,11 @@ export function PublicProgram({
   const detailReturnSurface = returnSurface(searchParams.get("from"), fallbackReturnSurface);
   const returnDay = searchParams.get("day");
   const returnQuery = searchParams.get("q");
-  const detailReturnContext: Readonly<Record<string, string>> = detailReturnSurface === "agenda" && returnDay
+  const returnTrack = searchParams.get("track");
+  const returnRoom = searchParams.get("room");
+  const detailReturnContext: Readonly<Record<string, string>> = detailReturnSurface === "sessions"
+    ? Object.fromEntries(Object.entries({ q: returnQuery, track: returnTrack, room: returnRoom }).filter((entry): entry is [string, string] => Boolean(entry[1])))
+    : (detailReturnSurface === "agenda" || detailReturnSurface === "schedule") && returnDay
     ? { day: returnDay }
     : (detailReturnSurface === "speakers" || detailReturnSurface === "gallery") && returnQuery
       ? { q: returnQuery }
@@ -849,10 +878,10 @@ export function PublicProgram({
           ) : <EmptyState headingLevel={1} title="Speaker not found" description="This speaker is not part of the published program." action={<Link className="font-black underline" to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers`}>Back to speakers</Link>} />
         ) : null}
         {!detail.sessionId && !detail.speakerId && surface === "sessions" ? <SessionsSurface agenda={agenda} gallery={gallery} /> : null}
-        {!detail.sessionId && !detail.speakerId && surface === "speakers" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="list" initialQuery={searchParams.get("q") ?? ""} /> : null}
-        {!detail.sessionId && !detail.speakerId && surface === "agenda" ? <AgendaSurface agenda={agenda} gallery={gallery} initialDay={searchParams.get("day") ?? ""} /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "speakers" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="list" /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "agenda" ? <AgendaSurface agenda={agenda} gallery={gallery} /> : null}
         {surface === "schedule" ? <ScheduleSurface agenda={agenda} gallery={gallery} /> : null}
-        {!detail.sessionId && !detail.speakerId && surface === "gallery" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="gallery" initialQuery={searchParams.get("q") ?? ""} /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "gallery" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="gallery" /> : null}
       </div>
       <footer className="mt-4 border-t-2 border-line-strong bg-ink text-on-accent">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
