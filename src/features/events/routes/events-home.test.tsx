@@ -4,6 +4,9 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EventsWorkspace,
+  RoleAwareHome,
+  accessModes,
+  automaticHomeDestination,
   eventAccessDestinations,
   eventPhase,
   fetchEventAccess,
@@ -94,6 +97,59 @@ describe("events home", () => {
     expect(markup).toContain("Speaker portal");
     expect(markup).toContain('href="/e/production-summit/dashboard"');
     expect(markup).toContain('href="/e/production-summit/portal"');
+  });
+
+  it("routes single-role accounts to the appropriate signed-in home", () => {
+    const speakerOnly = access(event(), { memberRole: null, speakerPortal: true });
+    const organizerOnly = access();
+    const reviewerOnly = access(event(), { memberRole: "reviewer" });
+
+    expect(automaticHomeDestination([speakerOnly], now)).toBe("/speaker/profile");
+    expect(automaticHomeDestination([organizerOnly], now)).toBe("/e/production-summit/dashboard");
+    expect(automaticHomeDestination([reviewerOnly], now)).toBe("/e/production-summit/review");
+    expect(accessModes([], true)).toEqual(["speaker"]);
+    expect(automaticHomeDestination([], now, true)).toBe("/speaker/profile");
+  });
+
+  it("chooses the highest-priority organizer event for an organizer-only account", () => {
+    const live = access(event({ id: "live", slug: "live-event", startsAt: new Date("2026-08-09T17:00:00.000Z"), endsAt: new Date("2026-08-09T20:00:00.000Z") }));
+    const upcoming = access(event({ id: "upcoming", slug: "upcoming-event", startsAt: new Date("2026-08-20T17:00:00.000Z"), endsAt: new Date("2026-08-21T20:00:00.000Z") }));
+
+    expect(automaticHomeDestination([upcoming, live], now)).toBe("/e/live-event/dashboard");
+  });
+
+  it("keeps dual-role users on a neutral chooser with explicit role destinations", () => {
+    const dualRole = access(event(), { speakerPortal: true });
+    const markup = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ["/events"] },
+        createElement(RoleAwareHome, { access: [dualRole], onCreateEvent: () => undefined }),
+      ),
+    );
+
+    expect(accessModes([dualRole])).toEqual(["organizer", "speaker"]);
+    expect(automaticHomeDestination([dualRole], now)).toBeNull();
+    expect(markup).toContain("Manage speaker profile");
+    expect(markup).toContain("Production Summit portal");
+    expect(markup).toContain("Production Summit dashboard");
+    expect(markup).toContain("Start an event");
+    expect(markup).toContain("Create event");
+  });
+
+  it("gives a new account neutral speaker and event-creation choices", () => {
+    const markup = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ["/events"] },
+        createElement(RoleAwareHome, { access: [], onCreateEvent: () => undefined }),
+      ),
+    );
+
+    expect(automaticHomeDestination([], now)).toBeNull();
+    expect(markup).toContain("Manage speaker profile");
+    expect(markup).toContain("Creating an event makes you its owner");
+    expect(markup).not.toContain("Event setup");
   });
 
   it("prioritizes live and upcoming work ahead of undated and completed events", () => {

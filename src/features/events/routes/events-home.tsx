@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { Schema } from "effect";
 import { ApiError, apiFetch } from "@/client/api";
+import { getMyProfile } from "@/features/profiles/routes/api";
 import {
   Badge,
   Button,
@@ -81,6 +82,40 @@ export function eventAccessDestinations(access: EventAccessSummary) {
       ? [{ label: "Speaker portal", role: "Speaker", to: `${base}/portal` }]
       : []),
   ] as const;
+}
+
+type AccessMode = "organizer" | "reviewer" | "speaker";
+const ACCESS_MODE_ORDER: readonly AccessMode[] = ["organizer", "reviewer", "speaker"];
+
+export function accessModes(
+  access: readonly EventAccessSummary[],
+  hasReusableProfile = false,
+): readonly AccessMode[] {
+  const modes = new Set<AccessMode>();
+  if (hasReusableProfile) modes.add("speaker");
+  for (const item of access) {
+    if (item.memberRole === "owner" || item.memberRole === "admin") modes.add("organizer");
+    if (item.memberRole === "reviewer") modes.add("reviewer");
+    if (item.speakerPortal) modes.add("speaker");
+  }
+  return ACCESS_MODE_ORDER.filter((mode) => modes.has(mode));
+}
+
+export function automaticHomeDestination(
+  access: readonly EventAccessSummary[],
+  now = new Date(),
+  hasReusableProfile = false,
+): string | null {
+  const modes = accessModes(access, hasReusableProfile);
+  if (modes.length !== 1) return null;
+  const mode = modes[0]!;
+  if (mode === "speaker") return "/speaker/profile";
+  const candidates = access.filter((item) => mode === "organizer"
+    ? item.memberRole === "owner" || item.memberRole === "admin"
+    : item.memberRole === "reviewer");
+  const [event] = prioritizeEvents(candidates.map((item) => item.event), now);
+  if (!event) return null;
+  return mode === "organizer" ? `/e/${event.slug}/dashboard` : `/e/${event.slug}/review`;
 }
 
 export function formatEventDates(event: Pick<EventSummary, "startsAt" | "endsAt" | "timezone">): string {
@@ -333,6 +368,80 @@ export function EventsWorkspace({ access, now = new Date() }: { access: readonly
   );
 }
 
+const workspaceLinkClass = "inline-flex min-h-11 items-center border-2 border-line-strong bg-surface px-4 py-2 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button transition-transform hover:-translate-y-0.5 hover:bg-production-sky";
+
+export function RoleAwareHome({
+  access,
+  hasReusableProfile = false,
+  onCreateEvent,
+}: {
+  readonly access: readonly EventAccessSummary[];
+  readonly hasReusableProfile?: boolean;
+  readonly onCreateEvent: () => void;
+}) {
+  const organizerAccess = access.filter(({ memberRole }) => memberRole === "owner" || memberRole === "admin");
+  const reviewerAccess = access.filter(({ memberRole }) => memberRole === "reviewer");
+  const speakerAccess = access.filter(({ speakerPortal }) => speakerPortal);
+  const modes = accessModes(access, hasReusableProfile);
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      {(modes.length === 0 || hasReusableProfile || speakerAccess.length > 0) && (
+        <Card title="Speaker">
+          <p className="text-sm font-semibold leading-6 text-ink-secondary">
+            Keep one reusable profile and open the event portals where you are presenting.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link className={workspaceLinkClass} to="/speaker/profile">Manage speaker profile →</Link>
+            {speakerAccess.map(({ event }) => (
+              <Link className={workspaceLinkClass} key={event.id} to={`/e/${event.slug}/portal`}>
+                {event.name} portal →
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {organizerAccess.length > 0 && (
+        <Card title="Organizer">
+          <p className="text-sm font-semibold leading-6 text-ink-secondary">
+            Open an event control room for a program you organize.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            {organizerAccess.map(({ event }) => (
+              <Link className={workspaceLinkClass} key={event.id} to={`/e/${event.slug}/dashboard`}>
+                {event.name} dashboard →
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {reviewerAccess.length > 0 && (
+        <Card title="Reviewer">
+          <p className="text-sm font-semibold leading-6 text-ink-secondary">
+            Continue committee work without entering organizer-only surfaces.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            {reviewerAccess.map(({ event }) => (
+              <Link className={workspaceLinkClass} key={event.id} to={`/e/${event.slug}/review`}>
+                Review {event.name} →
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card title="Start an event">
+        <p className="text-sm font-semibold leading-6 text-ink-secondary">
+          Creating an event makes you its owner. Start here only when you want a new organizer workspace.
+        </p>
+        <Button className="mt-5" variant="secondary" onClick={onCreateEvent}>Create event</Button>
+      </Card>
+    </div>
+  );
+}
+
 export function fetchEvents(): Promise<readonly EventSummary[]> {
   return apiFetch("/api/v1/events", { schema: Schema.Array(EventOutput) });
 }
@@ -343,6 +452,8 @@ export function fetchEventAccess(): Promise<readonly EventAccessSummary[]> {
 
 export default function EventsHome() {
   const [access, setAccess] = useState<readonly EventAccessSummary[] | null>(null);
+  const [hasReusableProfile, setHasReusableProfile] = useState<boolean | null>(null);
+  const { search } = useLocation();
   const navigate = useNavigate();
   const [loadError, setLoadError] = useState<"unauthenticated" | "failed" | null>(null);
   const [open, setOpen] = useState(false);
@@ -352,9 +463,10 @@ export default function EventsHome() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    void fetchEventAccess()
-      .then((loadedAccess) => {
+    void Promise.all([fetchEventAccess(), getMyProfile()])
+      .then(([loadedAccess, profile]) => {
         setAccess(loadedAccess);
+        setHasReusableProfile(profile !== null);
         setLoadError(null);
       })
       .catch((error) => {
@@ -392,16 +504,20 @@ export default function EventsHome() {
     if (!slugEdited) setSlug(slugifyEventName(value));
   };
 
+  const choosingWorkspace = new URLSearchParams(search).get("choose") === "1";
+  const automaticDestination = access === null || hasReusableProfile === null || choosingWorkspace
+    ? null
+    : automaticHomeDestination(access, new Date(), hasReusableProfile);
+
+  useEffect(() => {
+    if (automaticDestination) navigate(automaticDestination, { replace: true });
+  }, [automaticDestination, navigate]);
+
   return (
     <>
       <PageHeader
-        title="Event control room"
-        description="Your production workspaces, the next cue for each event, and a direct route into the work."
-        actions={
-          access !== null && loadError === null ? (
-            <Button onClick={() => setOpen(true)}>Create event</Button>
-          ) : undefined
-        }
+        title="Your Session Party"
+        description="Continue as a speaker, organizer, or reviewer. Your account only shows workspaces it can access."
       />
       {loadError === "unauthenticated" ? (
         <EmptyState
@@ -414,16 +530,12 @@ export default function EventsHome() {
           title="Events could not be loaded"
           description="Refresh the page to try again. Your event data has not been changed."
         />
-      ) : access === null ? (
+      ) : access === null || hasReusableProfile === null ? (
         <Skeleton />
-      ) : access.length === 0 ? (
-        <EmptyState
-          title="Create your first event"
-          description="Start with the basics, then invite your team and speakers."
-          action={<Button onClick={() => setOpen(true)}>Create event</Button>}
-        />
+      ) : automaticDestination ? (
+        <Skeleton />
       ) : (
-        <EventsWorkspace access={access} />
+        <RoleAwareHome access={access} hasReusableProfile={hasReusableProfile} onCreateEvent={() => setOpen(true)} />
       )}
       <Modal open={open} onClose={() => setOpen(false)} title="Create an event">
         <div className="space-y-4">
