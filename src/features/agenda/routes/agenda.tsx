@@ -822,28 +822,30 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       ) : (
         <>
           <div className="mb-5 flex flex-wrap items-center justify-between gap-4 border-b-2 border-line-strong pb-5">
-        <Tabs
-          tabs={views}
-          active={view}
-          onChange={(id) => setView(id as AgendaView)}
-        />
-        <p className="w-full max-w-md border-l-4 border-production-coral pl-3 text-xs font-bold text-ink-secondary md:w-auto">
-          Draft placement and warnings can be saved. Publication requires every active talk to be placed and conflict-free before confirmed talks leave backstage.
-        </p>
-      </div>
-      {refresh.status !== "idle" && (
-        <div className="mb-5 flex flex-wrap items-center gap-2 border-2 border-line-strong bg-production-yellow px-3 py-2.5 text-sm font-semibold text-ink shadow-[3px_3px_0_#171714]" role="status" aria-live="polite">
-          <Badge tone={refresh.status === "error" ? "danger" : "neutral"}>
-            {refresh.status === "error" ? "Refresh failed" : "Refreshing"}
-          </Badge>
-          <span>
-            {refresh.status === "error" ? refresh.message : `Updating the ${view} view without clearing the board.`}
-          </span>
-          {refresh.status === "error" && (
-            <Button size="sm" variant="secondary" onClick={() => void retryRefresh()}>Retry refresh</Button>
-          )}
-        </div>
-      )}
+            <Tabs
+              tabs={views}
+              active={view}
+              onChange={(id) => setView(id as AgendaView)}
+            />
+            <div className="relative w-full max-w-md border-l-4 border-production-coral pl-3 text-xs font-bold text-ink-secondary md:w-auto">
+              <p className={refresh.status === "idle" ? undefined : "invisible"} aria-hidden={refresh.status !== "idle"}>
+                Draft placement and warnings can be saved. Publication requires every active talk to be placed and conflict-free before confirmed talks leave backstage.
+              </p>
+              {refresh.status !== "idle" && (
+                <div className="absolute -inset-y-3 -left-1 right-0 z-10 flex flex-wrap items-center gap-2 border-2 border-line-strong bg-production-yellow px-3 py-2.5 text-sm font-semibold text-ink shadow-[3px_3px_0_#171714]" role="status" aria-live="polite">
+                  <Badge tone={refresh.status === "error" ? "danger" : "neutral"}>
+                    {refresh.status === "error" ? "Refresh failed" : "Refreshing"}
+                  </Badge>
+                  <span>
+                    {refresh.status === "error" ? refresh.message : `Updating the ${view} view without clearing the board.`}
+                  </span>
+                  {refresh.status === "error" && (
+                    <Button size="sm" variant="secondary" onClick={() => void retryRefresh()}>Retry refresh</Button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
       <section
         id={`agenda-view-${view}`}
         role="tabpanel"
