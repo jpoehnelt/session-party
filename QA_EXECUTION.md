@@ -34,6 +34,7 @@ Specification: `QA_PLAN.md`
 - Agenda cancellation now requires an exact-talk confirmation that explains draft-schedule removal and retained audit history. A disposable backlog proposal proves dismissing the prompt preserves both the unsaved editor draft and canonical talk, while confirmation archives the talk, closes the sheet, restores proposal eligibility in the backlog, and leaves the public revision unchanged.
 - An explicit 320/375/768/1024/1440/2560 px matrix checks representative public, organizer, table-heavy, agenda, and settings routes for reflow, true clipping, shell mode, and H1 integrity; forced-colors mode covers public sessions, forms, and agenda.
 - Failure injection verifies a recoverable organizer event-load state; local performance observers gate representative public and organizer routes at LCP ≤2.5 s and CLS ≤0.1. Deploy-ready static assets include CSP, one-year HSTS, clickjacking denial, nosniff, referrer, and browser-permission headers. A production-like Wrangler preview proves `/embed/*` reaches the Worker first, retains the application CSP, replaces only `frame-ancestors 'none'` with `frame-ancestors *`, and removes `X-Frame-Options` so published widgets remain frameable.
+- Malformed successful JSON and schema-drifted payloads are normalized at the client request boundaries to one safe, retryable error instead of exposing parser/schema internals. The public program browser flow proves the safe message, route metadata, absence of parser/stack text, and successful canonical retry.
 - Agenda disconnect/reconnect coverage proves offline status annunciation, mutation lockout, canonical refresh recovery, and restored controls. Form creation also fails closed when the browser session expires between editing and submission, with no draft persisted.
 - Portal uploads now validate decoded file signatures/containers in addition to declared MIME, extension, and purpose limits. Unit coverage rejects empty, truncated, renamed HTML/SVG, executable, corrupt OOXML, and double-extension payloads without R2, asset, completion, or idempotency side effects; Chromium, Firefox, and WebKit also verify the speaker UI reports rejection and preserves the asset list after reload.
 
@@ -42,7 +43,7 @@ Latest local result: **287 passed, 121 intentionally skipped, 0 failed** across 
 Baseline regression suites also passed before the QA fixes:
 
 - `pnpm check`: registry, TypeScript, and 98-item/146-check rubric manifest passed.
-- `pnpm test`: 47 files and 482 tests passed.
+- `pnpm test`: 47 files and 484 tests passed.
 - `pnpm test:audit-browser`: 7 files and 13 tests passed.
 - `pnpm rubric:test`: 7 tests passed.
 
@@ -52,6 +53,7 @@ Baseline regression suites also passed before the QA fixes:
 | --- | --- | --- |
 | Public agenda revision isolation | Updated live-feed projection rebuilt public output from current organizer records, leaking unpublished agenda edits and advancing feed validators before publication. | Serve the exact latest published snapshot; prove drafts leave public JSON/ICS/embed content, ETags, timestamps, and calendar sequence unchanged until an explicit publish. |
 | Browser security policy / embed routing | Deployed HTML had no CSP or HSTS. Adding global clickjacking protection initially revealed that Cloudflare's SPA fallback served `/embed/*` before the Worker, bypassing the existing frame-policy override and causing the new policy to deny every published iframe. | Add a Turnstile- and approved-provider-compatible CSP, HSTS, and legacy frame denial to static documents; route `/embed/*` through the Worker first; and prove production-build responses deny framing everywhere except the intentional embed shell override. |
+| Malformed API response UX | Successful responses containing invalid JSON or payloads that drifted from their declared schema surfaced low-level parser/schema diagnostics directly in public and organizer error UI. | Normalize both failure classes to a safe shared 502 response error, retain abort/auth behavior, and prove the public route can retry to canonical content without parser or stack text. |
 | Updated-main QA reconciliation | Persisted embeds and exact-assignment reviewer access replaced the transient embed generator and committee-wide reviewer reads, leaving browser assertions bound to removed controls and obsolete authorization semantics. | Exercise the versioned embed create/edit/disable/enable/copy lifecycle and verify organizer-visible recusal evidence with fail-closed unassigned/recused reviewer queue, detail, and write access. |
 | Route metadata | Agenda/communications H1 text could be concatenated in the title; async public routes retained the loading title. | Use rendered heading text and keep route metadata synchronized through async updates. |
 | Error routing | The wildcard route retained stale metadata and had no H1. | Run it through the route coordinator and render the empty-state title as H1. |

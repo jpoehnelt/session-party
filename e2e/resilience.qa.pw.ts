@@ -60,6 +60,28 @@ test("an organizer event-load failure renders a usable retry state and recovers"
   await expect(page.getByRole("button", { name: "New additional form" })).toBeEnabled();
 });
 
+test("a malformed public response fails safely and recovers through retry", async ({ page }, testInfo) => {
+  chromiumOnly(testInfo);
+  await installDeterministicBrowser(page);
+  const agendaPattern = `**/api/v1/public/events/${EVENT}/agenda/published`;
+  await page.route(agendaPattern, (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: "{",
+  }));
+
+  await page.goto(`/event/${EVENT}/sessions`);
+  await expect(page.getByRole("heading", { level: 1, name: "Published program unavailable" })).toBeVisible();
+  await expect(page.getByText("The server returned an invalid response. Try again.")).toBeVisible();
+  await expect(page.locator("main")).not.toContainText(/SyntaxError|JSON at position|ParseError|stack/i);
+  await expect(page).toHaveTitle("Published program unavailable — Session Party");
+
+  await page.unroute(agendaPattern);
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
+  await expect(page).toHaveTitle("Sessions — Session Party");
+});
+
 test("agenda mutations fail closed while offline and recover from canonical state after reconnect", async ({ context, page }, testInfo) => {
   chromiumOnly(testInfo);
   await context.addCookies([{

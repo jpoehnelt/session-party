@@ -11,6 +11,9 @@ export class ApiError extends Error {
   }
 }
 
+const invalidResponse = (): ApiError =>
+  new ApiError(502, "The server returned an invalid response. Try again.");
+
 export interface ApiFetchOptions<T> {
   method?: string;
   body?: unknown;
@@ -84,7 +87,12 @@ export async function apiFetch<T>(
   if (normalizedMethod === "GET" && requestGeneration !== authGeneration) {
     throw new DOMException("The authenticated principal changed during the request.", "AbortError");
   }
-  return schema ? Schema.decodeUnknownSync(schema)(payload) : (payload as T);
+  if (!schema) return payload as T;
+  try {
+    return Schema.decodeUnknownSync(schema)(payload);
+  } catch {
+    throw invalidResponse();
+  }
 }
 
 async function fetchPayload(
@@ -110,7 +118,12 @@ async function fetchPayload(
     throw new ApiError(response.status, message);
   }
 
-  return response.status === 204 ? undefined : response.json();
+  if (response.status === 204) return undefined;
+  try {
+    return await response.json();
+  } catch {
+    throw invalidResponse();
+  }
 }
 
 function responseMessage(response: Response): Promise<string> {
