@@ -45,6 +45,7 @@ import {
   type PublishedSpeakerGallerySnapshot,
 } from "@/features/portal/schema";
 import {
+  AgendaTalk as AgendaTalkSchema,
   AgendaDeliveryProjection as AgendaDeliveryProjectionSchema,
   PublishedAgenda as PublishedAgendaSchema,
 } from "./schema";
@@ -64,6 +65,7 @@ import type {
   GetAgendaDeliveryProjectionInput,
   GetPublishedAgendaInput,
   ListAgendaInput,
+  ListTalkContentHistoryInput,
   MoveTalkInput,
   PublishedAgenda,
   PublishAgendaInput,
@@ -74,6 +76,7 @@ import type {
   ScheduleTalkInput,
   Track,
   TrackMutationResult,
+  TalkContentHistory,
   UpdateTalkContentInput,
   UpdateRoomInput,
   UpdateTrackInput,
@@ -482,6 +485,43 @@ const decodeAgendaDeliveryProjection = (
       new External({ service: "agenda-delivery-projection", detail: String(error) }),
     ),
   );
+
+const decodeAgendaTalk = (payload: unknown): Effect.Effect<AgendaTalk, External> =>
+  Schema.decodeUnknown(AgendaTalkSchema)(payload).pipe(
+    Effect.mapError((error) =>
+      new External({ service: "agenda-content-history", detail: String(error) }),
+    ),
+  );
+
+export const listTalkContentHistory = (
+  input: ListTalkContentHistoryInput,
+): Effect.Effect<TalkContentHistory, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    yield* loadTalk(input.eventId, input.talkId);
+    const rows = yield* database(() => db.select({
+      id: auditLog.id,
+      after: auditLog.after,
+      actorApiKeyId: auditLog.actorApiKeyId,
+      actorName: users.name,
+      occurredAt: auditLog.occurredAt,
+    }).from(auditLog).leftJoin(users, eq(users.id, auditLog.actorUserId)).where(and(
+      eq(auditLog.eventId, input.eventId),
+      eq(auditLog.action, "agenda.talk_content_updated"),
+      eq(auditLog.resourceType, "talk"),
+      eq(auditLog.resourceId, input.talkId),
+    )).orderBy(desc(auditLog.occurredAt), desc(auditLog.id)));
+    return yield* Effect.forEach(rows, (row) => decodeAgendaTalk(row.after).pipe(
+      Effect.map((talk) => ({
+        id: row.id,
+        title: talk.title,
+        description: talk.description,
+        version: talk.version,
+        editorName: row.actorName ?? (row.actorApiKeyId ? "API key" : "Former user"),
+        occurredAt: row.occurredAt.getTime(),
+      })),
+    ));
+  });
 
 const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | null, AppError, Db> =>
   Effect.gen(function* () {

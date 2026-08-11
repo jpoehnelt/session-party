@@ -9,6 +9,7 @@ import {
   createTrack,
   getPublishedAgenda,
   listAgenda,
+  listTalkContentHistory,
   moveTalk,
   publishAgenda,
   scheduleTalk,
@@ -26,12 +27,14 @@ import {
   CreateTrackInput,
   GetPublishedAgendaInput,
   ListAgendaInput,
+  ListTalkContentHistoryInput,
   MoveTalkInput,
   PublishedAgenda,
   PublishAgendaInput,
   RoomMutationResult,
   ScheduleTalkInput,
   TrackMutationResult,
+  TalkContentHistory,
   UpdateRoomInput,
   UpdateTalkContentInput,
   UpdateTrackInput,
@@ -199,6 +202,29 @@ export const listAgendaOperation = {
   emits: [],
 } as const satisfies AnyOperationDef;
 
+export const listTalkContentHistoryOperation = {
+  id: "agenda.listTalkContentHistory",
+  kind: "query",
+  input: ListTalkContentHistoryInput,
+  output: TalkContentHistory,
+  authorize: readAuthorization,
+  invoke: listTalkContentHistory,
+  rest: {
+    method: "get",
+    path: "/events/:eventId/agenda/talks/:talkId/content-history",
+    input: { path: ["eventId", "talkId"] },
+    summary: "List durable organizer session-content revisions",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "agenda_list_talk_content_history",
+    description: "List timestamped session title and abstract revisions with editor attribution.",
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} as const satisfies AnyOperationDef;
+
 export const moveTalkOperation = {
   id: "agenda.moveTalk",
   kind: "command",
@@ -356,6 +382,7 @@ export const operations = [
   createTrackOperation,
   getPublishedAgendaOperation,
   listAgendaOperation,
+  listTalkContentHistoryOperation,
   moveTalkOperation,
   publishAgendaOperation,
   scheduleTalkOperation,
