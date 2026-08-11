@@ -30,7 +30,7 @@ import { Hono } from "hono";
 import { Effect, Either, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { runRestOperation, type AppHono } from "@/server/adapt";
-import { AppLayer, CurrentUser } from "@/server/services";
+import { AirtableSync, AppLayer, CurrentUser, MailQueue } from "@/server/services";
 import {
   createPublicSubmissionOperation,
   createTaskSubmissionOperation,
@@ -187,8 +187,23 @@ const taskSpeakerInput = (
   answers: [{ fieldId: `${TASK_VERSION_ID}-${TASK_FIELD_ID}`, value }],
 });
 
-const publicAbuseTestLayer = Layer.mergeAll(
+const testAppLayer = Layer.mergeAll(
   AppLayer(env),
+  Layer.succeed(AirtableSync, {
+    mode: "fake",
+    available: true,
+    wake: () => Effect.void,
+    wakeEvent: () => Effect.void,
+  }),
+  Layer.succeed(MailQueue, {
+    appOrigin: "http://localhost:5173",
+    fromEmail: "Session Party <welcome@sessionparty.com>",
+    wake: () => Effect.void,
+  }),
+);
+
+const publicAbuseTestLayer = Layer.mergeAll(
+  testAppLayer,
   Layer.succeed(PublicSubmissionAbuse, localTestPublicSubmissionAbuse),
   Layer.succeed(PublicSubmissionRequest, { remoteIp: "198.51.100.7" }),
 );
@@ -200,7 +215,7 @@ const runPublicWithAbuse = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   authorize: (attempt: PublicSubmissionAbuseAttempt) => Effect.Effect<void, Validation | External>,
 ) => Effect.runPromise(effect.pipe(Effect.provide(Layer.mergeAll(
-  AppLayer(env),
+  testAppLayer,
   Layer.succeed(PublicSubmissionAbuse, { ...localTestPublicSubmissionAbuse, authorize }),
   Layer.succeed(PublicSubmissionRequest, { remoteIp: "198.51.100.7" }),
 ))) as Effect.Effect<A, E, never>);
@@ -208,7 +223,7 @@ const runPublicWithAbuse = <A, E, R>(
 const runAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(
     effect.pipe(
-      Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+      Effect.provide(Layer.merge(testAppLayer, Layer.succeed(CurrentUser, principal))),
     ) as Effect.Effect<A, E, never>,
   );
 
@@ -216,7 +231,7 @@ const runEitherAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, 
   Effect.runPromise(
     effect.pipe(
       Effect.either,
-      Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+      Effect.provide(Layer.merge(testAppLayer, Layer.succeed(CurrentUser, principal))),
     ) as Effect.Effect<Either.Either<A, E>, never, never>,
   );
 

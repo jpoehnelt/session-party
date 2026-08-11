@@ -48,6 +48,12 @@ export interface VitestCheck {
   readonly title: string;
 }
 
+export interface VitestBrowserCheck {
+  readonly kind: "vitest-browser";
+  readonly file: string;
+  readonly title: string;
+}
+
 export interface GapCheck {
   readonly kind: "gap";
   readonly reason: string;
@@ -58,7 +64,7 @@ export interface ManualCheck {
   readonly instructions: string;
 }
 
-export type EvidenceCheck = VitestCheck | GapCheck | ManualCheck;
+export type EvidenceCheck = VitestCheck | VitestBrowserCheck | GapCheck | ManualCheck;
 export type EvidencePlan = Readonly<Record<string, readonly EvidenceCheck[]>>;
 
 export type ResolvedCheck = EvidenceCheck & {

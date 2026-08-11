@@ -67,6 +67,16 @@ export function assertNonDecreasing(previous: RubricBaseline, next: RubricBaseli
       `Refusing to lower the persisted rubric baseline from ${previous.overallScorePct.toFixed(1)}% to ${next.overallScorePct.toFixed(1)}%`,
     );
   }
+  if (next.overallEvidenceCoveragePct < previous.overallEvidenceCoveragePct) {
+    throw new Error(
+      `Refusing to lower persisted rubric evidence coverage from ${previous.overallEvidenceCoveragePct.toFixed(1)}% to ${next.overallEvidenceCoveragePct.toFixed(1)}%`,
+    );
+  }
+  if (next.overallImplementationGapPct > previous.overallImplementationGapPct) {
+    throw new Error(
+      `Refusing to raise persisted rubric implementation-gap weight from ${previous.overallImplementationGapPct.toFixed(1)}% to ${next.overallImplementationGapPct.toFixed(1)}%`,
+    );
+  }
 }
 
 export function writeBaseline(path: string, report: RubricReport): RubricBaseline {

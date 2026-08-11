@@ -18,16 +18,6 @@ const agenda: PublishedAgenda = {
   publishedAt: Date.UTC(2027, 4, 1),
   talks: [
     {
-      id: "talk-ci",
-      title: "Taming 40-Minute CI",
-      description: "A detailed account of incremental builds, remote caching, and evidence from a large monorepo. Attendees leave with an adoption plan and practical benchmarks that can be applied immediately.",
-      track: "Platform & Infra",
-      room: "Main Stage",
-      startsAt: START,
-      durationMin: 30,
-      speakerNames: ["Priya Raman"],
-    },
-    {
       id: "talk-cache",
       title: "Cache Invalidation Without Folklore",
       description: "Practical cache invalidation patterns.",
@@ -36,6 +26,16 @@ const agenda: PublishedAgenda = {
       startsAt: START + 3_600_000,
       durationMin: 45,
       speakerNames: ["Jamie Chen"],
+    },
+    {
+      id: "talk-ci",
+      title: "Taming 40-Minute CI",
+      description: "A detailed account of incremental builds, remote caching, and evidence from a large monorepo. Attendees leave with an adoption plan and practical benchmarks that can be applied immediately.",
+      track: "Platform & Infra",
+      room: "Main Stage",
+      startsAt: START,
+      durationMin: 30,
+      speakerNames: ["Priya Raman", "Jamie Chen"],
     },
     {
       id: "talk-docs",
@@ -70,7 +70,7 @@ const gallery: PublicSpeakerGallery = {
       title: "Principal Engineer",
       company: "Latticework Systems",
       bio: "Priya builds high-scale developer infrastructure. ".repeat(8),
-      headshotUrl: null,
+      headshotUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E",
       links: [],
     },
     {
@@ -91,8 +91,23 @@ const gallery: PublicSpeakerGallery = {
       headshotUrl: null,
       links: [],
     },
+    {
+      id: "speaker-avery",
+      displayName: "Avery Stone",
+      title: null,
+      company: "Independent",
+      bio: null,
+      headshotUrl: null,
+      links: [],
+    },
   ],
 };
+
+const formattedDateTime = (timestamp: number) => new Intl.DateTimeFormat(undefined, {
+  dateStyle: "full",
+  timeStyle: "short",
+  timeZone: agenda.timezone,
+}).format(timestamp);
 
 const byButton = (name: string): HTMLButtonElement => {
   const button = [...document.querySelectorAll<HTMLButtonElement>("button")]
@@ -137,13 +152,37 @@ describe("public program rendered interactions", () => {
     });
   };
 
-  it("searches and facets session cards while expanding the complete description", async () => {
+  it("proves complete session cards, title and speaker search, facets, and description expansion", async () => {
     await renderSurface("sessions");
     expect(container.textContent).toContain("03 sessions on the board");
-    await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Search sessions or speakers"), "Priya"));
+    const cards = [...container.querySelectorAll<HTMLElement>("article")];
+    expect(cards).toHaveLength(3);
+    for (const [talk, speaker] of [
+      [agenda.talks[0]!, gallery.speakers[2]!],
+      [agenda.talks[1]!, gallery.speakers[0]!],
+      [agenda.talks[2]!, gallery.speakers[1]!],
+    ] as const) {
+      const card = cards.find((candidate) => candidate.textContent?.includes(talk.title));
+      expect(card?.textContent).toContain(talk.description);
+      expect(card?.textContent).toContain(formattedDateTime(talk.startsAt));
+      expect(card?.textContent).toContain(`Room · ${talk.room}`);
+      expect(card?.textContent).toContain(`Track · ${talk.track}`);
+      expect(card?.textContent).toContain(`Format · ${talk.durationMin} minutes`);
+      expect(card?.textContent).toContain(speaker.displayName);
+      expect(card?.textContent).toContain(`${speaker.title} at ${speaker.company}`);
+    }
+    expect(cards.find((candidate) => candidate.textContent?.includes("Taming 40-Minute CI"))?.textContent)
+      .toContain("Jamie Chen — Engineering Manager at Switchyard");
+
+    await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Search sessions or speakers"), "Taming"));
     expect(container.textContent).toContain("01 session on the board");
     expect(container.textContent).toContain("Taming 40-Minute CI");
     expect(container.textContent).not.toContain("Docs That Answer Back");
+    await act(async () => userEvent.clear(fieldNamed<HTMLInputElement>("Search sessions or speakers")));
+    await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Search sessions or speakers"), "Okafor"));
+    expect(container.textContent).toContain("01 session on the board");
+    expect(container.textContent).toContain("Docs That Answer Back");
+    expect(container.textContent).not.toContain("Taming 40-Minute CI");
     await act(async () => userEvent.clear(fieldNamed<HTMLInputElement>("Search sessions or speakers")));
     await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Track"), "Developer Experience"));
     expect(container.textContent).toContain("01 session on the board");
@@ -153,25 +192,49 @@ describe("public program rendered interactions", () => {
     expect(byButton("Show less").getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("opens and closes complete speaker list and gallery profiles with a long biography", async () => {
+  it("opens and closes a complete searchable speaker list profile", async () => {
     await renderSurface("speakers");
     await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Search speakers"), "Priya Raman"));
     expect(container.textContent).toContain("01 speaker published");
     await act(async () => userEvent.click(byButton("Priya Raman")));
     expect(document.body.textContent).toContain("Biography");
+    expect(document.body.textContent).toContain("Principal Engineer at Latticework Systems");
     expect(document.body.textContent).toContain("Taming 40-Minute CI");
+    expect(document.body.textContent).toContain(formattedDateTime(START));
     expect(document.body.textContent).toContain("Main Stage");
     await act(async () => userEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!));
     expect(container.textContent).toContain("01 speaker published");
+  });
 
-    await act(async () => root.unmount());
-    root = createRoot(container);
+  it("renders complete gallery cards, fallbacks, and speaker detail", async () => {
     await renderSurface("gallery");
+    const galleryButtons = [...container.querySelectorAll<HTMLButtonElement>("ul button")];
+    expect(galleryButtons.map((button) => button.textContent)).toEqual([
+      expect.stringContaining("Jamie Chen"),
+      expect.stringContaining("Marcus Okafor"),
+      expect.stringContaining("Priya Raman"),
+      expect.stringContaining("Avery Stone"),
+    ]);
+    expect(galleryButtons.find((button) => button.textContent?.includes("Priya Raman"))?.textContent)
+      .toContain("Principal Engineer at Latticework Systems");
+    expect(container.querySelector<HTMLImageElement>('img[alt="Priya Raman"]')?.src).toContain("data:image/svg+xml");
+    expect(container.querySelector<HTMLElement>('[role="img"][aria-label="Avery Stone"]')?.textContent).toBe("AS");
+    expect(galleryButtons.find((button) => button.textContent?.includes("Avery Stone"))?.textContent)
+      .toContain("Independent");
+
     await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Search speakers"), "Priya"));
+    expect(container.textContent).toContain("01 speaker published");
     await act(async () => userEvent.click(byButton("Priya Raman")));
+    expect(document.body.querySelectorAll('img[alt="Priya Raman"]')).toHaveLength(2);
+    expect(document.body.textContent).toContain("Principal Engineer at Latticework Systems");
     expect(document.body.textContent).toContain("Show more biography");
     await act(async () => userEvent.click(byButton("Show more biography")));
     expect(byButton("Show less biography").getAttribute("aria-expanded")).toBe("true");
+    expect(document.body.textContent).toContain("Taming 40-Minute CI");
+    expect(document.body.textContent).toContain(formattedDateTime(START));
+    expect(document.body.textContent).toContain("Main Stage");
+    await act(async () => userEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!));
+    expect(container.textContent).toContain("01 speaker published");
   });
 
   it("switches agenda days and restores the agenda after closing complete session detail", async () => {
@@ -192,8 +255,22 @@ describe("public program rendered interactions", () => {
     expect(container.textContent).toContain("Docs That Answer Back");
   });
 
-  it("builds an exact personal schedule and restores it across a full remount", async () => {
+  it("renders a complete chronological itinerary and persists an exact personal schedule across remount", async () => {
     await renderSurface("schedule");
+    expect(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).toHaveLength(2);
+    const firstDayTitles = [...container.querySelectorAll<HTMLElement>("ol article h2")].map((heading) => heading.textContent);
+    expect(firstDayTitles).toEqual(["Taming 40-Minute CI", "Cache Invalidation Without Folklore"]);
+    const sampledCard = [...container.querySelectorAll<HTMLElement>("article")]
+      .find((candidate) => candidate.textContent?.includes("Taming 40-Minute CI"));
+    expect(sampledCard?.querySelector("time")?.dateTime).toBe(new Date(START).toISOString());
+    expect(sampledCard?.textContent).toContain(formattedDateTime(START));
+    expect(sampledCard?.textContent).toContain("Ends 9:30 AM");
+    expect(sampledCard?.textContent).toContain("Track · Platform & Infra");
+    expect(sampledCard?.textContent).toContain("Format · 30 minutes");
+    expect(sampledCard?.textContent).toContain("Room · Main Stage");
+    expect(sampledCard?.textContent).toContain("A detailed account of incremental builds");
+    expect(sampledCard?.textContent).toContain("Priya Raman — Principal Engineer at Latticework Systems");
+    expect(sampledCard?.textContent).toContain("Jamie Chen — Engineering Manager at Switchyard");
     await act(async () => userEvent.click(byButton("Add to my schedule")));
     const tabs = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     await act(async () => userEvent.click(tabs[1]!));

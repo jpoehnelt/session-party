@@ -755,7 +755,7 @@ describe("organizer content and workflows", () => {
     expect(resourceMarkup).toContain("Speaker production guide");
   });
 
-  it("renders a filterable content library with metadata, comments, history restore, and ZIP download", () => {
+  it("renders content metadata, selection controls, history, comments, and a ZIP affordance", () => {
     const markup = renderToStaticMarkup(createElement(OrganizerContentLibrary, {
       library: contentLibrary,
       onComment: noop,
@@ -767,10 +767,17 @@ describe("organizer content and workflows", () => {
     expect(markup).toContain("River Okafor");
     expect(markup).toContain("slides.pdf");
     expect(markup).toContain("application/pdf");
+    expect(markup).toContain("The calm show call");
+    expect(markup).toContain("v2 of 2");
+    expect(markup).toContain(new Date(contentLibrary.assets[0]!.uploadedAt).toLocaleString());
     expect(markup).toContain("Please add sources.");
     expect(markup).toContain("Download selected ZIP");
+    expect(markup).toContain("Select current results");
+    expect(markup).toContain("Select slides.pdf");
     expect(markup).toContain("All history");
+  });
 
+  it("builds standards-compliant stored ZIP archives", () => {
     const archive = buildStoredZip([
       { name: "one.txt", bytes: new TextEncoder().encode("one") },
       { name: "two.txt", bytes: new TextEncoder().encode("two") },
