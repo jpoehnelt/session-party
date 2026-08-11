@@ -131,9 +131,38 @@ test("owner, admin, reviewer, and speaker receive only their intended REST surfa
   }
 });
 
-test("unassigned and recused reviewers retain committee reads but not active-assignment powers", async ({ request }, testInfo) => {
+test("unassigned and recused reviewers are restricted to exact active assignments", async ({ request }, testInfo) => {
   desktopOnly(testInfo);
   const workbenchPath = `/api/v1/events/${EVENT_ID}/review`;
+
+  const organizer = await getJson(request, workbenchPath, sessions.owner);
+  expect(organizer.status).toBe(200);
+  const organizerQueue = (organizer.body as {
+    readonly queue: readonly { readonly id: string; readonly title: string }[];
+  }).queue;
+  const target = organizerQueue.find(({ title }) => title === "Priya Raman: field notes for developer tools");
+  expect(target, "recusal fixture must remain visible to organizers").toBeDefined();
+  const organizerSelected = await getJson(
+    request,
+    `${workbenchPath}?selectedSubmissionId=${encodeURIComponent(target!.id)}`,
+    sessions.owner,
+  );
+  expect(organizerSelected.status).toBe(200);
+  const organizerDetail = (organizerSelected.body as {
+    readonly selected: {
+      readonly assignments: readonly { readonly reviewerUserId: string; readonly status: string; readonly recusalReason: string | null }[];
+      readonly recusals: readonly { readonly reviewerUserId: string; readonly reason: string | null }[];
+    };
+  }).selected;
+  expect(organizerDetail.assignments).toContainEqual(expect.objectContaining({
+    reviewerUserId: "demo-reviewer-recused",
+    status: "recused",
+    recusalReason: "Topic creates a prior-work conflict for this reviewer.",
+  }));
+  expect(organizerDetail.recusals).toContainEqual(expect.objectContaining({
+    reviewerUserId: "demo-reviewer-recused",
+    reason: "Topic creates a prior-work conflict for this reviewer.",
+  }));
 
   const unassigned = await getJson(request, workbenchPath, sessions.unassignedReviewer);
   expect(unassigned.status).toBe(200);
@@ -142,42 +171,21 @@ test("unassigned and recused reviewers retain committee reads but not active-ass
     readonly viewerUserId: string;
   };
   expect(unassignedBody.viewerUserId).toBe("demo-reviewer-unassigned");
-  expect(unassignedBody.queue.length).toBeGreaterThan(0);
+  expect(unassignedBody.queue).toEqual([]);
   const unassignedOnly = await getJson(request, `${workbenchPath}?assignedToMe=true`, sessions.unassignedReviewer);
   expect(unassignedOnly.status).toBe(200);
   expect((unassignedOnly.body as { readonly queue: readonly unknown[] }).queue).toEqual([]);
 
   const recused = await getJson(request, workbenchPath, sessions.recusedReviewer);
   expect(recused.status).toBe(200);
-  const recusedQueue = (recused.body as {
-    readonly queue: readonly { readonly id: string; readonly title: string }[];
-  }).queue;
-  const target = recusedQueue.find(({ title }) => title === "Priya Raman: field notes for developer tools");
-  expect(target, "recusal fixture must remain visible to the committee").toBeDefined();
+  expect((recused.body as { readonly queue: readonly unknown[] }).queue).toEqual([]);
 
   const selected = await getJson(
     request,
     `${workbenchPath}?selectedSubmissionId=${encodeURIComponent(target!.id)}`,
     sessions.recusedReviewer,
   );
-  expect(selected.status).toBe(200);
-  const selectedBody = selected.body as {
-    readonly selected: {
-      readonly recusedByMe: boolean;
-      readonly assignments: readonly { readonly reviewerUserId: string; readonly status: string; readonly recusalReason: string | null }[];
-      readonly recusals: readonly { readonly reviewerUserId: string; readonly reason: string | null }[];
-    };
-  };
-  expect(selectedBody.selected.recusedByMe).toBe(true);
-  expect(selectedBody.selected.assignments).toContainEqual(expect.objectContaining({
-    reviewerUserId: "demo-reviewer-recused",
-    status: "recused",
-    recusalReason: "Topic creates a prior-work conflict for this reviewer.",
-  }));
-  expect(selectedBody.selected.recusals).toContainEqual(expect.objectContaining({
-    reviewerUserId: "demo-reviewer-recused",
-    reason: "Topic creates a prior-work conflict for this reviewer.",
-  }));
+  expectSafeDenial(selected.status, selected.body);
   expect(JSON.stringify(selected.body)).not.toMatch(/contactEmail|sbek-speaker@example\.com/i);
 
   const recusedOnly = await getJson(request, `${workbenchPath}?assignedToMe=true`, sessions.recusedReviewer);

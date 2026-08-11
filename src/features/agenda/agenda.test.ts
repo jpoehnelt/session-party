@@ -1265,7 +1265,7 @@ describe("agenda service", () => {
     });
   });
 
-  it("keeps an existing published widget consistent with organizer session edits without republishing", async () => {
+  it("keeps an existing published widget immutable while organizer drafts continue changing", async () => {
     const seeded = await seedAgenda("publication", { scheduled: true });
     const before = await runEither(
       seeded.user,
@@ -1333,22 +1333,13 @@ describe("agenda service", () => {
       runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" })),
     ]);
     const organizerTalk = organizerAgenda.talks.find((talk) => talk.id === seeded.talkA)!;
-    expect(stillPublished.revision).toBe(1);
-    expect(stillPublished.talks).toEqual([expect.objectContaining({
-      id: organizerTalk.id,
-      title: organizerTalk.title,
-      description: organizerTalk.description,
-      startsAt: organizerTalk.startsAt,
-      durationMin: organizerTalk.durationMin,
-      room: organizerAgenda.rooms.find((room) => room.id === organizerTalk.roomId)?.name,
-      track: organizerAgenda.tracks.find((track) => track.id === organizerTalk.trackId)?.name,
-      speakerNames: organizerTalk.speakerNames,
-    })]);
-    expect(stillPublished.talks[0]).toMatchObject({
+    expect(organizerTalk).toMatchObject({
       title: "Live organizer title",
-      room: "Summit",
+      roomId: seeded.roomB,
       startsAt: FIXED_DAY_START + 7_200_000,
     });
+    expect(stillPublished).toEqual(published);
+    expect(JSON.stringify(stillPublished)).not.toContain("Live organizer");
   });
 
   it("reissues changed published calendars once per prior recipient with stable identity", async () => {
@@ -1947,16 +1938,7 @@ describe("agenda service", () => {
       seeded.user,
       getPublishedAgenda({ eventSlug: seeded.eventSlug }),
     );
-    expect(stillPublished).toMatchObject({
-      revision: firstPublication.revision,
-      talks: firstPublication.talks.map((talk) => ({
-        ...talk,
-        room: "Summit",
-        startsAt: FIXED_DAY_START + 7_200_000,
-        durationMin: 30,
-      })),
-    });
-    expect(stillPublished.calendarRevision).toBeGreaterThan(firstPublication.calendarRevision!);
+    expect(stillPublished).toEqual(firstPublication);
     const publicationChanges = await seeded.db.select().from(domainChanges).where(and(
       eq(domainChanges.eventId, seeded.eventId),
       eq(domainChanges.aggregateType, "agenda-publication"),

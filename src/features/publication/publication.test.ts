@@ -354,7 +354,7 @@ describe("publication boundary", () => {
     expect(JSON.stringify(result)).not.toContain("Private cancelled talk");
   });
 
-  it("publishes only confirmed talks and keeps existing public widgets live with organizer edits", async () => {
+  it("publishes only confirmed talks and keeps public projections immutable until republished", async () => {
     const seeded = await seedPublication("immutable-publication");
     const unpublishedGallery = await Effect.runPromise(getPublicSpeakers({ eventSlug: seeded.eventSlug }).pipe(
       Effect.either,
@@ -514,22 +514,17 @@ describe("publication boundary", () => {
       `https://example.test/events/${seeded.eventSlug}/schedule.json`,
       { headers: { "If-None-Match": originalJsonEtag! } },
     );
-    expect(refreshedJson.status).toBe(200);
-    expect(refreshedJson.headers.get("etag")).not.toBe(originalJsonEtag);
-    expect(await refreshedJson.json()).toEqual(expect.objectContaining({
-      revision: 1,
-      talks: [expect.objectContaining({ title: "Live feed title" })],
-    }));
+    expect(refreshedJson.status).toBe(304);
+    expect(refreshedJson.headers.get("etag")).toBe(originalJsonEtag);
+    expect(await refreshedJson.text()).toBe("");
     const refreshedCalendar = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/schedule.ics`,
       { headers: { "If-None-Match": etag! } },
     );
-    expect(refreshedCalendar.status).toBe(200);
-    expect(refreshedCalendar.headers.get("etag")).not.toBe(etag);
-    expect(refreshedCalendar.headers.get("last-modified")).not.toBe(calendarResponse.headers.get("last-modified"));
-    const refreshedCalendarBody = await refreshedCalendar.text();
-    expect(refreshedCalendarBody).toContain(`SEQUENCE:${published.calendarRevision! + 1}`);
-    expect(refreshedCalendarBody).toContain("SUMMARY:Live feed title");
+    expect(refreshedCalendar.status).toBe(304);
+    expect(refreshedCalendar.headers.get("etag")).toBe(etag);
+    expect(refreshedCalendar.headers.get("last-modified")).toBe(calendarResponse.headers.get("last-modified"));
+    expect(await refreshedCalendar.text()).toBe("");
 
     const missingSession = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/sessions/missing-session.ics`,

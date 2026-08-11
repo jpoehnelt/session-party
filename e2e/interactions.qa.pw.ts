@@ -1640,7 +1640,7 @@ test("every archive download has the promised filename and parseable projection"
   }
 });
 
-test("publication clipboard and embed-builder controls round-trip without server mutation", async ({ context, page, baseURL }, testInfo) => {
+test("publication clipboard and persisted embed controls complete a versioned lifecycle", async ({ context, page, baseURL }, testInfo) => {
   desktopChromiumOnly(testInfo);
   const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: runtimeBaseURL });
@@ -1650,50 +1650,66 @@ test("publication clipboard and embed-builder controls round-trip without server
   await expect(page.getByText("Public link copied", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${runtimeBaseURL}/event/${EVENT}/sessions`);
 
-  const generated = page.getByRole("textbox", { name: "Generated share URL or code" });
-  const initialCode = await generated.inputValue();
-  for (const widget of ["sessions", "speakers", "agenda", "schedule", "gallery"]) {
-    await page.getByRole("combobox", { name: "Widget type" }).selectOption(widget);
-    expect(await generated.inputValue()).toContain(widget === "speakers" || widget === "gallery" ? "/speakers" : "/schedule");
-  }
-  await page.getByRole("combobox", { name: "Widget type" }).selectOption("sessions");
-  for (const format of ["styled-html", "plain-html", "json", "ical"]) {
-    await page.getByRole("combobox", { name: "Output format" }).selectOption(format);
-    expect(await generated.inputValue(), `${format} must produce output`).not.toBe("");
-  }
-  await page.getByRole("combobox", { name: "Output format" }).selectOption("styled-html");
+  const manager = page.getByRole("region", { name: "Embed & share" });
+  await expect(manager.getByRole("heading", { name: /^Saved embeds/ })).toBeVisible();
+  const widget = manager.getByRole("combobox", { name: "Widget" });
+  const preset = manager.getByRole("combobox", { name: "Preset" });
+  await widget.selectOption("speakerGallery");
+  for (const option of ["speakerList", "speakerGallery"]) await preset.selectOption(option);
+  await widget.selectOption("schedule");
+  for (const option of ["sessions", "agenda", "itinerary"]) await preset.selectOption(option);
+  await preset.selectOption("agenda");
   for (const aesthetic of ["bold", "minimal", "editorial"]) {
-    await page.getByRole("combobox", { name: "Design aesthetic" }).selectOption(aesthetic);
-    expect(await generated.inputValue()).toContain(`aesthetic=${aesthetic}`);
+    await manager.getByRole("combobox", { name: "Design aesthetic" }).selectOption(aesthetic);
   }
-  await page.getByLabel("Brand color").fill("#123456");
-  expect(await generated.inputValue()).toContain("123456");
+  await manager.getByLabel("Brand color").fill("#123456");
+  await manager.getByRole("combobox", { name: "Track filter" }).selectOption({ index: 1 });
   for (const field of ["Title", "Time", "Room", "Track", "Speakers", "Description"]) {
-    const checkbox = page.getByRole("checkbox", { name: field });
+    const checkbox = manager.getByRole("checkbox", { name: field });
     await checkbox.uncheck();
     await expect(checkbox).not.toBeChecked();
     await checkbox.check();
   }
-  expect(await generated.inputValue()).not.toBe(initialCode);
 
-  await page.getByRole("textbox", { name: "Embed name" }).fill("");
-  await page.getByRole("button", { name: "Save embed definition" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Name this embed before saving." })).toBeVisible();
-  await page.getByRole("textbox", { name: "Embed name" }).fill("QA embed — 東京");
-  await page.getByRole("button", { name: "Save embed definition" }).click();
-  await expect(page.getByRole("heading", { name: "Saved embeds (1)" })).toBeVisible();
+  await manager.getByRole("textbox", { name: "Embed name" }).fill("");
+  await manager.getByRole("button", { name: "Create embed" }).click();
+  await expect(manager.getByRole("status")).not.toHaveText("");
+  await manager.getByRole("textbox", { name: "Embed name" }).fill("QA embed — 東京");
+  await manager.getByRole("button", { name: "Create embed" }).click();
+  await expect(manager.getByRole("status")).toContainText("Created “QA embed — 東京”");
+  const saved = manager.locator("li").filter({ hasText: "QA embed — 東京" }).first();
+  await expect(saved).toContainText("Schedule widget · agenda · v1 · Enabled");
+  const code = saved.getByRole("textbox", { name: "QA embed — 東京 embed code" });
+  await expect(code).toHaveValue(/<iframe[^>]+\/embed\/ai-engineer-sandbox\/embed_/);
+  await expect(code).toHaveValue(/width:100%;min-height:720px/);
   await page.reload();
-  await expect(page.getByText("QA embed — 東京", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Disable" }).click();
-  await expect(page.getByText(/sessions · styled-html · Disabled/)).toBeVisible();
-  await page.getByRole("button", { name: "Enable" }).click();
-  await page.getByRole("button", { name: "Get code" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Copied “QA embed — 東京”." })).toBeVisible();
+  const reloadedManager = page.getByRole("region", { name: "Embed & share" });
+  const reloaded = reloadedManager.locator("li").filter({ hasText: "QA embed — 東京" }).first();
+  await expect(reloaded).toBeVisible();
+  await reloaded.getByRole("button", { name: "Edit" }).click();
+  await reloadedManager.getByRole("combobox", { name: "Widget" }).selectOption("speakerGallery");
+  await reloadedManager.getByRole("combobox", { name: "Preset" }).selectOption("speakerGallery");
+  await reloadedManager.getByRole("button", { name: "Update embed" }).click();
+  await expect(reloaded).toContainText("Speaker gallery widget · speakerGallery · v2 · Enabled");
+  await reloaded.getByRole("button", { name: "Disable" }).click();
+  await expect(reloaded).toContainText("Disabled");
+  await expect(reloaded.getByRole("button", { name: "Copy embed code" })).toBeDisabled();
+  await reloaded.getByRole("button", { name: "Enable" }).click();
+  await reloaded.getByRole("button", { name: "Copy embed code" }).click();
+  await expect(reloadedManager.getByRole("status")).toContainText("Copied “QA embed — 東京”.");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("<iframe");
-  await page.getByRole("button", { name: "Delete" }).click();
-  await expect(page.getByRole("heading", { name: "Saved embeds (0)" })).toBeVisible();
-  await page.reload();
-  await expect(page.getByRole("heading", { name: "Saved embeds (0)" })).toBeVisible();
+  const previewHref = await reloaded.getByRole("link", { name: "Preview" }).getAttribute("href");
+  expect(previewHref).toMatch(/^\/embed\/ai-engineer-sandbox\/embed_/);
+
+  for (const [buttonName, expected] of [
+    ["Copy schedule page", `${runtimeBaseURL}/event/${EVENT}/schedule`],
+    ["Copy speaker page", `${runtimeBaseURL}/event/${EVENT}/gallery`],
+    ["Copy JSON feed", `${runtimeBaseURL}/events/${EVENT}/schedule.json`],
+    ["Copy iCalendar feed", `${runtimeBaseURL}/events/${EVENT}/schedule.ics`],
+  ] as const) {
+    await reloadedManager.getByRole("button", { name: buttonName }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+  }
 });
 
 test("public program navigation, session detail, and personal schedule controls work on mobile", async ({ page }, testInfo) => {
@@ -1701,7 +1717,7 @@ test("public program navigation, session detail, and personal schedule controls 
   await page.goto(`/event/${EVENT}/sessions`);
   await page.getByRole("heading", { level: 1 }).waitFor({ state: "visible" });
   const nav = page.getByRole("navigation", { name: "Public event navigation" });
-  for (const name of ["Sessions", "Speakers", "Agenda", "Schedule itinerary", "Speaker gallery", "Embed & share"]) {
+  for (const name of ["Sessions", "Speakers", "Agenda", "Schedule itinerary", "Speaker gallery"]) {
     await expect(nav.getByRole("link", { name })).toBeVisible();
   }
   const sessionButton = page.locator('main button[type="button"]').first();
