@@ -422,6 +422,14 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     () => agenda?.talks.find(({ id }) => id === selectedTalkId) ?? null,
     [agenda, selectedTalkId],
   );
+  const talkDirty = useMemo(() => selectedTalk !== null && (
+    form.title !== selectedTalk.title
+    || form.description !== (selectedTalk.description ?? "")
+    || form.trackId !== (selectedTalk.trackId ?? "")
+    || form.roomId !== (selectedTalk.roomId ?? "")
+    || form.startsAt !== localInputValue(selectedTalk.startsAt, event.timezone)
+    || form.durationMin !== String(selectedTalk.durationMin)
+  ), [event.timezone, form, selectedTalk]);
   const setupDirty = useMemo(() => {
     const trackChanged = trackDraft.id === null
       ? trackDraft.name !== "" || trackDraft.color !== "" || trackDraft.order !== "0"
@@ -450,6 +458,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     setTrackDraft(emptyTrackDraft());
     setRoomDraft(emptyRoomDraft());
   }, [setupDirty]);
+
+  const closeTalkEditor = useCallback(() => {
+    if (talkDirty && !window.confirm("Discard unsaved talk changes?")) return;
+    room.send({ t: "agenda/focus", talkId: null });
+    closeTalkSheet();
+  }, [closeTalkSheet, room, talkDirty]);
 
   const selectTalk = (talk: AgendaTalk, message: string | null = null) => {
     room.send({ t: "agenda/focus", talkId: talk.id });
@@ -1083,10 +1097,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
       <Sheet
         open={selectedTalk !== null}
-        onClose={() => {
-          room.send({ t: "agenda/focus", talkId: null });
-          closeTalkSheet();
-        }}
+        onClose={closeTalkEditor}
         title={selectedTalk?.title ?? "Talk details"}
         size="lg"
         footer={

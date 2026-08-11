@@ -786,6 +786,159 @@ test("agenda track and room editors protect drafts, persist updates, and restore
   });
 });
 
+test("agenda talk editor protects drafts, validates mutations, preserves the public revision, and restores the fixture", async ({ context, page, request, baseURL }, testInfo) => {
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const agendaPath = `/api/v1/events/${EVENT_ID}/agenda`;
+  const publicAgendaPath = `/api/v1/public/events/${EVENT}/agenda/published`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  type Talk = Readonly<{
+    id: string;
+    title: string;
+    description: string | null;
+    trackId: string | null;
+    roomId: string | null;
+    startsAt: number | null;
+    durationMin: number;
+    status: "draft" | "confirmed" | "cancelled";
+    version: number;
+  }>;
+  type Agenda = Readonly<{
+    tracks: readonly Readonly<{ id: string; name: string }>[];
+    talks: readonly Talk[];
+  }>;
+  const loadAgenda = async (): Promise<Agenda> => {
+    const response = await request.get(agendaPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<Agenda>;
+  };
+  const loadPublicAgenda = async (): Promise<unknown> => {
+    const response = await request.get(publicAgendaPath);
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const initialAgenda = await loadAgenda();
+  const initialTalk = initialAgenda.talks.find(({ status, startsAt }) => status === "confirmed" && startsAt !== null);
+  expect(initialTalk).toBeDefined();
+  const alternateTrack = initialAgenda.tracks.find(({ id }) => id !== initialTalk!.trackId);
+  expect(alternateTrack).toBeDefined();
+  const publicBefore = await loadPublicAgenda();
+  const updatedTitle = `${initialTalk!.title} · QA ${testInfo.project.name}`;
+  const updatedDescription = `QA agenda content ${testInfo.project.name} — Unicode ✓`;
+  const idempotency = (kind: string) => `qa-agenda-talk-${kind}-${testInfo.project.name}-${Date.now()}`;
+  const editButton = (title: string) => page.locator(`button[aria-label^=${JSON.stringify(`Edit ${title}.`)}]`).first();
+  const restore = async (): Promise<void> => {
+    let current = (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id);
+    expect(current).toBeDefined();
+    if (current!.title !== initialTalk!.title || current!.description !== initialTalk!.description) {
+      const response = await request.patch(`${agendaPath}/talks/${current!.id}/content`, {
+        headers: ownerHeaders,
+        data: {
+          title: initialTalk!.title,
+          description: initialTalk!.description,
+          expectedVersion: current!.version,
+          idempotencyKey: idempotency("restore-content"),
+        },
+      });
+      expect(response.status()).toBe(200);
+    }
+    current = (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id);
+    expect(current).toBeDefined();
+    if (
+      current!.trackId !== initialTalk!.trackId
+      || current!.roomId !== initialTalk!.roomId
+      || current!.startsAt !== initialTalk!.startsAt
+      || current!.durationMin !== initialTalk!.durationMin
+    ) {
+      const response = await request.patch(`${agendaPath}/talks/${current!.id}/position`, {
+        headers: ownerHeaders,
+        data: {
+          trackId: initialTalk!.trackId,
+          roomId: initialTalk!.roomId,
+          startsAt: initialTalk!.startsAt,
+          durationMin: initialTalk!.durationMin,
+          expectedVersion: current!.version,
+          idempotencyKey: idempotency("restore-position"),
+        },
+      });
+      expect(response.status()).toBe(200);
+    }
+  };
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/agenda");
+  try {
+    await editButton(initialTalk!.title).click();
+    let editor = page.getByRole("dialog", { name: initialTalk!.title });
+    await expect(editor).toBeVisible();
+    const title = editor.getByLabel("Session title");
+    await title.fill(`${initialTalk!.title} unsaved`);
+
+    let closeMessage = "";
+    page.once("dialog", async (dialog) => {
+      closeMessage = dialog.message();
+      await dialog.dismiss();
+    });
+    await editor.getByRole("button", { name: "Close" }).click();
+    expect(closeMessage).toBe("Discard unsaved talk changes?");
+    await expect(editor).toBeVisible();
+    await expect(title).toHaveValue(`${initialTalk!.title} unsaved`);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await editor.getByRole("button", { name: "Close" }).click();
+    await expect(editor).toBeHidden();
+    await editButton(initialTalk!.title).click();
+    editor = page.getByRole("dialog", { name: initialTalk!.title });
+    await expect(editor.getByLabel("Session title")).toHaveValue(initialTalk!.title);
+
+    await editor.getByLabel("Session title").fill("   ");
+    await editor.getByRole("button", { name: "Save session content" }).click();
+    await expect(page.getByText("Enter a session title", { exact: true }).first()).toBeVisible();
+    await expect(editor.getByLabel("Session title")).toHaveValue("   ");
+    await editor.getByLabel("Session title").fill(initialTalk!.title);
+
+    const duration = editor.getByLabel("Duration (minutes)");
+    await duration.fill("4");
+    await editor.getByRole("button", { name: "Save schedule" }).click();
+    expect(await duration.evaluate((input: HTMLInputElement) => input.validity.rangeUnderflow)).toBe(true);
+    await expect(duration).toHaveValue("4");
+    await duration.fill(String(initialTalk!.durationMin));
+
+    await editor.getByLabel("Session title").fill(updatedTitle);
+    await editor.getByLabel("Session abstract").fill(updatedDescription);
+    await editor.getByRole("button", { name: "Save session content" }).click();
+    await expect(page.getByText("Session title and abstract updated", { exact: true }).first()).toBeVisible();
+    editor = page.getByRole("dialog", { name: updatedTitle });
+    await expect(editor).toBeVisible();
+
+    await editor.getByLabel("Track").selectOption(alternateTrack!.id);
+    await editor.getByRole("button", { name: "Save schedule" }).click();
+    await expect(page.getByText("Talk scheduled", { exact: true }).first()).toBeVisible();
+    await expect.poll(async () => (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id)?.trackId).toBe(alternateTrack!.id);
+    expect(await loadPublicAgenda()).toEqual(publicBefore);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("h1").waitFor({ state: "visible" });
+    await editButton(updatedTitle).click();
+    editor = page.getByRole("dialog", { name: updatedTitle });
+    await expect(editor.getByLabel("Session title")).toHaveValue(updatedTitle);
+    await expect(editor.getByLabel("Session abstract")).toHaveValue(updatedDescription);
+    await expect(editor.getByLabel("Track")).toHaveValue(alternateTrack!.id);
+  } finally {
+    await restore();
+  }
+
+  const restored = (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id);
+  expect(restored).toMatchObject({
+    title: initialTalk!.title,
+    description: initialTalk!.description,
+    trackId: initialTalk!.trackId,
+    roomId: initialTalk!.roomId,
+    startsAt: initialTalk!.startsAt,
+    durationMin: initialTalk!.durationMin,
+    status: initialTalk!.status,
+  });
+  expect(await loadPublicAgenda()).toEqual(publicBefore);
+});
+
 test("communications protects unsaved edits and rejects a stale template writer without losing its draft", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/comms");
