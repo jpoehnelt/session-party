@@ -1,10 +1,36 @@
 import { renderToStaticMarkup } from "react-dom/server.edge";
 import { describe, expect, it, vi } from "vitest";
-import { deterministicAgendaIds, FIXED_NOW, scheduledAgendaFixture } from "../fixtures";
+import { backlogAgendaFixture, deterministicAgendaIds, FIXED_NOW, scheduledAgendaFixture } from "../fixtures";
 import { AgendaBoard } from "./AgendaBoard";
 import { LiveShowControl } from "./LiveShowControl";
 
 describe("agenda realtime controls", () => {
+  it("links backlog proposals to review while preserving talk creation", () => {
+    const onCreateTalk = vi.fn();
+    const html = renderToStaticMarkup(
+      <AgendaBoard
+        agenda={backlogAgendaFixture.snapshot}
+        eventSlug="effect-days/2026"
+        view="day"
+        intent={{
+          clientIntentId: null,
+          connection: "connected",
+          acknowledgement: "idle",
+          sentAt: null,
+          message: null,
+        }}
+        onCreateTalk={onCreateTalk}
+        onSelectTalk={vi.fn()}
+        onMoveTalk={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("/e/effect-days%2F2026/review?selectedSubmissionId=submission-effects-at-scale");
+    expect(html).toContain("Effects at scale</a>");
+    expect(html).toContain("Create talk</button>");
+    expect(onCreateTalk).not.toHaveBeenCalled();
+  });
+
   it("renders collaborator presence and a remote ghost preview", () => {
     const html = renderToStaticMarkup(
       <AgendaBoard
