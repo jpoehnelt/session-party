@@ -37,10 +37,12 @@ const TARGETS: readonly KeyboardTarget[] = [
   { name: "integrations", path: `/e/${EVENT}/integrations`, persona: "owner" },
   { name: "settings", path: `/e/${EVENT}/settings`, persona: "owner" },
   { name: "speaker-portal", path: `/e/${EVENT}/portal`, persona: "speaker" },
+  { name: "reusable-speaker-profile", path: "/speaker/profile", persona: "speaker" },
   { name: "my-submissions", path: `/portal/events/${EVENT}/submissions`, persona: "speaker" },
   { name: "public-program", path: `/event/${EVENT}`, persona: "public" },
   { name: "public-sessions", path: `/event/${EVENT}/sessions`, persona: "public" },
   { name: "public-speakers", path: `/event/${EVENT}/speakers`, persona: "public" },
+  { name: "public-reusable-speaker-profile", path: "/speakers/priya-raman", persona: "public" },
   { name: "schedule-embed", path: `/embed/${EVENT}/schedule`, persona: "public" },
   { name: "speaker-embed", path: `/embed/${EVENT}/speakers`, persona: "public" },
   { name: "reviewer-invitation-invalid", path: "/reviewer-invitations/accept", persona: "public" },
@@ -93,7 +95,7 @@ async function registerTabStops(page: Page): Promise<readonly { readonly id: str
         candidate instanceof HTMLInputElement
         && candidate.type === "radio"
         && candidate.name === field.name
-        && !candidate.disabled);
+        && !candidate.matches(":disabled"));
       const groupTabStop = group.find((candidate) => candidate.checked) ?? group[0];
       id = `qa-tab-radio-${elements.indexOf(group[0]!)}`;
       for (const candidate of group) candidate.dataset.qaTabId = id;
@@ -107,7 +109,7 @@ async function registerTabStops(page: Page): Promise<readonly { readonly id: str
       || rect.height === 0
       || html.closest("[hidden], [inert], [aria-hidden=true]") !== null
       || (html.tagName !== "SUMMARY" && html.closest("details:not([open])") !== null);
-    const disabled = field.disabled || html.getAttribute("aria-disabled") === "true";
+    const disabled = html.matches(":disabled") || html.getAttribute("aria-disabled") === "true";
     if (hidden || disabled || html.tabIndex < 0) return [];
     html.dataset.qaTabId = id;
     const name = html.getAttribute("aria-label")
@@ -155,7 +157,17 @@ test("every stable interactive control is reachable in the sequential Tab order"
   const forms = await formsResponse.json() as readonly { readonly id: string; readonly purpose: string }[];
   const cfp = forms.find(({ purpose }) => purpose === "primary-cfp");
   expect(cfp).toBeDefined();
+  const directoryResponse = await request.get(`/api/v1/events/demo-event/portal/speakers`, {
+    headers: { Cookie: "sp_session=demo-owner-session" },
+  });
+  expect(directoryResponse.status()).toBe(200);
+  const directory = await directoryResponse.json() as { readonly speakers: readonly { readonly speaker: { readonly id: string } }[] };
+  expect(directory.speakers.length).toBeGreaterThan(0);
   const targets = [...TARGETS, {
+    name: "speaker-detail",
+    path: `/e/${EVENT}/speakers/${encodeURIComponent(directory.speakers[0]!.speaker.id)}`,
+    persona: "owner" as const,
+  }, {
     name: "public-cfp",
     path: `/submit/${EVENT}/${cfp!.id}`,
     persona: "public" as const,

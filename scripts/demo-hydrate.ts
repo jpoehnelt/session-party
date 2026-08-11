@@ -88,6 +88,12 @@ interface SpeakerProfile {
   readonly version: number;
 }
 
+interface ReusableSpeakerProfile {
+  readonly id: string;
+  readonly slug: string;
+  readonly version: number;
+}
+
 interface UploadOutput {
   readonly task: null | { readonly completionVersion: number };
 }
@@ -561,6 +567,22 @@ const profile = await request<SpeakerProfile>(`/events/${eventId}/portal/profile
   },
 });
 
+const reusableProfile = await request<ReusableSpeakerProfile>("/speaker-profile", {
+  method: "PUT",
+  session: speakerSession,
+  body: {
+    expectedVersion: 0,
+    slug: "priya-raman",
+    displayName: "Priya Raman",
+    title: "Principal AI Engineer",
+    company: "Fieldcraft Labs",
+    bio: "Priya builds reliable agent systems and teaches teams how to operate them in production.",
+    headshotUrl: null,
+    links: [{ label: "Website", url: "https://example.com/priya-raman" }],
+    visible: true,
+  },
+});
+
 await request(`/events/${eventId}/portal/tasks/${encode(tasks[0]!.id)}/completion`, {
   method: "PUT",
   session: speakerSession,
@@ -802,6 +824,7 @@ console.log(JSON.stringify({
   forms: { cfp: publishedCfp.id, task: publishedTaskForm.id },
   submission: submission.submissionId,
   speaker: accepted.primarySpeakerId,
+  reusableProfile: { id: reusableProfile.id, slug: reusableProfile.slug },
   managedSpeaker: managedSpeaker.id,
   provisioning: accepted.provisioningId,
   tasks: tasks.map(({ id }) => id),

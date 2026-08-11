@@ -26,7 +26,9 @@ const TARGETS: readonly VisualTarget[] = [
   { name: "agenda", path: `/e/${EVENT_SLUG}/agenda`, persona: "owner" },
   { name: "publication", path: `/e/${EVENT_SLUG}/publication`, persona: "owner" },
   { name: "speaker-portal", path: `/e/${EVENT_SLUG}/portal`, persona: "speaker" },
+  { name: "reusable-speaker-profile", path: "/speaker/profile", persona: "speaker" },
   { name: "public-program", path: `/event/${EVENT_SLUG}`, persona: "public" },
+  { name: "public-reusable-speaker-profile", path: "/speakers/priya-raman", persona: "public" },
   { name: "schedule-embed", path: `/embed/${EVENT_SLUG}/schedule`, persona: "public" },
   { name: "speaker-embed", path: `/embed/${EVENT_SLUG}/speakers`, persona: "public" },
 ];

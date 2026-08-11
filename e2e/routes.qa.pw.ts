@@ -35,6 +35,7 @@ const ORGANIZER_ROUTES: readonly RouteTarget[] = [
   { name: "review", path: `/e/${EVENT_SLUG}/review`, persona: "reviewer", appShell: true },
   { name: "onboarding", path: `/e/${EVENT_SLUG}/dashboard`, persona: "owner", appShell: true },
   { name: "speakers", path: `/e/${EVENT_SLUG}/speakers`, persona: "owner", appShell: true },
+  { name: "speaker-detail", path: `/e/${EVENT_SLUG}/speakers/__qa_speaker__`, persona: "owner", appShell: true },
   { name: "tasks", path: `/e/${EVENT_SLUG}/tasks`, persona: "owner", appShell: true },
   { name: "resources", path: `/e/${EVENT_SLUG}/resources`, persona: "owner", appShell: true },
   { name: "content", path: `/e/${EVENT_SLUG}/content`, persona: "owner", appShell: true },
@@ -55,10 +56,12 @@ const PUBLIC_AND_PORTAL_ROUTES: readonly RouteTarget[] = [
   { name: "login", path: "/login", persona: "public" },
   { name: "events", path: "/events", persona: "owner", appShell: true },
   { name: "speaker-portal", path: `/e/${EVENT_SLUG}/portal`, persona: "speaker" },
+  { name: "reusable-speaker-profile", path: "/speaker/profile", persona: "speaker", appShell: true },
   { name: "my-submissions", path: `/portal/events/${EVENT_SLUG}/submissions`, persona: "speaker" },
   { name: "public-program", path: `/event/${EVENT_SLUG}`, persona: "public" },
   { name: "public-sessions", path: `/event/${EVENT_SLUG}/sessions`, persona: "public" },
   { name: "public-speakers", path: `/event/${EVENT_SLUG}/speakers`, persona: "public" },
+  { name: "public-reusable-speaker-profile", path: "/speakers/priya-raman", persona: "public" },
   { name: "schedule-embed", path: `/embed/${EVENT_SLUG}/schedule`, persona: "public" },
   { name: "speaker-embed", path: `/embed/${EVENT_SLUG}/speakers`, persona: "public" },
   { name: "reviewer-invitation-invalid", path: "/reviewer-invitations/accept", persona: "public" },
@@ -83,9 +86,17 @@ async function authenticate(context: BrowserContext, persona: Persona, baseURL: 
 }
 
 async function openStablePage(page: Page, target: RouteTarget): Promise<void> {
-  const response = await page.goto(target.path, { waitUntil: "domcontentloaded" });
-  expect(response, `${target.path} did not return a document`).not.toBeNull();
-  expect(response?.status(), `${target.path} returned an HTTP error`).toBeLessThan(400);
+  let path = target.path;
+  if (path.includes("__qa_speaker__")) {
+    const directoryResponse = await page.request.get("/api/v1/events/demo-event/portal/speakers");
+    expect(directoryResponse.status(), "speaker detail fixture could not load").toBe(200);
+    const directory = await directoryResponse.json() as { readonly speakers: readonly { readonly speaker: { readonly id: string } }[] };
+    expect(directory.speakers.length, "speaker detail fixture is empty").toBeGreaterThan(0);
+    path = path.replace("__qa_speaker__", encodeURIComponent(directory.speakers[0]!.speaker.id));
+  }
+  const response = await page.goto(path, { waitUntil: "domcontentloaded" });
+  expect(response, `${path} did not return a document`).not.toBeNull();
+  expect(response?.status(), `${path} returned an HTTP error`).toBeLessThan(400);
   await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
   await page.locator("h1").first().waitFor({ state: "visible", timeout: 45_000 });
   await expect(page.locator("main")).toBeVisible();
