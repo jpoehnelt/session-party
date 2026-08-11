@@ -337,15 +337,52 @@ test("review score editor rejects a stale tab without losing its draft, then res
   expect((await currentReview()).scores).toEqual(initialReview!.scores);
 });
 
-test("onboarding contact editor can open and Cancel without recording contact", async ({ context, page, baseURL }, testInfo) => {
+test("onboarding contact editor cancels cleanly, records immutable evidence, and closes after Save", async ({ context, page, request, baseURL }, testInfo) => {
   desktopOnly(testInfo);
-  await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/dashboard");
-  const trigger = page.getByRole("button", { name: "Log contact" }).first();
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const dashboardPath = `/api/v1/events/${EVENT_ID}/portal/dashboard`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  type Dashboard = Readonly<{ speakers: readonly Readonly<{
+    speaker: Readonly<{ id: string; displayName: string }>;
+    latestContact: Readonly<{ medium: string; note: string | null; contactedAt: number }> | null;
+  }>[] }>;
+  const loadDashboard = async (): Promise<Dashboard> => {
+    const response = await request.get(dashboardPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<Dashboard>;
+  };
+  const initial = await loadDashboard();
+  const target = initial.speakers[0];
+  expect(target).toBeDefined();
+  const note = `QA completed contact for ${target!.speaker.displayName}`;
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/dashboard");
+  const row = page.getByRole("row").filter({ hasText: target!.speaker.displayName }).first();
+  const trigger = row.getByRole("button", { name: "Log contact" });
   await trigger.click();
-  await expect(page.getByRole("button", { name: "Save contact" }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Cancel" }).first().click();
-  await expect(page.getByRole("button", { name: "Save contact" })).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Save contact" })).toBeVisible();
+  await row.getByRole("button", { name: "Cancel" }).click();
+  await expect(row.getByRole("button", { name: "Save contact" })).toHaveCount(0);
   await expect(trigger).toBeVisible();
+
+  await trigger.click();
+  await row.getByLabel("Medium").selectOption("phone");
+  await row.getByLabel("Note (optional)").fill(note);
+  await row.getByRole("button", { name: "Save contact" }).click();
+  await expect(page.getByText("Contact logged", { exact: true }).first()).toBeVisible();
+  await expect(row.getByRole("button", { name: "Save contact" })).toHaveCount(0);
+  await expect(trigger).toBeVisible();
+  await expect(row).toContainText("Phone");
+  await expect(row).toContainText(note);
+  await expect.poll(async () => (await loadDashboard()).speakers.find(({ speaker }) => speaker.id === target!.speaker.id)?.latestContact).toMatchObject({
+    medium: "phone",
+    note,
+  });
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const reloadedRow = page.getByRole("row").filter({ hasText: target!.speaker.displayName }).first();
+  await expect(reloadedRow).toContainText("Phone");
+  await expect(reloadedRow).toContainText(note);
 });
 
 test("speaker directory search, selection, and bulk-action disabled state remain coherent", async ({ context, page, baseURL }, testInfo) => {
