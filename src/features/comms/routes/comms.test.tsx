@@ -8,6 +8,11 @@ import {
   createCampaignEnqueueCoordinator,
   ScheduleControl,
 } from "./comms";
+import {
+  communicationRouteSelection,
+  communicationSelectionSearch,
+  organizerCommunicationsPath,
+} from "../links";
 const baseRequest = {
   templateId: "template-1",
   expectedTemplateVersion: 3,
@@ -29,6 +34,28 @@ const campaignIdentity = (recipientKeys: readonly string[] = ["speaker-1"]) =>
   });
 
 describe("communications scheduling control", () => {
+  it("builds canonical communications tab and template deep links", () => {
+    expect(organizerCommunicationsPath("summit/2026", "templates", "template/welcome")).toBe(
+      "/e/summit%2F2026/comms?tab=templates&templateId=template%2Fwelcome",
+    );
+    expect(communicationSelectionSearch("?panel=compact", "send", "template-1")).toBe(
+      "?panel=compact&tab=send&templateId=template-1",
+    );
+    expect(communicationSelectionSearch("?templateId=template-1", "history", "template-1")).toBe(
+      "?tab=history",
+    );
+    expect(communicationRouteSelection("?tab=send&templateId=%20template-1%20")).toEqual({
+      tab: "send",
+      templateId: "template-1",
+      needsCanonicalization: true,
+    });
+    expect(communicationRouteSelection("?tab=unknown&templateId=template-1")).toEqual({
+      tab: "templates",
+      templateId: "template-1",
+      needsCanonicalization: true,
+    });
+  });
+
   it("builds a human-controlled mail draft without dispatching it", () => {
     expect(buildMailtoDraft({
       recipientEmail: "speaker@example.com",

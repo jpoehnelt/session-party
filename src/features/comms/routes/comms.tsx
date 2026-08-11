@@ -48,17 +48,37 @@ import {
   type DeliveryHistoryItem,
   type EnqueueCommunicationResult as EnqueueCommunicationResultValue,
 } from "../schema";
+import {
+  communicationRouteSelection,
+  communicationSelectionSearch,
+  type CommunicationWorkspaceTab,
+} from "../links";
 
 export const path = "/e/:eventSlug/comms";
 export const contentWidth = "canvas" as const;
 
 type EventIdentity = Readonly<{ id: string; name: string; slug: string; timezone: string }>;
-type WorkspaceTab = "templates" | "send" | "history";
 type SendMode = "now" | "scheduled";
+type NavigationMode = "push" | "replace" | "none";
 type PendingDraftDestination =
-  | Readonly<{ kind: "tab"; tab: WorkspaceTab }>
-  | Readonly<{ kind: "template"; template: CommunicationTemplateValue }>
-  | Readonly<{ kind: "new" }>;
+  | Readonly<{
+    kind: "tab";
+    tab: CommunicationWorkspaceTab;
+    templateId?: string | null;
+    navigation?: NavigationMode;
+    restoreOnCancel?: boolean;
+  }>
+  | Readonly<{
+    kind: "template";
+    template: CommunicationTemplateValue;
+    navigation?: NavigationMode;
+    restoreOnCancel?: boolean;
+  }>
+  | Readonly<{
+    kind: "new";
+    navigation?: NavigationMode;
+    restoreOnCancel?: boolean;
+  }>;
 type TemplateDraft = Readonly<{
   id: string | null;
   name: string;
@@ -285,6 +305,19 @@ export default function CommunicationsPage() {
   const [event, setEvent] = useState<EventIdentity | null | undefined>(undefined);
   const [eventError, setEventError] = useState<string | null>(null);
   const [request, setRequest] = useState(0);
+  const routeSelection = communicationRouteSelection(location.search);
+
+  const handleRouteSelectionChange = useCallback((
+    tab: CommunicationWorkspaceTab,
+    templateId: string | null,
+    options?: { readonly replace?: boolean },
+  ) => {
+    navigate({
+      pathname: location.pathname,
+      search: communicationSelectionSearch(location.search, tab, templateId),
+      hash: location.hash,
+    }, { replace: options?.replace ?? false });
+  }, [location.hash, location.pathname, location.search, navigate]);
 
   useEffect(() => {
     let active = true;
@@ -321,11 +354,38 @@ export default function CommunicationsPage() {
       </>
     );
   }
-  return <CommunicationsWorkspace key={event.id} event={event} />;
+  return (
+    <CommunicationsWorkspace
+      key={event.id}
+      event={event}
+      routeTab={routeSelection.tab}
+      routeTemplateId={routeSelection.templateId}
+      routeNeedsCanonicalization={routeSelection.needsCanonicalization}
+      onRouteSelectionChange={handleRouteSelectionChange}
+    />
+  );
 }
 
-export function CommunicationsWorkspace({ event }: { readonly event: EventIdentity }) {
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("templates");
+export interface CommunicationsWorkspaceProps {
+  readonly event: EventIdentity;
+  readonly routeTab?: CommunicationWorkspaceTab;
+  readonly routeTemplateId?: string | null;
+  readonly routeNeedsCanonicalization?: boolean;
+  readonly onRouteSelectionChange?: (
+    tab: CommunicationWorkspaceTab,
+    templateId: string | null,
+    options?: { readonly replace?: boolean },
+  ) => void;
+}
+
+export function CommunicationsWorkspace({
+  event,
+  routeTab,
+  routeTemplateId,
+  routeNeedsCanonicalization = false,
+  onRouteSelectionChange,
+}: CommunicationsWorkspaceProps) {
+  const [activeTab, setActiveTab] = useState<CommunicationWorkspaceTab>(routeTab ?? "templates");
   const [templates, setTemplates] = useState<readonly CommunicationTemplateValue[] | undefined>(undefined);
   const [audience, setAudience] = useState<AudienceSnapshotValue | undefined>(undefined);
   const [history, setHistory] = useState<DeliveryHistoryValue | undefined>(undefined);
@@ -344,6 +404,17 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
   const [pendingDraftDestination, setPendingDraftDestination] = useState<PendingDraftDestination | null>(null);
   const [refresh, setRefresh] = useState(0);
   const campaignEnqueue = useRef(createCampaignEnqueueCoordinator()).current;
+  const routeSynchronizedRef = useRef(false);
+  const activeTabRef = useRef(activeTab);
+  const draftRef = useRef(draft);
+  const selectedTemplateIdRef = useRef(selectedTemplateId);
+  const routeSelectionChangeRef = useRef(onRouteSelectionChange);
+  const pendingDraftDestinationRef = useRef(pendingDraftDestination);
+  activeTabRef.current = activeTab;
+  draftRef.current = draft;
+  selectedTemplateIdRef.current = selectedTemplateId;
+  routeSelectionChangeRef.current = onRouteSelectionChange;
+  pendingDraftDestinationRef.current = pendingDraftDestination;
 
   const loadWorkspace = useCallback(async () => {
     const root = `/api/v1/events/${encodeURIComponent(event.id)}/comms`;
@@ -395,27 +466,112 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
     timezone: event.timezone,
   });
 
-  const applyDraftDestination = (destination: PendingDraftDestination, discardCurrent = false) => {
+  const applyDraftDestination = useCallback((destination: PendingDraftDestination, discardCurrent = false) => {
     if (destination.kind === "tab") {
       if (discardCurrent) {
         setDraft(persistedDraft ? asDraft(persistedDraft) : emptyDraft);
         setPreview(null);
       }
       setActiveTab(destination.tab);
+      if (destination.tab === "send" && destination.templateId !== undefined) {
+        setSelectedTemplateId(destination.templateId ?? "");
+      }
+      if (destination.navigation !== "none") {
+        const templateId = destination.tab === "templates"
+          ? draftRef.current.id
+          : destination.tab === "send"
+            ? ((destination.templateId ?? selectedTemplateIdRef.current) || null)
+            : null;
+        routeSelectionChangeRef.current?.(destination.tab, templateId, {
+          replace: destination.navigation === "replace",
+        });
+      }
       return;
     }
     setDraft(destination.kind === "template" ? asDraft(destination.template) : emptyDraft);
+    setActiveTab("templates");
+    if (destination.kind === "template") setSelectedTemplateId(destination.template.id);
     setPreview(null);
-  };
+    if (destination.navigation !== "none") {
+      routeSelectionChangeRef.current?.(
+        "templates",
+        destination.kind === "template" ? destination.template.id : null,
+        { replace: destination.navigation === "replace" },
+      );
+    }
+  }, [persistedDraft]);
 
-  const requestDraftDestination = (destination: PendingDraftDestination) => {
-    if (destination.kind === "tab" && destination.tab === activeTab) return;
-    if (destination.kind === "template" && destination.template.id === draft.id) return;
+  const requestDraftDestination = useCallback((destination: PendingDraftDestination) => {
+    if (
+      destination.kind === "tab"
+      && destination.tab === activeTab
+      && (destination.tab !== "send"
+        || destination.templateId === undefined
+        || (destination.templateId ?? "") === selectedTemplateId)
+    ) return;
+    if (destination.kind === "template" && activeTab === "templates" && destination.template.id === draft.id) return;
+    if (destination.kind === "new" && activeTab === "templates" && draft.id === null) return;
     if (draftDirty) {
+      pendingDraftDestinationRef.current = destination;
       setPendingDraftDestination(destination);
       return;
     }
     applyDraftDestination(destination);
+  }, [activeTab, applyDraftDestination, draft.id, draftDirty, selectedTemplateId]);
+
+  useEffect(() => {
+    if (routeTab === undefined || templates === undefined) return;
+    const initialRoute = !routeSynchronizedRef.current;
+    routeSynchronizedRef.current = true;
+    const requestedTemplate = routeTemplateId
+      ? templates.find((template) => template.id === routeTemplateId) ?? null
+      : null;
+    const firstTemplate = templates[0] ?? null;
+    let canonical = routeNeedsCanonicalization;
+    let destination: PendingDraftDestination;
+    let targetTemplateId: string | null = null;
+
+    if (routeTab === "history") {
+      destination = { kind: "tab", tab: "history" };
+    } else if (routeTab === "send") {
+      const target = requestedTemplate ?? (routeTemplateId || initialRoute ? firstTemplate : null);
+      targetTemplateId = target?.id ?? null;
+      canonical ||= routeTemplateId !== targetTemplateId;
+      destination = { kind: "tab", tab: "send", templateId: targetTemplateId };
+    } else {
+      const target = requestedTemplate ?? (routeTemplateId || initialRoute ? firstTemplate : null);
+      targetTemplateId = target?.id ?? null;
+      canonical ||= routeTemplateId !== targetTemplateId;
+      destination = target ? { kind: "template", template: target } : { kind: "new" };
+    }
+
+    const matchesCurrent = routeTab === activeTabRef.current
+      && (routeTab === "history"
+        || (routeTab === "send" && selectedTemplateIdRef.current === targetTemplateId)
+        || (routeTab === "templates" && draftRef.current.id === targetTemplateId));
+    if (matchesCurrent) {
+      if (canonical) routeSelectionChangeRef.current?.(routeTab, targetTemplateId, { replace: true });
+      return;
+    }
+    requestDraftDestination({
+      ...destination,
+      navigation: canonical ? "replace" : "none",
+      restoreOnCancel: true,
+    });
+  }, [requestDraftDestination, routeNeedsCanonicalization, routeTab, routeTemplateId, templates]);
+
+  const cancelPendingDraftDestination = () => {
+    const destination = pendingDraftDestinationRef.current;
+    pendingDraftDestinationRef.current = null;
+    setPendingDraftDestination(null);
+    if (!destination?.restoreOnCancel) return;
+    const currentTab = activeTabRef.current;
+    const currentTemplateId = currentTab === "templates"
+      ? draftRef.current.id
+      : currentTab === "send"
+        ? selectedTemplateIdRef.current || null
+        : null;
+    routeSelectionChangeRef.current?.(currentTab, currentTemplateId, { replace: true });
   };
 
 
@@ -455,6 +611,9 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
         : [saved]);
       setDraft(asDraft(saved));
       setSelectedTemplateId(saved.id);
+      if (activeTabRef.current === "templates") {
+        routeSelectionChangeRef.current?.("templates", saved.id, { replace: true });
+      }
       toast(draft.id ? "Template saved" : "Template created", { tone: "success" });
     } catch (error) {
       toast(error instanceof Error ? error.message : "Template save failed", { tone: "danger" });
@@ -614,7 +773,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
         ))}
       </dl>
 
-      <Tabs tabs={tabs} active={activeTab} onChange={(value) => requestDraftDestination({ kind: "tab", tab: value as WorkspaceTab })} className="mb-7 max-w-3xl" />
+      <Tabs tabs={tabs} active={activeTab} onChange={(value) => requestDraftDestination({ kind: "tab", tab: value as CommunicationWorkspaceTab })} className="mb-7 max-w-3xl" />
 
       {loadError && (
         <Alert tone="danger" className="mb-6">
@@ -832,7 +991,15 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
                     Acceptance and rejection remain internal until an organizer deliberately authorizes this exact audience and template.
                   </AlertDescription>
                 </Alert>
-                <Select label="Template" value={selectedTemplateId} onChange={(event_) => setSelectedTemplateId(event_.target.value)}>
+                <Select
+                  label="Template"
+                  value={selectedTemplateId}
+                  onChange={(event_) => requestDraftDestination({
+                    kind: "tab",
+                    tab: "send",
+                    templateId: event_.target.value || null,
+                  })}
+                >
                   <option value="">Select a template</option>
                   {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
                 </Select>
@@ -943,7 +1110,7 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
           />
         </div>
       )}
-      <AlertDialog open={pendingDraftDestination !== null} onOpenChange={(open) => { if (!open) setPendingDraftDestination(null); }}>
+      <AlertDialog open={pendingDraftDestination !== null} onOpenChange={(open) => { if (!open) cancelPendingDraftDestination(); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Discard unsaved template changes?</AlertDialogTitle>
@@ -955,7 +1122,8 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
             <AlertDialogCancel>Keep editing</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                const destination = pendingDraftDestination;
+                const destination = pendingDraftDestinationRef.current;
+                pendingDraftDestinationRef.current = null;
                 setPendingDraftDestination(null);
                 if (destination) applyDraftDestination(destination, true);
               }}
