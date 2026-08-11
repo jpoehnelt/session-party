@@ -67,6 +67,7 @@ import type {
   MoveTalkInput,
   PublishedAgenda,
   PublishAgendaInput,
+  PublicAgendaSpeaker,
   PublicAgendaTalk,
   Room,
   RoomMutationResult,
@@ -1788,18 +1789,16 @@ export const publishAgenda = (
     yield* rejectConflicts(conflicts);
     const trackNames = new Map(trackRows.map(({ id, name }) => [id, name] as const));
     const roomNames = new Map(roomRows.map(({ id, name }) => [id, name] as const));
-    const visibleSpeakerNames = new Map<string, string[]>();
-    const visibleSpeakerProfiles = new Map<string, { name: string; slug: string }[]>();
+    const visibleTalkSpeakers = new Map<string, PublicAgendaSpeaker[]>();
     for (const row of speakerRows) {
       if (!row.visible || row.profileReviewStatus !== "approved") continue;
-      const names = visibleSpeakerNames.get(row.talkId) ?? [];
-      names.push(row.name);
-      visibleSpeakerNames.set(row.talkId, names);
-      if (row.profileVisible && row.profileSlug) {
-        const profiles = visibleSpeakerProfiles.get(row.talkId) ?? [];
-        profiles.push({ name: row.name, slug: row.profileSlug });
-        visibleSpeakerProfiles.set(row.talkId, profiles);
-      }
+      const talkSpeakers = visibleTalkSpeakers.get(row.talkId) ?? [];
+      talkSpeakers.push({
+        id: row.speakerId,
+        name: row.name,
+        ...(row.profileVisible && row.profileSlug ? { profileSlug: row.profileSlug } : {}),
+      });
+      visibleTalkSpeakers.set(row.talkId, talkSpeakers);
     }
     const confirmedTalks = agendaTalks
       .filter((talk): talk is AgendaTalk & { startsAt: number } =>
@@ -1833,20 +1832,25 @@ export const publishAgenda = (
           left.speakerId.localeCompare(right.speakerId)
         ),
     );
-    const publicTalks: PublicAgendaTalk[] = confirmedTalks.map((talk) => ({
-      id: talk.id,
-      title: talk.title,
-      description: talk.description,
-      trackId: talk.trackId,
-      track: talk.trackId === null ? null : trackNames.get(talk.trackId) ?? null,
-      room: talk.roomId === null ? null : roomNames.get(talk.roomId) ?? null,
-      startsAt: talk.startsAt,
-      durationMin: talk.durationMin,
-      speakerNames: visibleSpeakerNames.get(talk.id) ?? [],
-      ...((visibleSpeakerProfiles.get(talk.id)?.length ?? 0) > 0
-        ? { speakerProfiles: visibleSpeakerProfiles.get(talk.id) }
-        : {}),
-    }));
+    const publicTalks: PublicAgendaTalk[] = confirmedTalks.map((talk) => {
+      const talkSpeakers = visibleTalkSpeakers.get(talk.id) ?? [];
+      const profiles = talkSpeakers.flatMap((speaker) => speaker.profileSlug
+        ? [{ name: speaker.name, slug: speaker.profileSlug }]
+        : []);
+      return {
+        id: talk.id,
+        title: talk.title,
+        description: talk.description,
+        trackId: talk.trackId,
+        track: talk.trackId === null ? null : trackNames.get(talk.trackId) ?? null,
+        room: talk.roomId === null ? null : roomNames.get(talk.roomId) ?? null,
+        startsAt: talk.startsAt,
+        durationMin: talk.durationMin,
+        speakerNames: talkSpeakers.map(({ name }) => name),
+        speakers: talkSpeakers,
+        ...(profiles.length > 0 ? { speakerProfiles: profiles } : {}),
+      };
+    });
     const revision = currentRevision + 1;
     const calendarRevision = calendarProjectionRevision(
       event.version,

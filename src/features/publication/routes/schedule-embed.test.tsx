@@ -31,6 +31,7 @@ const agenda: PublishedAgenda = {
       startsAt: Date.UTC(2026, 7, 10, 16),
       durationMin: 45,
       speakerNames: ["Ada Rivera"],
+      speakers: [{ id: "speaker-ada", name: "Ada Rivera" }],
     },
   ],
 };
@@ -101,6 +102,7 @@ describe("public schedule route", () => {
     expect(markup).toContain('data-embed-aesthetic="editorial"');
     expect(markup).toContain("--color-accent:#0A6B58");
     expect(markup).toContain("font-serif");
+    expect(markup).toContain('href="/event/systems-summit/speakers/speaker-ada"');
   });
 
   it("enforces track and included-field parameters in the rendered embed", () => {

@@ -53,7 +53,11 @@ export function projectPublishedAgenda(
       } : {}),
       ...(visible.has("room") ? { room: talk.room } : {}),
       ...(visible.has("time") ? { startsAt: talk.startsAt, durationMin: talk.durationMin } : {}),
-      ...(visible.has("speakers") ? { speakerNames: talk.speakerNames } : {}),
+      ...(visible.has("speakers") ? {
+        speakerNames: talk.speakerNames,
+        ...(talk.speakers ? { speakers: talk.speakers } : {}),
+        ...(talk.speakerProfiles ? { speakerProfiles: talk.speakerProfiles } : {}),
+      } : {}),
     })),
   };
 }
