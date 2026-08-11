@@ -232,12 +232,14 @@ function Layout({ children, contentWidth }: { children: ReactNode; contentWidth?
 }
 
 function NotFound() {
+  const navigate = useNavigate();
   return (
     <Layout>
       <EmptyState
         headingLevel={1}
         title="Page not found"
         description="The page you requested does not exist."
+        action={<Button onClick={() => navigate("/")}>Return home</Button>}
       />
     </Layout>
   );
