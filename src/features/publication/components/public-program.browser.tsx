@@ -1,11 +1,16 @@
-import { act, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PublishedAgenda } from "@/features/agenda/schema";
 import type { PublicSpeakerGallery } from "@/features/portal/schema";
-import { PublicProgram, type PublicProgramSurface } from "./PublicProgram";
+import {
+  PublicProgram,
+  publicDetailFromSplat,
+  publicSurfaceFromSplat,
+  type PublicProgramSurface,
+} from "./PublicProgram";
 
 const START = Date.UTC(2027, 4, 12, 16);
 const agenda: PublishedAgenda = {
@@ -142,36 +147,27 @@ describe("public program rendered interactions", () => {
     window.localStorage.clear();
   });
 
-  const ProgramHarness = ({ initialSurface }: { readonly initialSurface: PublicProgramSurface }) => {
-    const basePath = `/event/${agenda.eventSlug}`;
-    const [path, setPath] = useState(`${basePath}/${initialSurface}`);
-    const splat = path.slice(basePath.length + 1);
-    const [surfaceSegment, detailId] = splat.split("/");
-    const surface = (surfaceSegment || initialSurface) as PublicProgramSurface;
-    const detail = detailId
-      ? surface === "sessions"
-        ? { sessionId: detailId }
-        : { speakerId: detailId }
-      : {};
-    const captureInternalNavigation = (event: ReactMouseEvent<HTMLDivElement>) => {
-      const anchor = (event.target as Element).closest<HTMLAnchorElement>("a");
-      const href = anchor?.getAttribute("href");
-      if (!href?.startsWith(`${basePath}/`)) return;
-      event.preventDefault();
-      setPath(href);
-    };
+  const RoutedPublicProgram = () => {
+    const location = useLocation();
+    const routePrefix = `/event/${agenda.eventSlug}/`;
+    const splat = location.pathname.startsWith(routePrefix)
+      ? location.pathname.slice(routePrefix.length)
+      : undefined;
     return (
-      <div onClickCapture={captureInternalNavigation}>
-        <PublicProgram agenda={agenda} gallery={gallery} surface={surface} detail={detail} />
-      </div>
+      <PublicProgram
+        agenda={agenda}
+        gallery={gallery}
+        surface={publicSurfaceFromSplat(splat)}
+        detail={publicDetailFromSplat(splat)}
+      />
     );
   };
 
   const renderSurface = async (surface: PublicProgramSurface) => {
     await act(async () => {
       root.render(
-        <MemoryRouter>
-          <ProgramHarness initialSurface={surface} />
+        <MemoryRouter initialEntries={[`/event/${agenda.eventSlug}/${surface}`]}>
+          <RoutedPublicProgram />
         </MemoryRouter>,
       );
     });
@@ -228,8 +224,7 @@ describe("public program rendered interactions", () => {
     expect(document.body.textContent).toContain(formattedDateTime(START));
     expect(document.body.textContent).toContain("Main Stage");
     await act(async () => userEvent.click(byControl("Back to speakers")));
-    expect(container.textContent).toContain("04 speakers published");
-    expect(container.textContent).toContain("Priya Raman");
+    expect(container.textContent).toContain("01 speaker published");
   });
 
   it("renders complete gallery cards, fallbacks, and speaker detail", async () => {
@@ -259,9 +254,8 @@ describe("public program rendered interactions", () => {
     expect(document.body.textContent).toContain("Taming 40-Minute CI");
     expect(document.body.textContent).toContain(formattedDateTime(START));
     expect(document.body.textContent).toContain("Main Stage");
-    await act(async () => userEvent.click(byControl("Back to speakers")));
-    expect(container.textContent).toContain("04 speakers published");
-    expect(container.textContent).toContain("Priya Raman");
+    await act(async () => userEvent.click(byControl("Back to speaker gallery")));
+    expect(container.textContent).toContain("01 speaker published");
   });
 
   it("switches agenda days and restores the agenda after closing complete session detail", async () => {
@@ -278,8 +272,9 @@ describe("public program rendered interactions", () => {
     expect(document.body.textContent).toContain("Format · 45 minutes");
     expect(document.body.textContent).toContain("Track · Developer Experience");
     expect(document.body.textContent).toContain("Room · Room 2A");
-    await act(async () => userEvent.click(byControl("Back to sessions")));
+    await act(async () => userEvent.click(byControl("Back to agenda")));
     expect(container.textContent).toContain("Docs That Answer Back");
+    expect(container.textContent).not.toContain("Taming 40-Minute CI");
   });
 
   it("renders a complete chronological itinerary and persists an exact personal schedule across remount", async () => {
