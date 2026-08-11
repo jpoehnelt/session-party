@@ -1009,6 +1009,31 @@ export const pages = sqliteTable("pages", {
   check("pages_version_positive", sql`${t.version} > 0`),
 ]);
 
+export const embeds = sqliteTable("embeds", {
+  id: id(),
+  eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+  name: text("name").notNull(),
+  widget: text("widget", { enum: ["schedule", "speakerGallery"] }).notNull(),
+  preset: text("preset", { enum: ["sessions", "agenda", "itinerary", "speakerList", "speakerGallery"] }).notNull(),
+  aesthetic: text("aesthetic", { enum: ["bold", "minimal", "editorial"] }).notNull().default("bold"),
+  accent: text("accent").notNull().default("#7857FF"),
+  track: text("track"),
+  fields: text("fields", { mode: "json" }).$type<readonly string[]>().notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  version: version(),
+  ...timestamps,
+}, (t) => [
+  uniqueIndex("embeds_event_id_unique").on(t.eventId, t.id),
+  index("embeds_event_updated").on(t.eventId, t.updatedAt),
+  check("embeds_name_nonempty", sql`length(trim(${t.name})) > 0`),
+  check("embeds_accent_hex", sql`${t.accent} glob '#[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]'`),
+  check("embeds_version_positive", sql`${t.version} > 0`),
+  check(
+    "embeds_widget_preset",
+    sql`(${t.widget} = 'schedule' and ${t.preset} in ('sessions', 'agenda', 'itinerary')) or (${t.widget} = 'speakerGallery' and ${t.preset} in ('speakerList', 'speakerGallery'))`,
+  ),
+]);
+
 // ---------- integration configuration and Airtable synchronization ----------
 
 export const integrations = sqliteTable(

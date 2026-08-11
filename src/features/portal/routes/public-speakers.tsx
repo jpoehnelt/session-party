@@ -41,14 +41,17 @@ export default function PublicSpeakersRoute() {
 export function PublicSpeakerEmbedContent({
   gallery,
   design = DEFAULT_EMBED_DESIGN,
+  preset = "speakerGallery",
 }: {
   readonly gallery: PublicSpeakerGallery;
   readonly design?: EmbedDesign;
+  readonly preset?: "speakerList" | "speakerGallery";
 }) {
   return (
     <div
       className={`space-y-10 ${embedTypographyClass(design.aesthetic)}`}
       data-embed-aesthetic={design.aesthetic}
+      data-embed-preset={preset}
       style={embedDesignStyle(design)}
     >
       <ProductionHeader
@@ -75,7 +78,7 @@ export function PublicSpeakerEmbedContent({
             <p className="mt-2 text-sm font-medium text-ink-faint">Public speakers will appear here after they are ready.</p>
           </div>
         ) : (
-          <ul className={`grid gap-6 sm:grid-cols-2 ${design.aesthetic === "editorial" ? "lg:grid-cols-2" : "lg:grid-cols-3"}`}>
+          <ul className={preset === "speakerList" ? "grid gap-4" : `grid gap-6 sm:grid-cols-2 ${design.aesthetic === "editorial" ? "lg:grid-cols-2" : "lg:grid-cols-3"}`}>
             {gallery.speakers.map((speaker, index) => (
               <li key={speaker.id}>
                 <article className={`group relative h-full overflow-hidden bg-surface p-5 sm:p-6 ${

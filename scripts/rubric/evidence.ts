@@ -267,14 +267,14 @@ export const evidencePlan = {
   ],
   "EMB-13": [browser(publicProgramBrowser, "renders complete gallery cards, fallbacks, and speaker detail")],
   "EMB-14": [
-    test(publicProgram, "renders a live-data widget builder for all five public surfaces"),
+    test(publicProgram, "presents two widgets with presets and separates feeds from embed code"),
     test(publicProgram, "maps conventional public routes to discoverable surfaces"),
   ],
   "EMB-15": [
-    test(publicProgram, "renders a live-data widget builder for all five public surfaces"),
+    test(publicProgram, "presents two widgets with presets and separates feeds from embed code"),
     test(embedDesign, "round-trips a supported aesthetic and normalized brand color"),
-    test(publicProgram, "round-trips named saved embed definitions for later code retrieval"),
-    browser(publicProgramBrowser, "saves, retrieves, disables, and restores an organizer embed definition"),
+    test(publicProgram, "generates stable, lazy iframe code from persisted definitions"),
+    test(publicationService, "persists versioned embeds and makes disabling the stable URL real"),
   ],
   "EMB-16": [
     test(publicationService, "publishes only confirmed talks and visible speaker names as an immutable snapshot"),

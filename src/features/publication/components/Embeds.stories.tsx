@@ -5,7 +5,7 @@ import type { PublishedAgenda } from "@/features/agenda/schema";
 import { ProductionBareFrame } from "@/features/portal/components/production-ui";
 import { PublicSpeakerEmbedContent } from "@/features/portal/routes/public-speakers";
 import type { PublicSpeakerGallery } from "@/features/portal/schema";
-import { PublicProgram } from "./PublicProgram";
+import { EmbedManager } from "./EmbedManager";
 import { ScheduleEmbedContent } from "../routes/schedule-embed";
 import {
   embedDesignStyle,
@@ -134,22 +134,44 @@ export const SpeakersMinimal: Story = { render: () => <SpeakerStory design={desi
 export const SpeakersEditorial: Story = { render: () => <SpeakerStory design={designs.editorial} /> };
 
 export const WidgetBuilderConfiguration: Story = {
+  beforeEach: () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (_input, init) => {
+      if (init?.method !== "POST") {
+        return Response.json([]);
+      }
+      const input = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return Response.json({
+        ...input,
+        id: "embed_story",
+        eventSlug: agenda.eventSlug,
+        version: 1,
+        createdAt: START,
+        updatedAt: START,
+      });
+    };
+    return () => { globalThis.fetch = previousFetch; };
+  },
   render: () => (
     <MemoryRouter>
       <div className="min-h-dvh bg-canvas p-6">
-        <PublicProgram agenda={agenda} gallery={gallery} surface="widgets" />
+        <EmbedManager agenda={agenda} />
       </div>
     </MemoryRouter>
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.selectOptions(canvas.getByLabelText("Design aesthetic"), "minimal");
+    await userEvent.selectOptions(canvas.getByLabelText("Widget"), "speakerGallery");
     fireEvent.change(canvas.getByLabelText("Brand color"), { target: { value: "#0a6b58" } });
 
     await waitFor(() => {
-      const generated = canvas.getByLabelText("Generated share URL or code") as HTMLTextAreaElement;
-      expect(generated.value).toContain("aesthetic=minimal&accent=%230A6B58");
-      expect(generated.value).toContain("border-top:4px solid #0A6B58");
+      expect(canvas.getByLabelText("Preset")).toHaveValue("speakerList");
+      expect(canvas.getByText("Feeds & integrations")).toBeVisible();
+    });
+    await userEvent.click(canvas.getByRole("button", { name: "Create embed" }));
+    await waitFor(() => {
+      expect(canvas.getByLabelText<HTMLTextAreaElement>("Main schedule embed code").value).toContain("/embed/devflow-conf-2027/embed_story");
+      expect(canvas.getByText("Created “Main schedule”. Its embed URL is stable.")).toBeVisible();
     });
   },
 };

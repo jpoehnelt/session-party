@@ -6,6 +6,14 @@ import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  optimizeDeps: {
+    include: [
+      "@hookform/resolvers/effect-ts",
+      "partysocket/react",
+      "posthog-js",
+      "react-router/dom",
+    ],
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),

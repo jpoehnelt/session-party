@@ -6,12 +6,11 @@ import type { PublishedAgenda } from "@/features/agenda/schema";
 import type { PublicSpeakerGallery } from "@/features/portal/schema";
 import {
   PublicProgram,
-  embedDefinitionStorageKey,
-  parseSavedEmbedDefinitions,
   publicSurfaceFromSplat,
   sessionMatches,
   sortPublicSpeakers,
 } from "./PublicProgram";
+import { EmbedManager, stableEmbedCode, stableEmbedPath } from "./EmbedManager";
 
 const START = Date.UTC(2027, 4, 12, 16);
 const agenda: PublishedAgenda = {
@@ -131,46 +130,33 @@ describe("public program", () => {
     expect(markup).toContain("Principal Engineer at Latticework Systems");
   });
 
-  it("renders a live-data widget builder for all five public surfaces", () => {
-    const markup = render("widgets");
-    expect(markup).toContain("Widget type");
-    expect(markup).toContain("Sessions list");
-    expect(markup).toContain("Speakers list");
-    expect(markup).toContain("Schedule itinerary");
-    expect(markup).toContain("Speaker gallery");
-    expect(markup).toContain("Design aesthetic");
-    expect(markup).toContain("Bold &amp; energetic");
-    expect(markup).toContain("Clean &amp; minimal");
-    expect(markup).toContain("Editorial");
-    expect(markup).toContain("iCalendar");
-    expect(markup).toContain("Track filter");
-    expect(markup).toContain("Included fields");
-    expect(markup).toContain("Save embed definition");
-    expect(markup).toContain("Saved embeds (0)");
-    expect(markup).toContain("Generated share URL or code");
-    expect(markup).toContain("/embed/devflow-conf-2027/schedule");
-    expect(markup).toContain("aesthetic=bold&amp;accent=%23635BFF");
-    expect(markup).toContain("Preview live embed");
+  it("keeps embed management off public program routes", () => {
+    expect(publicSurfaceFromSplat("widgets")).toBe("sessions");
+    expect(render(publicSurfaceFromSplat("widgets"))).not.toContain("Create an embed");
   });
 
-  it("round-trips named saved embed definitions for later code retrieval", () => {
+  it("presents two widgets with presets and separates feeds from embed code", () => {
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, {
+      children: createElement(EmbedManager, { agenda }),
+    }));
+    expect(markup).toContain("Schedule widget");
+    expect(markup).toContain("Speaker gallery widget");
+    expect(markup).toContain("Preset");
+    expect(markup).toContain("Public links");
+    expect(markup).toContain("Feeds &amp; integrations");
+    expect(markup).toContain("These are feeds, not widgets");
+    expect(markup).not.toContain("Output format");
+  });
+
+  it("generates stable, lazy iframe code from persisted definitions", () => {
     const definition = {
       id: "embed-main",
       name: "Main schedule",
-      widget: "schedule" as const,
-      format: "styled-html" as const,
-      aesthetic: "bold" as const,
-      accent: "#635BFF",
-      track: "Platform & Infra",
-      fields: ["title", "time", "room"],
-      code: '<iframe title="Main schedule"></iframe>',
-      enabled: true,
+      eventSlug: agenda.eventSlug,
     };
-    expect(embedDefinitionStorageKey(agenda.eventSlug)).toBe(
-      "session-party:devflow-conf-2027:saved-embeds",
-    );
-    expect(parseSavedEmbedDefinitions(JSON.stringify([definition]))).toEqual([definition]);
-    expect(parseSavedEmbedDefinitions("not-json")).toEqual([]);
+    expect(stableEmbedPath(definition)).toBe("/embed/devflow-conf-2027/embed-main");
+    expect(stableEmbedCode(definition, "https://sessionparty.com")).toContain('loading="lazy"');
+    expect(stableEmbedCode(definition, "https://sessionparty.com")).toContain("min-height:720px");
   });
 
   it("keeps session and speaker identity consistent across public surfaces and organizer source", () => {

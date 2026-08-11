@@ -21,7 +21,8 @@ import {
   publishAgendaOperation,
 } from "@/features/agenda/operations";
 import { getPublishedAgenda, publishAgenda } from "@/features/agenda/service";
-import { AppLayer, CurrentUser, Db } from "@/server/services";
+import { AppLayer, type Authorizer, CurrentUser, Db } from "@/server/services";
+import { createEmbed, getPublicEmbed, listEmbeds, updateEmbed } from "./service";
 
 interface TestEnv extends Cloudflare.Env {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -43,7 +44,7 @@ const browserPrincipal = (userId: string): Principal => ({
 
 const runEitherAs = <A, E>(
   principal: Principal,
-  effect: Effect.Effect<A, E, CurrentUser | Db>,
+  effect: Effect.Effect<A, E, Authorizer | CurrentUser | Db>,
 ) =>
   Effect.runPromise(effect.pipe(
     Effect.either,
@@ -52,7 +53,7 @@ const runEitherAs = <A, E>(
 
 const runAs = <A, E>(
   principal: Principal,
-  effect: Effect.Effect<A, E, CurrentUser | Db>,
+  effect: Effect.Effect<A, E, Authorizer | CurrentUser | Db>,
 ) =>
   Effect.runPromise(effect.pipe(
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
@@ -200,6 +201,84 @@ beforeAll(async () => {
 });
 
 describe("publication boundary", () => {
+  it("persists versioned embeds and makes disabling the stable URL real", async () => {
+    const seeded = await seedPublication("persisted-embed");
+    const created = await runAs(seeded.owner, createEmbed({
+      eventId: seeded.eventId,
+      name: "Main schedule",
+      widget: "schedule",
+      preset: "agenda",
+      aesthetic: "minimal",
+      accent: "#005a9c",
+      track: "Systems",
+      fields: ["title", "time", "room"],
+      enabled: true,
+    }));
+    expect(created).toMatchObject({
+      eventSlug: seeded.eventSlug,
+      name: "Main schedule",
+      widget: "schedule",
+      preset: "agenda",
+      accent: "#005A9C",
+      version: 1,
+      enabled: true,
+    });
+    expect(await runAs(seeded.owner, listEmbeds({ eventId: seeded.eventId }))).toEqual([created]);
+    expect(await Effect.runPromise(getPublicEmbed({ eventSlug: seeded.eventSlug, embedId: created.id }).pipe(Effect.provide(AppLayer(env))))).toEqual(created);
+    const publicResponse = await SELF.fetch(`https://example.test/api/v1/public/events/${seeded.eventSlug}/embeds/${created.id}`);
+    expect(publicResponse.status).toBe(200);
+    expect(await publicResponse.json()).toEqual(created);
+
+    const disabled = await runAs(seeded.owner, updateEmbed({
+      eventId: seeded.eventId,
+      embedId: created.id,
+      expectedVersion: created.version,
+      name: created.name,
+      widget: created.widget,
+      preset: created.preset,
+      aesthetic: created.aesthetic,
+      accent: created.accent,
+      track: created.track,
+      fields: [...created.fields],
+      enabled: false,
+    }));
+    expect(disabled).toMatchObject({ id: created.id, version: 2, enabled: false });
+    const publicResult = await Effect.runPromise(getPublicEmbed({ eventSlug: seeded.eventSlug, embedId: created.id }).pipe(Effect.either, Effect.provide(AppLayer(env))));
+    expect(publicResult).toMatchObject({ _tag: "Left", left: { _tag: "NotFound" } });
+    expect((await SELF.fetch(`https://example.test/api/v1/public/events/${seeded.eventSlug}/embeds/${created.id}`)).status).toBe(404);
+
+    const stale = await runEitherAs(seeded.owner, updateEmbed({
+      eventId: seeded.eventId,
+      embedId: created.id,
+      expectedVersion: 1,
+      name: created.name,
+      widget: created.widget,
+      preset: created.preset,
+      aesthetic: created.aesthetic,
+      accent: created.accent,
+      track: created.track,
+      fields: [...created.fields],
+      enabled: true,
+    }));
+    expect(stale).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+  });
+
+  it("rejects presets and filters that do not belong to the selected widget", async () => {
+    const seeded = await seedPublication("embed-validation");
+    const result = await runEitherAs(seeded.owner, createEmbed({
+      eventId: seeded.eventId,
+      name: "Invalid gallery",
+      widget: "speakerGallery",
+      preset: "agenda",
+      aesthetic: "bold",
+      accent: "#7857FF",
+      track: null,
+      fields: [],
+      enabled: true,
+    }));
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "Validation" } });
+  });
+
   it("owns no shadow agenda REST, MCP, DTO, or operation aliases", () => {
     expect([
       listAgendaOperation.id,
@@ -386,5 +465,12 @@ describe("publication boundary", () => {
 
     expect(response.status).toBe(404);
     expect(await response.text()).not.toContain("Effects at scale");
+  });
+
+  it("serves embed shells with an explicit framing policy", async () => {
+    const response = await SELF.fetch("https://example.test/embed/example/embed_example");
+    expect(response.headers.get("content-security-policy")).toBe("frame-ancestors *");
+    expect(response.headers.get("x-frame-options")).toBeNull();
+    expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
   });
 });

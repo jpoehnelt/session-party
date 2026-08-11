@@ -2,10 +2,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { userEvent } from "vitest/browser";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PublishedAgenda } from "@/features/agenda/schema";
 import type { PublicSpeakerGallery } from "@/features/portal/schema";
-import { PublicProgram, embedDefinitionStorageKey, type PublicProgramSurface } from "./PublicProgram";
+import { PublicProgram, type PublicProgramSurface } from "./PublicProgram";
 
 const START = Date.UTC(2027, 4, 12, 16);
 const agenda: PublishedAgenda = {
@@ -291,34 +291,4 @@ describe("public program rendered interactions", () => {
     expect(container.textContent).toContain("My schedule (1)");
   });
 
-  it("saves, retrieves, disables, and restores an organizer embed definition", async () => {
-    await renderSurface("widgets");
-    const widgetSelect = fieldNamed<HTMLSelectElement>("Widget type");
-    const formatSelect = fieldNamed<HTMLSelectElement>("Output format");
-    await act(async () => userEvent.selectOptions(formatSelect, "ical"));
-    expect(document.querySelector<HTMLTextAreaElement>("#generated-widget-code")?.value).toContain("data:text/calendar");
-    await act(async () => userEvent.selectOptions(widgetSelect, "gallery"));
-    expect(formatSelect.value).toBe("json");
-    expect(formatSelect.querySelector<HTMLOptionElement>('option[value="ical"]')?.disabled).toBe(true);
-    expect(document.querySelector<HTMLTextAreaElement>("#generated-widget-code")?.value).toContain(
-      "/api/v1/public/events/devflow-conf-2027/speakers",
-    );
-    await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Embed name"), "Platform schedule"));
-    await act(async () => userEvent.selectOptions(widgetSelect, "schedule"));
-    await act(async () => userEvent.selectOptions(formatSelect, "styled-html"));
-    await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Track filter"), "Platform & Infra"));
-    await act(async () => userEvent.click(byButton("Save embed definition")));
-    expect(container.textContent).toContain("Saved embeds (1)");
-    expect(container.textContent).toContain("Platform schedule");
-    expect(window.localStorage.getItem(embedDefinitionStorageKey(agenda.eventSlug))).toContain("Platform schedule");
-    await act(async () => userEvent.click(byButton("Disable")));
-    expect(container.textContent).toContain("Disabled");
-
-    await act(async () => root.unmount());
-    root = createRoot(container);
-    await renderSurface("widgets");
-    await vi.waitFor(() => expect(container.textContent).toContain("Saved embeds (1)"));
-    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Platform schedule code"]')?.value).toContain("<iframe");
-    expect(container.textContent).toContain("Get code");
-  });
 });

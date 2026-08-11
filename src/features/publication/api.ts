@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { Hono } from "hono";
 import { PublishedAgenda } from "@/features/agenda/schema";
+import { EmbedDefinition, EmbedDefinitions, type CreateEmbedInput, type UpdateEmbedInput } from "./schema";
 
 declare global {
   interface Env {}
@@ -48,6 +49,38 @@ export async function getPublicSchedule(
     throw new Error("Published schedule revision does not match the current public revision");
   }
   return published;
+}
+
+export async function listEmbedDefinitions(eventId: string) {
+  const response = await fetch(`${api}/events/${encodeURIComponent(eventId)}/embeds`);
+  if (!response.ok) throw new PublicationApiError(response.status, await responseMessage(response));
+  return Schema.decodeUnknownSync(EmbedDefinitions)(await response.json());
+}
+
+export async function createEmbedDefinition(input: CreateEmbedInput) {
+  const response = await fetch(`${api}/events/${encodeURIComponent(input.eventId)}/embeds`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new PublicationApiError(response.status, await responseMessage(response));
+  return Schema.decodeUnknownSync(EmbedDefinition)(await response.json());
+}
+
+export async function updateEmbedDefinition(input: UpdateEmbedInput) {
+  const response = await fetch(`${api}/events/${encodeURIComponent(input.eventId)}/embeds/${encodeURIComponent(input.embedId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new PublicationApiError(response.status, await responseMessage(response));
+  return Schema.decodeUnknownSync(EmbedDefinition)(await response.json());
+}
+
+export async function getPublicEmbedDefinition(eventSlug: string, embedId: string) {
+  const response = await fetch(`${api}/public/events/${encodeURIComponent(eventSlug)}/embeds/${encodeURIComponent(embedId)}`);
+  if (!response.ok) throw new PublicationApiError(response.status, await responseMessage(response));
+  return Schema.decodeUnknownSync(EmbedDefinition)(await response.json());
 }
 
 function responseMessage(response: Response): Promise<string> {

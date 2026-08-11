@@ -36,6 +36,7 @@ export interface ScheduleEmbedContentProps {
   readonly onRetry: () => void;
   readonly design?: EmbedDesign;
   readonly includedFields?: readonly ScheduleEmbedField[];
+  readonly preset?: "sessions" | "agenda" | "itinerary";
 }
 
 function ScheduleMasthead({ label, design }: { readonly label: string; readonly design: EmbedDesign }) {
@@ -112,6 +113,7 @@ function ScheduleEmbedBody({
   onRetry,
   design,
   includedFields,
+  preset = "agenda",
 }: ScheduleEmbedContentProps & { readonly design: EmbedDesign }) {
   if (agenda === undefined) {
     return (
@@ -150,7 +152,7 @@ function ScheduleEmbedBody({
   }
   return (
     <>
-      <ScheduleMasthead label="Schedule live" design={design} />
+      <ScheduleMasthead label={`${preset === "sessions" ? "Sessions" : preset === "itinerary" ? "Itinerary" : "Agenda"} live`} design={design} />
       <section className={`mb-10 grid bg-surface lg:grid-cols-[minmax(0,1fr)_18rem] ${
         design.aesthetic === "bold"
           ? "border-2 border-line-strong shadow-[8px_8px_0_#171714]"
@@ -226,15 +228,17 @@ function ScheduleEmbedBody({
 
 export function ScheduleEmbedContent({
   design = DEFAULT_EMBED_DESIGN,
+  preset = "agenda",
   ...props
 }: ScheduleEmbedContentProps) {
   return (
     <div
       className={embedTypographyClass(design.aesthetic)}
       data-embed-aesthetic={design.aesthetic}
+      data-embed-preset={preset}
       style={embedDesignStyle(design)}
     >
-      <ScheduleEmbedBody {...props} design={design} />
+      <ScheduleEmbedBody {...props} design={design} preset={preset} />
     </div>
   );
 }
