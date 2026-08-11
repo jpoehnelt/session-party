@@ -83,6 +83,40 @@ const idleShowState = (): ShowRunState => ({
 const clientIntentId = () => `intent-${crypto.randomUUID()}`;
 const idempotencyKey = (action: string) => `${action}-${crypto.randomUUID()}`;
 
+export async function createAcceptedAgendaTalk(
+  eventId: string,
+  proposal: BacklogProposal,
+  autoSchedule: boolean,
+): Promise<AgendaMutationResult> {
+  const created = await apiFetch<AgendaMutationResult>(
+    `/api/v1/events/${encodeURIComponent(eventId)}/agenda/talks`,
+    {
+      method: "POST",
+      body: {
+        submissionId: proposal.submissionId,
+        trackId: null,
+        roomId: null,
+        startsAt: null,
+        durationMin: 30,
+        idempotencyKey: idempotencyKey("create-talk"),
+      },
+      schema: AgendaMutationResult,
+    },
+  );
+  if (!autoSchedule) return created;
+  return apiFetch<AgendaMutationResult>(
+    `/api/v1/events/${encodeURIComponent(eventId)}/agenda/talks/${encodeURIComponent(created.talk.id)}/auto-placement`,
+    {
+      method: "POST",
+      body: {
+        expectedVersion: created.talk.version,
+        idempotencyKey: idempotencyKey("auto-place-talk"),
+      },
+      schema: AgendaMutationResult,
+    },
+  );
+}
+
 interface TrackDraft {
   readonly id: string | null;
   readonly name: string;
@@ -544,30 +578,30 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     }
   };
 
-  const createTalk = async (proposal: BacklogProposal) => {
+  const createTalk = async (proposal: BacklogProposal, autoSchedule = false) => {
     const clientId = clientIntentId();
     try {
-      const result = await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
-        `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks`,
-        {
-          method: "POST",
-          body: {
-            submissionId: proposal.submissionId,
-            trackId: null,
-            roomId: null,
-            startsAt: null,
-            durationMin: 30,
-            idempotencyKey: idempotencyKey("create-talk"),
-          },
-          schema: AgendaMutationResult,
-        },
-      ));
+      const result = await runMutation(
+        clientId,
+        () => createAcceptedAgendaTalk(event.id, proposal, autoSchedule),
+      );
       selectTalk(result.talk);
-      toast("Talk created", { tone: "success" });
+      toast(autoSchedule ? "Accepted session created and auto-scheduled" : "Talk created", { tone: "success" });
       await refreshAfterCommit();
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Could not create talk", { tone: "danger" });
-      await refreshAfterStaleFailure(error);
+      toast(
+        error instanceof Error
+          ? error.message
+          : autoSchedule
+            ? "Could not auto-schedule the accepted session"
+            : "Could not create talk",
+        { tone: "danger" },
+      );
+      if (autoSchedule) {
+        toast("If the draft was created before placement failed, open it from the agenda and retry Auto-place talk.", { tone: "warning" });
+      }
+      if (autoSchedule) await refreshAfterCommit();
+      else await refreshAfterStaleFailure(error);
     }
   };
 
@@ -995,6 +1029,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           presence={presence}
           disabled={mutationsDisabled}
           onCreateTalk={(proposal) => void createTalk(proposal)}
+          onAutoScheduleProposal={(proposal) => void createTalk(proposal, true)}
           onSelectTalk={selectTalk}
           onMoveTalk={(talk, target) => void moveTalk(talk, target)}
           onFocusTalk={(talk) => room.send({ t: "agenda/focus", talkId: talk.id })}
@@ -1016,7 +1051,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
             <div className="border-l-4 border-accent pl-3">
               <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Signal routing</p>
               <h2 id="agenda-track-setup-heading" className="mt-1 text-2xl font-black tracking-[-0.04em] text-ink">Tracks</h2>
-              <p className="mt-1 text-sm font-semibold text-ink-secondary">Create program lanes and control their stable display order.</p>
+              <p className="mt-1 text-sm font-semibold text-ink-secondary">Create program lanes and control their stable display order. Saved tracks are immediately available in every talk's scheduling controls.</p>
             </div>
             {agenda.tracks.length > 0 && (
               <ul className="divide-y-2 divide-line-strong border-2 border-line-strong bg-surface shadow-[4px_4px_0_#171714]">
@@ -1067,7 +1102,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
             <div className="border-l-4 border-production-coral pl-3">
               <p className="text-[10px] font-black uppercase tracking-[0.16em] text-danger">Venue map</p>
               <h2 id="agenda-room-setup-heading" className="mt-1 text-2xl font-black tracking-[-0.04em] text-ink">Rooms</h2>
-              <p className="mt-1 text-sm font-semibold text-ink-secondary">Add physical or virtual spaces before scheduling talks.</p>
+              <p className="mt-1 text-sm font-semibold text-ink-secondary">Add physical or virtual spaces before scheduling talks. Saved rooms are immediately available for manual and automatic placement.</p>
             </div>
             {agenda.rooms.length > 0 && (
               <ul className="divide-y-2 divide-line-strong border-2 border-line-strong bg-surface shadow-[4px_4px_0_#171714]">

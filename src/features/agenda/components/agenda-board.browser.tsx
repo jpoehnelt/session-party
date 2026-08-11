@@ -55,4 +55,35 @@ describe("multi-day agenda builder", () => {
     expect(container.textContent).toContain("Durable workflows without folklore");
     expect(container.textContent).not.toContain("Effects at scale");
   });
+
+  it("exposes accepted-session auto-scheduling directly from the backlog", async () => {
+    const onAutoScheduleProposal = vi.fn();
+    const proposal = scheduledAgendaFixture.snapshot.backlog[0]!;
+    await act(async () => {
+      root.render(
+        <AgendaBoard
+          agenda={scheduledAgendaFixture.snapshot}
+          view="list"
+          intent={{
+            clientIntentId: null,
+            connection: "connected",
+            acknowledgement: "idle",
+            sentAt: null,
+            message: null,
+          }}
+          onCreateTalk={vi.fn()}
+          onAutoScheduleProposal={onAutoScheduleProposal}
+          onSelectTalk={vi.fn()}
+          onMoveTalk={vi.fn()}
+        />,
+      );
+    });
+
+    const action = container.querySelector<HTMLButtonElement>(
+      `button[aria-label="Auto-schedule accepted session ${proposal.title}"]`,
+    );
+    expect(action).not.toBeNull();
+    await act(async () => userEvent.click(action!));
+    expect(onAutoScheduleProposal).toHaveBeenCalledWith(proposal);
+  });
 });

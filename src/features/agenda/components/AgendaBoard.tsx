@@ -29,6 +29,7 @@ export interface AgendaBoardProps {
   readonly disabled?: boolean;
   readonly eventSlug?: string;
   readonly onCreateTalk: (proposal: BacklogProposal) => void;
+  readonly onAutoScheduleProposal?: (proposal: BacklogProposal) => void;
   readonly onSelectTalk: (talk: AgendaTalk) => void;
   readonly onMoveTalk: (talk: AgendaTalk, target: AgendaMoveTarget) => void;
   readonly onFocusTalk?: (talk: AgendaTalk) => void;
@@ -91,6 +92,7 @@ export function AgendaBoard({
   disabled = false,
   eventSlug,
   onCreateTalk,
+  onAutoScheduleProposal,
   onSelectTalk,
   onMoveTalk,
   onFocusTalk,
@@ -471,15 +473,28 @@ export function AgendaBoard({
                   <p className="mt-1.5 text-xs font-semibold text-ink-secondary">
                     {proposal.primarySpeakerName}{proposal.category ? ` · ${proposal.category}` : ""}
                   </p>
-                  <Button
-                    className="mt-3 w-full"
-                    size="sm"
-                    variant="secondary"
-                    disabled={disabled}
-                    onClick={() => onCreateTalk(proposal)}
-                  >
-                    Create talk
-                  </Button>
+                  <div className="mt-3 grid gap-2">
+                    {onAutoScheduleProposal && (
+                      <Button
+                        className="w-full"
+                        size="sm"
+                        disabled={disabled}
+                        aria-label={`Auto-schedule accepted session ${proposal.title}`}
+                        onClick={() => onAutoScheduleProposal(proposal)}
+                      >
+                        Auto-schedule
+                      </Button>
+                    )}
+                    <Button
+                      className="w-full"
+                      size="sm"
+                      variant="secondary"
+                      disabled={disabled}
+                      onClick={() => onCreateTalk(proposal)}
+                    >
+                      Create talk
+                    </Button>
+                  </div>
                 </li>
               ))}
             </ol>
