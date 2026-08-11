@@ -7,6 +7,7 @@ const EVENT_ID = "demo-event";
 const OWNER_SESSION = "demo-owner-session";
 const ADMIN_SESSION = "demo-admin-session";
 const REVIEWER_SESSION = "demo-reviewer-session";
+const SPEAKER_SESSION = "demo-speaker-session";
 const ADMIN_EMAIL = "admin@sessionparty.local";
 
 async function signIn(context: BrowserContext, baseURL: string, session = OWNER_SESSION): Promise<void> {
@@ -757,6 +758,122 @@ test("resource editor preserves rejected input and completes a create, update, r
   } finally {
     await cleanup();
   }
+});
+
+test("speaker content filters, downloads, comments, and version restoration preserve canonical state", async ({ context, page, request, baseURL }, testInfo) => {
+  desktopOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const collectionPath = `/api/v1/events/${EVENT_ID}/portal/content`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  const speakerHeaders = { Cookie: `sp_session=${SPEAKER_SESSION}` };
+  type Asset = Readonly<{
+    id: string;
+    filename: string;
+    contentType: string;
+    purpose: "headshot" | "slides" | "document";
+    version: number;
+    current: boolean;
+    speakerId: string;
+    speakerName: string;
+    speakerVersion: number;
+    versionCount: number;
+    supersedesAssetId: string | null;
+    restoredFromAssetId: string | null;
+    comments: readonly Readonly<{ id: string; body: string }>[];
+  }>;
+  type Library = Readonly<{ assets: readonly Asset[] }>;
+  const loadLibrary = async (): Promise<Library> => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<Library>;
+  };
+  const before = await loadLibrary();
+  const previous = before.assets.find((asset) => asset.current && asset.purpose === "document");
+  expect(previous).toBeDefined();
+  const suffix = `${testInfo.project.name}-${Date.now()}`.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const filename = `qa-content-${suffix}.pdf`;
+  const comment = `QA content review ${testInfo.project.name} — Unicode ✓`;
+  const pdfBase64 = "JVBERi0xLjQKJSBkZXRlcm1pbmlzdGljIHFhCiUlRU9G";
+  const uploaded = await request.post(`/api/v1/events/${EVENT_ID}/portal/assets`, {
+    headers: speakerHeaders,
+    data: {
+      purpose: "document",
+      filename,
+      contentType: "application/pdf",
+      contentBase64: pdfBase64,
+      expectedVersion: 0,
+      idempotencyKey: `qa-content-upload-${suffix}`,
+    },
+  });
+  expect(uploaded.status()).toBe(201);
+  const created = (await uploaded.json() as { readonly asset: { readonly id: string; readonly version: number } }).asset;
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/content");
+  await expect(page.getByRole("link", { name: "Content", exact: true })).toHaveAttribute("aria-current", "page");
+  const search = page.getByRole("searchbox", { name: "Search" });
+  const purpose = page.getByLabel("Purpose");
+  const versions = page.getByLabel("Versions");
+  await search.fill(filename);
+  await purpose.selectOption("document");
+  await expect(page.getByRole("row").filter({ hasText: filename })).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Select current results" }).click();
+  await expect(page.getByText("1 files selected", { exact: true })).toBeVisible();
+  const zipPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download selected ZIP" }).click();
+  const zip = await zipPromise;
+  expect(zip.suggestedFilename()).toBe("AI-Engineer-Sandbox-speaker-content.zip");
+  const zipPath = await zip.path();
+  expect(zipPath).not.toBeNull();
+  expect([...((await readFile(zipPath!)).subarray(0, 4))]).toEqual([0x50, 0x4b, 0x03, 0x04]);
+  await expect(page.getByRole("status")).toContainText("ZIP download started for 1 latest file.");
+  await expect(search).toHaveValue(filename);
+  await expect(purpose).toHaveValue("document");
+  await expect(versions).toHaveValue("current");
+  await expect(page.getByText("1 files selected", { exact: true })).toBeVisible();
+
+  let currentRow = page.getByRole("row").filter({ hasText: filename }).filter({ hasText: "Current" });
+  const filePromise = page.waitForEvent("download");
+  await currentRow.getByRole("button", { name: "Download" }).click();
+  const file = await filePromise;
+  expect(file.suggestedFilename()).toBe(filename);
+  const filePath = await file.path();
+  expect(filePath).not.toBeNull();
+  expect((await readFile(filePath!)).subarray(0, 4).toString()).toBe("%PDF");
+  await expect(search).toHaveValue(filename);
+
+  await currentRow.locator("summary").click();
+  const commentInput = currentRow.getByLabel("Add comment");
+  await currentRow.getByRole("button", { name: "Comment" }).click();
+  expect(await commentInput.evaluate((input: HTMLInputElement) => input.validity.valueMissing)).toBe(true);
+  expect((await loadLibrary()).assets.find(({ id }) => id === created.id)?.comments).toHaveLength(0);
+  await commentInput.fill(comment);
+  await currentRow.getByRole("button", { name: "Comment" }).click();
+  await expect(page.getByText("Comment added", { exact: true }).first()).toBeVisible();
+  await expect.poll(async () => (await loadLibrary()).assets.find(({ id }) => id === created.id)?.comments.map(({ body }) => body)).toContain(comment);
+
+  await page.getByLabel("Versions").selectOption("history");
+  const previousRow = page.getByRole("row")
+    .filter({ hasText: previous!.filename })
+    .filter({ hasText: `v${previous!.version} of` });
+  await expect(previousRow).toHaveCount(1);
+  await previousRow.getByRole("button", { name: "Restore as current" }).click();
+  await expect(page.getByText("Version restored", { exact: true }).first()).toBeVisible();
+  await expect.poll(async () => (await loadLibrary()).assets.find((asset) => asset.current && asset.purpose === "document")).toMatchObject({
+    filename: previous!.filename,
+    version: created.version + 1,
+    restoredFromAssetId: previous!.id,
+    supersedesAssetId: created.id,
+  });
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("h1").waitFor({ state: "visible" });
+  await page.getByLabel("Versions").selectOption("history");
+  await expect(page.getByRole("row").filter({ hasText: filename }).filter({ hasText: comment })).toHaveCount(1);
+  await expect(page.getByRole("row")
+    .filter({ hasText: previous!.filename })
+    .filter({ has: page.getByText("Current", { exact: true }) }))
+    .toContainText(`Restored from v${previous!.version}`);
 });
 
 test("agenda views, setup, and live-show controls are keyboard-reachable and reversible", async ({ context, page, baseURL }, testInfo) => {

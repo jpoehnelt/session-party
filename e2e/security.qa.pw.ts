@@ -231,6 +231,7 @@ test("every signed-out organizer route renders a truthful top-level error headin
     "/speakers",
     "/tasks",
     "/resources",
+    "/content",
     "/agenda",
     "/comms",
     "/publication",

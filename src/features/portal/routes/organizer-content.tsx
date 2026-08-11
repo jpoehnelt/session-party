@@ -81,14 +81,16 @@ export default function OrganizerContentRoute() {
   if (state.status === "loading") return <RouteLoading label="Loading speaker content" />;
   if (state.status === "error") return <RouteFailure message={state.message} onRetry={retry} />;
 
-  const perform = async (id: string, action: () => Promise<unknown>, success?: string) => {
+  const perform = async (id: string, action: () => Promise<unknown>, success?: string, refresh = true) => {
     setBusy(id);
     try {
       await action();
       if (success) toast(success, { tone: "success" });
-      retry();
+      if (refresh) retry();
+      return true;
     } catch (error) {
       toast(error instanceof Error ? error.message : "Content action failed", { tone: "danger" });
+      return false;
     } finally {
       setBusy(null);
     }
@@ -119,7 +121,7 @@ export default function OrganizerContentRoute() {
       onDownload={(asset) => perform(`download:${asset.id}`, async () => {
         const output = await fetchAsset(asset);
         saveBlob(output.asset.filename, fromBase64(output.contentBase64), output.asset.contentType);
-      })}
+      }, undefined, false)}
       onDownloadZip={(assets) => perform("zip", async () => {
         const downloaded = await Promise.all(assets.map(fetchAsset));
         const files = downloaded.map((output) => ({
@@ -127,7 +129,7 @@ export default function OrganizerContentRoute() {
           bytes: fromBase64(output.contentBase64),
         }));
         saveBlob(`${safeFilename(state.data.event.name)}-speaker-content.zip`, buildStoredZip(files), "application/zip");
-      })}
+      }, undefined, false)}
     />
     <Toaster />
   </>;
@@ -143,10 +145,10 @@ export function OrganizerContentLibrary({
 }: {
   readonly library: ContentLibrary;
   readonly busy?: string | null;
-  readonly onComment: (asset: ContentAsset, body: string) => void;
-  readonly onRestore: (asset: ContentAsset) => void;
-  readonly onDownload: (asset: ContentAsset) => void;
-  readonly onDownloadZip: (assets: readonly ContentAsset[]) => void;
+  readonly onComment: (asset: ContentAsset, body: string) => boolean | void | Promise<boolean | void>;
+  readonly onRestore: (asset: ContentAsset) => boolean | void | Promise<boolean | void>;
+  readonly onDownload: (asset: ContentAsset) => boolean | void | Promise<boolean | void>;
+  readonly onDownloadZip: (assets: readonly ContentAsset[]) => boolean | void | Promise<boolean | void>;
 }) {
   const [query, setQuery] = useState("");
   const [purpose, setPurpose] = useState("all");
@@ -164,7 +166,11 @@ export function OrganizerContentLibrary({
     if (selected.length === 0) return;
     setExportStatus(`Generating ZIP for ${selected.length} latest file${selected.length === 1 ? "" : "s"}…`);
     try {
-      await onDownloadZip(selected);
+      const result = await onDownloadZip(selected);
+      if (result === false) {
+        setExportStatus("ZIP generation failed. Try again.");
+        return;
+      }
       setExportStatus(`ZIP download started for ${selected.length} latest file${selected.length === 1 ? "" : "s"}.`);
     } catch {
       setExportStatus("ZIP generation failed. Try again.");
@@ -211,7 +217,7 @@ export function OrganizerContentLibrary({
             { key: "speaker", header: "Speaker / session", render: (asset) => <div><strong>{asset.speakerName}</strong><p className="text-xs text-ink-muted">{asset.sessionTitles.length > 0 ? asset.sessionTitles.join(", ") : "No session assigned"}</p><p className="text-xs text-ink-muted">{asset.purpose}</p></div> },
             { key: "file", header: "File", render: (asset) => <div><strong>{asset.filename}</strong><p className="text-xs text-ink-muted">{asset.contentType} · {asset.size.toLocaleString()} bytes</p></div> },
             { key: "version", header: "Version", render: (asset) => <div><Badge tone={asset.current ? "success" : "neutral"}>{asset.current ? "Current" : "History"}</Badge><p className="mt-1 text-xs">v{asset.version} of {asset.versionCount} · {new Date(asset.uploadedAt).toLocaleString()}</p>{asset.restoredFromAssetId ? <p className="text-xs">Restored from v{library.assets.find((candidate) => candidate.id === asset.restoredFromAssetId)?.version ?? "?"}</p> : null}</div> },
-            { key: "comments", header: "Comments", render: (asset) => <details><summary className="cursor-pointer font-bold">{asset.comments.length} comment{asset.comments.length === 1 ? "" : "s"}</summary><ul className="my-2 space-y-2">{asset.comments.map((comment) => <li key={comment.id} className="text-xs"><strong>{comment.authorName}</strong> · {new Date(comment.createdAt).toLocaleString()}<p>{comment.body}</p></li>)}</ul><form className="min-w-64 space-y-2" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const body = String(new FormData(event.currentTarget).get("body") ?? "").trim(); if (body) onComment(asset, body); }}><Input name="body" label="Add comment" required /><Button type="submit" size="sm" loading={busy === asset.id}>Comment</Button></form></details> },
+            { key: "comments", header: "Comments", render: (asset) => <details><summary className="cursor-pointer font-bold">{asset.comments.length} comment{asset.comments.length === 1 ? "" : "s"}</summary><ul className="my-2 space-y-2">{asset.comments.map((comment) => <li key={comment.id} className="text-xs"><strong>{comment.authorName}</strong> · {new Date(comment.createdAt).toLocaleString()}<p>{comment.body}</p></li>)}</ul><form className="min-w-64 space-y-2" onSubmit={async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = event.currentTarget; const body = String(new FormData(form).get("body") ?? "").trim(); if (body && await onComment(asset, body) !== false) form.reset(); }}><Input name="body" label="Add comment" required /><Button type="submit" size="sm" loading={busy === asset.id}>Comment</Button></form></details> },
             { key: "actions", header: "Actions", render: (asset) => <div className="flex flex-col gap-2"><Button size="sm" variant="secondary" loading={busy === `download:${asset.id}`} onClick={() => onDownload(asset)}>Download</Button>{!asset.current ? <Button size="sm" variant="ghost" loading={busy === asset.id} onClick={() => onRestore(asset)}>Restore as current</Button> : null}</div> },
           ]}
         />

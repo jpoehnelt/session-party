@@ -37,6 +37,7 @@ const ORGANIZER_ROUTES: readonly RouteTarget[] = [
   { name: "speakers", path: `/e/${EVENT_SLUG}/speakers`, persona: "owner", appShell: true },
   { name: "tasks", path: `/e/${EVENT_SLUG}/tasks`, persona: "owner", appShell: true },
   { name: "resources", path: `/e/${EVENT_SLUG}/resources`, persona: "owner", appShell: true },
+  { name: "content", path: `/e/${EVENT_SLUG}/content`, persona: "owner", appShell: true },
   { name: "agenda", path: `/e/${EVENT_SLUG}/agenda`, persona: "owner", appShell: true },
   { name: "communications", path: `/e/${EVENT_SLUG}/comms`, persona: "owner", appShell: true },
   { name: "publication", path: `/e/${EVENT_SLUG}/publication`, persona: "owner", appShell: true },

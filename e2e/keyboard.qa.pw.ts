@@ -29,6 +29,7 @@ const TARGETS: readonly KeyboardTarget[] = [
   { name: "speakers", path: `/e/${EVENT}/speakers`, persona: "owner" },
   { name: "tasks", path: `/e/${EVENT}/tasks`, persona: "owner" },
   { name: "resources", path: `/e/${EVENT}/resources`, persona: "owner" },
+  { name: "content", path: `/e/${EVENT}/content`, persona: "owner" },
   { name: "agenda", path: `/e/${EVENT}/agenda`, persona: "owner" },
   { name: "communications", path: `/e/${EVENT}/comms`, persona: "owner" },
   { name: "publication", path: `/e/${EVENT}/publication`, persona: "owner" },
