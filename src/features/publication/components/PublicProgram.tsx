@@ -838,7 +838,7 @@ export function PublicProgram({
               <SurfaceIntro eyebrow="Session detail" title={selectedTalk.title} titleId="public-session-detail-title" description="Published timing, room, description, and speakers for this session." />
               <SessionDetail talk={selectedTalk} agenda={agenda} speakers={speakers} />
             </section>
-          ) : <EmptyState title="Session not found" description="This session is not part of the published program." action={<Link className="font-black underline" to={`/event/${encodeURIComponent(agenda.eventSlug)}/sessions`}>Back to sessions</Link>} />
+          ) : <EmptyState headingLevel={1} title="Session not found" description="This session is not part of the published program." action={<Link className="font-black underline" to={`/event/${encodeURIComponent(agenda.eventSlug)}/sessions`}>Back to sessions</Link>} />
         ) : detail.speakerId ? (
           selectedSpeaker ? (
             <section className="space-y-6" aria-labelledby="public-speaker-detail-title">
@@ -846,7 +846,7 @@ export function PublicProgram({
               <SurfaceIntro eyebrow="Speaker detail" title={selectedSpeaker.displayName} titleId="public-speaker-detail-title" description="Published event profile and sessions for this speaker." />
               <SpeakerDetail speaker={selectedSpeaker} agenda={agenda} />
             </section>
-          ) : <EmptyState title="Speaker not found" description="This speaker is not part of the published program." action={<Link className="font-black underline" to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers`}>Back to speakers</Link>} />
+          ) : <EmptyState headingLevel={1} title="Speaker not found" description="This speaker is not part of the published program." action={<Link className="font-black underline" to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers`}>Back to speakers</Link>} />
         ) : null}
         {!detail.sessionId && !detail.speakerId && surface === "sessions" ? <SessionsSurface agenda={agenda} gallery={gallery} /> : null}
         {!detail.sessionId && !detail.speakerId && surface === "speakers" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="list" initialQuery={searchParams.get("q") ?? ""} /> : null}

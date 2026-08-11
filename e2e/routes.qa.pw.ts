@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import axe from "axe-core";
+import { loadPublicRouteFixtures, resolvePublicRoutePath } from "./helpers/public-route-fixtures";
 import { installDeterministicBrowser } from "./helpers/visual-readiness";
 
 type Persona = "public" | "owner" | "admin" | "reviewer" | "speaker";
@@ -60,10 +61,20 @@ const PUBLIC_AND_PORTAL_ROUTES: readonly RouteTarget[] = [
   { name: "my-submissions", path: `/portal/events/${EVENT_SLUG}/submissions`, persona: "speaker" },
   { name: "public-program", path: `/event/${EVENT_SLUG}`, persona: "public" },
   { name: "public-sessions", path: `/event/${EVENT_SLUG}/sessions`, persona: "public" },
+  { name: "public-session-detail", path: `/event/${EVENT_SLUG}/sessions/__qa_public_talk__`, persona: "public" },
+  { name: "public-session-missing", path: `/event/${EVENT_SLUG}/sessions/talk_qa_missing`, persona: "public" },
   { name: "public-speakers", path: `/event/${EVENT_SLUG}/speakers`, persona: "public" },
+  { name: "public-speaker-detail", path: `/event/${EVENT_SLUG}/speakers/__qa_public_speaker__`, persona: "public" },
+  { name: "public-speaker-missing", path: `/event/${EVENT_SLUG}/speakers/speaker_qa_missing`, persona: "public" },
+  { name: "public-agenda", path: `/event/${EVENT_SLUG}/agenda`, persona: "public" },
+  { name: "public-schedule", path: `/event/${EVENT_SLUG}/schedule`, persona: "public" },
+  { name: "public-gallery", path: `/event/${EVENT_SLUG}/gallery`, persona: "public" },
+  { name: "public-gallery-detail", path: `/event/${EVENT_SLUG}/gallery/__qa_public_speaker__`, persona: "public" },
   { name: "public-reusable-speaker-profile", path: "/speakers/priya-raman", persona: "public" },
   { name: "schedule-embed", path: `/embed/${EVENT_SLUG}/schedule`, persona: "public" },
   { name: "speaker-embed", path: `/embed/${EVENT_SLUG}/speakers`, persona: "public" },
+  { name: "persisted-embed", path: `/embed/${EVENT_SLUG}/__qa_public_embed__`, persona: "public" },
+  { name: "persisted-embed-unavailable", path: `/embed/${EVENT_SLUG}/embed_qa_missing`, persona: "public" },
   { name: "reviewer-invitation-invalid", path: "/reviewer-invitations/accept", persona: "public" },
   { name: "not-found", path: "/qa-route-that-does-not-exist", persona: "public", appShell: true },
 ] as const;
@@ -93,6 +104,9 @@ async function openStablePage(page: Page, target: RouteTarget): Promise<void> {
     const directory = await directoryResponse.json() as { readonly speakers: readonly { readonly speaker: { readonly id: string } }[] };
     expect(directory.speakers.length, "speaker detail fixture is empty").toBeGreaterThan(0);
     path = path.replace("__qa_speaker__", encodeURIComponent(directory.speakers[0]!.speaker.id));
+  }
+  if (path.includes("__qa_public_")) {
+    path = resolvePublicRoutePath(path, await loadPublicRouteFixtures(page.request));
   }
   const response = await page.goto(path, { waitUntil: "domcontentloaded" });
   expect(response, `${path} did not return a document`).not.toBeNull();
