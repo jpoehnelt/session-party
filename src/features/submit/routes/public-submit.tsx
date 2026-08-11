@@ -21,6 +21,7 @@ import {
   type PublicFormField,
   type PublicSubmissionForm as PublicSubmissionFormValue,
 } from "../schema";
+import { TURNSTILE_ALWAYS_PASS_SITE_KEY, TURNSTILE_DEMO_TOKEN } from "../abuse";
 
 export const path = "/submit/:eventSlug/:formId";
 export const layout = "bare" as const;
@@ -147,11 +148,13 @@ export function visibleFields(
 export function PublicField({
   field,
   value,
+  error,
   disabled,
   onChange,
 }: {
   readonly field: PublicFormField;
   readonly value: AnswerValue | undefined;
+  readonly error?: string;
   readonly disabled: boolean;
   readonly onChange: (value: AnswerValue) => void;
 }) {
@@ -173,6 +176,7 @@ export function PublicField({
       <Textarea
         id={id}
         label={field.label}
+        error={error}
         hint={field.helpText ?? undefined}
         required={field.required}
         disabled={disabled}
@@ -186,6 +190,7 @@ export function PublicField({
       <Select
         id={id}
         label={field.label}
+        error={error}
         hint={field.helpText ?? undefined}
         required={field.required}
         disabled={disabled}
@@ -202,6 +207,7 @@ export function PublicField({
       <Select
         id={id}
         label={field.label}
+        error={error}
         hint={field.helpText ?? undefined}
         required={field.required}
         disabled={disabled}
@@ -215,15 +221,19 @@ export function PublicField({
   }
   if (field.type === "checkbox") {
     return (
-      <Checkbox
-        id={id}
-        label={field.label}
-        description={field.helpText ?? undefined}
-        required={field.required}
-        disabled={disabled}
-        checked={value === "true"}
-        onChange={(event) => onChange(event.currentTarget.checked ? "true" : "false")}
-      />
+      <div className="space-y-1.5">
+        <Checkbox
+          id={id}
+          label={field.label}
+          description={field.helpText ?? undefined}
+          required={field.required}
+          disabled={disabled}
+          checked={value === "true"}
+          aria-invalid={error ? true : undefined}
+          onChange={(event) => onChange(event.currentTarget.checked ? "true" : "false")}
+        />
+        {error && <p className="text-[13px] text-danger">{error}</p>}
+      </div>
     );
   }
   return (
@@ -231,6 +241,7 @@ export function PublicField({
       id={id}
       type={field.type === "date" ? "date" : field.type === "email" ? "email" : field.type === "url" ? "url" : "text"}
       label={field.label}
+      error={error}
       hint={field.helpText ?? undefined}
       required={field.required}
       disabled={disabled}
@@ -238,6 +249,21 @@ export function PublicField({
       onChange={(event) => onChange(event.currentTarget.value)}
     />
   );
+}
+
+const answerIsMissing = (field: PublicFormField, value: AnswerValue | undefined): boolean =>
+  value === undefined
+  || (typeof value === "string" && (value.trim().length === 0 || (field.type === "checkbox" && value !== "true")))
+  || (Array.isArray(value) && value.length === 0);
+
+/** Client feedback only; the service independently validates the immutable published fields. */
+export function requiredAnswerErrors(
+  fields: readonly PublicFormField[],
+  answers: Readonly<Record<string, AnswerValue>>,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(fields
+    .filter((field) => field.required && answerIsMissing(field, answers[field.id]))
+    .map((field) => [field.id, `${field.label} is required.`]));
 }
 
 export interface PublicSubmitPageProps {
@@ -318,7 +344,12 @@ function TurnstileChallenge({
 }) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!siteKey || !mountRef.current) return;
+    if (!siteKey) return;
+    if (siteKey === TURNSTILE_ALWAYS_PASS_SITE_KEY) {
+      onToken(TURNSTILE_DEMO_TOKEN);
+      return () => onToken(null);
+    }
+    if (!mountRef.current) return;
     let mounted = true;
     const render = () => {
       if (!mounted || !mountRef.current || !window.turnstile) return;
@@ -348,6 +379,14 @@ function TurnstileChallenge({
   if (!siteKey) {
     return <Alert tone="danger"><AlertTitle>Human verification unavailable</AlertTitle><AlertDescription>Please try again later.</AlertDescription></Alert>;
   }
+  if (siteKey === TURNSTILE_ALWAYS_PASS_SITE_KEY) {
+    return (
+      <Alert tone="success" role="status">
+        <AlertTitle>Demo verification ready</AlertTitle>
+        <AlertDescription>This non-production environment uses Cloudflare's published test key.</AlertDescription>
+      </Alert>
+    );
+  }
   return <div aria-label="Human verification" aria-disabled={disabled} ref={mountRef} />;
 }
 
@@ -361,6 +400,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   const [coSpeakers, setCoSpeakers] = useState<readonly CoSpeakerDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Readonly<Record<string, string>>>({});
   const [draftStatus, setDraftStatus] = useState<"restored" | "saved" | null>(null);
   const [success, setSuccess] = useState<typeof CreatePublicSubmissionOutput.Type | null>(initialSuccess);
   const idempotencyKey = useRef(crypto.randomUUID());
@@ -409,7 +449,17 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!form || form.form.availability !== "open" || submitting || !turnstileToken) return;
+    if (!form || form.form.availability !== "open" || submitting) return;
+    const requiredErrors = requiredAnswerErrors(shownFields, answers);
+    setFieldErrors(requiredErrors);
+    if (Object.keys(requiredErrors).length > 0) {
+      setSubmitError("Complete the required fields highlighted above before submitting.");
+      return;
+    }
+    if (!turnstileToken) {
+      setSubmitError("Complete the human verification challenge and try again.");
+      return;
+    }
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -484,7 +534,6 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   }
 
   const accepting = form.form.availability === "open";
-  const canSubmit = accepting && !!form.turnstileSiteKey && !!turnstileToken && !turnstileUnavailable;
   return (
     <PublicSubmitShell>
       <main className="mx-auto grid max-w-6xl items-start gap-10 px-4 py-10 sm:px-6 sm:py-16 lg:grid-cols-[minmax(0,0.78fr)_minmax(28rem,1.22fr)] lg:gap-14 lg:px-8">
@@ -540,7 +589,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
               </AlertDescription>
             </Alert>
           )}
-          <form className="border-[3px] border-line-strong bg-surface shadow-[10px_10px_0_#171714]" onSubmit={handleSubmit}>
+          <form className="border-[3px] border-line-strong bg-surface shadow-[10px_10px_0_#171714]" noValidate onSubmit={handleSubmit}>
             <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
               <div className="flex items-center gap-2">
                 <span className={`size-2.5 ${accepting ? "bg-production-lime" : "bg-production-yellow"}`} aria-hidden="true" />
@@ -559,8 +608,18 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                   <PublicField
                     field={field}
                     value={answers[field.id]}
+                    error={fieldErrors[field.id]}
                     disabled={!accepting || submitting}
-                    onChange={(value) => setAnswers((current) => ({ ...current, [field.id]: value }))}
+                    onChange={(value) => {
+                      setAnswers((current) => ({ ...current, [field.id]: value }));
+                      setSubmitError(null);
+                      setFieldErrors((current) => {
+                        if (!(field.id in current)) return current;
+                        const next = { ...current };
+                        delete next[field.id];
+                        return next;
+                      });
+                    }}
                   />
                 </div>
               ))}
@@ -679,6 +738,12 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                   onUnavailable={markTurnstileUnavailable}
                   widgetIdRef={widgetId}
                 />
+                {turnstileUnavailable && (
+                  <Alert className="mt-3" tone="danger">
+                    <AlertTitle>Human verification could not load</AlertTitle>
+                    <AlertDescription>Check your connection, then reload this page to try again.</AlertDescription>
+                  </Alert>
+                )}
               </div>
             )}
             {submitError && (
@@ -707,7 +772,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                   >
                     Save draft
                   </Button>
-                  <Button type="submit" disabled={submitting || !canSubmit}>{submitting ? "Submitting…" : "Submit proposal →"}</Button>
+                  <Button type="submit" disabled={submitting}>{submitting ? "Submitting…" : "Submit proposal →"}</Button>
                 </div>
               </div>
             )}

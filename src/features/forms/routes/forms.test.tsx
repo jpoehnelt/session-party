@@ -469,18 +469,26 @@ describe("forms organizer mutations", () => {
       opensAt: null,
       closesAt: null,
     });
-    expect(createBody.fields).toHaveLength(5);
+    expect(createBody.fields).toHaveLength(6);
     expect(createBody.fields.map((field: { semanticKey: string | null }) => field.semanticKey)).toEqual([
       "submissionTitle",
       "submissionAbstract",
       "speakerName",
       "speakerEmail",
       null,
+      null,
     ]);
     expect(createBody.fields[4]).toMatchObject({
       type: "radio",
       options: ["General"],
       routing: { General: "general" },
+    });
+    expect(createBody.fields[5]).toMatchObject({
+      type: "select",
+      label: "Session format",
+      required: true,
+      options: ["Talk", "Workshop", "Panel"],
+      routing: {},
     });
 
     const update = fetchMock.mock.calls[1]![1] as RequestInit;

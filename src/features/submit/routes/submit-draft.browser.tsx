@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { userEvent } from "vitest/browser";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PublicSubmissionForm } from "../schema";
 import PublicSubmitPage, { draftStorageKey } from "./public-submit";
 
@@ -58,14 +58,15 @@ describe("public submission draft lifecycle", () => {
     await act(async () => root.unmount());
     container.remove();
     window.localStorage.clear();
+    vi.unstubAllGlobals();
   });
 
-  const renderForm = async () => {
+  const renderForm = async (initialForm: PublicSubmissionForm = fixture) => {
     await act(async () => {
       root.render(
         <MemoryRouter initialEntries={[route]}>
           <Routes>
-            <Route path="/submit/:eventSlug/:formId" element={<PublicSubmitPage initialForm={fixture} />} />
+            <Route path="/submit/:eventSlug/:formId" element={<PublicSubmitPage initialForm={initialForm} />} />
           </Routes>
         </MemoryRouter>,
       );
@@ -93,5 +94,44 @@ describe("public submission draft lifecycle", () => {
 
     expect(document.querySelector<HTMLInputElement>("#public-submit-field-title")?.value).toBe("A resilient draft");
     expect(container.textContent).toContain("Draft restored");
+  });
+
+  it("shows durable required-field feedback even before human verification completes", async () => {
+    await renderForm();
+    const submit = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Submit proposal"));
+    expect(submit).not.toBeUndefined();
+
+    await act(async () => userEvent.click(submit!));
+
+    expect(container.textContent).toContain("Proposal title is required.");
+    expect(container.textContent).toContain("Complete the required fields highlighted above before submitting.");
+    expect(document.querySelector("#public-submit-field-title")?.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("uses the published Turnstile test key only for a deterministic demo round-trip", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      submissionId: "submission-demo-created",
+      status: "submitted",
+      submittedAt: Date.UTC(2026, 7, 11, 18),
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await renderForm({ ...fixture, turnstileSiteKey: "1x00000000000000000000AA" });
+
+    expect(container.textContent).toContain("Demo verification ready");
+    const title = document.querySelector<HTMLInputElement>("#public-submit-field-title");
+    await act(async () => userEvent.fill(title!, "Automation without a bypass"));
+    const submit = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Submit proposal"));
+    await act(async () => userEvent.click(submit!));
+
+    await vi.waitFor(() => expect(container.textContent).toContain("Submission received"));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/public/events/architecture-summit/forms/form-public/submissions",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"turnstileToken":"session-party-demo-turnstile"'),
+      }),
+    );
   });
 });
