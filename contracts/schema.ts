@@ -373,14 +373,33 @@ export const speakers = sqliteTable(
   (t) => [
     uniqueIndex("speakers_event_id_unique").on(t.eventId, t.id),
     uniqueIndex("speakers_event_user_unique").on(t.eventId, t.userId),
-    uniqueIndex("speakers_event_contact_email_unique")
-      .on(t.eventId, sql`lower(${t.contactEmail})`)
-      .where(sql`${t.contactEmail} is not null`),
     index("speakers_event_visible").on(t.eventId, t.visible),
     index("speakers_user").on(t.userId),
     foreignKey({ columns: [t.eventId, t.headshotAssetId], foreignColumns: [assets.eventId, assets.id], name: "speakers_headshot_fk" })
       .onDelete("restrict").onUpdate("cascade"),
     check("speakers_version_positive", sql`${t.version} > 0`),
+  ],
+);
+
+/** Normalized email claims for organizer-managed speaker identities only. */
+export const managedSpeakerEmails = sqliteTable(
+  "managed_speaker_emails",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    normalizedEmail: text("normalized_email").notNull(),
+    speakerId: text("speaker_id").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("managed_speaker_emails_event_email_unique").on(t.eventId, t.normalizedEmail),
+    uniqueIndex("managed_speaker_emails_event_speaker_unique").on(t.eventId, t.speakerId),
+    foreignKey({
+      columns: [t.eventId, t.speakerId],
+      foreignColumns: [speakers.eventId, speakers.id],
+      name: "managed_speaker_emails_speaker_fk",
+    }).onDelete("cascade").onUpdate("cascade"),
+    check("managed_speaker_emails_normalized", sql`length(${t.normalizedEmail}) > 0 and ${t.normalizedEmail} = lower(trim(${t.normalizedEmail}))`),
   ],
 );
 

@@ -13,6 +13,7 @@ import {
   formVersionFields,
   idempotencyRecords,
   integrations,
+  managedSpeakerEmails,
   mailDeliveries,
   mailDeliverySnapshots,
   pages,
@@ -2795,6 +2796,10 @@ export const createManagedSpeaker = (input: CreateManagedSpeakerInput): Effect.E
   const committed = yield* database(() => db.batch([
     db.insert(idempotencyRecords).values(idempotency),
     db.insert(speakers).values(record),
+    db.insert(managedSpeakerEmails).values({
+      id: id("managed_email"), eventId: input.eventId, normalizedEmail: contactEmail,
+      speakerId: record.id, createdAt, updatedAt: createdAt,
+    }),
     db.insert(domainChanges).values(writeChange(
       input.eventId, "speaker", record.id, 1, "portal.speaker.managed.created",
       { speakerId: record.id, source: "manual" }, actor, createdAt, requestId, idempotency.id,
@@ -2835,6 +2840,12 @@ export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.E
     sql`lower(${speakers.contactEmail}) = ${contactEmail}`,
   )).limit(2).then((rows) => rows.find((row) => row.id !== input.speakerId)));
   if (duplicate) return yield* Effect.fail(new Conflict({ message: "A speaker with this contact email already exists" }));
+  const [claimedEmail] = yield* database(() => db.select({ speakerId: managedSpeakerEmails.speakerId }).from(managedSpeakerEmails).where(and(
+    eq(managedSpeakerEmails.eventId, input.eventId), eq(managedSpeakerEmails.normalizedEmail, contactEmail),
+  )).limit(1));
+  if (claimedEmail && claimedEmail.speakerId !== input.speakerId) {
+    return yield* Effect.fail(new Conflict({ message: "A speaker with this contact email already exists" }));
+  }
   const updatedAt = now();
   const version = input.expectedVersion + 1;
   const guard = and(eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId), eq(speakers.version, input.expectedVersion));
@@ -2850,6 +2861,10 @@ export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.E
     updatedAt,
   };
   const requestId = id("portal_request");
+  const change = writeChange(
+    input.eventId, "speaker", input.speakerId, version, "portal.speaker.managed.updated",
+    { speakerId: input.speakerId, workflowStatus: values.workflowStatus }, actor, updatedAt, requestId,
+  );
   const audit = {
     id: id("audit"), eventId: input.eventId, requestId,
     actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
@@ -2857,11 +2872,19 @@ export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.E
     before: speakerView(existing), after: speakerView({ ...existing, ...values }), metadata: null, occurredAt: updatedAt,
   };
   const committed = yield* database(() => db.batch([
-    db.insert(domainChanges).select(db.select(changeSelection(writeChange(
-      input.eventId, "speaker", input.speakerId, version, "portal.speaker.managed.updated",
-      { speakerId: input.speakerId, workflowStatus: values.workflowStatus }, actor, updatedAt, requestId,
-    ))).from(speakers).where(guard)),
+    db.insert(domainChanges).values(change),
     db.update(speakers).set(values).where(guard).returning(),
+    db.delete(managedSpeakerEmails).where(and(
+      eq(managedSpeakerEmails.eventId, input.eventId), eq(managedSpeakerEmails.speakerId, input.speakerId),
+    )),
+    db.insert(managedSpeakerEmails).values({
+      id: id("managed_email"), eventId: input.eventId, normalizedEmail: contactEmail,
+      speakerId: input.speakerId, createdAt: updatedAt, updatedAt,
+    }),
+    db.insert(domainChanges).select(db.select(changeSelection(change)).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+      or(ne(speakers.version, version), ne(speakers.contactEmail, contactEmail)),
+    ))),
     db.insert(auditLog).select(db.select({
       id: sql<string>`${audit.id}`.as("id"),
       eventId: speakers.eventId,
@@ -3050,6 +3073,11 @@ export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<
   const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [db.insert(idempotencyRecords).values(record)];
   if (inserts.length > 0) {
     statements.push(db.insert(speakers).values(inserts));
+    statements.push(db.insert(managedSpeakerEmails).values(inserts.map((speaker) => ({
+      id: id("managed_email"), eventId: input.eventId,
+      normalizedEmail: speaker.contactEmail!, speakerId: speaker.id,
+      createdAt, updatedAt: createdAt,
+    }))));
     for (const inserted of inserts) statements.push(db.insert(domainChanges).values(changes.get(inserted.id)!));
   }
   for (const update of updates) {
@@ -3057,7 +3085,13 @@ export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<
     const nextVersion = update.existing.version + 1;
     statements.push(db.update(speakers).set(update.values).where(and(
       eq(speakers.eventId, input.eventId), eq(speakers.id, update.existing.id), eq(speakers.version, update.existing.version),
-    )), db.insert(domainChanges).values(change), db.insert(domainChanges).select(
+    )), db.delete(managedSpeakerEmails).where(and(
+      eq(managedSpeakerEmails.eventId, input.eventId), eq(managedSpeakerEmails.speakerId, update.existing.id),
+    )), db.insert(managedSpeakerEmails).values({
+      id: id("managed_email"), eventId: input.eventId,
+      normalizedEmail: update.existing.contactEmail!.toLowerCase(), speakerId: update.existing.id,
+      createdAt, updatedAt: createdAt,
+    }), db.insert(domainChanges).values(change), db.insert(domainChanges).select(
       db.select(changeSelection(change)).from(speakers).where(and(
         eq(speakers.eventId, input.eventId), eq(speakers.id, update.existing.id), ne(speakers.version, nextVersion),
       )),

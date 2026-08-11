@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "ae8fc2d9-9fb7-4c76-8d26-c27dc8efa90c",
+  "id": "b121c265-5b24-48f2-ad7b-314021faa462",
   "prevId": "11d81daa-3796-4e03-b499-3a2f92b17b3c",
   "tables": {
     "accelevents_external_identities": {
@@ -5042,6 +5042,109 @@
         }
       }
     },
+    "managed_speaker_emails": {
+      "name": "managed_speaker_emails",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "normalized_email": {
+          "name": "normalized_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "speaker_id": {
+          "name": "speaker_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "managed_speaker_emails_event_email_unique": {
+          "name": "managed_speaker_emails_event_email_unique",
+          "columns": [
+            "event_id",
+            "normalized_email"
+          ],
+          "isUnique": true
+        },
+        "managed_speaker_emails_event_speaker_unique": {
+          "name": "managed_speaker_emails_event_speaker_unique",
+          "columns": [
+            "event_id",
+            "speaker_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "managed_speaker_emails_event_id_events_id_fk": {
+          "name": "managed_speaker_emails_event_id_events_id_fk",
+          "tableFrom": "managed_speaker_emails",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "cascade"
+        },
+        "managed_speaker_emails_speaker_fk": {
+          "name": "managed_speaker_emails_speaker_fk",
+          "tableFrom": "managed_speaker_emails",
+          "tableTo": "speakers",
+          "columnsFrom": [
+            "event_id",
+            "speaker_id"
+          ],
+          "columnsTo": [
+            "event_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "cascade"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "managed_speaker_emails_normalized": {
+          "name": "managed_speaker_emails_normalized",
+          "value": "length(\"managed_speaker_emails\".\"normalized_email\") > 0 and \"managed_speaker_emails\".\"normalized_email\" = lower(trim(\"managed_speaker_emails\".\"normalized_email\"))"
+        }
+      }
+    },
     "pages": {
       "name": "pages",
       "columns": {
@@ -6589,15 +6692,6 @@
           ],
           "isUnique": true
         },
-        "speakers_event_contact_email_unique": {
-          "name": "speakers_event_contact_email_unique",
-          "columns": [
-            "event_id",
-            "lower(\"contact_email\")"
-          ],
-          "isUnique": true,
-          "where": "\"speakers\".\"contact_email\" is not null"
-        },
         "speakers_event_visible": {
           "name": "speakers_event_visible",
           "columns": [
@@ -8094,14 +8188,6 @@
     "columns": {}
   },
   "internal": {
-    "indexes": {
-      "speakers_event_contact_email_unique": {
-        "columns": {
-          "lower(\"contact_email\")": {
-            "isExpression": true
-          }
-        }
-      }
-    }
+    "indexes": {}
   }
 }
