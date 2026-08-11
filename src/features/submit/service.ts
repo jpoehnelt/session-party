@@ -1588,9 +1588,11 @@ const ownSummary = (
     status: row.status,
     submittedAt: row.submittedAt.getTime(),
     version: row.version,
-    editable: availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
+    editable: row.status === "accepted" || (
+      availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
       && row.status !== "rejected"
-      && row.status !== "withdrawn",
+      && row.status !== "withdrawn"
+    ),
   };
 };
 
@@ -1686,14 +1688,30 @@ export const updateOwnSubmissionAbstract = (
         eq(submissions.id, input.submissionId),
         eq(submissions.version, input.expectedVersion),
         inArray(submissions.status, ["submitted", "in_review", "waitlist", "accepted"]),
-        exists(db.select({ id: forms.id }).from(forms).where(and(
-          eq(forms.eventId, submissions.eventId),
-          eq(forms.id, submissions.formId),
-          eq(forms.kind, "cfp"),
-          eq(forms.status, "open"),
-          or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
-          or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
-        ))),
+        or(
+          exists(db.select({ id: forms.id }).from(forms).where(and(
+            eq(forms.eventId, submissions.eventId),
+            eq(forms.id, submissions.formId),
+            eq(forms.kind, "cfp"),
+            eq(forms.status, "open"),
+            or(isNull(forms.opensAt), lte(forms.opensAt, commitNowMs)),
+            or(isNull(forms.closesAt), gt(forms.closesAt, commitNowMs)),
+          ))),
+          and(
+            eq(submissions.status, "accepted"),
+            exists(db.select({ id: submissionSpeakers.id }).from(submissionSpeakers)
+              .innerJoin(speakers, and(
+                eq(speakers.eventId, submissionSpeakers.eventId),
+                eq(speakers.id, submissionSpeakers.speakerId),
+              ))
+              .where(and(
+                eq(submissionSpeakers.eventId, submissions.eventId),
+                eq(submissionSpeakers.submissionId, submissions.id),
+                eq(submissionSpeakers.isPrimary, true),
+                eq(speakers.userId, owner.userId),
+              ))),
+          ),
+        ),
       )),
       db.update(submissionAnswers).set({ value: abstract, version: abstractAnswer.version + 1, updatedAt: savedAt }).where(and(
         eq(submissionAnswers.id, abstractAnswer.id),

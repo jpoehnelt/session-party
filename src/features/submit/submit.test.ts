@@ -717,7 +717,7 @@ describe("public submission creation", () => {
     if (unauthorized._tag === "Left") expect(unauthorized.left._tag).toBe("Forbidden");
   });
 
-  it("locks accepted, rejected, and withdrawn proposals after the CFP deadline", async () => {
+  it("allows the exact accepted primary speaker to edit after the CFP deadline", async () => {
     const db = drizzle(env.DB);
     const now = new Date();
     const submissionId = "submission-accepted-closed-edit";
@@ -827,19 +827,21 @@ describe("public submission creation", () => {
     expect(before.submissions.find((submission) => submission.id === submissionId)).toMatchObject({
       abstract: "Accepted abstract before the edit.",
       status: "accepted",
-      editable: false,
+      editable: true,
       version: 1,
     });
 
-    const acceptedAttempt = await runEitherAs(submittingSpeaker, updateOwnSubmissionAbstract({
+    const acceptedAttempt = await runAs(submittingSpeaker, updateOwnSubmissionAbstract({
       eventSlug: EVENT_SLUG,
       submissionId,
       abstract: "Accepted abstract after the closed-CFP edit.",
       expectedVersion: 1,
       idempotencyKey: "submit-accepted-closed-update-001",
     }));
-    expect(acceptedAttempt._tag).toBe("Left");
-    if (acceptedAttempt._tag === "Left") expect(acceptedAttempt.left._tag).toBe("Conflict");
+    expect(acceptedAttempt).toMatchObject({
+      submission: { abstract: "Accepted abstract after the closed-CFP edit.", editable: true, version: 2 },
+      idempotent: false,
+    });
 
     const [abstractAnswer, emailAnswer] = await Promise.all([
       db.select({ value: submissionAnswers.value, version: submissionAnswers.version })
@@ -851,7 +853,7 @@ describe("public submission creation", () => {
         .where(eq(submissionAnswers.id, "answer-accepted-closed-email"))
         .get(),
     ]);
-    expect(abstractAnswer).toEqual({ value: "Accepted abstract before the edit.", version: 1 });
+    expect(abstractAnswer).toEqual({ value: "Accepted abstract after the closed-CFP edit.", version: 2 });
     expect(emailAnswer).toEqual({ value: immutableSpeakerEmail, version: 1 });
 
     const sameEmailOutsider: Principal = { ...outsider, email: immutableSpeakerEmail };
@@ -861,7 +863,7 @@ describe("public submission creation", () => {
       eventSlug: EVENT_SLUG,
       submissionId,
       abstract: "An edit by a different browser identity with the immutable email.",
-      expectedVersion: 1,
+      expectedVersion: 2,
       idempotencyKey: "submit-accepted-closed-outsider-001",
     }));
     expect(outsiderAttempt._tag).toBe("Left");
@@ -873,7 +875,7 @@ describe("public submission creation", () => {
         eventSlug: EVENT_SLUG,
         submissionId,
         abstract: `An edit after ${status}.`,
-        expectedVersion: 1,
+        expectedVersion: 2,
         idempotencyKey: `submit-accepted-closed-${status}-001`,
       }));
       expect(denied._tag).toBe("Left");
