@@ -42,9 +42,22 @@ test("persists stable one-decimal rubric scores", () => {
 
 test("refuses to lower a persisted rubric baseline", () => {
   const current = baselineFromReport(report);
-  assert.doesNotThrow(() => assertNonDecreasing(current, { ...current, overallScorePct: 64.4 }));
+  assert.doesNotThrow(() => assertNonDecreasing(current, {
+    ...current,
+    overallScorePct: 64.4,
+    overallEvidenceCoveragePct: 50.1,
+    overallImplementationGapPct: 49.9,
+  }));
   assert.throws(
     () => assertNonDecreasing(current, { ...current, overallScorePct: 64.2 }),
     /Refusing to lower/,
+  );
+  assert.throws(
+    () => assertNonDecreasing(current, { ...current, overallEvidenceCoveragePct: 49.9 }),
+    /evidence coverage/,
+  );
+  assert.throws(
+    () => assertNonDecreasing(current, { ...current, overallImplementationGapPct: 50.1 }),
+    /implementation-gap weight/,
   );
 });

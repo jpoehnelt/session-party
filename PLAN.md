@@ -62,7 +62,7 @@ The aggregate onboarding/chase dashboard is product-critical even though the com
 | Form semantic roles | Draft and immutable form fields carry optional `semanticKey`: `submissionTitle`, `submissionAbstract`, `speakerName`, or `speakerEmail`; keys are unique per form/version, and primary CFP publication requires exactly one title and abstract key |
 | Legacy form semantics | Upgrade migration preserves legacy semantic keys as `null`; it never guesses from labels. Historical data stays readable, but explicit organizer assignment is required before republish/new submit-review activation |
 | AI review identity | AI suggestions are `reviews` rows with `ai=true` and no reviewer; only a separate human-authored row enters human evidence. Event-scoped MCP/API keys may request labeled AI suggestions with `reviews:write`, but never human-score, accept, or act on behalf of a reviewer |
-| Committee review | Event reviewers see only proposals assigned to them in the selected round; owners/admins retain committee-wide access and derived progress. Recusal is a versioned assignment state with preserved reason/history and permits a later replacement assignment. A round may hide presenter identity for blind review. Speaker and cross-event access remain forbidden, and rubric score rationale and append-only conversation messages remain distinct records |
+| Committee review | Event reviewers see the event's proposals and append-only per-submission committee thread by default; assignment is an optional worklist filter, while speaker and cross-event access remain forbidden. Organizer progress is derived from assignments and human reviews. Recusal is a versioned assignment state with preserved reason/history and permits a later replacement assignment. Rubric score rationale and conversation messages remain distinct records |
 | Institutional memory | Stable IDs survive every JSON projection; submission-speaker links freeze nullable title/organization-at-time for new records, legacy links remain null rather than guessed, and the organizer archive includes speakers, submissions, answers, sessions, reviews, decisions, and onboarding evidence |
 | Internal contention records | `forms.primaryClaim` and `forms.versionClaim` are approved internal-only `domainChanges` records committed atomically with idempotency/audit evidence; they are not semantic operation emits and are never broadcast |
 | Cloudflare account | `jpoehnelt` (`9cfedefc6185f3dad8ab91241b401135`) |
@@ -219,7 +219,7 @@ The existing prototype is not safe to freeze. Phase 0 must establish:
    - composite same-event foreign keys/uniques where D1 permits them
    - IDs are locators, never authority
 2. **Role-filtered realtime**
-   - one event coordination object, but recipient/audience filtering for admin, exact round/submission reviewer assignments, speaker-self, and public data
+   - one event coordination object, but recipient/audience filtering for admin, event reviewer, optional assignment filters, speaker-self, and public data
    - replay applies the same authorization as live delivery
 3. **Credential safety**
    - hash magic-link/session/API-key bearer values
@@ -257,7 +257,7 @@ Organizer-locked product behavior:
 
 Security defaults adopted by authorization “according to PLAN.md” unless the user overrides:
 
-- **Review:** reviewers see submissions and committee comments only for exact selected-round assignments that they have not recused from; owners/admins see the full round. Blind rounds omit presenter identities for reviewers. Speakers never see reviewer identities, comments, or scores.
+- **Review:** reviewers see all submissions and committee comments for events where they are members; assignment remains an optional filter. Speakers never see reviewer identities, comments, or scores.
 - **Public projection:** event name/description/dates/timezone/location/banner/accent; visible speaker name/title/company/bio/headshot/approved links; published talk title/description/time/duration/room/track/public speaker names. Never expose email, form answers, reviews, tasks, assets not explicitly public, audit, or integration state.
 - **Embeds:** sandboxed iframes from `youtube-nocookie.com`, `youtube.com`, `player.vimeo.com`, and `docs.google.com`; no scripts, raw same-origin HTML, or arbitrary providers.
 - **Uploads:** headshots JPEG/PNG/WebP ≤10 MB; slides PDF/PPT/PPTX ≤100 MB; supporting docs PDF/DOC/DOCX ≤25 MB; reject HTML/SVG/executables and serve documents as attachments.
@@ -366,7 +366,7 @@ One feature directory owns each route and operation prefix. A producer may serve
 | `events` | `/`, `/e/:eventSlug`, `/e/:eventSlug/settings`, `/reviewer-invitations/accept` | `events.*` | `/events`, `/events/:idOrSlug`, `/events/:eventId/reviewer-invitations`, `/reviewer-invitations/accept` | event member; organizer shell. Reviewer invitation acceptance uses the existing browser-session/magic-link path and grants only event reviewer membership |
 | `forms` | `/e/:eventSlug/forms` | `forms.*` | `/events/:eventId/forms/**` | owner/admin or scoped API key; organizer shell |
 | `submissions` | `/e/:eventSlug/submissions`, `/submit/:eventSlug/:formId` | `submissions.*` | `/events/:eventId/submissions/**`; public read/create at `/public/events/:eventSlug/forms/:formId` and `/public/events/:eventSlug/forms/:formId/submissions` | organizer queue uses owner/admin/reviewer policy; CFP is anonymous, Turnstile/rate-limited, and `layout = "bare"` |
-| `review` | `/e/:eventSlug/review` | `review.*` | `/events/:eventId/review/**`, `/events/:eventId/submissions/:submissionId/acceptance` | reviewers participate only through exact per-round assignments and may recuse; blind rounds hide presenter identity; owner/admin retain full queue and decision authority; organizer shell |
+| `review` | `/e/:eventSlug/review` | `review.*` | `/events/:eventId/review/**`, `/events/:eventId/submissions/:submissionId/acceptance` | every event reviewer can participate; assignments are optional filters; owner/admin retain decision authority; organizer shell |
 | `agenda` | `/e/:eventSlug/agenda`, `/e/:eventSlug/publication`, `/embed/:eventSlug/schedule` | `agenda.*` | `/events/:eventId/agenda/**`; public slug read at `/public/events/:eventSlug/agenda/published` | agenda/publication use owner/admin or scoped API key and organizer shell; schedule embed is public, immutable-published data only, and bare |
 | `speakers` | `/e/:eventSlug/speakers`, `/embed/:eventSlug/speakers` | `speakers.*` | `/events/:eventId/speakers/**`; public read at `/public/events/:eventSlug/speakers` | directory uses owner/admin or scoped API key and organizer shell; embed is public projection only and bare |
 | `tasks` | `/e/:eventSlug/tasks` | `tasks.*` | `/events/:eventId/tasks/**`, `/events/:eventId/speakers/:speakerId/task-completions/**` | definitions use owner/admin; completion requires exact speaker-self proof; organizer shell |
@@ -634,7 +634,7 @@ The review route is always `writer → Main intake → read-only commit reviewer
 | `BaselineGreen` | current schema migrates from blank and legacy D1; auth is tenant-safe; REST/MCP/Party errors and audiences agree; local reset/smoke is deterministic | registry freshness, strict types, Workers suite, build, fresh/upgrade migration proof, local API/MCP/DO smoke | this SHA becomes the only producer base for feature activation |
 | `forms` | organizer builds conditional fields and track routing; publish produces an immutable version and a readable routing summary | focused forms service/operation/UI test | publishes the forms operation artifact; it does not substitute for the public `submit` producer |
 | `submit` | public user renders the published mobile form, creates one routed submission, cannot submit when closed, and receives idempotent replay | focused public-CFP contract/security test and route smoke | produces the submission artifact consumed by review |
-| `review` + acceptance | assigned event reviewers record typed weighted rubric responses and append committee discussion by round; exact assignments gate participation, recusals remove access, and blind rounds hide presenter identity; acceptance is auditable and yields a provisionable speaker contract | focused review/acceptance service/operation/UI test | produces the acceptance artifact consumed by portal and agenda |
+| `review` + acceptance | event reviewers record bounded rubric scores and append committee discussion by round; assignments narrow the queue without restricting participation; acceptance is auditable and yields a provisionable speaker contract | focused review/acceptance service/operation/UI test | produces the acceptance artifact consumed by portal and agenda |
 | `agenda` | operator assigns accepted talks by room/time, sees speaker/room conflicts, and can complete the workflow without pointer-only drag | focused agenda service/operation/UI/accessibility test | produces the scheduled-talk artifact consumed by ICS comms and public schedule |
 
 #### Current candidate ledger — 2026-08-08
@@ -713,7 +713,7 @@ The nine brief feature areas define scope, with the dashboard explicitly best-ef
 1. **CFP forms — required:** one primary form with one-or-more track options/routing, optional additional forms, conditional fields, public mobile submission, closed-state and idempotency proof
 2. **Speaker portal — required:** primary-speaker account; accepted submission/profile/tasks together; bio/headshot/slides/supporting docs; task-linked forms; speaker-only resources/wiki with safe embeds; independent co-speaker accounts are P1
 3. **Communications — required:** immutable personalized text/HTML, scheduled reminders, auditable actual dispatch, valid confirmed-agenda ICS with no video link, room details when assigned, and updated invite after schedule changes
-4. **Reviews — required:** named dated rounds, independent reviewer pools, exact assignments, recusals, blind review, typed weighted scorecards, progress/reminders/exports, and optional labeled AI assist
+4. **Reviews — required:** rounds, assignments, bounded rubric scores, optional labeled AI assist
 5. **Agenda — required:** backlog, drag/move alternative, room/speaker conflicts, list/day/week/track/room views
 6. **Onboarding visibility — required in portal/tasks; aggregate dashboard optional:** speakers and organizers can observe real task completion state; realtime dashboard aggregation is best-effort
 7. **Accelevents — required:** fixture-demonstrable, production-interface, idempotent one-way import that eliminates re-entry; Airtable sync is bonus

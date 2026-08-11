@@ -1,15 +1,15 @@
 {
   "schemaVersion": 2,
   "rubricRevision": "2b0f7956ab0c6f4868d41356e495b3a225badaab",
-  "overallScorePct": 100,
-  "overallEvidenceCoveragePct": 99,
-  "overallImplementationGapPct": 0,
+  "overallScorePct": 95.3,
+  "overallEvidenceCoveragePct": 90.7,
+  "overallImplementationGapPct": 8.4,
   "areas": {
-    "call-for-papers": 100,
-    "abstract-management": 100,
+    "call-for-papers": 91.9,
+    "abstract-management": 91.1,
     "speaker-management": 100,
-    "content-management": 100,
+    "content-management": 96.8,
     "ai-agenda": 100,
-    "public-widgets": 100
+    "public-widgets": 95.7
   }
 }

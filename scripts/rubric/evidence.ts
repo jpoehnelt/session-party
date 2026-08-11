@@ -88,14 +88,14 @@ export const evidencePlan = {
   ],
   "CFP-14": [
     test(commsService, "includes rejected applicants in bulk communications and queues their outcome email"),
+    gap("Acceptance notifications and organizer-side dispatch confirmation are not implemented and proven together."),
   ],
   "CFP-15": [
     test(agendaService, "lists only accepted, provisioned proposals in the backlog"),
     test(agendaService, "creates, schedules, moves, replays idempotently, and cancels a talk with evidence"),
   ],
   "CFP-16": [
-    test(submitService, "renders the immutable closed snapshot but rejects creation without writes"),
-    test(submitService, "locks accepted, rejected, and withdrawn proposals after the CFP deadline"),
+    gap("Accepted primary speakers intentionally remain editable after CFP close under the authoritative product contract."),
   ],
   "CFP-17": [test(eventsService, "creates, lists, and gets an event for its owner")],
   "CFP-18": [
@@ -115,7 +115,10 @@ export const evidencePlan = {
     test(reviewService, "calculates typed scorecards with configured numeric and dropdown weights"),
   ],
   "ABS-04": [test(reviewService, "calculates typed scorecards with configured numeric and dropdown weights")],
-  "ABS-05": [test(reviewService, "returns all proposals to organizers and only exact assigned proposals to reviewers")],
+  "ABS-05": [
+    test(reviewService, "returns the committee queue to reviewers and keeps assignments as an optional worklist filter"),
+    gap("Committee reviewers can open unassigned proposals, so the rubric's exact-assignment isolation is not implemented."),
+  ],
   "ABS-06": [test(reviewService, "bulk-balances an independent round pool and reports per-reviewer completion")],
   "ABS-07": [test(reviewService, "hides presenter identities from assigned reviewers in blind rounds")],
   "ABS-08": [test(reviewService, "bulk-balances an independent round pool and reports per-reviewer completion")],
@@ -125,9 +128,12 @@ export const evidencePlan = {
   ],
   "ABS-11": [
     test(submitService, "creates trimmed primary and repeatable co-speaker snapshots atomically and replays without duplicates"),
-    test(reviewService, "hides presenter identities from assigned reviewers in blind rounds"),
+    gap("Co-presenter role labels are not persisted or shown in organizer review and results views."),
   ],
-  "ABS-12": [test(reviewService, "records reviewer recusals and immediately removes review access")],
+  "ABS-12": [
+    test(reviewService, "derives organizer progress from active assignments and preserves recusal history through reassignment"),
+    test(reviewRoute, "renders scoring and the private committee conversation for an assigned event reviewer"),
+  ],
   "ABS-13": [test(reviewService, "exports normalized review results with criterion-level responses")],
   "ABS-14": [
     test(reviewService, "limits AI input, labels the suggestion, and never transitions submission status"),
@@ -199,12 +205,14 @@ export const evidencePlan = {
   "CNT-05": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
   "CNT-06": [
     test(portalRoute, "applies purpose-specific upload limits before reading or encoding files"),
-    test(portalService, "accepts a decoded 10 MiB upload for every asset kind"),
   ],
   "CNT-07": [
     test(portalRoute, "renders a filterable content library with metadata, comments, history restore, and ZIP download"),
   ],
-  "CNT-08": [test(portalService, "queues idempotent invitations, manual outstanding reminders, and automated due reminders")],
+  "CNT-08": [
+    test(portalService, "queues messages only for speakers with an accepted provisioned portal"),
+    gap("No focused organizer UI assertion proves bulk reminder selection and a visible send confirmation."),
+  ],
   "CNT-09": [test(agendaService, "edits the organizer session title and abstract with versioned evidence")],
   "CNT-10": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
   "CNT-11": [test(portalService, "retains content history, supports cross-role comments, downloads, restores, and organizer profile edits")],
@@ -265,6 +273,7 @@ export const evidencePlan = {
   "EMB-16": [
     test(publicationService, "publishes only confirmed talks and visible speaker names as an immutable snapshot"),
     test(publicProgram, "keeps session and speaker identity consistent across public surfaces and organizer source"),
+    gap("No focused round-trip proves title, date/time, room, and track across widgets or propagates an organizer edit without republishing."),
   ],
 
   "CRM-01": [gap("No organization-level cross-event contact directory exists.")],
