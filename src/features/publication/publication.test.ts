@@ -423,7 +423,7 @@ describe("publication boundary", () => {
     ))).toEqual(publishedGallery);
   });
 
-  it("serves JSON, subscribable ICS, and per-session ICS from the same published revision", async () => {
+  it("serves basic HTML, JSON, XML, subscribable ICS, and per-session ICS from the same published revision", async () => {
     const seeded = await seedPublication("server-feeds");
     const published = await runAs(
       seeded.owner,
@@ -461,6 +461,34 @@ describe("publication boundary", () => {
       talks: published.talks.map((talk) => ({ id: talk.id, title: talk.title })),
     });
     expect(titleOnlyJsonResponse.headers.get("etag")).not.toBe(jsonResponse.headers.get("etag"));
+
+    const xmlResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.xml?track=Systems&fields=title`,
+    );
+    expect(xmlResponse.status).toBe(200);
+    expect(xmlResponse.headers.get("content-type")).toBe("application/xml; charset=utf-8");
+    expect(xmlResponse.headers.get("access-control-allow-origin")).toBe("*");
+    const xml = await xmlResponse.text();
+    expect(xml).toContain('<schedule event-id="server-feeds-event" revision="1">');
+    expect(xml).toContain('<session id="server-feeds-talk-confirmed" status="confirmed">');
+    expect(xml).toContain("<title>Effects at scale</title>");
+    expect(xml).not.toContain("<description>");
+    expect(xml).not.toContain("Private cancelled talk");
+
+    const htmlResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.html?track=Systems&fields=title,room`,
+    );
+    expect(htmlResponse.status).toBe(200);
+    expect(htmlResponse.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(htmlResponse.headers.get("access-control-allow-origin")).toBe("*");
+    expect(htmlResponse.headers.get("content-security-policy")).toContain("default-src 'none'");
+    const html = await htmlResponse.text();
+    expect(html).toContain('<main class="session-party-schedule" data-event-id="server-feeds-event">');
+    expect(html).toContain('<article class="session-party-session" data-session-id="server-feeds-talk-confirmed" data-status="confirmed">');
+    expect(html).toContain("Effects at scale");
+    expect(html).toContain("Harbor");
+    expect(html).not.toContain("Private cancelled talk");
+    expect(htmlResponse.headers.get("etag")).not.toBe(xmlResponse.headers.get("etag"));
 
     const calendarResponse = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/schedule.ics`,

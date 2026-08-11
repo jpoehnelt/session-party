@@ -97,11 +97,129 @@ export const renderPublishedCalendar = (
   return lines.map(foldCalendarLine).join("\r\n");
 };
 
+const escapeMarkup = (value: string | number): string => String(value)
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
+
+const sessionMarkupFields = (
+  talk: PublicAgendaTalk,
+  fields: readonly ScheduleEmbedField[],
+) => {
+  const visible = new Set(fields);
+  return {
+    visible,
+    startsAt: new Date(talk.startsAt).toISOString(),
+    endsAt: new Date(talk.startsAt + talk.durationMin * 60_000).toISOString(),
+  };
+};
+
+/** A standards-shaped data feed for systems that consume XML instead of JSON. */
+export const renderPublishedScheduleXml = (
+  agenda: PublishedAgenda,
+  fields: readonly ScheduleEmbedField[] = SCHEDULE_EMBED_FIELDS,
+): string => {
+  const sessions = agenda.talks.map((talk) => {
+    const { visible, startsAt, endsAt } = sessionMarkupFields(talk, fields);
+    return [
+      `  <session id="${escapeMarkup(talk.id)}" status="confirmed">`,
+      ...(visible.has("title") ? [`    <title>${escapeMarkup(talk.title)}</title>`] : []),
+      ...(visible.has("description") && talk.description
+        ? [`    <description>${escapeMarkup(talk.description)}</description>`]
+        : []),
+      ...(visible.has("time") ? [
+        `    <starts-at>${startsAt}</starts-at>`,
+        `    <ends-at>${endsAt}</ends-at>`,
+        `    <duration-minutes>${talk.durationMin}</duration-minutes>`,
+      ] : []),
+      ...(visible.has("room") && talk.room ? [`    <room>${escapeMarkup(talk.room)}</room>`] : []),
+      ...(visible.has("track") && talk.track ? [
+        `    <track${talk.trackId ? ` id="${escapeMarkup(talk.trackId)}"` : ""}>${escapeMarkup(talk.track)}</track>`,
+      ] : []),
+      ...(visible.has("speakers") ? [
+        "    <speakers>",
+        ...talk.speakerNames.map((speaker) => `      <speaker>${escapeMarkup(speaker)}</speaker>`),
+        "    </speakers>",
+      ] : []),
+      "  </session>",
+    ].join("\n");
+  });
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<schedule event-id="${escapeMarkup(agenda.eventId)}" revision="${agenda.revision}">`,
+    `  <event-name>${escapeMarkup(agenda.eventName)}</event-name>`,
+    `  <event-slug>${escapeMarkup(agenda.eventSlug)}</event-slug>`,
+    `  <timezone>${escapeMarkup(agenda.timezone)}</timezone>`,
+    ...(agenda.location ? [`  <location>${escapeMarkup(agenda.location)}</location>`] : []),
+    `  <published-at>${new Date(agenda.publishedAt).toISOString()}</published-at>`,
+    ...sessions,
+    "</schedule>",
+    "",
+  ].join("\n");
+};
+
+/** Unstyled semantic HTML with stable classes so host sites can apply their own CSS. */
+export const renderPublishedScheduleHtml = (
+  agenda: PublishedAgenda,
+  fields: readonly ScheduleEmbedField[] = SCHEDULE_EMBED_FIELDS,
+): string => {
+  const sessions = agenda.talks.map((talk) => {
+    const { visible, startsAt, endsAt } = sessionMarkupFields(talk, fields);
+    return [
+      `    <article class="session-party-session" data-session-id="${escapeMarkup(talk.id)}" data-status="confirmed">`,
+      ...(visible.has("title") ? [`      <h2 class="session-party-session__title">${escapeMarkup(talk.title)}</h2>`] : []),
+      ...(visible.has("description") && talk.description
+        ? [`      <p class="session-party-session__description">${escapeMarkup(talk.description)}</p>`]
+        : []),
+      ...(visible.has("time") ? [
+        `      <p class="session-party-session__time"><time datetime="${startsAt}">${startsAt}</time> – <time datetime="${endsAt}">${endsAt}</time></p>`,
+      ] : []),
+      ...(visible.has("room") && talk.room
+        ? [`      <p class="session-party-session__room">${escapeMarkup(talk.room)}</p>`]
+        : []),
+      ...(visible.has("track") && talk.track
+        ? [`      <p class="session-party-session__track">${escapeMarkup(talk.track)}</p>`]
+        : []),
+      ...(visible.has("speakers") && talk.speakerNames.length > 0 ? [
+        '      <ul class="session-party-session__speakers">',
+        ...talk.speakerNames.map((speaker) => `        <li class="session-party-session__speaker">${escapeMarkup(speaker)}</li>`),
+        "      </ul>",
+      ] : []),
+      "    </article>",
+    ].join("\n");
+  });
+  return [
+    "<!doctype html>",
+    `<html lang="en" data-session-party-revision="${agenda.revision}">`,
+    "  <head>",
+    '    <meta charset="utf-8">',
+    '    <meta name="viewport" content="width=device-width, initial-scale=1">',
+    `    <title>${escapeMarkup(agenda.eventName)} schedule</title>`,
+    "  </head>",
+    "  <body>",
+    `  <main class="session-party-schedule" data-event-id="${escapeMarkup(agenda.eventId)}">`,
+    `    <h1 class="session-party-schedule__title">${escapeMarkup(agenda.eventName)}</h1>`,
+    ...sessions,
+    "  </main>",
+    "  </body>",
+    "</html>",
+    "",
+  ].join("\n");
+};
+
 export const publishedScheduleIcsPath = (eventSlug: string): string =>
   `/events/${encodeURIComponent(eventSlug)}/schedule.ics`;
 
 export const publishedScheduleJsonPath = (eventSlug: string): string =>
   `/events/${encodeURIComponent(eventSlug)}/schedule.json`;
+
+export const publishedScheduleXmlPath = (eventSlug: string): string =>
+  `/events/${encodeURIComponent(eventSlug)}/schedule.xml`;
+
+export const publishedScheduleHtmlPath = (eventSlug: string): string =>
+  `/events/${encodeURIComponent(eventSlug)}/schedule.html`;
 
 export const publishedSessionIcsPath = (eventSlug: string, talkId: string): string =>
   `/events/${encodeURIComponent(eventSlug)}/sessions/${encodeURIComponent(talkId)}.ics`;

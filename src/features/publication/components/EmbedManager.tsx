@@ -9,7 +9,12 @@ import {
 } from "../api";
 import { DEFAULT_EMBED_DESIGN, normalizeEmbedAccent, type EmbedAesthetic } from "../embed-design";
 import { SCHEDULE_EMBED_FIELDS } from "../embed-content";
-import { publishedScheduleIcsPath, publishedScheduleJsonPath } from "../feeds";
+import {
+  publishedScheduleHtmlPath,
+  publishedScheduleIcsPath,
+  publishedScheduleJsonPath,
+  publishedScheduleXmlPath,
+} from "../feeds";
 import type { EmbedDefinition, EmbedPreset, EmbedWidget } from "../schema";
 
 const PRESETS: Readonly<Record<EmbedWidget, readonly { readonly value: EmbedPreset; readonly label: string; readonly fields: readonly string[] }[]>> = {
@@ -29,6 +34,17 @@ export function stableEmbedPath(definition: Pick<EmbedDefinition, "eventSlug" | 
 }
 export function stableEmbedCode(definition: Pick<EmbedDefinition, "eventSlug" | "id" | "name">, origin: string): string {
   return `<iframe title="${definition.name.replaceAll("&", "&amp;").replaceAll('"', "&quot;")}" src="${origin}${stableEmbedPath(definition)}" style="width:100%;min-height:720px;border:0" loading="lazy"></iframe>`;
+}
+
+export function configuredScheduleFeedPath(
+  path: string,
+  track: string | null,
+  fields: ReadonlySet<string>,
+): string {
+  const params = new URLSearchParams();
+  if (track) params.set("track", track);
+  params.set("fields", SCHEDULE_EMBED_FIELDS.filter((field) => fields.has(field)).join(","));
+  return `${path}?${params.toString()}`;
 }
 
 export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
@@ -62,6 +78,11 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
   const tracks = [...new Map(agenda.talks.flatMap((talk) =>
     talk.trackId && talk.track ? [[talk.trackId, { id: talk.trackId, name: talk.track }] as const] : []
   )).values()].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+  const configuredFeedPath = (path: string) => configuredScheduleFeedPath(
+    path,
+    widget === "schedule" ? tracks.find(({ id }) => id === trackId)?.name ?? null : null,
+    widget === "schedule" ? fields : new Set(SCHEDULE_EMBED_FIELDS),
+  );
 
   const chooseWidget = (next: EmbedWidget) => {
     const nextPreset = PRESETS[next][0]!;
@@ -198,7 +219,7 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Public links" titleLevel={3}><p className="mb-3 text-sm text-ink-secondary">Share full public pages without embedding them.</p><div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={() => void copyText(`${origin}/event/${agenda.eventSlug}/schedule`)}>Copy schedule page</Button><Button size="sm" variant="secondary" onClick={() => void copyText(`${origin}/event/${agenda.eventSlug}/gallery`)}>Copy speaker page</Button></div></Card>
-        <Card title="Feeds & integrations" titleLevel={3}><p className="mb-3 text-sm text-ink-secondary">Use JSON for integrations and iCalendar for calendar subscriptions. These are feeds, not widgets.</p><div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={() => void copyText(`${origin}${publishedScheduleJsonPath(agenda.eventSlug)}`)}>Copy JSON feed</Button><Button size="sm" variant="secondary" onClick={() => void copyText(`${origin}${publishedScheduleIcsPath(agenda.eventSlug)}`)}>Copy iCalendar feed</Button></div></Card>
+        <Card title="Output formats" titleLevel={3}><p className="mb-3 text-sm text-ink-secondary">Use basic HTML with stable CSS classes for custom site styling, JSON or XML for integrations, and iCalendar for subscriptions. Schedule feeds inherit the selected track and fields; only confirmed sessions from the published revision are exposed.</p><div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={() => void copyText(`${origin}${configuredFeedPath(publishedScheduleHtmlPath(agenda.eventSlug))}`)}>Copy basic HTML</Button><Button size="sm" variant="secondary" onClick={() => void copyText(`${origin}${configuredFeedPath(publishedScheduleJsonPath(agenda.eventSlug))}`)}>Copy JSON feed</Button><Button size="sm" variant="secondary" onClick={() => void copyText(`${origin}${configuredFeedPath(publishedScheduleXmlPath(agenda.eventSlug))}`)}>Copy XML feed</Button><Button size="sm" variant="secondary" onClick={() => void copyText(`${origin}${configuredFeedPath(publishedScheduleIcsPath(agenda.eventSlug))}`)}>Copy iCalendar feed</Button></div></Card>
       </div>
     </section>
   );

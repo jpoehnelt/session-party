@@ -11,7 +11,12 @@ import {
   sessionMatches,
   sortPublicSpeakers,
 } from "./PublicProgram";
-import { EmbedManager, stableEmbedCode, stableEmbedPath } from "./EmbedManager";
+import {
+  configuredScheduleFeedPath,
+  EmbedManager,
+  stableEmbedCode,
+  stableEmbedPath,
+} from "./EmbedManager";
 
 const START = Date.UTC(2027, 4, 12, 16);
 const agenda: PublishedAgenda = {
@@ -157,7 +162,7 @@ describe("public program", () => {
     expect(render(publicSurfaceFromSplat("widgets"))).not.toContain("Create an embed");
   });
 
-  it("presents two widgets with presets and separates feeds from embed code", () => {
+  it("presents configurable widget presets and every supported handoff format", () => {
     const markup = renderToStaticMarkup(createElement(MemoryRouter, {
       children: createElement(EmbedManager, { agenda }),
     }));
@@ -165,9 +170,15 @@ describe("public program", () => {
     expect(markup).toContain("Speaker gallery widget");
     expect(markup).toContain("Preset");
     expect(markup).toContain("Public links");
-    expect(markup).toContain("Feeds &amp; integrations");
-    expect(markup).toContain("These are feeds, not widgets");
-    expect(markup).not.toContain("Output format");
+    expect(markup).toContain("Sessions");
+    expect(markup).toContain("Agenda");
+    expect(markup).toContain("Schedule itinerary");
+    expect(markup).toContain("Speaker gallery widget");
+    expect(markup).toContain("Output formats");
+    expect(markup).toContain("Copy basic HTML");
+    expect(markup).toContain("Copy JSON feed");
+    expect(markup).toContain("Copy XML feed");
+    expect(markup).toContain("Copy iCalendar feed");
   });
 
   it("generates stable, lazy iframe code from persisted definitions", () => {
@@ -179,6 +190,16 @@ describe("public program", () => {
     expect(stableEmbedPath(definition)).toBe("/embed/devflow-conf-2027/embed-main");
     expect(stableEmbedCode(definition, "https://sessionparty.com")).toContain('loading="lazy"');
     expect(stableEmbedCode(definition, "https://sessionparty.com")).toContain("min-height:720px");
+  });
+
+  it("projects the selected track and fields into every schedule feed URL", () => {
+    expect(configuredScheduleFeedPath(
+      "/events/devflow-conf-2027/schedule.xml",
+      "Platform & Infra",
+      new Set(["title", "room"]),
+    )).toBe(
+      "/events/devflow-conf-2027/schedule.xml?track=Platform+%26+Infra&fields=title%2Croom",
+    );
   });
 
   it("keeps session and speaker identity consistent across public surfaces and organizer source", () => {
