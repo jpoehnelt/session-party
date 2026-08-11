@@ -1,5 +1,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import { userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,6 +16,7 @@ vi.mock("@/client/api", () => ({
 }));
 
 import { CommunicationsWorkspace } from "./comms";
+import { communicationRouteSelection, communicationSelectionSearch } from "../links";
 
 const template = {
   id: "template-1",
@@ -27,6 +29,16 @@ const template = {
   version: 3,
   createdAt: 1_786_291_200_000,
   updatedAt: 1_786_291_200_000,
+};
+
+const followUpTemplate = {
+  ...template,
+  id: "template-2",
+  name: "Attendee follow-up",
+  subject: "Thanks for joining us",
+  textBody: "Thank you {{speakerName}}",
+  htmlBody: "<p>Thank you {{speakerName}}</p>",
+  version: 1,
 };
 
 const audience = {
@@ -82,6 +94,21 @@ const buttonNamed = (name: string): HTMLButtonElement => {
   return button;
 };
 
+const buttonContaining = (name: string): HTMLButtonElement => {
+  const button = [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find((candidate) => candidate.textContent?.includes(name));
+  if (!button) throw new Error(`Missing button containing: ${name}`);
+  return button;
+};
+
+const inputNamed = (name: string): HTMLInputElement => {
+  const label = [...document.querySelectorAll<HTMLLabelElement>("label")]
+    .find((candidate) => candidate.textContent?.includes(name));
+  const input = label?.htmlFor ? document.getElementById(label.htmlFor) : null;
+  if (!(input instanceof HTMLInputElement)) throw new Error(`Missing input: ${name}`);
+  return input;
+};
+
 const checkboxNamed = (name: string): HTMLInputElement => {
   const label = [...document.querySelectorAll<HTMLLabelElement>("label")]
     .find((candidate) => candidate.textContent?.includes(name));
@@ -91,6 +118,33 @@ const checkboxNamed = (name: string): HTMLInputElement => {
   if (!checkbox) throw new Error(`Missing checkbox: ${name}`);
   return checkbox;
 };
+
+function RoutedCommunicationsWorkspace() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const route = communicationRouteSelection(location.search);
+  return (
+    <>
+      <button type="button" onClick={() => void navigate(-1)}>Browser back</button>
+      <output data-testid="comms-location">{location.search}</output>
+      <CommunicationsWorkspace
+        event={{ id: "event-1", name: "Summit", slug: "summit", timezone: "America/Los_Angeles" }}
+        routeTab={route.tab}
+        routeTemplateId={route.templateId}
+        routeNeedsCanonicalization={route.needsCanonicalization}
+        onRouteSelectionChange={(tab, templateId, options) => {
+          void navigate({
+            pathname: location.pathname,
+            search: communicationSelectionSearch(location.search, tab, templateId),
+          }, { replace: options?.replace ?? false });
+        }}
+      />
+    </>
+  );
+}
+
+const locationSearch = () => document.querySelector<HTMLOutputElement>('[data-testid="comms-location"]')?.textContent ?? "";
+const selectedTemplateLabel = () => document.querySelector<HTMLButtonElement>('button[aria-current="page"]')?.textContent ?? "";
 
 describe("rendered campaign confirmation lifecycle", () => {
   let container: HTMLDivElement;
@@ -193,5 +247,56 @@ describe("rendered campaign confirmation lifecycle", () => {
       ([path, options]) => options?.method === "POST" && path.endsWith("/deliveries"),
     );
     expect(enqueueCall?.[1].body).toMatchObject({ recipientKeys: ["speaker-2:rejected"] });
+  });
+
+  it("deep links tabs and templates while guarding internal and history navigation", async () => {
+    apiMocks.apiFetch.mockImplementation((path: string) => {
+      if (path.endsWith("/templates")) return Promise.resolve([template, followUpTemplate]);
+      if (path.endsWith("/audience")) return Promise.resolve(audience);
+      if (path.endsWith("/deliveries")) return Promise.resolve({ eventId: "event-1", deliveries: [], localCaptureCount: 0 });
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/e/summit/comms?tab=unknown&templateId=missing-template"]}>
+          <RoutedCommunicationsWorkspace />
+        </MemoryRouter>,
+      );
+    });
+
+    await vi.waitFor(() => expect(selectedTemplateLabel()).toContain(template.name));
+    expect(locationSearch()).toBe("?tab=templates&templateId=template-1");
+
+    await act(async () => userEvent.click(buttonContaining(followUpTemplate.name)));
+    await vi.waitFor(() => expect(locationSearch()).toBe("?tab=templates&templateId=template-2"));
+    expect(selectedTemplateLabel()).toContain(followUpTemplate.name);
+
+    await act(async () => userEvent.click(buttonNamed("Browser back")));
+    await vi.waitFor(() => expect(selectedTemplateLabel()).toContain(template.name));
+    expect(locationSearch()).toBe("?tab=templates&templateId=template-1");
+
+    await vi.waitFor(() => expect(inputNamed("Template name").value).toBe(template.name));
+    await act(async () => userEvent.fill(inputNamed("Template name"), "Unsaved speaker briefing"));
+    await act(async () => userEvent.click(buttonNamed("02 / Audience & queue")));
+    expect(document.body.textContent).toContain("Discard unsaved template changes?");
+    expect(locationSearch()).toBe("?tab=templates&templateId=template-1");
+    await act(async () => userEvent.click(buttonNamed("Keep editing")));
+    expect(locationSearch()).toBe("?tab=templates&templateId=template-1");
+
+    await act(async () => userEvent.click(buttonNamed("02 / Audience & queue")));
+    await act(async () => userEvent.click(buttonNamed("Discard changes")));
+    await vi.waitFor(() => expect(locationSearch()).toBe("?tab=send&templateId=template-1"));
+    await vi.waitFor(() => expect(buttonNamed("Select ready")).toBeTruthy());
+
+    await act(async () => userEvent.click(buttonNamed("01 / Templates")));
+    await vi.waitFor(() => expect(locationSearch()).toBe("?tab=templates&templateId=template-1"));
+    await vi.waitFor(() => expect(inputNamed("Template name").value).toBe(template.name));
+    await act(async () => userEvent.fill(inputNamed("Template name"), "Another unsaved briefing"));
+    await act(async () => userEvent.click(buttonNamed("Browser back")));
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Discard unsaved template changes?"));
+    expect(locationSearch()).toBe("?tab=send&templateId=template-1");
+    await act(async () => userEvent.click(buttonNamed("Keep editing")));
+    await vi.waitFor(() => expect(locationSearch()).toBe("?tab=templates&templateId=template-1"));
+    expect(selectedTemplateLabel()).toContain(template.name);
   });
 });
