@@ -587,6 +587,36 @@ describe("portal service", () => {
     ]);
   });
 
+  it("uses checklist order to choose between equally due readiness blockers", async () => {
+    const setup = await fixture();
+    await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Created first but ordered second",
+      description: null,
+      kind: "confirm",
+      formId: null,
+      dueAt: null,
+      order: 2,
+    }));
+    await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Created second but ordered first",
+      description: null,
+      kind: "profile",
+      formId: null,
+      dueAt: null,
+      order: 1,
+    }));
+
+    const dashboard = await runAs(owner, getPortalDashboard({ eventId: setup.eventId }));
+    expect(dashboard.speakers[0]?.readiness.missingItems.map(({ name }) => name)).toEqual([
+      "Created second but ordered first",
+      "Created first but ordered second",
+    ]);
+    expect(dashboard.speakers[0]?.readiness.clearestBlocker)
+      .toBe("Missing: Created second but ordered first");
+  });
+
   it("appends only explicit organizer contact evidence and projects the latest contact", async () => {
     const setup = await fixture();
     await runAs(owner, createPortalTask({
