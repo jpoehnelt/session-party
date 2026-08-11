@@ -229,6 +229,7 @@ const contentLibrary: ContentLibrary = {
     speakerName: profile.displayName,
     speakerVersion: profile.version,
     sessionTitles: ["The calm show call"],
+    sessionLinks: [{ id: "talk-calm-show-call", title: "The calm show call" }],
     versionCount: 2,
     current: true,
     supersedesAssetId: "asset-history",
@@ -247,6 +248,7 @@ const contentLibrary: ContentLibrary = {
     speakerName: profile.displayName,
     speakerVersion: profile.version,
     sessionTitles: ["The calm show call"],
+    sessionLinks: [{ id: "talk-calm-show-call", title: "The calm show call" }],
     versionCount: 2,
     current: false,
     supersedesAssetId: null,
@@ -809,6 +811,7 @@ describe("organizer content and workflows", () => {
     expect(markup).toContain("slides.pdf");
     expect(markup).toContain("application/pdf");
     expect(markup).toContain("The calm show call");
+    expect(markup).toContain(`/e/${event.slug}/agenda?talk=talk-calm-show-call`);
     expect(markup).toContain("v2 of 2");
     expect(markup).toContain(new Date(contentLibrary.assets[0]!.uploadedAt).toLocaleString());
     expect(markup).toContain("Please add sources.");

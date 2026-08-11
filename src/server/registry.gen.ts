@@ -11813,6 +11813,33 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                   }
                 ]
               },
+              "sessionLinks": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "description": "a string at most 255 character(s) long",
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "title": "maxLength(255)",
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "a string at most 500 character(s) long",
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "title": "maxLength(500)",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "sessionTitles": {
                 "items": {
                   "description": "a string at most 500 character(s) long",
@@ -15846,6 +15873,33 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "type": "null"
             }
           ]
+        },
+        "sessionLinks": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "a string at most 255 character(s) long",
+                "maxLength": 255,
+                "minLength": 1,
+                "title": "maxLength(255)",
+                "type": "string"
+              },
+              "title": {
+                "description": "a string at most 500 character(s) long",
+                "maxLength": 500,
+                "minLength": 1,
+                "title": "maxLength(500)",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         },
         "sessionTitles": {
           "items": {
@@ -37329,6 +37383,33 @@ export const openApi = {
                               }
                             ]
                           },
+                          "sessionLinks": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "description": "a string at most 255 character(s) long",
+                                  "maxLength": 255,
+                                  "minLength": 1,
+                                  "title": "maxLength(255)",
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "description": "a string at most 500 character(s) long",
+                                  "maxLength": 500,
+                                  "minLength": 1,
+                                  "title": "maxLength(500)",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "title"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
                           "sessionTitles": {
                             "items": {
                               "description": "a string at most 500 character(s) long",
@@ -37827,6 +37908,33 @@ export const openApi = {
                             }
                           ]
                         },
+                        "sessionLinks": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "description": "a string at most 255 character(s) long",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "title": "maxLength(255)",
+                                "type": "string"
+                              },
+                              "title": {
+                                "description": "a string at most 500 character(s) long",
+                                "maxLength": 500,
+                                "minLength": 1,
+                                "title": "maxLength(500)",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "title"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
                         "sessionTitles": {
                           "items": {
                             "description": "a string at most 500 character(s) long",
@@ -38117,6 +38225,33 @@ export const openApi = {
                           "type": "null"
                         }
                       ]
+                    },
+                    "sessionLinks": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "description": "a string at most 255 character(s) long",
+                            "maxLength": 255,
+                            "minLength": 1,
+                            "title": "maxLength(255)",
+                            "type": "string"
+                          },
+                          "title": {
+                            "description": "a string at most 500 character(s) long",
+                            "maxLength": 500,
+                            "minLength": 1,
+                            "title": "maxLength(500)",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
                     },
                     "sessionTitles": {
                       "items": {
@@ -43630,6 +43765,33 @@ export const openApi = {
                           "type": "null"
                         }
                       ]
+                    },
+                    "sessionLinks": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "description": "a string at most 255 character(s) long",
+                            "maxLength": 255,
+                            "minLength": 1,
+                            "title": "maxLength(255)",
+                            "type": "string"
+                          },
+                          "title": {
+                            "description": "a string at most 500 character(s) long",
+                            "maxLength": 500,
+                            "minLength": 1,
+                            "title": "maxLength(500)",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
                     },
                     "sessionTitles": {
                       "items": {

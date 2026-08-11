@@ -11,6 +11,7 @@ import type { PublicSpeakerGallery } from "../schema";
 import { getPublicSpeakerGallery } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
 import { ProductionBareFrame, ProductionHeader, ProductionSectionLabel } from "../components/production-ui";
+import { publicEventSpeakerPath } from "@/features/publication/links";
 
 export const path = "/embed/:eventSlug/speakers";
 export const layout = "bare" as const;
@@ -105,9 +106,7 @@ export function PublicSpeakerEmbedContent({
                     </div>
                     <div className="min-w-0 pt-1">
                       <h2 className={`text-xl leading-tight text-ink ${design.aesthetic === "editorial" ? "font-serif font-medium tracking-[-0.02em]" : "font-black tracking-[-0.04em]"}`}>
-                        {speaker.publicProfileSlug ? (
-                          <a className="underline decoration-2 underline-offset-4 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(speaker.publicProfileSlug)}`}>{speaker.displayName}</a>
-                        ) : speaker.displayName}
+                        <a className="underline decoration-2 underline-offset-4 hover:text-accent-deep" href={publicEventSpeakerPath(gallery.event.slug, speaker)}>{speaker.displayName}</a>
                       </h2>
                       {(speaker.title || speaker.company) && (
                         <p className="mt-1 text-xs font-black uppercase tracking-[0.08em] text-ink-secondary">

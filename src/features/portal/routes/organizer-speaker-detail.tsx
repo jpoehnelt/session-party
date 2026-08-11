@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router";
 import { Avatar, Badge, Card, EmptyState, PageHeader, ProgressChecklist } from "@/ui";
 import { getSpeakerDirectory } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
+import { organizerAgendaTalkPath } from "@/features/agenda/links";
 
 export const path = "/e/:eventSlug/speakers/:speakerId";
 
@@ -45,7 +46,7 @@ export default function OrganizerSpeakerDetailRoute() {
             <ProgressChecklist items={item.readiness.missingItems.map((missing) => ({ id: missing.id, label: missing.name, completed: false }))} />
           </Card>
           <Card title="Sessions">
-            {item.sessions.length === 0 ? <p className="text-sm text-ink-secondary">No session linked.</p> : <ul className="space-y-3">{item.sessions.map((session) => <li key={session.id}><p className="font-bold">{session.title}</p><p className="text-xs text-ink-faint">{session.status}</p></li>)}</ul>}
+            {item.sessions.length === 0 ? <p className="text-sm text-ink-secondary">No session linked.</p> : <ul className="space-y-3">{item.sessions.map((session) => <li key={session.id}><a className="font-bold underline decoration-2 underline-offset-3 hover:text-accent-deep" href={organizerAgendaTalkPath(eventSlug, session.id)}>{session.title}</a><p className="text-xs text-ink-faint">{session.status}</p></li>)}</ul>}
           </Card>
         </div>
       </div>

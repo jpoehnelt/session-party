@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import type {
   AgendaCollaborator,
   PresenceUser,
@@ -254,6 +254,8 @@ type RefreshState =
   | { readonly status: "error"; readonly message: string };
 
 function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedTalkId = searchParams.get("talk");
   const [view, setView] = useState<AgendaView>("day");
   const [agenda, setAgenda] = useState<AgendaSnapshot | null | undefined>(undefined);
   const [refresh, setRefresh] = useState<RefreshState>({ status: "idle", message: null });
@@ -313,7 +315,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     }
   }, [refreshAgenda]);
 
-  const closeTalkSheet = useCallback(() => setSelectedTalkId(null), []);
+  const closeTalkSheet = useCallback(() => {
+    setSelectedTalkId(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("talk");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     mounted.current = true;
@@ -466,9 +473,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     closeTalkSheet();
   }, [closeTalkSheet, room, talkDirty]);
 
-  const selectTalk = (talk: AgendaTalk, message: string | null = null) => {
+  const selectTalk = useCallback((talk: AgendaTalk, message: string | null = null) => {
     room.send({ t: "agenda/focus", talkId: talk.id });
     setSelectedTalkId(talk.id);
+    const next = new URLSearchParams(searchParams);
+    next.set("talk", talk.id);
+    setSearchParams(next, { replace: true });
     setForm({
       title: talk.title,
       description: talk.description ?? "",
@@ -478,7 +488,13 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       durationMin: String(talk.durationMin),
     });
     if (message) setIntent((current) => ({ ...current, message }));
-  };
+  }, [event.timezone, room, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (!agenda || !linkedTalkId || selectedTalkId === linkedTalkId) return;
+    const linkedTalk = agenda.talks.find(({ id }) => id === linkedTalkId);
+    if (linkedTalk) selectTalk(linkedTalk);
+  }, [agenda, linkedTalkId, selectTalk, selectedTalkId]);
 
   const runMutation = async <A,>(clientId: string, action: () => Promise<A>): Promise<A> => {
     setBusy(true);

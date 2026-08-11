@@ -63,6 +63,7 @@ describe("published schedule rendering", () => {
       expect(markup).toContain("Systems");
       expect(markup).toContain("Harbor");
       expect(markup).toContain("<ol");
+      expect(markup).toContain('href="/event/render-summit/sessions/render-talk-1"');
       expect(markup).not.toContain("<table");
       expect(markup).not.toContain("submissionId");
       expect(markup).not.toContain("version");

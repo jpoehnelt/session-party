@@ -40,11 +40,10 @@ export function SpeakerGallery({
       {speakers.map((speaker) => (
         <li key={speaker.id} className="transition-transform hover:-translate-y-1">
           <Card className="h-full border-line-strong">
-            <button
+            {onSelect ? <button
               type="button"
-              disabled={onSelect == null}
-              onClick={() => onSelect?.(speaker)}
-              className="w-full rounded-control text-left outline-none enabled:focus-visible:ring-2 enabled:focus-visible:ring-accent disabled:cursor-default"
+              onClick={() => onSelect(speaker)}
+              className="w-full rounded-control text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               <div className="flex items-start gap-3">
                 <Avatar name={speaker.displayName} src={speaker.headshotUrl} size="lg" />
@@ -58,7 +57,22 @@ export function SpeakerGallery({
               {mode === "grid" && speaker.bio && (
                 <p className="mt-3 line-clamp-4 text-sm leading-relaxed text-ink-secondary">{speaker.bio}</p>
               )}
-            </button>
+            </button> : <div>
+              <div className="flex items-start gap-3">
+                <Avatar name={speaker.displayName} src={speaker.headshotUrl} size="lg" />
+                <div className="min-w-0">
+                  <h3 className="text-lg font-black tracking-[-0.025em] text-ink">
+                    {speaker.profileUrl ? <a className="underline decoration-2 underline-offset-3 hover:text-accent-deep" href={speaker.profileUrl}>{speaker.displayName}</a> : speaker.displayName}
+                  </h3>
+                  {(speaker.title || speaker.company) && (
+                    <p className="text-sm text-ink-secondary">{[speaker.title, speaker.company].filter(Boolean).join(" at ")}</p>
+                  )}
+                </div>
+              </div>
+              {mode === "grid" && speaker.bio && (
+                <p className="mt-3 line-clamp-4 text-sm leading-relaxed text-ink-secondary">{speaker.bio}</p>
+              )}
+            </div>}
             {speaker.links && speaker.links.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-3">
                 {speaker.links.map((link) => (
@@ -83,6 +97,7 @@ export function SpeakerGallery({
 export interface ScheduleListItem {
   id: string;
   title: string;
+  url?: string;
   description?: string;
   track?: string;
   room?: string;
@@ -129,7 +144,11 @@ export function ScheduleList({
             <p className="mt-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/55">{talk.durationMin} min · {timezone}</p>
           </div>}
           <div className="min-w-0 px-4 py-4">
-            {visible.has("title") && <h3 className="text-lg font-black tracking-[-0.025em] text-ink">{talk.title}</h3>}
+            {visible.has("title") && (
+              <h3 className="text-lg font-black tracking-[-0.025em] text-ink">
+                {talk.url ? <a className="underline decoration-2 underline-offset-3 hover:text-accent-deep" href={talk.url}>{talk.title}</a> : talk.title}
+              </h3>
+            )}
             {visible.has("speakers") && (
               <p className="mt-1 text-sm text-ink-secondary">
                 {talk.speakerNames.map((name, index) => {
