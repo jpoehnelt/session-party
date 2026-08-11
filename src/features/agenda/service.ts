@@ -1267,11 +1267,12 @@ const repositionTalk = (
   input: ScheduleTalkInput | MoveTalkInput,
   interlock?: AgendaMutationInterlock,
   idempotencyInput: AutoPlaceTalkInput | ScheduleTalkInput | MoveTalkInput = input,
+  preparedContext?: IdempotencyContext,
 ): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
   mutationContention(Effect.gen(function* () {
     const { db } = yield* Db;
     const principal = yield* CurrentUser;
-    const prepared = yield* prepareIdempotency(operationId, idempotencyInput);
+    const prepared = preparedContext ?? (yield* prepareIdempotency(operationId, idempotencyInput));
     if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
     const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
     yield* waitAfterWorkspaceSample(interlock, {
@@ -1280,7 +1281,9 @@ const repositionTalk = (
       workspaceVersion,
     });
     yield* ensureScheduleReferences(input.eventId, input.roomId, input.trackId);
-    const before = yield* loadTalk(input.eventId, input.talkId);
+    const existing = yield* loadTalkRows(input.eventId);
+    const before = existing.find(({ id }) => id === input.talkId);
+    if (!before) return yield* Effect.fail(new NotFound({ entity: "talk", id: input.talkId }));
     if (before.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: `Talk version is ${before.version}; expected ${input.expectedVersion}` }));
     }
@@ -1297,7 +1300,6 @@ const repositionTalk = (
       status,
       version: before.version + 1,
     };
-    const existing = yield* loadTalkRows(input.eventId);
     const conflicts = yield* loadConflicts(input.eventId, [...existing.filter(({ id }) => id !== candidate.id), candidate]);
 
     const changeId = nanoid();
@@ -1384,12 +1386,13 @@ export const autoPlaceTalk = (
     const prepared = yield* prepareIdempotency("agenda.autoPlaceTalk", input);
     if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
     const { db } = yield* Db;
-    const [event, before, roomRows, existing] = yield* Effect.all([
+    const [event, roomRows, existing] = yield* Effect.all([
       getEvent(input.eventId),
-      loadTalk(input.eventId, input.talkId),
       database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name), asc(rooms.id))),
       loadTalkRows(input.eventId),
     ]);
+    const before = existing.find(({ id }) => id === input.talkId);
+    if (!before) return yield* Effect.fail(new NotFound({ entity: "talk", id: input.talkId }));
     if (before.status === "cancelled") {
       return yield* Effect.fail(new Conflict({ message: "Cancelled talks cannot be auto-placed" }));
     }
@@ -1432,7 +1435,7 @@ export const autoPlaceTalk = (
       roomId: placement.roomId,
       startsAt: placement.startsAt,
       durationMin: before.durationMin,
-    }, undefined, input);
+    }, undefined, input, prepared);
   });
 
 export const updateTalkContent = (
@@ -1443,7 +1446,9 @@ export const updateTalkContent = (
     const principal = yield* CurrentUser;
     const prepared = yield* prepareIdempotency("agenda.updateTalkContent", input);
     if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
-    const before = yield* loadTalk(input.eventId, input.talkId);
+    const existing = yield* loadTalkRows(input.eventId);
+    const before = existing.find(({ id }) => id === input.talkId);
+    if (!before) return yield* Effect.fail(new NotFound({ entity: "talk", id: input.talkId }));
     if (before.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: `Talk version is ${before.version}; expected ${input.expectedVersion}` }));
     }
@@ -1478,7 +1483,7 @@ export const updateTalkContent = (
     const changeId = nanoid();
     const auditId = nanoid();
     const conflicts = yield* loadConflicts(input.eventId, [
-      ...(yield* loadTalkRows(input.eventId)).filter(({ id }) => id !== candidate.id),
+      ...existing.filter(({ id }) => id !== candidate.id),
       candidate,
     ]);
     const result: AgendaMutationResult = {

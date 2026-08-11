@@ -723,6 +723,10 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
     : `${origin}/embed/${agenda.eventSlug}/schedule`;
   const safeAccent = normalizeEmbedAccent(accent);
   const isSpeakerWidget = widget === "speakers" || widget === "gallery";
+  const selectWidget = (nextWidget: Exclude<PublicProgramSurface, "widgets">) => {
+    setWidget(nextWidget);
+    if ((nextWidget === "speakers" || nextWidget === "gallery") && format === "ical") setFormat("json");
+  };
   const supportsTrack = !isSpeakerWidget && format !== "plain-html";
   const supportsFields = !isSpeakerWidget && format === "styled-html";
   const effectiveTrack = supportsTrack ? track : "";
@@ -784,7 +788,7 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
   const removeSaved = (id: string) => persist(savedEmbeds.filter((definition) => definition.id !== id));
 
   const tracks = [...new Set(agenda.talks.flatMap((talk) => talk.track ? [talk.track] : []))].sort();
-  const fieldOptions = ["title", "time", "room", "track", "speakers", "description"] as const;
+  const fieldOptions = SCHEDULE_EMBED_FIELDS;
 
   return (
     <section className="space-y-6" aria-labelledby="public-widgets-title">
@@ -797,7 +801,7 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
       <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h2]:text-ink" title="Widget builder / output patch bay" titleLevel={2}>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Input label="Embed name" value={name} onChange={(event) => setName(event.currentTarget.value)} />
-          <Select label="Widget type" value={widget} onChange={(event) => setWidget(event.currentTarget.value as Exclude<PublicProgramSurface, "widgets">)}>
+          <Select label="Widget type" value={widget} onChange={(event) => selectWidget(event.currentTarget.value as Exclude<PublicProgramSurface, "widgets">)}>
             <option value="sessions">Sessions list</option>
             <option value="speakers">Speakers list</option>
             <option value="agenda">Agenda</option>
@@ -808,7 +812,7 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
             <option value="styled-html">Styled HTML</option>
             <option value="plain-html">Plain HTML</option>
             <option value="json">JSON</option>
-            <option value="ical">iCalendar</option>
+            <option value="ical" disabled={isSpeakerWidget}>iCalendar</option>
           </Select>
           <Select label="Design aesthetic" value={aesthetic} onChange={(event) => setAesthetic(event.currentTarget.value as EmbedAesthetic)}>
             <option value="bold">Bold &amp; energetic</option>

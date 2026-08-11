@@ -216,9 +216,19 @@ describe("public program rendered interactions", () => {
 
   it("saves, retrieves, disables, and restores an organizer embed definition", async () => {
     await renderSurface("widgets");
+    const widgetSelect = fieldNamed<HTMLSelectElement>("Widget type");
+    const formatSelect = fieldNamed<HTMLSelectElement>("Output format");
+    await act(async () => userEvent.selectOptions(formatSelect, "ical"));
+    expect(document.querySelector<HTMLTextAreaElement>("#generated-widget-code")?.value).toContain("data:text/calendar");
+    await act(async () => userEvent.selectOptions(widgetSelect, "gallery"));
+    expect(formatSelect.value).toBe("json");
+    expect(formatSelect.querySelector<HTMLOptionElement>('option[value="ical"]')?.disabled).toBe(true);
+    expect(document.querySelector<HTMLTextAreaElement>("#generated-widget-code")?.value).toContain(
+      "/api/v1/public/events/devflow-conf-2027/speakers",
+    );
     await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Embed name"), "Platform schedule"));
-    await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Widget type"), "schedule"));
-    await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Output format"), "styled-html"));
+    await act(async () => userEvent.selectOptions(widgetSelect, "schedule"));
+    await act(async () => userEvent.selectOptions(formatSelect, "styled-html"));
     await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Track filter"), "Platform & Infra"));
     await act(async () => userEvent.click(byButton("Save embed definition")));
     expect(container.textContent).toContain("Saved embeds (1)");
