@@ -9,11 +9,12 @@ Specification: `QA_PLAN.md`
 `pnpm test:qa` starts a clean local Worker, hydrates the deterministic AI Engineer Sandbox fixture, and runs the Playwright matrix in Desktop Chrome, Pixel 7 Chrome, Desktop Firefox, and Desktop WebKit.
 
 - 39 owner, admin, reviewer, speaker, public, embed, authentication, invitation, and error routes at both breakpoints.
-- Runtime discovery and JSON evidence for links, buttons, inputs, selects, textareas, summaries, and explicit ARIA roles across 78 desktop/mobile route-persona inventories: 5,909 visible instances and 510 distinct signatures in the latest serialized run.
+- Runtime discovery and JSON evidence for links, buttons, inputs, selects, textareas, summaries, and explicit ARIA roles across 78 desktop/mobile route-persona inventories: 5,929 visible instances and 511 distinct signatures in the latest serialized run.
 - Accessible-name, single-H1, document-title, canonical/Open Graph URL and title, current-navigation, horizontal-overflow, browser-error, and HTTP-document assertions.
 - Axe WCAG 2.0/2.1/2.2 A/AA scans; serious and critical violations fail the run.
 - Skip-link, mobile navigation, Escape close, focus restoration, client-route focus, title, and canonical behavior.
 - Sequential Tab-order reconciliation covers every enabled stable control across 27 distinct owner, reviewer, speaker, public, embed, authentication, error, and dynamic CFP surfaces at desktop and mobile Chromium: 1,278 desktop plus 1,062 mobile Tab stops in the latest run. Native radio groups, roving tabs, and collapsed disclosures are modeled by their actual keyboard contract.
+- Pointer hit-testing now reconciles the same 27-route desktop/mobile surface with non-mutating trial activation for every enabled visible stable control, proving scrolling, stability, hit targeting, and freedom from overlay obstruction. The only exclusions are the keyboard-only skip link and visually hidden file input represented by its visible chooser button; the latest serialized run covered 1,322 desktop plus 1,106 mobile pointer targets.
 - Safe interaction scenarios for login validation, browser Back/Forward and multi-tab logout, modal validation/cancel, submission filters and pagination, review filters, contact editing, speaker selection, destructive-dialog cancellation, agenda views/setup/live show, communication tabs/template editing, publish/import confirmation, membership-role cancellation, every archive download, public-link clipboard behavior, every embed-builder option plus saved-definition round trip, public-program mobile navigation/session details/schedule controls, and the public CFP's conditional fields, validation, co-speaker controls, Unicode local-draft save, and reload recovery.
 - Authorization checks for signed-out, expired, malformed, cross-event, owner, admin, assigned/unassigned/recused reviewer, and speaker identities at both the REST and organizer-UI boundaries. Reviewer evidence proves committee-wide reads, empty assigned-only worklists for unassigned/recused identities, retained recusal history, private-contact redaction, and denial of post-recusal scoring.
 - Public-projection privacy assertions, immutable publication-revision reconciliation, and hostile login return-target containment.
@@ -21,13 +22,14 @@ Specification: `QA_PLAN.md`
 - An explicit 320/375/768/1024/1440/2560 px matrix checks representative public, organizer, table-heavy, agenda, and settings routes for reflow, true clipping, shell mode, and H1 integrity; forced-colors mode covers public sessions, forms, and agenda.
 - Failure injection verifies a recoverable organizer event-load state; local performance observers gate representative public and organizer routes at LCP ≤2.5 s and CLS ≤0.1. Deploy-ready static assets include baseline nosniff, referrer, and browser-permission headers.
 - Agenda disconnect/reconnect coverage proves offline status annunciation, mutation lockout, canonical refresh recovery, and restored controls. Form creation also fails closed when the browser session expires between editing and submission, with no draft persisted.
+- Portal uploads now validate decoded file signatures/containers in addition to declared MIME, extension, and purpose limits. Unit coverage rejects empty, truncated, renamed HTML/SVG, executable, corrupt OOXML, and double-extension payloads without R2, asset, completion, or idempotency side effects; Chromium, Firefox, and WebKit also verify the speaker UI reports rejection and preserves the asset list after reload.
 
-Latest local result: **234 passed, 94 intentionally skipped, 0 failed** across 328 project cases. The skips avoid duplicating browser-independent API/security/mutation/viewport/resilience/keyboard checks, omit the deploy-only header assertion under Vite dev, and avoid mobile-only or Chromium-permission-specific interactions in other engines; route, control, runtime-error, interaction, and accessibility coverage runs in Chromium, Firefox, and WebKit, with the full route surface also covered on mobile Chromium. The shared D1 sandbox runs serially so route inventories cannot observe another test's in-flight disposable mutation.
+Latest local result: **239 passed, 97 intentionally skipped, 0 failed** across 336 project cases. The skips avoid duplicating browser-independent API/security/mutation/viewport/resilience/keyboard/pointer checks, omit the deploy-only header assertion under Vite dev, and avoid mobile-only or Chromium-permission-specific interactions in other engines; route, control, runtime-error, interaction, and accessibility coverage runs in Chromium, Firefox, and WebKit, with the full route surface also covered on mobile Chromium. The shared D1 sandbox runs serially so route inventories cannot observe another test's in-flight disposable mutation.
 
 Baseline regression suites also passed before the QA fixes:
 
 - `pnpm check`: registry, TypeScript, and 98-item/145-check rubric manifest passed.
-- `pnpm test`: 47 files and 469 tests passed.
+- `pnpm test`: 47 files and 470 tests passed.
 - `pnpm test:audit-browser`: 6 files and 11 tests passed.
 - `pnpm rubric:test`: 7 tests passed.
 
@@ -48,6 +50,7 @@ Baseline regression suites also passed before the QA fixes:
 | WebKit focus | Pointer-activated controls are not focused by Safari/WebKit, so a controlled dialog could lose its opener on close. | Support an explicit opener reference and restore the form-dialog trigger after every close transition. |
 | WebKit embeds | WebKit rejected `allow-presentation` as an iframe sandbox token and emitted a runtime console error. | Remove the unnecessary token while preserving allowlisted script/same-origin and fullscreen behavior. |
 | Layout stability | The async top bar inserted its first action after session resolution, shifting the entire readiness dashboard to CLS 0.114. | Reserve the action footprint during session loading; the route now passes the 0.1 local CLS budget. |
+| Upload validation | Portal uploads trusted the declared MIME type and matching extension, allowing renamed active content or arbitrary bytes to be stored as an allowed file. | Validate decoded PNG/JPEG/WebP/PDF/OLE/OOXML signatures or containers before any R2 or database side effect; add adversarial unit and cross-browser speaker-UI coverage. |
 
 ## Deployed read-only reconciliation
 
@@ -63,11 +66,11 @@ All three pass in the local matrix with this change set. Login, schedule embed, 
 
 The production run is read-only. Publishing, imports, member/role changes, key creation/revocation, deletes, outbound communication, uploads, acceptance decisions, and other mutating/destructive actions remain limited to the deterministic local sandbox. The following plan areas still require dedicated controlled environments or human sessions before a full release sign-off:
 
-- Pointer activation and state-transition reconciliation is still incomplete for controls outside the explicit scenarios; sequential keyboard reachability and discovery/accessibility evidence are complete for stable route surfaces, and unmatched dynamic/error-state controls are not silently treated as covered.
+- Actual pointer-triggered state-transition reconciliation is still incomplete for controls outside the explicit interaction scenarios; pointer hit-testing, sequential keyboard reachability, and discovery/accessibility evidence are complete for stable route surfaces, and unmatched dynamic/error-state controls are not silently treated as covered.
 - Mutation-level role and concurrency checks outside forms, API keys, tasks, resources, and reviewer recusal.
 - Real provider email, file-storage, Airtable, Accelevents, retry/dead-letter, and audit evidence.
 - Concurrent stale-version, Party gap recovery, and idempotency-race cases; offline/reconnect and session-expiry coverage currently exercises agenda and form creation respectively.
 - Screen-reader manual passes, true browser 200% zoom, manual visual review, mobile Safari/device coverage, and moderated IA first-click studies.
-- Production p75 Core Web Vitals/load, broader slow-network/failure injection, deployed-header confirmation, CSP, and upload/embed adversarial testing.
+- Production p75 Core Web Vitals/load, broader slow-network/failure injection, deployed-header confirmation, CSP, full upload boundary/storage-failure coverage, and deeper embed redirect/frame-policy testing.
 
 Those items remain blockers for claiming the entire `QA_PLAN.md` release gate; they are not silently treated as passes.
