@@ -166,7 +166,9 @@ export const WidgetBuilderConfiguration: Story = {
 
     await waitFor(() => {
       expect(canvas.getByLabelText("Preset")).toHaveValue("speakerList");
-      expect(canvas.getByText("Feeds & integrations")).toBeVisible();
+      expect(canvas.getByText("Output formats")).toBeVisible();
+      expect(canvas.getByRole("button", { name: "Copy basic HTML" })).toBeVisible();
+      expect(canvas.getByRole("button", { name: "Copy XML feed" })).toBeVisible();
     });
     await userEvent.click(canvas.getByRole("button", { name: "Create embed" }));
     await waitFor(() => {

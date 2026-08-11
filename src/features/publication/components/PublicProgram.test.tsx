@@ -162,7 +162,7 @@ describe("public program", () => {
     expect(render(publicSurfaceFromSplat("widgets"))).not.toContain("Create an embed");
   });
 
-  it("presents configurable widget presets and every supported handoff format", () => {
+  it("presents two widgets with presets and separates feeds from embed code", () => {
     const markup = renderToStaticMarkup(createElement(MemoryRouter, {
       children: createElement(EmbedManager, { agenda }),
     }));
