@@ -1183,6 +1183,13 @@ describe("portal service", () => {
 
   it("retains content history, supports cross-role comments, downloads, restores, and organizer profile edits", async () => {
     const setup = await fixture();
+    const scheduledAt = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("insert into talks (id, event_id, submission_id, title, starts_at, duration_min, status, version, created_at, updated_at) values (?, ?, ?, 'Accepted talk', ?, 45, 'confirmed', 1, ?, ?)")
+        .bind(`portal-talk-${setup.eventId}`, setup.eventId, setup.submissionId, scheduledAt, scheduledAt, scheduledAt),
+      env.DB.prepare("insert into talk_speakers (id, event_id, talk_id, speaker_id, created_at) values (?, ?, ?, ?, ?)")
+        .bind(`portal-talk-speaker-${setup.eventId}`, setup.eventId, `portal-talk-${setup.eventId}`, setup.speakerId, scheduledAt),
+    ]);
     await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
     const task = await runAs(owner, createPortalTask({
       eventId: setup.eventId, name: "Headshot", description: null, kind: "upload", formId: null, dueAt: null, order: 1,
@@ -1206,9 +1213,11 @@ describe("portal service", () => {
     }), "Validation");
     const beforeRestore = await runAs(owner, getContentLibrary({ eventId: setup.eventId }));
     expect(beforeRestore.assets).toHaveLength(2);
-    expect(beforeRestore.assets.find((asset) => asset.id === second.asset.id)).toMatchObject({ current: true, version: 2, comments: [
+    expect(beforeRestore.assets.find((asset) => asset.id === second.asset.id)).toMatchObject({
+      current: true, version: 2, versionCount: 2, sessionTitles: ["Accepted talk"], comments: [
       expect.objectContaining({ body: "Organizer review" }), expect.objectContaining({ body: "Speaker response" }),
-    ] });
+      ],
+    });
     await expect(runAs(owner, downloadContent({ eventId: setup.eventId, assetId: first.asset.id }))).resolves.toMatchObject({
       asset: { id: first.asset.id, current: false }, contentBase64: "iVBORw0KGgo=",
     });
@@ -1238,7 +1247,9 @@ describe("portal service", () => {
     expect(managedHeadshot).toMatchObject({ current: true, purpose: "headshot", version: 4, supersedesAssetId: restored.id });
     const library = await runAs(owner, getContentLibrary({ eventId: setup.eventId }));
     expect(library.assets).toHaveLength(4);
-    expect(library.assets.filter((asset) => asset.current)).toEqual([expect.objectContaining({ id: managedHeadshot.id })]);
+    expect(library.assets.filter((asset) => asset.current)).toEqual([expect.objectContaining({
+      id: managedHeadshot.id, versionCount: 4, sessionTitles: ["Accepted talk"],
+    })]);
     expect(await env.FILES.get(`portal/${setup.eventId}/${first.asset.id}`)).not.toBeNull();
     expect(await drizzle(env.DB).select().from(assetComments).where(eq(assetComments.assetId, second.asset.id))).toHaveLength(2);
   });

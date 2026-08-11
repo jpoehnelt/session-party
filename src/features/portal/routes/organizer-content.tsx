@@ -152,13 +152,24 @@ export function OrganizerContentLibrary({
   const [purpose, setPurpose] = useState("all");
   const [versions, setVersions] = useState("current");
   const [selectedIds, setSelectedIds] = useState<readonly string[]>([]);
+  const [exportStatus, setExportStatus] = useState("");
   const filtered = useMemo(() => library.assets.filter((asset) => {
     const matchesQuery = !query.trim() || [asset.speakerName, asset.filename, asset.purpose].some((value) => value.toLowerCase().includes(query.trim().toLowerCase()));
     return matchesQuery && (purpose === "all" || asset.purpose === purpose) && (versions === "history" || asset.current);
   }), [library.assets, purpose, query, versions]);
-  const selected = library.assets.filter((asset) => selectedIds.includes(asset.id));
+  const selected = library.assets.filter((asset) => asset.current && selectedIds.includes(asset.id));
   const currentCount = library.assets.filter((asset) => asset.current).length;
   const speakerCount = new Set(library.assets.map((asset) => asset.speakerId)).size;
+  const startZip = async () => {
+    if (selected.length === 0) return;
+    setExportStatus(`Generating ZIP for ${selected.length} latest file${selected.length === 1 ? "" : "s"}…`);
+    try {
+      await onDownloadZip(selected);
+      setExportStatus(`ZIP download started for ${selected.length} latest file${selected.length === 1 ? "" : "s"}.`);
+    } catch {
+      setExportStatus("ZIP generation failed. Try again.");
+    }
+  };
   return <div className="space-y-8">
     <ProductionHeader
       eyebrow="Organizer control room / Deliverables"
@@ -184,10 +195,11 @@ export function OrganizerContentLibrary({
       </div>
       <Card className="mb-4" title={`${selected.length} files selected`}>
         <div className="flex flex-wrap gap-3">
-          <Button disabled={selected.length === 0 || busy === "zip"} loading={busy === "zip"} onClick={() => onDownloadZip(selected)}>Download selected ZIP</Button>
+          <Button disabled={selected.length === 0 || busy === "zip"} loading={busy === "zip"} onClick={() => void startZip()}>Download selected ZIP</Button>
           <Button variant="ghost" onClick={() => setSelectedIds(filtered.filter((asset) => asset.current).map((asset) => asset.id))}>Select current results</Button>
           <Button variant="ghost" onClick={() => setSelectedIds([])}>Clear</Button>
         </div>
+        {exportStatus ? <p className="mt-3 text-sm font-semibold" role="status">{exportStatus}</p> : null}
       </Card>
       <div className={productionTableClass}>
         <Table
@@ -195,10 +207,10 @@ export function OrganizerContentLibrary({
           rowKey={(asset) => asset.id}
           empty="Speaker uploads will appear here."
           columns={[
-            { key: "select", header: "Select", render: (asset) => <Checkbox label={`Select ${asset.filename}`} checked={selectedIds.includes(asset.id)} onChange={(event) => setSelectedIds((ids) => event.currentTarget.checked ? [...ids, asset.id] : ids.filter((id) => id !== asset.id))} /> },
-            { key: "speaker", header: "Speaker", render: (asset) => <div><strong>{asset.speakerName}</strong><p className="text-xs text-ink-muted">{asset.purpose}</p></div> },
+            { key: "select", header: "Select", render: (asset) => <Checkbox label={`Select ${asset.filename}`} checked={asset.current && selectedIds.includes(asset.id)} disabled={!asset.current} onChange={(event) => setSelectedIds((ids) => event.currentTarget.checked ? [...ids, asset.id] : ids.filter((id) => id !== asset.id))} /> },
+            { key: "speaker", header: "Speaker / session", render: (asset) => <div><strong>{asset.speakerName}</strong><p className="text-xs text-ink-muted">{asset.sessionTitles.length > 0 ? asset.sessionTitles.join(", ") : "No session assigned"}</p><p className="text-xs text-ink-muted">{asset.purpose}</p></div> },
             { key: "file", header: "File", render: (asset) => <div><strong>{asset.filename}</strong><p className="text-xs text-ink-muted">{asset.contentType} · {asset.size.toLocaleString()} bytes</p></div> },
-            { key: "version", header: "Version", render: (asset) => <div><Badge tone={asset.current ? "success" : "neutral"}>{asset.current ? "Current" : "History"}</Badge><p className="mt-1 text-xs">v{asset.version} · {new Date(asset.uploadedAt).toLocaleString()}</p>{asset.restoredFromAssetId ? <p className="text-xs">Restored from v{library.assets.find((candidate) => candidate.id === asset.restoredFromAssetId)?.version ?? "?"}</p> : null}</div> },
+            { key: "version", header: "Version", render: (asset) => <div><Badge tone={asset.current ? "success" : "neutral"}>{asset.current ? "Current" : "History"}</Badge><p className="mt-1 text-xs">v{asset.version} of {asset.versionCount} · {new Date(asset.uploadedAt).toLocaleString()}</p>{asset.restoredFromAssetId ? <p className="text-xs">Restored from v{library.assets.find((candidate) => candidate.id === asset.restoredFromAssetId)?.version ?? "?"}</p> : null}</div> },
             { key: "comments", header: "Comments", render: (asset) => <details><summary className="cursor-pointer font-bold">{asset.comments.length} comment{asset.comments.length === 1 ? "" : "s"}</summary><ul className="my-2 space-y-2">{asset.comments.map((comment) => <li key={comment.id} className="text-xs"><strong>{comment.authorName}</strong> · {new Date(comment.createdAt).toLocaleString()}<p>{comment.body}</p></li>)}</ul><form className="min-w-64 space-y-2" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const body = String(new FormData(event.currentTarget).get("body") ?? "").trim(); if (body) onComment(asset, body); }}><Input name="body" label="Add comment" required /><Button type="submit" size="sm" loading={busy === asset.id}>Comment</Button></form></details> },
             { key: "actions", header: "Actions", render: (asset) => <div className="flex flex-col gap-2"><Button size="sm" variant="secondary" loading={busy === `download:${asset.id}`} onClick={() => onDownload(asset)}>Download</Button>{!asset.current ? <Button size="sm" variant="ghost" loading={busy === asset.id} onClick={() => onRestore(asset)}>Restore as current</Button> : null}</div> },
           ]}

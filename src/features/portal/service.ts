@@ -3062,6 +3062,7 @@ export const uploadManagedSpeakerHeadshot = (input: UploadManagedSpeakerHeadshot
   )).orderBy(desc(assets.version), desc(assets.createdAt)).limit(1));
   const uploadedAt = now();
   const assetId = id("portal_asset");
+  const nextAssetVersion = (oldAsset?.version ?? 0) + 1;
   const key = assetKey(input.eventId, assetId);
   const { put, delete: deleteFile } = yield* Files;
   yield* put(key, data, {
@@ -3073,12 +3074,14 @@ export const uploadManagedSpeakerHeadshot = (input: UploadManagedSpeakerHeadshot
     id: assetId, eventId: input.eventId, uploaderUserId: actor.userId, speakerId: speaker.id,
     purpose: "headshot", supersedesAssetId: oldAsset?.id ?? null, restoredFromAssetId: null, current: true,
     filename: input.filename.trim(), contentType: input.contentType, size: data.byteLength,
-    version: (oldAsset?.version ?? 0) + 1, createdAt: uploadedAt, updatedAt: uploadedAt,
+    version: nextAssetVersion, createdAt: uploadedAt, updatedAt: uploadedAt,
   };
+  const sessionTitles = (yield* loadSpeakerSessionTitles(input.eventId, [speaker.id])).get(speaker.id) ?? [];
   const result: ContentAsset = {
     ...assetView(assetRecord as typeof assets.$inferSelect, "headshot"),
     speakerId: speaker.id, speakerName: speaker.displayName, current: true,
     speakerVersion: speaker.version + 1,
+    sessionTitles, versionCount: nextAssetVersion,
     supersedesAssetId: oldAsset?.id ?? null, restoredFromAssetId: null,
     uploadedAt: uploadedAt.getTime(), comments: [],
   };
@@ -3445,6 +3448,30 @@ export const enqueueAutomatedDueTaskReminders = (runAt = now()): Effect.Effect<{
   return { queuedCount: rows.length, runDate };
 });
 
+const loadSpeakerSessionTitles = (
+  eventId: string,
+  speakerIds: readonly string[],
+): Effect.Effect<ReadonlyMap<string, readonly string[]>, AppError, Db> => Effect.gen(function* () {
+  if (speakerIds.length === 0) return new Map();
+  const { db } = yield* Db;
+  const rows = yield* database(() => db.select({ speakerId: talkSpeakers.speakerId, title: talks.title })
+    .from(talkSpeakers)
+    .innerJoin(talks, and(eq(talks.eventId, talkSpeakers.eventId), eq(talks.id, talkSpeakers.talkId)))
+    .where(and(
+      eq(talkSpeakers.eventId, eventId),
+      inArray(talkSpeakers.speakerId, [...speakerIds]),
+      ne(talks.status, "cancelled"),
+    ))
+    .orderBy(asc(talks.startsAt), asc(talks.title), asc(talks.id)));
+  const titles = new Map<string, string[]>();
+  for (const row of rows) {
+    const current = titles.get(row.speakerId) ?? [];
+    if (!current.includes(row.title)) current.push(row.title);
+    titles.set(row.speakerId, current);
+  }
+  return titles;
+});
+
 const loadContentAssets = (eventId: string, onlyAssetId?: string): Effect.Effect<readonly ContentAsset[], AppError, Db> => Effect.gen(function* () {
   const { db } = yield* Db;
   const assetRows = yield* database(() => db.select({ asset: assets, speaker: speakers }).from(assets)
@@ -3455,6 +3482,13 @@ const loadContentAssets = (eventId: string, onlyAssetId?: string): Effect.Effect
       ...(onlyAssetId ? [eq(assets.id, onlyAssetId)] : []),
     ))
     .orderBy(desc(assets.current), asc(speakers.displayName), asc(assets.purpose), desc(assets.version), desc(assets.createdAt)));
+  const speakerIds = [...new Set(assetRows.map((row) => row.speaker.id))];
+  const sessionTitles = yield* loadSpeakerSessionTitles(eventId, speakerIds);
+  const versionCounts = new Map<string, number>();
+  for (const { asset, speaker } of assetRows) {
+    const lineage = `${speaker.id}\u0000${asset.purpose ?? "document"}`;
+    versionCounts.set(lineage, (versionCounts.get(lineage) ?? 0) + 1);
+  }
   const assetIds = assetRows.map((row) => row.asset.id);
   const commentRows = assetIds.length === 0 ? [] : yield* database(() => db.select({ comment: assetComments, authorName: users.name }).from(assetComments)
     .innerJoin(users, eq(users.id, assetComments.actorUserId))
@@ -3465,6 +3499,8 @@ const loadContentAssets = (eventId: string, onlyAssetId?: string): Effect.Effect
     speakerId: speaker.id,
     speakerName: speaker.displayName,
     speakerVersion: speaker.version,
+    sessionTitles: sessionTitles.get(speaker.id) ?? [],
+    versionCount: versionCounts.get(`${speaker.id}\u0000${asset.purpose ?? "document"}`) ?? 1,
     current: asset.current,
     supersedesAssetId: asset.supersedesAssetId,
     restoredFromAssetId: asset.restoredFromAssetId,
@@ -3580,6 +3616,7 @@ export const restoreContentVersion = (
   const bytes = new Uint8Array(yield* fileEffect(() => sourceObject.arrayBuffer()));
   const restoredAt = now();
   const restoredId = id("portal_asset");
+  const restoredVersion = current.version + 1;
   const key = assetKey(input.eventId, restoredId);
   const dispositionFilename = source.asset.filename.replace(/["\\\r\n]/g, "_");
   yield* put(key, bytes, {
@@ -3595,12 +3632,14 @@ export const restoreContentVersion = (
     speakerId: sourceSpeakerId, purpose: sourcePurpose,
     supersedesAssetId: current.id, restoredFromAssetId: source.asset.id, current: true,
     filename: source.asset.filename, contentType: source.asset.contentType, size: source.asset.size,
-    version: current.version + 1, createdAt: restoredAt, updatedAt: restoredAt,
+    version: restoredVersion, createdAt: restoredAt, updatedAt: restoredAt,
   };
+  const sessionTitles = (yield* loadSpeakerSessionTitles(input.eventId, [sourceSpeakerId])).get(sourceSpeakerId) ?? [];
   const result: ContentAsset = {
     ...assetView(restoredRecord as typeof assets.$inferSelect, sourcePurpose),
     speakerId: source.speaker.id, speakerName: source.speaker.displayName, current: true,
     speakerVersion: sourcePurpose === "headshot" ? source.speaker.version + 1 : source.speaker.version,
+    sessionTitles, versionCount: restoredVersion,
     supersedesAssetId: current.id, restoredFromAssetId: source.asset.id,
     uploadedAt: restoredAt.getTime(), comments: [],
   };

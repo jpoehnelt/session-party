@@ -15,6 +15,7 @@ export default defineConfig({
     include: [
       "src/features/review/routes/review-lifecycle.browser.tsx",
       "src/features/comms/routes/comms-lifecycle.browser.tsx",
+      "src/features/portal/routes/organizer-content.browser.tsx",
     ],
     browser: {
       enabled: true,

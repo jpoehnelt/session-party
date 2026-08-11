@@ -10847,6 +10847,16 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                   }
                 ]
               },
+              "sessionTitles": {
+                "items": {
+                  "description": "a string at most 500 character(s) long",
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "title": "maxLength(500)",
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "size": {
                 "$ref": "#/$defs/Int",
                 "description": "a non-negative number",
@@ -10898,6 +10908,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "description": "a positive number",
                 "exclusiveMinimum": 0,
                 "title": "positive"
+              },
+              "versionCount": {
+                "$ref": "#/$defs/Int",
+                "description": "a positive number",
+                "exclusiveMinimum": 0,
+                "title": "positive"
               }
             },
             "required": [
@@ -10911,6 +10927,8 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "speakerId",
               "speakerName",
               "speakerVersion",
+              "sessionTitles",
+              "versionCount",
               "current",
               "supersedesAssetId",
               "restoredFromAssetId",
@@ -14423,6 +14441,16 @@ export const mcpTools: readonly McpToolDescriptor[] = [
             }
           ]
         },
+        "sessionTitles": {
+          "items": {
+            "description": "a string at most 500 character(s) long",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "maxLength(500)",
+            "type": "string"
+          },
+          "type": "array"
+        },
         "size": {
           "$ref": "#/$defs/Int",
           "description": "a non-negative number",
@@ -14474,6 +14502,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "description": "a positive number",
           "exclusiveMinimum": 0,
           "title": "positive"
+        },
+        "versionCount": {
+          "$ref": "#/$defs/Int",
+          "description": "a positive number",
+          "exclusiveMinimum": 0,
+          "title": "positive"
         }
       },
       "required": [
@@ -14487,6 +14521,8 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "speakerId",
         "speakerName",
         "speakerVersion",
+        "sessionTitles",
+        "versionCount",
         "current",
         "supersedesAssetId",
         "restoredFromAssetId",
@@ -34027,6 +34063,16 @@ export const openApi = {
                               }
                             ]
                           },
+                          "sessionTitles": {
+                            "items": {
+                              "description": "a string at most 500 character(s) long",
+                              "maxLength": 500,
+                              "minLength": 1,
+                              "title": "maxLength(500)",
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
                           "size": {
                             "$ref": "#/$defs/Int",
                             "description": "a non-negative number",
@@ -34078,6 +34124,12 @@ export const openApi = {
                             "description": "a positive number",
                             "exclusiveMinimum": 0,
                             "title": "positive"
+                          },
+                          "versionCount": {
+                            "$ref": "#/$defs/Int",
+                            "description": "a positive number",
+                            "exclusiveMinimum": 0,
+                            "title": "positive"
                           }
                         },
                         "required": [
@@ -34091,6 +34143,8 @@ export const openApi = {
                           "speakerId",
                           "speakerName",
                           "speakerVersion",
+                          "sessionTitles",
+                          "versionCount",
                           "current",
                           "supersedesAssetId",
                           "restoredFromAssetId",
@@ -34507,6 +34561,16 @@ export const openApi = {
                             }
                           ]
                         },
+                        "sessionTitles": {
+                          "items": {
+                            "description": "a string at most 500 character(s) long",
+                            "maxLength": 500,
+                            "minLength": 1,
+                            "title": "maxLength(500)",
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
                         "size": {
                           "$ref": "#/$defs/Int",
                           "description": "a non-negative number",
@@ -34558,6 +34622,12 @@ export const openApi = {
                           "description": "a positive number",
                           "exclusiveMinimum": 0,
                           "title": "positive"
+                        },
+                        "versionCount": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a positive number",
+                          "exclusiveMinimum": 0,
+                          "title": "positive"
                         }
                       },
                       "required": [
@@ -34571,6 +34641,8 @@ export const openApi = {
                         "speakerId",
                         "speakerName",
                         "speakerVersion",
+                        "sessionTitles",
+                        "versionCount",
                         "current",
                         "supersedesAssetId",
                         "restoredFromAssetId",
@@ -34780,6 +34852,16 @@ export const openApi = {
                         }
                       ]
                     },
+                    "sessionTitles": {
+                      "items": {
+                        "description": "a string at most 500 character(s) long",
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "title": "maxLength(500)",
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "size": {
                       "$ref": "#/$defs/Int",
                       "description": "a non-negative number",
@@ -34831,6 +34913,12 @@ export const openApi = {
                       "description": "a positive number",
                       "exclusiveMinimum": 0,
                       "title": "positive"
+                    },
+                    "versionCount": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a positive number",
+                      "exclusiveMinimum": 0,
+                      "title": "positive"
                     }
                   },
                   "required": [
@@ -34844,6 +34932,8 @@ export const openApi = {
                     "speakerId",
                     "speakerName",
                     "speakerVersion",
+                    "sessionTitles",
+                    "versionCount",
                     "current",
                     "supersedesAssetId",
                     "restoredFromAssetId",
@@ -39153,6 +39243,16 @@ export const openApi = {
                         }
                       ]
                     },
+                    "sessionTitles": {
+                      "items": {
+                        "description": "a string at most 500 character(s) long",
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "title": "maxLength(500)",
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "size": {
                       "$ref": "#/$defs/Int",
                       "description": "a non-negative number",
@@ -39204,6 +39304,12 @@ export const openApi = {
                       "description": "a positive number",
                       "exclusiveMinimum": 0,
                       "title": "positive"
+                    },
+                    "versionCount": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a positive number",
+                      "exclusiveMinimum": 0,
+                      "title": "positive"
                     }
                   },
                   "required": [
@@ -39217,6 +39323,8 @@ export const openApi = {
                     "speakerId",
                     "speakerName",
                     "speakerVersion",
+                    "sessionTitles",
+                    "versionCount",
                     "current",
                     "supersedesAssetId",
                     "restoredFromAssetId",
