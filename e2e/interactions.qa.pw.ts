@@ -6,6 +6,7 @@ const EVENT = "ai-engineer-sandbox";
 const EVENT_ID = "demo-event";
 const OWNER_SESSION = "demo-owner-session";
 const ADMIN_SESSION = "demo-admin-session";
+const REVIEWER_SESSION = "demo-reviewer-session";
 const ADMIN_EMAIL = "admin@sessionparty.local";
 
 async function signIn(context: BrowserContext, baseURL: string, session = OWNER_SESSION): Promise<void> {
@@ -224,6 +225,116 @@ test("review search and filters expose a reversible empty state", async ({ conte
   await expect(page.getByRole("heading", { name: "No proposals match these filters" })).toBeVisible();
   await page.getByRole("button", { name: "Clear filters" }).click();
   await expect(page.getByRole("list", { name: "Submission review queue" })).toBeVisible();
+});
+
+test("review score editor rejects a stale tab without losing its draft, then restores the fixture", async ({ context, page, request, baseURL }, testInfo) => {
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const reviewPath = `/api/v1/events/${EVENT_ID}/review`;
+  const reviewerHeaders = { Cookie: `sp_session=${REVIEWER_SESSION}` };
+  type Criterion = Readonly<{ key: string; label: string; type: string }>;
+  type HumanReview = Readonly<{
+    reviewerUserId: string;
+    version: number;
+    scores: readonly Readonly<{ criterionKey: string; score: number | string }>[];
+    comment: string | null;
+  }>;
+  type Detail = Readonly<{
+    id: string;
+    title: string;
+    round: null | Readonly<{ id: string; rubric: Readonly<{ criteria: readonly Criterion[] }> }>;
+    reviews: readonly HumanReview[];
+  }>;
+  type Workbench = Readonly<{ queue: readonly Readonly<{ id: string }>[]; selected: Detail | null }>;
+  const loadWorkbench = async (selectedSubmissionId?: string): Promise<Workbench> => {
+    const query = new URLSearchParams({ status: "accepted", pageSize: "60" });
+    if (selectedSubmissionId) query.set("selectedSubmissionId", selectedSubmissionId);
+    const response = await request.get(`${reviewPath}?${query}`, { headers: reviewerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<Workbench>;
+  };
+  const candidates = (await loadWorkbench()).queue;
+  let selected: Detail | undefined;
+  let initialReview: HumanReview | undefined;
+  for (const candidate of candidates) {
+    const detail = (await loadWorkbench(candidate.id)).selected;
+    const review = detail?.reviews.find(({ reviewerUserId }) => reviewerUserId === "demo-reviewer");
+    if (detail?.round && review) {
+      selected = detail;
+      initialReview = review;
+      break;
+    }
+  }
+  expect(selected, "the deterministic fixture must expose the reviewer's scored accepted proposal").toBeDefined();
+  expect(initialReview).toBeDefined();
+  const numericCriterion = selected!.round!.rubric.criteria.find(({ type }) => type === "numeric");
+  expect(numericCriterion).toBeDefined();
+  const initialNumeric = initialReview!.scores.find(({ criterionKey }) => criterionKey === numericCriterion!.key)?.score;
+  expect(typeof initialNumeric).toBe("number");
+  const winnerScore = initialNumeric === 1 ? 2 : 1;
+  const staleScore = winnerScore === 5 ? 4 : 5;
+  const winnerDraft = `QA review winner ${testInfo.project.name} — Unicode ✓`;
+  const staleDraft = `QA review stale writer ${testInfo.project.name} — preserved`;
+  const itemPath = `/api/v1/events/${EVENT_ID}/review/rounds/${selected!.round!.id}/submissions/${selected!.id}/score`;
+  const currentReview = async (): Promise<HumanReview> => {
+    const detail = (await loadWorkbench(selected!.id)).selected;
+    const review = detail?.reviews.find(({ reviewerUserId }) => reviewerUserId === "demo-reviewer");
+    expect(review).toBeDefined();
+    return review!;
+  };
+  const restore = async (): Promise<void> => {
+    const current = await currentReview();
+    if (JSON.stringify(current.scores) === JSON.stringify(initialReview!.scores) && current.comment === initialReview!.comment) return;
+    const response = await request.put(itemPath, {
+      headers: { ...reviewerHeaders, "x-request-id": `qa-review-restore-${testInfo.project.name}` },
+      data: {
+        expectedVersion: current.version,
+        scores: initialReview!.scores,
+        ...(initialReview!.comment === null ? {} : { comment: initialReview!.comment }),
+      },
+    });
+    expect(response.status()).toBe(200);
+  };
+  const route = `/e/${EVENT}/review?status=accepted&selectedSubmissionId=${encodeURIComponent(selected!.id)}`;
+  const stalePage = await context.newPage();
+
+  await signIn(context, runtimeBaseURL, REVIEWER_SESSION);
+  await Promise.all([installDeterministicBrowser(page), installDeterministicBrowser(stalePage)]);
+  try {
+    await Promise.all([
+      page.goto(route, { waitUntil: "domcontentloaded" }),
+      stalePage.goto(route, { waitUntil: "domcontentloaded" }),
+    ]);
+    const winnerRationale = page.getByLabel("Private rationale");
+    const staleRationale = stalePage.getByLabel("Private rationale");
+    await expect(winnerRationale).toHaveValue(initialReview!.comment ?? "");
+    await expect(staleRationale).toHaveValue(initialReview!.comment ?? "");
+
+    const scoreButton = (targetPage: Page, score: number) => targetPage
+      .locator(`[aria-label="${numericCriterion!.label} score"]`)
+      .getByRole("button", { name: new RegExp(`^${score} —`) });
+    await scoreButton(page, winnerScore).click();
+    await winnerRationale.fill(winnerDraft);
+    await page.getByRole("button", { name: "Save my review" }).click();
+    await expect.poll(async () => (await currentReview()).comment).toBe(winnerDraft);
+    await expect(scoreButton(page, winnerScore)).toHaveAttribute("aria-pressed", "true");
+
+    await scoreButton(stalePage, staleScore).click();
+    await staleRationale.fill(staleDraft);
+    await stalePage.getByRole("button", { name: "Save my review" }).click();
+    await expect(stalePage.getByRole("alert")).toContainText(/changed|reload/i);
+    await expect(staleRationale).toHaveValue(staleDraft);
+    expect((await currentReview()).comment).toBe(winnerDraft);
+
+    await stalePage.reload({ waitUntil: "domcontentloaded" });
+    await expect(stalePage.getByLabel("Private rationale")).toHaveValue(winnerDraft);
+  } finally {
+    await restore();
+    await stalePage.close();
+  }
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Private rationale")).toHaveValue(initialReview!.comment ?? "");
+  expect((await currentReview()).scores).toEqual(initialReview!.scores);
 });
 
 test("onboarding contact editor can open and Cancel without recording contact", async ({ context, page, baseURL }, testInfo) => {
