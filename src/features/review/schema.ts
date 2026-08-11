@@ -398,7 +398,7 @@ export type BulkAssignReviewersOutput = typeof BulkAssignReviewersOutput.Type;
 export const SendReviewRemindersInput = Schema.Struct({
   eventId: EntityId,
   roundId: EntityId,
-  reviewerUserIds: Schema.Array(EntityId).pipe(Schema.maxItems(50)),
+  reviewerUserIds: Schema.NonEmptyArray(EntityId).pipe(Schema.maxItems(50)),
   idempotencyKey: IdempotencyKey,
   requestId: RequestId,
 });

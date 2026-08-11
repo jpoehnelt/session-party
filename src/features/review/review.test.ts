@@ -1688,7 +1688,7 @@ describe("review and acceptance slice", () => {
     const input = {
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
-      reviewerUserIds: [] as readonly string[],
+      reviewerUserIds: [fixtureReviewerId, "user_reviewer_dev"] as const,
       idempotencyKey: "review-reminders-active-round-01",
       requestId: "request_review_reminders_active",
     };
@@ -1708,6 +1708,18 @@ describe("review and acceptance slice", () => {
       snapshot.renderedText?.includes("outstanding") && snapshot.renderedText.includes("assigned queue")
     )).toBe(true);
     expect(mailQueueWakeCount).toBe(wakeCountBefore + 2);
+  });
+
+  it("rejects an empty reviewer reminder audience", async () => {
+    const result = await runEitherAs(owner, sendReviewReminders({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      reviewerUserIds: [] as unknown as readonly [string, ...string[]],
+      idempotencyKey: "review-reminders-empty-audience-01",
+      requestId: "request_review_reminders_empty",
+    }));
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") expect(result.left._tag).toBe("Validation");
   });
 
   it("exports normalized review results with criterion-level responses", async () => {

@@ -16420,118 +16420,6 @@ export const mcpTools: readonly McpToolDescriptor[] = [
     ]
   },
   {
-    "description": "Queue reminder emails for selected reviewers who still have outstanding assignments in a review round.",
-    "inputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "properties": {
-        "eventId": {
-          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9_-]+$",
-          "title": "maxLength(128)",
-          "type": "string"
-        },
-        "idempotencyKey": {
-          "description": "a string at most 256 character(s) long",
-          "maxLength": 256,
-          "minLength": 8,
-          "title": "maxLength(256)",
-          "type": "string"
-        },
-        "requestId": {
-          "description": "a string at most 128 character(s) long",
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "maxLength(128)",
-          "type": "string"
-        },
-        "reviewerUserIds": {
-          "description": "an array of at most 50 item(s)",
-          "items": {
-            "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_-]+$",
-            "title": "maxLength(128)",
-            "type": "string"
-          },
-          "maxItems": 50,
-          "title": "maxItems(50)",
-          "type": "array"
-        },
-        "roundId": {
-          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9_-]+$",
-          "title": "maxLength(128)",
-          "type": "string"
-        }
-      },
-      "required": [
-        "eventId",
-        "roundId",
-        "reviewerUserIds",
-        "idempotencyKey",
-        "requestId"
-      ],
-      "type": "object"
-    },
-    "name": "review_send_reminders",
-    "operationId": "review.sendReminders",
-    "outputSchema": {
-      "$defs": {
-        "Int": {
-          "description": "an integer",
-          "title": "int",
-          "type": "integer"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "properties": {
-        "idempotent": {
-          "type": "boolean"
-        },
-        "queuedCount": {
-          "$ref": "#/$defs/Int",
-          "description": "a non-negative number",
-          "minimum": 0,
-          "title": "nonNegative"
-        },
-        "reviewerUserIds": {
-          "items": {
-            "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_-]+$",
-            "title": "maxLength(128)",
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "skippedCount": {
-          "$ref": "#/$defs/Int",
-          "description": "a non-negative number",
-          "minimum": 0,
-          "title": "nonNegative"
-        }
-      },
-      "required": [
-        "queuedCount",
-        "skippedCount",
-        "reviewerUserIds",
-        "idempotent"
-      ],
-      "type": "object"
-    },
-    "requiredScopes": [
-      "reviews:write"
-    ]
-  },
-  {
     "description": "Update a review round's name, dates, blind-review policy, and typed weighted scorecard with version protection.",
     "inputSchema": {
       "$defs": {
@@ -40826,6 +40714,7 @@ export const openApi = {
                       "type": "string"
                     },
                     "maxItems": 50,
+                    "minItems": 1,
                     "title": "maxItems(50)",
                     "type": "array"
                   }
@@ -40897,10 +40786,7 @@ export const openApi = {
         "summary": "Queue reminders for reviewers with outstanding assignments",
         "x-authorization": {
           "apiKey": {
-            "kind": "api-key",
-            "scopes": [
-              "reviews:write"
-            ]
+            "kind": "deny"
           },
           "browser": {
             "kind": "event-member",
@@ -47075,10 +46961,6 @@ export const ownershipManifest = {
     {
       "name": "review_request_ai_suggestion",
       "operationId": "review.requestAiSuggestion"
-    },
-    {
-      "name": "review_send_reminders",
-      "operationId": "review.sendReminders"
     },
     {
       "name": "review_update_round",

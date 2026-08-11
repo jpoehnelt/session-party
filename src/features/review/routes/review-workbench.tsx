@@ -607,12 +607,20 @@ export function ReviewWorkbenchContent({
   };
 
   const sendReminders = () => {
-    if (!loadedRound) return;
+    if (!loadedRound || selectedReviewers.length === 0) return;
+    const audience = selectedReviewers.map((reviewer) => reviewer.name).join(", ");
+    const authorized = window.confirm(
+      `Queue reminder emails now to ${selectedReviewers.length} selected reviewer${selectedReviewers.length === 1 ? "" : "s"}?\n\n`
+      + `Audience: ${audience}\n`
+      + `Template: personalized outstanding-review count and a link to the assigned ${loadedRound.name} queue\n`
+      + "Reply-to: none\nDelivery: immediately after the durable outbox commit",
+    );
+    if (!authorized) return;
     void runBulk("remind", async () => {
       const result = await sendReviewRemindersRequest({
         eventId: workbench.eventId,
         roundId: loadedRound.id,
-        reviewerUserIds: selectedReviewers.map((reviewer) => reviewer.userId),
+        reviewerUserIds: selectedReviewers.map((reviewer) => reviewer.userId) as [string, ...string[]],
         idempotencyKey: reminderKey.current,
         requestId: `review-reminders-${crypto.randomUUID()}`,
       });
@@ -750,7 +758,7 @@ export function ReviewWorkbenchContent({
                 )}
                 <div className="flex flex-wrap gap-2">
                   <Button disabled={bulkPending !== undefined || visibleQueue.length === 0 || selectedReviewers.length === 0} loading={bulkPending === "assign"} onClick={bulkAssign}>Assign filtered proposals</Button>
-                  <Button variant="secondary" disabled={bulkPending !== undefined} loading={bulkPending === "remind"} onClick={sendReminders}>Remind outstanding</Button>
+                  <Button variant="secondary" disabled={bulkPending !== undefined || selectedReviewers.length === 0} loading={bulkPending === "remind"} onClick={sendReminders}>Review &amp; remind selected</Button>
                   <Button variant="secondary" disabled={bulkPending !== undefined} loading={bulkPending === "export"} onClick={exportCsv}>Export CSV</Button>
                 </div>
                 {bulkMessage && <p role="status" className="border-2 border-line-strong bg-surface px-3 py-2 text-xs font-bold shadow-[2px_2px_0_#171714]">{bulkMessage}</p>}

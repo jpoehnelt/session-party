@@ -1309,6 +1309,9 @@ export const sendReviewReminders = (
     yield* requireOrganizer(viewer);
     const round = yield* loadRound(input.eventId, input.roundId);
     const requestedReviewerIds = [...new Set(input.reviewerUserIds)];
+    if (requestedReviewerIds.length === 0) {
+      return yield* Effect.fail(new Validation({ message: "Select at least one reviewer to remind" }));
+    }
     if (requestedReviewerIds.length !== input.reviewerUserIds.length) {
       return yield* Effect.fail(new Validation({ message: "Reminder recipients cannot contain duplicates" }));
     }
@@ -1359,11 +1362,11 @@ export const sendReviewReminders = (
     ]);
     const event = eventRow[0];
     if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
-    const targetSet = requestedReviewerIds.length > 0 ? new Set(requestedReviewerIds) : null;
+    const targetSet = new Set(requestedReviewerIds);
     const pairKey = (submissionId: string, reviewerUserId: string | null) => `${submissionId}\u0000${reviewerUserId ?? ""}`;
     const completedSet = new Set(completed.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
     const recipients = members.flatMap((member) => {
-      if (targetSet && !targetSet.has(member.userId)) return [];
+      if (!targetSet.has(member.userId)) return [];
       const outstandingCount = assignments.filter((assignment) =>
         assignment.reviewerUserId === member.userId &&
         !completedSet.has(pairKey(assignment.submissionId, member.userId))
@@ -1412,7 +1415,7 @@ export const sendReviewReminders = (
     });
     const output: SendReviewRemindersOutput = {
       queuedCount: rows.length,
-      skippedCount: (targetSet?.size ?? members.length) - rows.length,
+      skippedCount: targetSet.size - rows.length,
       reviewerUserIds: recipients.map((recipient) => recipient.userId),
       idempotent: false,
     };

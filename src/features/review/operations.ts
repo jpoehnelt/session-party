@@ -55,6 +55,11 @@ const organizerWrite = eventAuthorization(
   { kind: "api-key", scopes: ["reviews:write"] },
 );
 
+const organizerHumanWrite = eventAuthorization(
+  { kind: "event-member", roles: ["owner", "admin"] },
+  { kind: "deny" },
+);
+
 const acceptanceWrite = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
   { kind: "deny" },
@@ -418,7 +423,7 @@ const sendReviewRemindersOperation = {
   kind: "command",
   input: SendReviewRemindersInput,
   output: SendReviewRemindersOutput,
-  authorize: organizerWrite,
+  authorize: organizerHumanWrite,
   invoke: sendReviewReminders,
   rest: {
     method: "post",
@@ -430,10 +435,6 @@ const sendReviewRemindersOperation = {
     },
     summary: "Queue reminders for reviewers with outstanding assignments",
     successStatus: 202,
-  },
-  mcp: {
-    name: "review_send_reminders",
-    description: "Queue reminder emails for selected reviewers who still have outstanding assignments in a review round.",
   },
   idempotency: "required",
   concurrency: "none",

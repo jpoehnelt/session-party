@@ -326,7 +326,7 @@ export function SubmissionReviewPane({
   };
 
   const allCriteriaScored = Boolean(
-    round && round.rubric.criteria.every(
+    round && scores.length > 0 && round.rubric.criteria.every(
       (criterion) => !criterion.required || scores.some((score) => score.criterionKey === criterion.key),
     ),
   );
