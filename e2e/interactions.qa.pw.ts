@@ -650,6 +650,142 @@ test("agenda views, setup, and live-show controls are keyboard-reachable and rev
   await expect(live).toBeVisible();
 });
 
+test("agenda track and room editors protect drafts, persist updates, and restore the fixture", async ({ context, page, request, baseURL }, testInfo) => {
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const agendaPath = `/api/v1/events/${EVENT_ID}/agenda`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  type Track = Readonly<{ id: string; name: string; color: string | null; order: number; version: number }>;
+  type Room = Readonly<{ id: string; name: string; capacity: number | null; order: number; version: number }>;
+  type Agenda = Readonly<{ tracks: readonly Track[]; rooms: readonly Room[] }>;
+  const loadAgenda = async (): Promise<Agenda> => {
+    const response = await request.get(agendaPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<Agenda>;
+  };
+  const initialAgenda = await loadAgenda();
+  const initialTrack = initialAgenda.tracks[0];
+  const initialRoom = initialAgenda.rooms[0];
+  expect(initialTrack).toBeDefined();
+  expect(initialRoom).toBeDefined();
+  const updatedTrackName = `${initialTrack!.name} · QA ${testInfo.project.name}`;
+  const updatedRoomName = `${initialRoom!.name} · QA ${testInfo.project.name}`;
+  const idempotency = (kind: string) => `qa-agenda-${kind}-${testInfo.project.name}-${Date.now()}`;
+  const restore = async (): Promise<void> => {
+    const current = await loadAgenda();
+    const track = current.tracks.find(({ id }) => id === initialTrack!.id);
+    const room = current.rooms.find(({ id }) => id === initialRoom!.id);
+    expect(track).toBeDefined();
+    expect(room).toBeDefined();
+    if (track!.name !== initialTrack!.name || track!.color !== initialTrack!.color || track!.order !== initialTrack!.order) {
+      const response = await request.patch(`${agendaPath}/tracks/${track!.id}`, {
+        headers: ownerHeaders,
+        data: {
+          name: initialTrack!.name,
+          color: initialTrack!.color,
+          order: initialTrack!.order,
+          expectedVersion: track!.version,
+          idempotencyKey: idempotency("restore-track"),
+        },
+      });
+      expect(response.status()).toBe(200);
+    }
+    if (room!.name !== initialRoom!.name || room!.capacity !== initialRoom!.capacity || room!.order !== initialRoom!.order) {
+      const latest = (await loadAgenda()).rooms.find(({ id }) => id === initialRoom!.id)!;
+      const response = await request.patch(`${agendaPath}/rooms/${latest.id}`, {
+        headers: ownerHeaders,
+        data: {
+          name: initialRoom!.name,
+          capacity: initialRoom!.capacity,
+          order: initialRoom!.order,
+          expectedVersion: latest.version,
+          idempotencyKey: idempotency("restore-room"),
+        },
+      });
+      expect(response.status()).toBe(200);
+    }
+  };
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/agenda");
+  try {
+    await page.getByRole("button", { name: "Tracks & rooms" }).click();
+    let setup = page.getByRole("dialog", { name: "Tracks and rooms" });
+    await setup.getByRole("button", { name: `Edit track ${initialTrack!.name}`, exact: true }).click();
+    const trackName = setup.getByLabel("Track name");
+    await trackName.fill(`${initialTrack!.name} unsaved`);
+
+    let closeMessage = "";
+    page.once("dialog", async (dialog) => {
+      closeMessage = dialog.message();
+      await dialog.dismiss();
+    });
+    await setup.getByRole("button", { name: "Close" }).click();
+    expect(closeMessage).toBe("Discard unsaved track or room changes?");
+    await expect(setup).toBeVisible();
+    await expect(trackName).toHaveValue(`${initialTrack!.name} unsaved`);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await setup.getByRole("button", { name: "Close" }).click();
+    await expect(setup).toBeHidden();
+    await page.getByRole("button", { name: "Tracks & rooms" }).click();
+    setup = page.getByRole("dialog", { name: "Tracks and rooms" });
+    await expect(setup.getByLabel("New track name")).toHaveValue("");
+
+    const createTrackForm = setup.locator("form").filter({ has: page.getByRole("button", { name: "Create track" }) });
+    await createTrackForm.getByLabel("New track name").fill("QA invalid track");
+    await createTrackForm.getByLabel("Color (hex)").fill("not-a-color");
+    await createTrackForm.getByRole("button", { name: "Create track" }).click();
+    await expect(page.getByText("Track color must be a six-digit hex value such as #2563EB", { exact: true }).first()).toBeVisible();
+    await expect(createTrackForm.getByLabel("New track name")).toHaveValue("QA invalid track");
+
+    await setup.getByRole("button", { name: `Edit track ${initialTrack!.name}`, exact: true }).click();
+    const trackForm = setup.locator("form").filter({ has: page.getByRole("button", { name: "Update track" }) });
+    await trackForm.getByLabel("Track name").fill(updatedTrackName);
+    await trackForm.getByLabel("Color (hex)").fill("#123ABC");
+    await trackForm.getByLabel("Display order").fill(String(initialTrack!.order + 20));
+    await trackForm.getByRole("button", { name: "Update track" }).click();
+    await expect(page.getByText("Track updated", { exact: true }).first()).toBeVisible();
+    await expect.poll(async () => (await loadAgenda()).tracks.find(({ id }) => id === initialTrack!.id)?.name).toBe(updatedTrackName);
+
+    const createRoomForm = setup.locator("form").filter({ has: page.getByRole("button", { name: "Create room" }) });
+    await createRoomForm.getByLabel("New room name").fill("QA invalid room");
+    const invalidCapacity = createRoomForm.getByLabel("Capacity");
+    await invalidCapacity.fill("0");
+    await createRoomForm.getByRole("button", { name: "Create room" }).click();
+    expect(await invalidCapacity.evaluate((input: HTMLInputElement) => input.validity.rangeUnderflow)).toBe(true);
+    await expect(createRoomForm.getByLabel("New room name")).toHaveValue("QA invalid room");
+
+    await setup.getByRole("button", { name: `Edit room ${initialRoom!.name}`, exact: true }).click();
+    const roomForm = setup.locator("form").filter({ has: page.getByRole("button", { name: "Update room" }) });
+    await roomForm.getByLabel("Room name").fill(updatedRoomName);
+    await roomForm.getByLabel("Capacity").fill("321");
+    await roomForm.getByLabel("Display order").fill(String(initialRoom!.order + 20));
+    await roomForm.getByRole("button", { name: "Update room" }).click();
+    await expect(page.getByText("Room updated", { exact: true }).first()).toBeVisible();
+    await expect.poll(async () => (await loadAgenda()).rooms.find(({ id }) => id === initialRoom!.id)?.name).toBe(updatedRoomName);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("h1").waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "Tracks & rooms" }).click();
+    setup = page.getByRole("dialog", { name: "Tracks and rooms" });
+    await expect(setup.getByRole("button", { name: `Edit track ${updatedTrackName}`, exact: true })).toBeVisible();
+    await expect(setup.getByRole("button", { name: `Edit room ${updatedRoomName}`, exact: true })).toBeVisible();
+  } finally {
+    await restore();
+  }
+
+  const restored = await loadAgenda();
+  expect(restored.tracks.find(({ id }) => id === initialTrack!.id)).toMatchObject({
+    name: initialTrack!.name,
+    color: initialTrack!.color,
+    order: initialTrack!.order,
+  });
+  expect(restored.rooms.find(({ id }) => id === initialRoom!.id)).toMatchObject({
+    name: initialRoom!.name,
+    capacity: initialRoom!.capacity,
+    order: initialRoom!.order,
+  });
+});
+
 test("communications protects unsaved edits and rejects a stale template writer without losing its draft", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/comms");

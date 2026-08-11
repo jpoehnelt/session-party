@@ -422,6 +422,34 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     () => agenda?.talks.find(({ id }) => id === selectedTalkId) ?? null,
     [agenda, selectedTalkId],
   );
+  const setupDirty = useMemo(() => {
+    const trackChanged = trackDraft.id === null
+      ? trackDraft.name !== "" || trackDraft.color !== "" || trackDraft.order !== "0"
+      : (() => {
+          const track = agenda?.tracks.find(({ id }) => id === trackDraft.id);
+          return !track
+            || trackDraft.name !== track.name
+            || trackDraft.color !== (track.color ?? "")
+            || trackDraft.order !== String(track.order);
+        })();
+    const roomChanged = roomDraft.id === null
+      ? roomDraft.name !== "" || roomDraft.capacity !== "" || roomDraft.order !== "0"
+      : (() => {
+          const agendaRoom = agenda?.rooms.find(({ id }) => id === roomDraft.id);
+          return !agendaRoom
+            || roomDraft.name !== agendaRoom.name
+            || roomDraft.capacity !== (agendaRoom.capacity === null ? "" : String(agendaRoom.capacity))
+            || roomDraft.order !== String(agendaRoom.order);
+        })();
+    return trackChanged || roomChanged;
+  }, [agenda?.rooms, agenda?.tracks, roomDraft, trackDraft]);
+
+  const closeSetup = useCallback(() => {
+    if (setupDirty && !window.confirm("Discard unsaved track or room changes?")) return;
+    setSetupOpen(false);
+    setTrackDraft(emptyTrackDraft());
+    setRoomDraft(emptyRoomDraft());
+  }, [setupDirty]);
 
   const selectTalk = (talk: AgendaTalk, message: string | null = null) => {
     room.send({ t: "agenda/focus", talkId: talk.id });
@@ -941,7 +969,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
       <Sheet
         open={setupOpen}
-        onClose={() => setSetupOpen(false)}
+        onClose={closeSetup}
         title="Tracks and rooms"
         size="lg"
       >
@@ -960,7 +988,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                       <p className="truncate text-sm font-black text-ink">{track.name}</p>
                       <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-ink-secondary">Order {track.order} · Version {track.version}{track.color ? ` · ${track.color}` : ""}</p>
                     </div>
-                    <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => editTrack(track)}>Edit</Button>
+                    <Button type="button" size="sm" variant="secondary" aria-label={`Edit track ${track.name}`} disabled={busy} onClick={() => editTrack(track)}>Edit</Button>
                   </li>
                 ))}
               </ul>
@@ -1011,7 +1039,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                       <p className="truncate text-sm font-black text-ink">{room.name}</p>
                       <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-ink-secondary">Order {room.order} · Version {room.version}{room.capacity === null ? "" : ` · ${room.capacity} seats`}</p>
                     </div>
-                    <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => editRoom(room)}>Edit</Button>
+                    <Button type="button" size="sm" variant="secondary" aria-label={`Edit room ${room.name}`} disabled={busy} onClick={() => editRoom(room)}>Edit</Button>
                   </li>
                 ))}
               </ul>
