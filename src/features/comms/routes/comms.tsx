@@ -560,9 +560,9 @@ export function CommunicationsWorkspace({ event }: { readonly event: EventIdenti
         className="border-[3px] border-line-strong bg-ink p-5 text-on-accent shadow-[7px_7px_0_#7857ff] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-[0.88] [&_h1]:tracking-[-0.055em] [&_h1]:text-on-accent sm:[&_h1]:text-5xl [&_p]:mt-4 [&_p]:max-w-2xl [&_p]:font-semibold [&_p]:text-on-accent/70"
         actions={(
           <div className="border-2 border-line-strong bg-production-lime px-4 py-3 text-ink shadow-[4px_4px_0_#fffdf7]">
-            <p className="text-3xl font-black leading-none tracking-[-0.06em]">{eligibleRecipients.length}</p>
-            <p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em]">Speakers on comms</p>
-            <p className="mt-2 text-[9px] font-black uppercase tracking-[0.12em] opacity-70">{history.localCaptureCount} local captures</p>
+            <p className="text-3xl font-black leading-none tracking-[-0.06em] !text-ink">{eligibleRecipients.length}</p>
+            <p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em] !text-ink">Speakers on comms</p>
+            <p className="mt-2 text-[9px] font-black uppercase tracking-[0.12em] !text-ink">{history.localCaptureCount} local captures</p>
           </div>
         )}
       />

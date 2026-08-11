@@ -450,7 +450,7 @@ export function FormBuilder({
             className={PRODUCTION_CARD}
             title={
               <span className="flex flex-wrap items-center justify-between gap-2">
-                <span><span className="mr-2 opacity-60">{String(index + 1).padStart(2, "0")}</span>{field.label || "Untitled field"}</span>
+                <span><span className="mr-2">{String(index + 1).padStart(2, "0")}</span>{field.label || "Untitled field"}</span>
                 <Badge className={PRODUCTION_BADGE}>{FIELD_TYPE_LABELS[field.type]}</Badge>
               </span>
             }

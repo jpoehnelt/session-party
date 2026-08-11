@@ -150,6 +150,7 @@ function Topbar({
   return (
     <div className="flex items-center justify-between gap-3 py-1">
       <Button
+        id="mobile-navigation-trigger"
         className="min-h-11 lg:hidden"
         variant="secondary"
         type="button"
@@ -205,7 +206,10 @@ function Layout({ children, contentWidth }: { children: ReactNode; contentWidth?
       <Sheet
         id="mobile-navigation"
         open={mobileNavigationOpen}
-        onClose={() => setMobileNavigationOpen(false)}
+        onClose={() => {
+          setMobileNavigationOpen(false);
+          requestAnimationFrame(() => document.getElementById("mobile-navigation-trigger")?.focus());
+        }}
         title="Navigation"
       >
         <Sidebar mobile onNavigate={() => setMobileNavigationOpen(false)} />
@@ -218,6 +222,7 @@ function NotFound() {
   return (
     <Layout>
       <EmptyState
+        headingLevel={1}
         title="Page not found"
         description="The page you requested does not exist."
       />
@@ -241,7 +246,7 @@ function RouteCoordinator({ children }: { children: ReactNode }) {
         main.id ||= "main-content";
         main.tabIndex = -1;
       }
-      const name = heading.textContent?.replace(/\s+/g, " ").trim();
+      const name = heading.innerText.replace(/\s+/g, " ").trim();
       if (location.pathname === "/") document.title = "Session Party — Your whole program, ready on cue.";
       else if (name) document.title = `${name} — Session Party`;
       const canonicalUrl = `${window.location.origin}${location.pathname}`;
@@ -263,11 +268,9 @@ function RouteCoordinator({ children }: { children: ReactNode }) {
       }
       return true;
     };
-    if (apply()) return;
-    const observer = new MutationObserver(() => {
-      if (apply()) observer.disconnect();
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
+    apply();
+    const observer = new MutationObserver(apply);
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     return () => observer.disconnect();
   }, [location.pathname]);
 
@@ -293,6 +296,6 @@ export const router = createBrowserRouter([
   })),
   {
     path: "*",
-    element: <NotFound />,
+    element: <RouteCoordinator><NotFound /></RouteCoordinator>,
   },
 ]);

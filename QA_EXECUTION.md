@@ -1,0 +1,60 @@
+# QA execution record — AI Engineer Sandbox
+
+Run date: 2026-08-11  
+Target: `https://sessionparty.com/e/ai-engineer-sandbox`  
+Specification: `QA_PLAN.md`
+
+## Automated coverage implemented
+
+`pnpm test:qa` starts a clean local Worker, hydrates the deterministic AI Engineer Sandbox fixture, and runs the Playwright matrix in Desktop Chrome and a Pixel 7 viewport.
+
+- 26 organizer, portal, public, embed, authentication, invitation, and error routes at both breakpoints.
+- Runtime discovery and JSON evidence for links, buttons, inputs, selects, textareas, summaries, and explicit ARIA roles.
+- Accessible-name, single-H1, document-title, canonical-URL, current-navigation, horizontal-overflow, browser-error, and HTTP-document assertions.
+- Axe WCAG 2.0/2.1/2.2 A/AA scans; serious and critical violations fail the run.
+- Skip-link, mobile navigation, Escape close, focus restoration, client-route focus, title, and canonical behavior.
+- Safe interaction scenarios for login validation, modal validation/cancel, submission filters and pagination, review filters, contact editing, speaker selection, destructive-dialog cancellation, agenda views/setup/live show, communication tabs/template editing, publish/import confirmation, membership-role cancellation, and public-program mobile navigation/session details/schedule controls.
+
+Latest local result: **69 passed, 13 intentionally skipped, 0 failed**. The skips avoid duplicating desktop-only interaction scenarios on mobile and mobile-only scenarios on desktop; route, layout, control, and accessibility coverage still runs at both breakpoints.
+
+Baseline regression suites also passed before the QA fixes:
+
+- `pnpm check`: registry, TypeScript, and 98-item/145-check rubric manifest passed.
+- `pnpm test`: 47 files and 469 tests passed.
+- `pnpm test:audit-browser`: 6 files and 11 tests passed.
+- `pnpm rubric:test`: 7 tests passed.
+
+## Defects found and fixed
+
+| Area | Finding | Resolution |
+| --- | --- | --- |
+| Route metadata | Agenda/communications H1 text could be concatenated in the title; async public routes retained the loading title. | Use rendered heading text and keep route metadata synchronized through async updates. |
+| Error routing | The wildcard route retained stale metadata and had no H1. | Run it through the route coordinator and render the empty-state title as H1. |
+| Public errors | Stable public-program error states had no H1. | Add explicit EmptyState heading levels. |
+| Dialog focus | Mobile navigation and generic modals failed to return focus to their opener. | Capture the opener before the portal moves focus and restore it after close. |
+| Publication IA | Publication rendered both “Publish the run of show” and “Embed & share” as H1. | Support section heading levels and render the embedded builder title as H2. |
+| ARIA | Onboarding and event-setup visual meters used `aria-label` on generic divs. | Expose native progressbar semantics and numeric values. |
+| Contrast | Forms, review, communications, landing, integrations, checkbox help, and speaker-portal text produced serious contrast violations. | Replace opacity/faint tokens with passing semantic text colors. |
+| Keyboard access | The horizontally scrollable MCP endpoint was not keyboard focusable on mobile. | Make scrollable code regions focusable. |
+
+## Deployed read-only reconciliation
+
+The public subset was also run against `https://sessionparty.com` without fixture writes: **8 passed and 10 failed**, representing three unique defects in the currently deployed revision:
+
+1. Landing workflow-card text has serious contrast violations at desktop and mobile.
+2. Sessions and Speakers public routes retain `Loading published program — Session Party` after content loads.
+3. The unknown-route page has no H1.
+
+All three pass in the local matrix with this change set. Login, schedule embed, speaker embed, and invalid reviewer-invitation surfaces passed at both breakpoints.
+
+## Deliberately not executed against production
+
+The production run is read-only. Publishing, imports, member/role changes, key creation/revocation, deletes, outbound communication, uploads, acceptance decisions, and other mutating/destructive actions remain limited to the deterministic local sandbox. The following plan areas still require dedicated controlled environments or human sessions before a full release sign-off:
+
+- Admin/unassigned/recused/cross-event personas and live API-key authorization boundaries.
+- Real provider email, file-storage, Airtable, Accelevents, retry/dead-letter, and audit evidence.
+- Concurrent stale-version, offline/reconnect, Party gap recovery, idempotency-race, and session-expiry cases.
+- Screen-reader manual passes, 200% zoom/high-contrast/manual visual review, non-Chromium browser coverage, and moderated IA first-click studies.
+- Load, Core Web Vitals, slow-network, failure-injection, security-header, CSP, and upload/embed adversarial testing.
+
+Those items remain blockers for claiming the entire `QA_PLAN.md` release gate; they are not silently treated as passes.

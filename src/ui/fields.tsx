@@ -144,7 +144,7 @@ export function Checkbox({
         <label htmlFor={inputId} className="flex select-none flex-col gap-0.5">
           {label && <span className="text-sm font-bold text-ink">{label}</span>}
           {description && (
-            <span className="text-[13px] text-ink-faint">{description}</span>
+            <span className="text-[13px] text-ink-secondary">{description}</span>
           )}
         </label>
       )}

@@ -178,12 +178,12 @@ function WorkflowCard({ step }: { step: (typeof workflow)[number] }) {
     >
       <div className="flex items-start justify-between gap-5">
         <p className="text-xs font-black uppercase tracking-[0.14em]">{step.eyebrow}</p>
-        <span className="text-6xl font-black leading-none tracking-[-0.08em] opacity-25 sm:text-7xl">{step.number}</span>
+        <span className="text-6xl font-black leading-none tracking-[-0.08em] sm:text-7xl">{step.number}</span>
       </div>
       <div>
         <p className="mb-3 inline-block border-2 border-current px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em]">{step.detail}</p>
         <h3 className="text-4xl font-black tracking-[-0.055em] sm:text-5xl">{step.title}</h3>
-        <p className="mt-3 max-w-xl text-sm font-semibold leading-6 opacity-80 sm:text-base">{step.description}</p>
+        <p className="mt-3 max-w-xl text-sm font-semibold leading-6 sm:text-base">{step.description}</p>
       </div>
     </li>
   );

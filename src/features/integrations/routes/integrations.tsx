@@ -513,7 +513,7 @@ function IntegrationsWorkspace({
                       ["Conflicts", airtableStatus.counts.conflicts],
                     ].map(([label, value], index) => (
                       <div className={`px-2.5 py-3 ${index > 1 ? "border-t-2" : ""} ${index % 2 === 1 ? "border-l-2 sm:border-l-0" : ""} ${index % 3 !== 0 ? "sm:border-l-2" : ""}`} key={label}>
-                        <dt className="text-[8px] font-black uppercase tracking-[0.1em] text-ink/60">{label}</dt>
+                        <dt className="text-[8px] font-black uppercase tracking-[0.1em] text-ink">{label}</dt>
                         <dd className="mt-1 text-lg font-black tracking-[-0.04em] text-ink">{value}</dd>
                       </div>
                     ))}
@@ -628,7 +628,7 @@ function IntegrationsWorkspace({
                         ["Mode", latest.mode, "bg-production-yellow"],
                       ].map(([label, value, color], index) => (
                         <div className={`px-2.5 py-3 ${color} ${index > 0 ? "border-l-0 sm:border-l-2" : ""} ${index > 1 ? "border-t-2 sm:border-t-0" : ""} ${index % 2 === 1 ? "border-l-2" : ""}`} key={label}>
-                          <dt className="text-[8px] font-black uppercase tracking-[0.1em] text-ink/60">{label}</dt>
+                          <dt className="text-[8px] font-black uppercase tracking-[0.1em] text-ink">{label}</dt>
                           <dd className="mt-1 text-lg font-black capitalize tracking-[-0.04em] text-ink">{value}</dd>
                         </div>
                       ))}

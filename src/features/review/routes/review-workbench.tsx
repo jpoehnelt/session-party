@@ -682,7 +682,7 @@ export function ReviewWorkbenchContent({
           </div>
           <p className="mt-3 text-sm font-semibold text-ink">Evidence-first triage for {workbench.eventName}. Times shown in {workbench.timezone}.</p>
           {workbench.rounds.length > 1 && onSelectRound && loadedRound && (
-            <div className="mt-4 max-w-sm">
+            <div className="mt-4 max-w-sm [&_label]:text-ink">
               <Select
                 label="Review round"
                 value={loadedRound.id}

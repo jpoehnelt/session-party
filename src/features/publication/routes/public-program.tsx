@@ -78,6 +78,7 @@ export default function PublicProgramRoute() {
           </header>
           <EmptyState
             className="min-h-80 bg-production-coral/20 shadow-[8px_8px_0_#171714]"
+            headingLevel={1}
             title="Published program unavailable"
             description={state.message}
             action={<Button type="button" onClick={() => setRequest((value) => value + 1)}>Try again</Button>}

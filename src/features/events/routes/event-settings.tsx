@@ -217,7 +217,7 @@ export function ApiAccessPanel({ eventId, initialApiKeys }: ApiAccessPanelProps)
       <div className="mt-4 border-2 border-line-strong bg-surface-muted p-4">
         <p className="text-[11px] font-black uppercase tracking-[0.08em]">MCP endpoint</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs">{endpoint}</code>
+          <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs" tabIndex={0}>{endpoint}</code>
           <Button type="button" size="sm" variant="secondary" onClick={() => void copyText(endpoint, "Endpoint")}>Copy endpoint</Button>
         </div>
       </div>
@@ -245,7 +245,7 @@ export function ApiAccessPanel({ eventId, initialApiKeys }: ApiAccessPanelProps)
             <Button type="button" size="sm" variant="ghost" onClick={() => setCreated(null)}>Dismiss</Button>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs" data-testid="api-key-secret">{created.secret}</code>
+            <code className="min-w-0 flex-1 overflow-x-auto bg-surface px-3 py-2 text-xs" data-testid="api-key-secret" tabIndex={0}>{created.secret}</code>
             <Button type="button" size="sm" variant="secondary" onClick={() => void copyText(created.secret, "Secret")}>Copy secret</Button>
           </div>
           <p className="mt-4 text-[11px] font-black uppercase tracking-[0.08em]">Client configuration</p>
