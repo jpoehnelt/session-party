@@ -26,38 +26,12 @@ CREATE TABLE `task_assignments` (
 CREATE UNIQUE INDEX `task_assignments_event_id_unique` ON `task_assignments` (`event_id`,`id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `task_assignments_pair_unique` ON `task_assignments` (`event_id`,`task_id`,`speaker_id`);--> statement-breakpoint
 CREATE INDEX `task_assignments_speaker` ON `task_assignments` (`event_id`,`speaker_id`);--> statement-breakpoint
-PRAGMA foreign_keys=OFF;--> statement-breakpoint
-CREATE TABLE `__new_assets` (
-	`id` text PRIMARY KEY NOT NULL,
-	`event_id` text,
-	`uploader_user_id` text NOT NULL,
-	`speaker_id` text,
-	`purpose` text,
-	`supersedes_asset_id` text,
-	`restored_from_asset_id` text,
-	`current` integer DEFAULT true NOT NULL,
-	`filename` text NOT NULL,
-	`content_type` text NOT NULL,
-	`size` integer NOT NULL,
-	`version` integer DEFAULT 1 NOT NULL,
-	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL,
-	FOREIGN KEY (`event_id`) REFERENCES `events`(`id`) ON UPDATE cascade ON DELETE cascade,
-	FOREIGN KEY (`uploader_user_id`) REFERENCES `users`(`id`) ON UPDATE cascade ON DELETE restrict,
-	FOREIGN KEY (`event_id`,`supersedes_asset_id`) REFERENCES `assets`(`event_id`,`id`) ON UPDATE cascade ON DELETE restrict,
-	FOREIGN KEY (`event_id`,`restored_from_asset_id`) REFERENCES `assets`(`event_id`,`id`) ON UPDATE cascade ON DELETE restrict,
-	CONSTRAINT "assets_size_nonnegative" CHECK("__new_assets"."size" >= 0),
-	CONSTRAINT "assets_version_positive" CHECK("__new_assets"."version" > 0)
-);
---> statement-breakpoint
-INSERT INTO `__new_assets`("id", "event_id", "uploader_user_id", "speaker_id", "purpose", "supersedes_asset_id", "restored_from_asset_id", "current", "filename", "content_type", "size", "version", "created_at", "updated_at") SELECT "id", "event_id", "uploader_user_id", NULL, NULL, NULL, NULL, 1, "filename", "content_type", "size", "version", "created_at", "updated_at" FROM `assets`;--> statement-breakpoint
-DROP TABLE `assets`;--> statement-breakpoint
-ALTER TABLE `__new_assets` RENAME TO `assets`;--> statement-breakpoint
-PRAGMA foreign_keys=ON;--> statement-breakpoint
-CREATE UNIQUE INDEX `assets_event_id_unique` ON `assets` (`event_id`,`id`);--> statement-breakpoint
-CREATE INDEX `assets_event` ON `assets` (`event_id`);--> statement-breakpoint
+ALTER TABLE `assets` ADD `speaker_id` text;--> statement-breakpoint
+ALTER TABLE `assets` ADD `purpose` text;--> statement-breakpoint
+ALTER TABLE `assets` ADD `supersedes_asset_id` text;--> statement-breakpoint
+ALTER TABLE `assets` ADD `restored_from_asset_id` text;--> statement-breakpoint
+ALTER TABLE `assets` ADD `current` integer DEFAULT true NOT NULL;--> statement-breakpoint
 CREATE INDEX `assets_speaker_purpose` ON `assets` (`event_id`,`speaker_id`,`purpose`,`current`);--> statement-breakpoint
-CREATE INDEX `assets_uploader` ON `assets` (`uploader_user_id`);--> statement-breakpoint
 CREATE TABLE `__new_review_rounds` (
 	`id` text PRIMARY KEY NOT NULL,
 	`event_id` text NOT NULL,

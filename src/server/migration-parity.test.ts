@@ -585,12 +585,13 @@ describe("baseline migration parity", () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
     expect(migrations).toHaveLength(14);
-    await applyOneByOne(db, migrations.slice(0, 10));
+    await applyOneByOne(db, migrations.slice(0, 11));
     const now = 1_700_000_000_000;
     await db.batch([
       db.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('recusal-user', 'recusal@example.com', 'Recusal Reviewer', 1, ?, ?)").bind(now, now),
       db.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('recusal-event', 'recusal-event', 'Recusal Event', 'UTC', 1, ?, ?)").bind(now, now),
       db.prepare("INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at) VALUES ('recusal-member', 'recusal-event', 'recusal-user', 'reviewer', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO speakers (id, event_id, user_id, display_name, visible, version, created_at, updated_at) VALUES ('recusal-speaker', 'recusal-event', 'recusal-user', 'Recusal Reviewer', 1, 1, ?, ?)").bind(now, now),
       db.prepare("INSERT INTO forms (id, event_id, kind, name, status, version, created_at, updated_at) VALUES ('recusal-form', 'recusal-event', 'cfp', 'Recusal CFP', 'closed', 1, ?, ?)").bind(now, now),
       db.prepare("INSERT INTO form_versions (id, event_id, form_id, version_number, name, published_at, created_at) VALUES ('recusal-form-v1', 'recusal-event', 'recusal-form', 1, 'Recusal CFP', ?, ?)").bind(now, now),
       db.prepare("INSERT INTO submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, version, created_at, updated_at) VALUES ('recusal-submission', 'recusal-event', 'recusal-form', 'recusal-form-v1', 'Recusal proposal', 'submitted', ?, 1, ?, ?)").bind(now, now, now),
@@ -598,8 +599,14 @@ describe("baseline migration parity", () => {
       db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, version, created_at, updated_at) VALUES ('recusal-assignment-old', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 1, ?, ?)").bind(now, now),
       db.prepare("INSERT INTO assets (id, event_id, uploader_user_id, filename, content_type, size, version, created_at, updated_at) VALUES ('legacy-asset', 'recusal-event', 'recusal-user', 'legacy.pdf', 'application/pdf', 42, 3, ?, ?)").bind(now, now),
     ]);
+    await db.prepare(
+      "UPDATE speakers SET headshot_asset_id = 'legacy-asset' WHERE id = 'recusal-speaker'",
+    ).run();
+    expect(await db.prepare(
+      "SELECT headshot_asset_id FROM speakers WHERE id = 'recusal-speaker'",
+    ).first()).toEqual({ headshot_asset_id: "legacy-asset" });
 
-    await applyOneByOne(db, migrations.slice(10));
+    await applyOneByOne(db, migrations.slice(11));
     expect(await db.prepare(
       "SELECT id, status, recusal_reason, recused_at, version FROM review_assignments WHERE id = 'recusal-assignment-old'",
     ).first()).toEqual({
@@ -619,6 +626,9 @@ describe("baseline migration parity", () => {
       current: 1,
       version: 3,
     });
+    expect(await db.prepare(
+      "SELECT headshot_asset_id FROM speakers WHERE id = 'recusal-speaker'",
+    ).first()).toEqual({ headshot_asset_id: "legacy-asset" });
     expect(await db.prepare(
       "SELECT starts_at, ends_at, blind FROM review_rounds WHERE id = 'recusal-round'",
     ).first()).toEqual({ starts_at: null, ends_at: null, blind: 0 });
