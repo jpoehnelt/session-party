@@ -383,3 +383,24 @@ test("public CFP supports conditional fields, co-speaker controls, validation, a
   await page.getByRole("combobox", { name: "Best-fit track" }).selectOption("AI systems");
   await expect(page.getByRole("textbox", { name: "Workshop exercise plan" })).toHaveCount(0);
 });
+
+test("speaker upload rejects active content disguised as an allowed image without changing the asset list", async ({ context, page, baseURL }, testInfo) => {
+  desktopOnly(testInfo);
+  await signIn(context, baseURL ?? "http://127.0.0.1:5173", "demo-speaker-session");
+  await installDeterministicBrowser(page);
+  await page.goto(`/e/${EVENT}/portal`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { level: 1 }).waitFor({ state: "visible" });
+  const uploads = page.getByRole("region", { name: "Production files" });
+  const before = await uploads.locator("li").allTextContents();
+  await page.getByRole("combobox", { name: "File purpose" }).selectOption("headshot");
+  await page.getByLabel("Choose files").setInputFiles({
+    name: "renamed.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("<html><script>document.location='https://attacker.invalid'</script></html>"),
+  });
+  await expect(page.getByRole("alert").first()).toContainText("Invalid headshot file content, type, extension, or size");
+  await expect(uploads.getByText("renamed.png")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Production files" }).locator("li")).toHaveText(before);
+});

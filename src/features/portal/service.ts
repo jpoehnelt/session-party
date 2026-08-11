@@ -745,7 +745,7 @@ const uploadPolicy = (
   purpose: UploadPortalAssetInput["purpose"],
   contentType: string,
   filename: string,
-  size: number,
+  data: Uint8Array,
 ) => {
   const extension = filename.toLowerCase().split(".").pop() ?? "";
   const allowed: Readonly<Record<string, readonly string[]>> = purpose === "headshot"
@@ -766,8 +766,39 @@ const uploadPolicy = (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ["docx"],
       };
   const maxSize = PORTAL_UPLOAD_MAX_BYTES[purpose];
-  if (!allowed[contentType as keyof typeof allowed]?.includes(extension) || size === 0 || size > maxSize) {
-    return new Validation({ message: `Invalid ${purpose} file type, extension, or size` });
+  const startsWith = (signature: readonly number[]) =>
+    data.length >= signature.length && signature.every((byte, index) => data[index] === byte);
+  const endsWith = (signature: readonly number[]) => {
+    const offset = data.length - signature.length;
+    return offset >= 0 && signature.every((byte, index) => data[offset + index] === byte);
+  };
+  const containsAscii = (value: string) => {
+    const signature = [...value].map((character) => character.charCodeAt(0));
+    outer: for (let offset = 0; offset <= data.length - signature.length; offset += 1) {
+      for (let index = 0; index < signature.length; index += 1) {
+        if (data[offset + index] !== signature[index]) continue outer;
+      }
+      return true;
+    }
+    return false;
+  };
+  const contentMatches = contentType === "image/png"
+    ? startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) && containsAscii("IEND")
+    : contentType === "image/jpeg"
+      ? startsWith([0xff, 0xd8, 0xff]) && endsWith([0xff, 0xd9])
+      : contentType === "image/webp"
+        ? startsWith([0x52, 0x49, 0x46, 0x46]) && data.length >= 12 && data.slice(8, 12).every((byte, index) => byte === [0x57, 0x45, 0x42, 0x50][index])
+        : contentType === "application/pdf"
+          ? startsWith([0x25, 0x50, 0x44, 0x46, 0x2d]) && containsAscii("%%EOF")
+          : contentType === "application/vnd.ms-powerpoint" || contentType === "application/msword"
+            ? data.length >= 512 && startsWith([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
+            : contentType === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+              ? startsWith([0x50, 0x4b, 0x03, 0x04]) && containsAscii("ppt/") && containsAscii("PK\u0005\u0006")
+              : contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                ? startsWith([0x50, 0x4b, 0x03, 0x04]) && containsAscii("word/") && containsAscii("PK\u0005\u0006")
+                : false;
+  if (!allowed[contentType as keyof typeof allowed]?.includes(extension) || data.byteLength === 0 || data.byteLength > maxSize || !contentMatches) {
+    return new Validation({ message: `Invalid ${purpose} file content, type, extension, or size` });
   }
   return null;
 };
@@ -2068,7 +2099,7 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
     input.purpose,
     input.contentType,
     input.filename,
-    data.byteLength,
+    data,
   );
   if (policyError) return yield* Effect.fail(policyError);
 
@@ -3045,7 +3076,7 @@ export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.E
 export const uploadManagedSpeakerHeadshot = (input: UploadManagedSpeakerHeadshotInput): Effect.Effect<ContentAsset, AppError, Db | CurrentUser | Authorizer | Files> => Effect.gen(function* () {
   const actor = yield* organizer(input.eventId, "content:write");
   const data = yield* decodeBase64(input.contentBase64, "headshot");
-  const policyError = uploadPolicy("headshot", input.contentType, input.filename, data.byteLength);
+  const policyError = uploadPolicy("headshot", input.contentType, input.filename, data);
   if (policyError) return yield* Effect.fail(policyError);
   const { db } = yield* Db;
   const contentHash = yield* sha256(input.contentBase64);

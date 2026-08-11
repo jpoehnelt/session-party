@@ -575,7 +575,7 @@ for (const [purpose, filename, key, taskId] of [
       purpose,
       filename,
       contentType: "application/pdf",
-      contentBase64: "JVBERi0xLjQKJSBkZXRlcm1pbmlzdGljIGRlbW8K",
+      contentBase64: "JVBERi0xLjQKJSBkZXRlcm1pbmlzdGljIGRlbW8KJSVFT0Y=",
       expectedVersion: taskId ? materialsVersion : 0,
       idempotencyKey: key,
     },

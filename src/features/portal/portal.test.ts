@@ -130,14 +130,27 @@ const expectFailure = async (
   expect(result._tag).toBe("Left");
   if (result._tag === "Left") expect(result.left._tag).toBe(tag);
 };
-const base64Payload = (size: number): string => {
+const asciiBytes = (value: string): readonly number[] => [...value].map((character) => character.charCodeAt(0));
+const base64Payload = (
+  size: number,
+  { prefix = [], marker = [], suffix = [] }: {
+    readonly prefix?: readonly number[];
+    readonly marker?: readonly number[];
+    readonly suffix?: readonly number[];
+  } = {},
+): string => {
   const bytes = new Uint8Array(size);
+  bytes.set(prefix, 0);
+  bytes.set(marker, Math.min(Math.max(prefix.length, 64), size - marker.length));
+  bytes.set(suffix, size - suffix.length);
   const chunks: string[] = [];
   for (let offset = 0; offset < bytes.length; offset += 32_768) {
     chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 32_768)));
   }
   return btoa(chunks.join(""));
 };
+const validPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const validPdfBase64 = "JVBERi0xLjQKMSAwIG9iago8PD4+CmVuZG9iagolJUVPRg==";
 
 
 const fixture = async ({
@@ -691,7 +704,7 @@ describe("portal service", () => {
     const setup = await fixture();
     const task = await runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Headshot", description: null, kind: "upload", formId: null, dueAt: null, order: 1 }));
     await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
-    const firstInput = { eventId: setup.eventId, taskId: task.id, purpose: "headshot", filename: "headshot.png", contentType: "image/png", contentBase64: "iVBORw0KGgo=", expectedVersion: 1, idempotencyKey: `headshot-${task.id}` } as const;
+    const firstInput = { eventId: setup.eventId, taskId: task.id, purpose: "headshot", filename: "headshot.png", contentType: "image/png", contentBase64: validPngBase64, expectedVersion: 1, idempotencyKey: `headshot-${task.id}` } as const;
     const result = await runAs(speakerUser, uploadPortalAsset(firstInput));
     expect(result.speaker.headshotAssetId).toBe(result.asset.id);
     const replay = await runAs(speakerUser, uploadPortalAsset(firstInput));
@@ -714,7 +727,7 @@ describe("portal service", () => {
       purpose: "headshot",
       filename: "replacement.png",
       contentType: "image/png",
-      contentBase64: "iVBORw0KGgo=",
+      contentBase64: validPngBase64,
       expectedVersion: result.speaker.version,
       idempotencyKey: `headshot-replacement-${task.id}`,
     }));
@@ -748,7 +761,6 @@ describe("portal service", () => {
       expectedVersion: 1,
     }));
     const put = vi.spyOn(env.FILES, "put").mockResolvedValue({} as R2Object);
-    const contentBase64 = base64Payload(10 * 1_024 * 1_024);
     const cases = [
       {
         purpose: "headshot" as const,
@@ -756,6 +768,9 @@ describe("portal service", () => {
         contentType: "image/webp",
         taskId: uploadTasks[0]!.id,
         expectedVersion: 1,
+        contentBase64: base64Payload(10 * 1_024 * 1_024, {
+          prefix: asciiBytes("RIFF0000WEBP"),
+        }),
       },
       {
         purpose: "slides" as const,
@@ -763,6 +778,11 @@ describe("portal service", () => {
         contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         taskId: uploadTasks[1]!.id,
         expectedVersion: 0,
+        contentBase64: base64Payload(10 * 1_024 * 1_024, {
+          prefix: [0x50, 0x4b, 0x03, 0x04],
+          marker: asciiBytes("ppt/"),
+          suffix: [0x50, 0x4b, 0x05, 0x06],
+        }),
       },
       {
         purpose: "document" as const,
@@ -770,6 +790,11 @@ describe("portal service", () => {
         contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         taskId: uploadTasks[2]!.id,
         expectedVersion: 0,
+        contentBase64: base64Payload(10 * 1_024 * 1_024, {
+          prefix: [0x50, 0x4b, 0x03, 0x04],
+          marker: asciiBytes("word/"),
+          suffix: [0x50, 0x4b, 0x05, 0x06],
+        }),
       },
     ];
     try {
@@ -777,7 +802,6 @@ describe("portal service", () => {
         const result = await runAs(speakerUser, uploadPortalAsset({
           eventId: setup.eventId,
           ...upload,
-          contentBase64,
           idempotencyKey: `max-upload-${setup.eventId}-${index}`,
         }));
         expect(result.asset.size).toBe(10 * 1_024 * 1_024);
@@ -809,7 +833,10 @@ describe("portal service", () => {
       expectedVersion: 1,
     }));
     const put = vi.spyOn(env.FILES, "put").mockResolvedValue({} as R2Object);
-    const contentBase64 = base64Payload(10 * 1_024 * 1_024 + 1);
+    const contentBase64 = base64Payload(10 * 1_024 * 1_024 + 1, {
+      prefix: [0xff, 0xd8, 0xff],
+      suffix: [0xff, 0xd9],
+    });
     const cases = [
       { purpose: "headshot" as const, filename: "speaker.jpg", contentType: "image/jpeg", expectedVersion: 1 },
     ];
@@ -821,6 +848,55 @@ describe("portal service", () => {
           ...upload,
           contentBase64,
           idempotencyKey: `oversize-upload-${setup.eventId}-${index}`,
+        }), "Validation");
+      }
+      expect(put).not.toHaveBeenCalled();
+      const db = drizzle(env.DB);
+      expect(await db.select().from(assets).where(eq(assets.eventId, setup.eventId))).toHaveLength(0);
+      expect(await db.select().from(taskCompletions).where(eq(taskCompletions.eventId, setup.eventId))).toHaveLength(0);
+      expect(await db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, setup.eventId))).toHaveLength(0);
+    } finally {
+      put.mockRestore();
+    }
+  });
+
+  it("rejects empty, spoofed, active-content, executable, and corrupt uploads before durable side effects", async () => {
+    const setup = await fixture();
+    const task = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Upload",
+      description: null,
+      kind: "upload",
+      formId: null,
+      dueAt: null,
+      order: 1,
+    }));
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const put = vi.spyOn(env.FILES, "put").mockResolvedValue({} as R2Object);
+    const encoded = (value: string) => btoa(value);
+    const cases = [
+      { purpose: "headshot" as const, filename: "empty.png", contentType: "image/png", contentBase64: "" },
+      { purpose: "headshot" as const, filename: "renamed.png", contentType: "image/png", contentBase64: encoded("<html><script>alert(1)</script></html>") },
+      { purpose: "headshot" as const, filename: "vector.png", contentType: "image/png", contentBase64: encoded("<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>") },
+      { purpose: "headshot" as const, filename: "truncated.png", contentType: "image/png", contentBase64: "iVBORw0KGgo=" },
+      { purpose: "slides" as const, filename: "deck.pdf", contentType: "application/pdf", contentBase64: encoded("MZ executable disguised as a PDF %%EOF") },
+      { purpose: "slides" as const, filename: "deck.pptx", contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", contentBase64: btoa(String.fromCharCode(0x50, 0x4b, 0x03, 0x04) + "ppt/corrupt") },
+      { purpose: "document" as const, filename: "notes.docx", contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", contentBase64: btoa(String.fromCharCode(0x50, 0x4b, 0x03, 0x04) + "word/corrupt") },
+      { purpose: "document" as const, filename: "notes.pdf.exe", contentType: "application/pdf", contentBase64: validPdfBase64 },
+    ];
+    try {
+      for (const [index, upload] of cases.entries()) {
+        await expectFailure(speakerUser, uploadPortalAsset({
+          eventId: setup.eventId,
+          taskId: task.id,
+          ...upload,
+          expectedVersion: upload.purpose === "headshot" ? 1 : 0,
+          idempotencyKey: `adversarial-upload-${setup.eventId}-${index}`,
         }), "Validation");
       }
       expect(put).not.toHaveBeenCalled();
@@ -1166,7 +1242,7 @@ describe("portal service", () => {
     }));
     await expectFailure(speakerUser, uploadPortalAsset({
       eventId: setup.eventId, taskId: selectedOnly.id, purpose: "slides", filename: "private.pdf",
-      contentType: "application/pdf", contentBase64: "QQ==", expectedVersion: 0,
+      contentType: "application/pdf", contentBase64: validPdfBase64, expectedVersion: 0,
       idempotencyKey: `private-upload-${setup.eventId}`,
     }), "Forbidden");
     expect(await drizzle(env.DB).select().from(assets).where(eq(assets.eventId, setup.eventId))).toHaveLength(0);
@@ -1226,11 +1302,11 @@ describe("portal service", () => {
     }));
     const first = await runAs(speakerUser, uploadPortalAsset({
       eventId: setup.eventId, taskId: task.id, purpose: "headshot", filename: "first.png", contentType: "image/png",
-      contentBase64: "iVBORw0KGgo=", expectedVersion: 1, idempotencyKey: `history-first-${setup.eventId}`,
+      contentBase64: validPngBase64, expectedVersion: 1, idempotencyKey: `history-first-${setup.eventId}`,
     }));
     const second = await runAs(speakerUser, uploadPortalAsset({
       eventId: setup.eventId, taskId: task.id, purpose: "headshot", filename: "second.png", contentType: "image/png",
-      contentBase64: "iVBORw0KGgo=", expectedVersion: first.speaker.version, idempotencyKey: `history-second-${setup.eventId}`,
+      contentBase64: validPngBase64, expectedVersion: first.speaker.version, idempotencyKey: `history-second-${setup.eventId}`,
     }));
     await runAs(owner, addContentComment({
       eventId: setup.eventId, assetId: second.asset.id, body: "Organizer review", idempotencyKey: `comment-owner-${setup.eventId}`,
@@ -1249,8 +1325,14 @@ describe("portal service", () => {
       ],
     });
     await expect(runAs(owner, downloadContent({ eventId: setup.eventId, assetId: first.asset.id }))).resolves.toMatchObject({
-      asset: { id: first.asset.id, current: false }, contentBase64: "iVBORw0KGgo=",
+      asset: { id: first.asset.id, current: false }, contentBase64: validPngBase64,
     });
+    await expect(runAs(speakerUser, downloadContent({ eventId: setup.eventId, assetId: first.asset.id }))).resolves.toMatchObject({
+      asset: { id: first.asset.id }, contentBase64: validPngBase64,
+    });
+    await expectFailure(reviewer, downloadContent({ eventId: setup.eventId, assetId: first.asset.id }), "Forbidden");
+    await expectFailure(otherUser, downloadContent({ eventId: setup.eventId, assetId: first.asset.id }), "Forbidden");
+    await expectFailure(owner, downloadContent({ eventId: "wrong-event", assetId: first.asset.id }), "NotFound");
     const restoreInput = {
       eventId: setup.eventId,
       assetId: first.asset.id,
@@ -1271,7 +1353,7 @@ describe("portal service", () => {
     const currentProfile = (await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }))).speakers.find((item) => item.speaker.id === setup.speakerId)!.speaker;
     const managedHeadshot = await runAs(owner, uploadManagedSpeakerHeadshot({
       eventId: setup.eventId, speakerId: setup.speakerId, expectedVersion: currentProfile.version,
-      filename: "organizer.webp", contentType: "image/webp", contentBase64: "UklGRg==",
+      filename: "organizer.webp", contentType: "image/webp", contentBase64: "UklGRjAwMDBXRUJQ",
       idempotencyKey: `managed-headshot-${setup.eventId}`,
     }));
     expect(managedHeadshot).toMatchObject({ current: true, purpose: "headshot", version: 4, supersedesAssetId: restored.id });
@@ -1282,6 +1364,8 @@ describe("portal service", () => {
     })]);
     expect(await env.FILES.get(`portal/${setup.eventId}/${first.asset.id}`)).not.toBeNull();
     expect(await drizzle(env.DB).select().from(assetComments).where(eq(assetComments.assetId, second.asset.id))).toHaveLength(2);
+    await env.FILES.delete(`portal/${setup.eventId}/${first.asset.id}`);
+    await expectFailure(owner, downloadContent({ eventId: setup.eventId, assetId: first.asset.id }), "NotFound");
   });
 
   it("rejects restore when a linked task completion changes before commit", async () => {
@@ -1296,12 +1380,12 @@ describe("portal service", () => {
     }));
     const first = await runAs(speakerUser, uploadPortalAsset({
       eventId: setup.eventId, taskId: task.id, purpose: "slides", filename: "first.pdf",
-      contentType: "application/pdf", contentBase64: "QQ==", expectedVersion: 0,
+      contentType: "application/pdf", contentBase64: validPdfBase64, expectedVersion: 0,
       idempotencyKey: `restore-completion-first-${setup.eventId}`,
     }));
     const second = await runAs(speakerUser, uploadPortalAsset({
       eventId: setup.eventId, taskId: task.id, purpose: "slides", filename: "second.pdf",
-      contentType: "application/pdf", contentBase64: "Qg==", expectedVersion: first.asset.version,
+      contentType: "application/pdf", contentBase64: validPdfBase64, expectedVersion: first.asset.version,
       idempotencyKey: `restore-completion-second-${setup.eventId}`,
     }));
     const db = drizzle(env.DB);
