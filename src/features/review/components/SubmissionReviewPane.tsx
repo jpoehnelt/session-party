@@ -117,14 +117,25 @@ function ScoreRationales({
                     {review.comment || "No written comment supplied."}
                   </p>
                   <dl className="mt-3 flex flex-wrap gap-2">
-                    {submission.round?.rubric.criteria.map((criterion) => (
-                      <div key={criterion.key} className="rounded-control border-2 border-line-strong bg-surface-muted px-2.5 py-1.5">
-                        <dt className="inline text-[10px] font-black uppercase tracking-[0.06em] text-ink-faint">{criterion.label}: </dt>
-                        <dd className="inline font-mono text-xs font-black tabular-nums text-ink">
-                          {scoreByCriterion[criterion.key] ?? "—"}{criterion.type === "text" ? "" : " / 5"}
-                        </dd>
-                      </div>
-                    ))}
+                    {submission.round?.rubric.criteria.map((criterion) => {
+                      const value = scoreByCriterion[criterion.key];
+                      const rendered = value === undefined
+                        ? "—"
+                        : criterion.type === "text"
+                          ? String(value)
+                          : criterion.type === "dropdown"
+                            ? (() => {
+                                const option = criterion.options?.find((candidate) => candidate.value === value);
+                                return option ? `${option.label} (${option.score} / 5)` : "—";
+                              })()
+                            : `${value} / 5`;
+                      return (
+                        <div key={criterion.key} className="rounded-control border-2 border-line-strong bg-surface-muted px-2.5 py-1.5">
+                          <dt className="inline text-[10px] font-black uppercase tracking-[0.06em] text-ink-faint">{criterion.label}: </dt>
+                          <dd className="inline font-mono text-xs font-black tabular-nums text-ink">{rendered}</dd>
+                        </div>
+                      );
+                    })}
                   </dl>
                 </article>
               </li>
@@ -154,9 +165,7 @@ export function SubmissionReviewPane({
   const recusedWithoutReassignment = submission.assignments.some(
     (assignment) => assignment.reviewerUserId === viewerUserId && assignment.status === "recused",
   ) && !currentAssignment;
-  const hasReviewAccess = organizer || (
-    submission.assignedToMe && !submission.recusedByMe && !recusedWithoutReassignment
-  );
+  const hasReviewAccess = organizer || (!submission.recusedByMe && !recusedWithoutReassignment);
   const canScore = round?.status === "active" && hasReviewAccess;
   const canRequestAi = round?.status === "active" && hasReviewAccess;
   const primarySpeaker = submission.speakers.find((speaker) => speaker.isPrimary);
@@ -399,7 +408,7 @@ export function SubmissionReviewPane({
       </Card>
 
       <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Reviewer assignments">
-        <p className="mb-3 text-sm text-ink-secondary">Reviewers can open and score only proposals assigned to them in this round. Owners and admins retain committee-wide access.</p>
+        <p className="mb-3 text-sm text-ink-secondary">Assignments organize reviewer worklists; every event reviewer can open and score committee proposals unless they recuse. Owners and admins retain committee-wide access.</p>
         {submission.assignments.length === 0 ? (
           <p className="text-sm text-ink-faint">No reviewers are assigned in this round.</p>
         ) : (

@@ -395,22 +395,6 @@ export const BulkAssignReviewersOutput = Schema.Struct({
 });
 export type BulkAssignReviewersOutput = typeof BulkAssignReviewersOutput.Type;
 
-export const RecuseReviewerInput = Schema.Struct({
-  eventId: EntityId,
-  roundId: EntityId,
-  submissionId: EntityId,
-  reason: Schema.NullOr(Schema.String.pipe(Schema.maxLength(500))),
-  idempotencyKey: IdempotencyKey,
-  requestId: RequestId,
-});
-export type RecuseReviewerInput = typeof RecuseReviewerInput.Type;
-
-export const RecuseReviewerOutput = Schema.Struct({
-  recusal: ReviewRecusal,
-  idempotent: Schema.Boolean,
-});
-export type RecuseReviewerOutput = typeof RecuseReviewerOutput.Type;
-
 export const SendReviewRemindersInput = Schema.Struct({
   eventId: EntityId,
   roundId: EntityId,

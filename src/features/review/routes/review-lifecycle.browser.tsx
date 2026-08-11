@@ -13,7 +13,6 @@ const mutationMocks = vi.hoisted(() => ({
   createReviewRoundRequest: vi.fn(),
   exportReviewResultsRequest: vi.fn(),
   recuseAssignmentRequest: vi.fn(),
-  recuseReviewerRequest: vi.fn(),
   rejectSubmissionRequest: vi.fn(),
   requestAiSuggestionRequest: vi.fn(),
   revokeAcceptanceRequest: vi.fn(),

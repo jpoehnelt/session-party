@@ -624,30 +624,6 @@ export const reviewComments = sqliteTable(
   ],
 );
 
-export const reviewRecusals = sqliteTable(
-  "review_recusals",
-  {
-    id: id(),
-    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    roundId: text("round_id").notNull(),
-    submissionId: text("submission_id").notNull(),
-    reviewerUserId: text("reviewer_user_id").notNull(),
-    reason: text("reason"),
-    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-  },
-  (t) => [
-    uniqueIndex("review_recusals_event_id_unique").on(t.eventId, t.id),
-    uniqueIndex("review_recusals_pair_unique").on(t.eventId, t.roundId, t.submissionId, t.reviewerUserId),
-    index("review_recusals_reviewer").on(t.eventId, t.roundId, t.reviewerUserId),
-    foreignKey({ columns: [t.eventId, t.roundId], foreignColumns: [reviewRounds.eventId, reviewRounds.id], name: "review_recusals_round_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
-    foreignKey({ columns: [t.eventId, t.submissionId], foreignColumns: [submissions.eventId, submissions.id], name: "review_recusals_submission_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
-    foreignKey({ columns: [t.eventId, t.reviewerUserId], foreignColumns: [eventMembers.eventId, eventMembers.userId], name: "review_recusals_member_fk" })
-      .onDelete("cascade").onUpdate("cascade"),
-  ],
-);
-
 // ---------- agenda ----------
 
 export const tracks = sqliteTable("tracks", {

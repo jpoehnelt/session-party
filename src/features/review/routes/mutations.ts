@@ -8,7 +8,6 @@ import {
   BulkAssignReviewersOutput,
   CreateReviewRoundOutput,
   ExportReviewResultsOutput,
-  RecuseReviewerOutput,
   RequestAiSuggestionOutput,
   RejectSubmissionOutput,
   RecuseAssignmentOutput,
@@ -23,7 +22,6 @@ import {
   type BulkAssignReviewersInput,
   type CreateReviewRoundInput,
   type ExportReviewResultsInput,
-  type RecuseReviewerInput,
   type RequestAiSuggestionInput,
   type RejectSubmissionInput,
   type RecuseAssignmentInput,
@@ -164,17 +162,6 @@ export function bulkAssignReviewersRequest(input: BulkAssignReviewersInput) {
       strategy: input.strategy,
     },
     schema: BulkAssignReviewersOutput,
-  });
-}
-
-export function recuseReviewerRequest(input: RecuseReviewerInput) {
-  return mutation({
-    path: `/api/v1/events/${segment(input.eventId)}/review/rounds/${segment(input.roundId)}/submissions/${segment(input.submissionId)}/recusal`,
-    method: "POST",
-    requestId: input.requestId,
-    idempotencyKey: input.idempotencyKey,
-    body: { reason: input.reason },
-    schema: RecuseReviewerOutput,
   });
 }
 

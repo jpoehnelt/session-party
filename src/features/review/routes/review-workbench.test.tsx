@@ -376,6 +376,26 @@ describe("review workbench route", () => {
       reviewers: [],
       selected: workbench.selected && {
         ...workbench.selected,
+        round: workbench.selected.round && {
+          ...workbench.selected.round,
+          rubric: {
+            criteria: [
+              { key: "clarity", label: "Clarity", type: "numeric", weight: 1, required: true, max: 5 },
+              {
+                key: "recommendation",
+                label: "Recommendation",
+                type: "dropdown",
+                weight: 1,
+                required: true,
+                max: 5,
+                options: [
+                  { value: "decline", label: "Decline", score: 1 },
+                  { value: "exceptional", label: "Strong accept", score: 5 },
+                ],
+              },
+            ],
+          },
+        },
         reviewState: "in_progress",
         assignedToMe: true,
         assignmentCount: 1,
@@ -395,7 +415,10 @@ describe("review workbench route", () => {
           reviewerUserId: "user_colleague",
           reviewerName: "Colleague Reviewer",
           score: 4,
-          scores: [{ criterionKey: "clarity", score: 4 }],
+          scores: [
+            { criterionKey: "clarity", score: 4 },
+            { criterionKey: "recommendation", score: "exceptional" },
+          ],
           comment: "This is a strong opening; I would clarify the audience outcome.",
           version: 1,
           updatedAt: 1_700_000_000_000,
@@ -420,6 +443,8 @@ describe("review workbench route", () => {
     expect(markup).toContain("Request AI suggestion");
     expect(markup).toContain("Committee thread");
     expect(markup).toContain("Score rationales");
+    expect(markup).toContain("Strong accept (5 / 5)");
+    expect(markup).not.toContain("exceptional / 5");
     expect(markup).toContain("Colleague Reviewer");
     expect(markup).toContain("This is a strong opening; I would clarify the audience outcome.");
     expect(markup).toContain("Would the speaker add a concrete production example?");
@@ -428,7 +453,7 @@ describe("review workbench route", () => {
     expect(markup).toContain("Speakers and API keys cannot author");
     expect(markup).toContain("Recusal reason (optional)");
     expect(markup).toContain("Recuse from this submission");
-    expect(markup).toContain("Reviewers can open and score only proposals assigned to them");
+    expect(markup).toContain("Assignments organize reviewer worklists");
     expect(markup).not.toContain("Assign reviewer");
     expect(markup).not.toContain("Accept &amp; provision primary speaker");
     expect(markup).not.toContain("Create round");

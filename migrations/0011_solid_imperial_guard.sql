@@ -12,23 +12,6 @@ CREATE TABLE `asset_comments` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `asset_comments_event_id_unique` ON `asset_comments` (`event_id`,`id`);--> statement-breakpoint
 CREATE INDEX `asset_comments_asset_time` ON `asset_comments` (`event_id`,`asset_id`,`created_at`);--> statement-breakpoint
-CREATE TABLE `review_recusals` (
-	`id` text PRIMARY KEY NOT NULL,
-	`event_id` text NOT NULL,
-	`round_id` text NOT NULL,
-	`submission_id` text NOT NULL,
-	`reviewer_user_id` text NOT NULL,
-	`reason` text,
-	`created_at` integer NOT NULL,
-	FOREIGN KEY (`event_id`) REFERENCES `events`(`id`) ON UPDATE cascade ON DELETE cascade,
-	FOREIGN KEY (`event_id`,`round_id`) REFERENCES `review_rounds`(`event_id`,`id`) ON UPDATE cascade ON DELETE cascade,
-	FOREIGN KEY (`event_id`,`submission_id`) REFERENCES `submissions`(`event_id`,`id`) ON UPDATE cascade ON DELETE cascade,
-	FOREIGN KEY (`event_id`,`reviewer_user_id`) REFERENCES `event_members`(`event_id`,`user_id`) ON UPDATE cascade ON DELETE cascade
-);
---> statement-breakpoint
-CREATE UNIQUE INDEX `review_recusals_event_id_unique` ON `review_recusals` (`event_id`,`id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `review_recusals_pair_unique` ON `review_recusals` (`event_id`,`round_id`,`submission_id`,`reviewer_user_id`);--> statement-breakpoint
-CREATE INDEX `review_recusals_reviewer` ON `review_recusals` (`event_id`,`round_id`,`reviewer_user_id`);--> statement-breakpoint
 CREATE TABLE `task_assignments` (
 	`id` text PRIMARY KEY NOT NULL,
 	`event_id` text NOT NULL,
@@ -67,7 +50,7 @@ CREATE TABLE `__new_assets` (
 	CONSTRAINT "assets_version_positive" CHECK("__new_assets"."version" > 0)
 );
 --> statement-breakpoint
-INSERT INTO `__new_assets`("id", "event_id", "uploader_user_id", "speaker_id", "purpose", "supersedes_asset_id", "restored_from_asset_id", "current", "filename", "content_type", "size", "version", "created_at", "updated_at") SELECT "id", "event_id", "uploader_user_id", "speaker_id", "purpose", "supersedes_asset_id", "restored_from_asset_id", "current", "filename", "content_type", "size", "version", "created_at", "updated_at" FROM `assets`;--> statement-breakpoint
+INSERT INTO `__new_assets`("id", "event_id", "uploader_user_id", "speaker_id", "purpose", "supersedes_asset_id", "restored_from_asset_id", "current", "filename", "content_type", "size", "version", "created_at", "updated_at") SELECT "id", "event_id", "uploader_user_id", NULL, NULL, NULL, NULL, 1, "filename", "content_type", "size", "version", "created_at", "updated_at" FROM `assets`;--> statement-breakpoint
 DROP TABLE `assets`;--> statement-breakpoint
 ALTER TABLE `__new_assets` RENAME TO `assets`;--> statement-breakpoint
 PRAGMA foreign_keys=ON;--> statement-breakpoint
@@ -93,7 +76,7 @@ CREATE TABLE `__new_review_rounds` (
 	CONSTRAINT "review_rounds_version_positive" CHECK("__new_review_rounds"."version" > 0)
 );
 --> statement-breakpoint
-INSERT INTO `__new_review_rounds`("id", "event_id", "name", "order", "status", "starts_at", "ends_at", "blind", "rubric", "version", "created_at", "updated_at") SELECT "id", "event_id", "name", "order", "status", "starts_at", "ends_at", "blind", "rubric", "version", "created_at", "updated_at" FROM `review_rounds`;--> statement-breakpoint
+INSERT INTO `__new_review_rounds`("id", "event_id", "name", "order", "status", "starts_at", "ends_at", "blind", "rubric", "version", "created_at", "updated_at") SELECT "id", "event_id", "name", "order", "status", NULL, NULL, 0, "rubric", "version", "created_at", "updated_at" FROM `review_rounds`;--> statement-breakpoint
 DROP TABLE `review_rounds`;--> statement-breakpoint
 ALTER TABLE `__new_review_rounds` RENAME TO `review_rounds`;--> statement-breakpoint
 CREATE UNIQUE INDEX `review_rounds_event_id_unique` ON `review_rounds` (`event_id`,`id`);--> statement-breakpoint

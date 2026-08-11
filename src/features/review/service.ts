@@ -12,7 +12,6 @@ import {
   mailDeliverySnapshots,
   reviewAssignments,
   reviewComments,
-  reviewRecusals,
   reviewRounds,
   reviews,
   speakers,
@@ -48,8 +47,6 @@ import {
   type ReviewExportRow,
   RecuseAssignmentOutput,
   type RecuseAssignmentInput,
-  RecuseReviewerOutput,
-  type RecuseReviewerInput,
   type RequestAiSuggestionInput,
   type RequestAiSuggestionOutput,
   RejectSubmissionOutput,
@@ -206,28 +203,19 @@ const requireAssignedReviewer = (
     ? Effect.void
     : Effect.gen(function* () {
       const { db } = yield* Db;
-      const [assignment, recusal] = yield* Effect.all([
-        database(() => db.select({ id: reviewAssignments.id, status: reviewAssignments.status }).from(reviewAssignments).where(and(
+      const assignments = yield* database(() =>
+        db.select({ status: reviewAssignments.status }).from(reviewAssignments).where(and(
           eq(reviewAssignments.eventId, eventId),
           eq(reviewAssignments.roundId, roundId),
           eq(reviewAssignments.submissionId, submissionId),
           eq(reviewAssignments.reviewerUserId, viewer.userId),
-        ))),
-        database(() => db.select({ id: reviewRecusals.id }).from(reviewRecusals).where(and(
-          eq(reviewRecusals.eventId, eventId),
-          eq(reviewRecusals.roundId, roundId),
-          eq(reviewRecusals.submissionId, submissionId),
-          eq(reviewRecusals.reviewerUserId, viewer.userId),
-        )).limit(1)),
-      ]);
-      if (!assignment.some(({ status }) => status === "assigned")) {
-        if (assignment.some(({ status }) => status === "recused")) {
-          return yield* Effect.fail(new Conflict({ message: "This review assignment has been recused" }));
-        }
-        return yield* Effect.fail(new Forbidden({ reason: "This proposal is not assigned to you in the selected round" }));
-      }
-      if (recusal[0]) {
-        return yield* Effect.fail(new Forbidden({ reason: "You recused yourself from this proposal" }));
+        )),
+      );
+      if (
+        !assignments.some(({ status }) => status === "assigned") &&
+        assignments.some(({ status }) => status === "recused")
+      ) {
+        return yield* Effect.fail(new Conflict({ message: "This review assignment has been recused" }));
       }
     });
 
@@ -885,53 +873,33 @@ export const getWorkbench = (
       return yield* Effect.fail(new NotFound({ entity: "reviewRound", id: input.roundId }));
     }
 
-    const [assignmentRows, recusalRows] = yield* Effect.all([
-      database(() =>
-        db
-          .select({
-            id: reviewAssignments.id,
-            roundId: reviewAssignments.roundId,
-            submissionId: reviewAssignments.submissionId,
-            reviewerUserId: reviewAssignments.reviewerUserId,
-            status: reviewAssignments.status,
-            recusalReason: reviewAssignments.recusalReason,
-            recusedAt: reviewAssignments.recusedAt,
-            version: reviewAssignments.version,
-            reviewerName: users.name,
-          })
-          .from(reviewAssignments)
-          .innerJoin(users, eq(users.id, reviewAssignments.reviewerUserId))
-          .where(eq(reviewAssignments.eventId, input.eventId)),
-      ),
-      database(() =>
-        db
-          .select({
-            id: reviewRecusals.id,
-            roundId: reviewRecusals.roundId,
-            submissionId: reviewRecusals.submissionId,
-            reviewerUserId: reviewRecusals.reviewerUserId,
-            reviewerName: users.name,
-            reason: reviewRecusals.reason,
-            createdAt: reviewRecusals.createdAt,
-          })
-          .from(reviewRecusals)
-          .innerJoin(users, eq(users.id, reviewRecusals.reviewerUserId))
-          .where(eq(reviewRecusals.eventId, input.eventId)),
-      ),
-    ]);
+    const assignmentRows = yield* database(() =>
+      db
+        .select({
+          id: reviewAssignments.id,
+          roundId: reviewAssignments.roundId,
+          submissionId: reviewAssignments.submissionId,
+          reviewerUserId: reviewAssignments.reviewerUserId,
+          status: reviewAssignments.status,
+          recusalReason: reviewAssignments.recusalReason,
+          recusedAt: reviewAssignments.recusedAt,
+          version: reviewAssignments.version,
+          updatedAt: reviewAssignments.updatedAt,
+          reviewerName: users.name,
+        })
+        .from(reviewAssignments)
+        .innerJoin(users, eq(users.id, reviewAssignments.reviewerUserId))
+        .where(eq(reviewAssignments.eventId, input.eventId)),
+    );
+    const recusalRows = assignmentRows.filter((assignment) => assignment.status === "recused");
     const relevantRoundId = selectedRound?.id;
-    const isRecused = (roundId: string, submissionId: string, reviewerUserId: string) =>
-      recusalRows.some((recusal) =>
-        recusal.roundId === roundId && recusal.submissionId === submissionId && recusal.reviewerUserId === reviewerUserId
-      );
     const reviewerSubmissionIds = new Set(
       assignmentRows
         .filter(
           (assignment) =>
             assignment.reviewerUserId === viewer.userId &&
             assignment.status === "assigned" &&
-            (!relevantRoundId || assignment.roundId === relevantRoundId) &&
-            !isRecused(assignment.roundId, assignment.submissionId, assignment.reviewerUserId),
+            (!relevantRoundId || assignment.roundId === relevantRoundId),
         )
         .map((assignment) => assignment.submissionId),
     );
@@ -955,7 +923,7 @@ export const getWorkbench = (
         .orderBy(desc(submissions.submittedAt)),
     );
     let submissionRows = allSubmissionRows;
-    if (viewer.role === "reviewer" || input.assignedToMe) {
+    if (input.assignedToMe) {
       submissionRows = submissionRows.filter((submission) => reviewerSubmissionIds.has(submission.id));
     }
     if (input.status) submissionRows = submissionRows.filter((submission) => submission.status === input.status);
@@ -969,8 +937,7 @@ export const getWorkbench = (
       const reviewerAssignments = assignmentRows.filter((assignment) =>
         assignment.reviewerUserId === reviewer.userId &&
         assignment.status === "assigned" &&
-        (!relevantRoundId || assignment.roundId === relevantRoundId) &&
-        !isRecused(assignment.roundId, assignment.submissionId, assignment.reviewerUserId)
+        (!relevantRoundId || assignment.roundId === relevantRoundId)
       );
       const completedCount = reviewerAssignments.filter((assignment) =>
         visibleHumanReviews.some((review) =>
@@ -992,18 +959,20 @@ export const getWorkbench = (
       const assignments = assignmentRows.filter(
         (assignment) => assignment.submissionId === submission.id &&
           assignment.status === "assigned" &&
-          (!relevantRoundId || assignment.roundId === relevantRoundId) &&
-          !isRecused(assignment.roundId, assignment.submissionId, assignment.reviewerUserId),
+          (!relevantRoundId || assignment.roundId === relevantRoundId),
       );
       const humanReviews = visibleHumanReviews.filter(
         (review) => review.submissionId === submission.id && (!relevantRoundId || review.roundId === relevantRoundId),
       );
       const scoredReviews = humanReviews.filter((review) => review.score !== 0);
+      const completedAssignmentCount = assignments.filter((assignment) =>
+        humanReviews.some((review) => review.reviewerUserId === assignment.reviewerUserId)
+      ).length;
       const score = scoredReviews.length === 0
         ? null
         : scoredReviews.reduce((total, review) => total + review.score, 0) / scoredReviews.length;
       const reviewState = humanReviews.length > 0
-        ? assignments.length > 0 && humanReviews.length >= assignments.length
+        ? assignments.length > 0 && completedAssignmentCount === assignments.length
           ? "complete"
           : "in_progress"
         : assignments.length > 0
@@ -1148,15 +1117,16 @@ export const getWorkbench = (
             submissionId: recusal.submissionId,
             reviewerUserId: recusal.reviewerUserId,
             reviewerName: recusal.reviewerName ?? "Reviewer",
-            reason: recusal.reason,
-            createdAt: toMillis(recusal.createdAt),
+            reason: recusal.recusalReason,
+            createdAt: toMillis(recusal.recusedAt ?? recusal.updatedAt),
           })),
-        recusedByMe: recusalRows.some((recusal) =>
-          recusal.submissionId === submissionId &&
-          recusal.reviewerUserId === viewer.userId &&
-          (!relevantRoundId || recusal.roundId === relevantRoundId)
-        ) || assignmentRows.some((assignment) =>
+        recusedByMe: assignmentRows.some((assignment) =>
           assignment.status === "recused" &&
+          assignment.submissionId === submissionId &&
+          assignment.reviewerUserId === viewer.userId &&
+          (!relevantRoundId || assignment.roundId === relevantRoundId)
+        ) && !assignmentRows.some((assignment) =>
+          assignment.status === "assigned" &&
           assignment.submissionId === submissionId &&
           assignment.reviewerUserId === viewer.userId &&
           (!relevantRoundId || assignment.roundId === relevantRoundId)
@@ -1171,17 +1141,14 @@ export const getWorkbench = (
       : (() => {
           const roundAssignments = assignmentRows.filter((assignment) => assignment.roundId === selectedRound.id);
           const activeAssignments = roundAssignments.filter((assignment) =>
-            assignment.status === "assigned" &&
-            !isRecused(assignment.roundId, assignment.submissionId, assignment.reviewerUserId)
+            assignment.status === "assigned"
           );
-          const roundRecusalRows = recusalRows.filter((recusal) => recusal.roundId === selectedRound.id);
           const roundHumanReviews = visibleHumanReviews.filter((review) => review.roundId === selectedRound.id);
           const assignmentIsComplete = (assignment: typeof activeAssignments[number]) => roundHumanReviews.some(
             (review) => review.submissionId === assignment.submissionId && review.reviewerUserId === assignment.reviewerUserId,
           );
           const completedReviewCount = activeAssignments.filter(assignmentIsComplete).length;
-          const recusalCount = roundAssignments.filter((assignment) => assignment.status === "recused").length
-            + roundRecusalRows.length;
+          const recusalCount = roundAssignments.filter((assignment) => assignment.status === "recused").length;
           return {
             roundId: selectedRound.id,
             roundName: selectedRound.name,
@@ -1200,7 +1167,7 @@ export const getWorkbench = (
                 outstandingReviewCount: reviewerAssignments.length - reviewerCompleted,
                 recusalCount: roundAssignments.filter(
                   (assignment) => assignment.status === "recused" && assignment.reviewerUserId === reviewer.userId,
-                ).length + roundRecusalRows.filter((recusal) => recusal.reviewerUserId === reviewer.userId).length,
+                ).length,
               };
             }).sort((left, right) =>
               right.outstandingReviewCount - left.outstandingReviewCount
@@ -1213,7 +1180,7 @@ export const getWorkbench = (
               const outstanding = active.filter((assignment) => !assignmentIsComplete(assignment));
               const submissionRecusalCount = roundAssignments.filter(
                 (assignment) => assignment.status === "recused" && assignment.submissionId === submission.id,
-              ).length + roundRecusalRows.filter((recusal) => recusal.submissionId === submission.id).length;
+              ).length;
               const needsReviewer = active.length === 0 && submissionRecusalCount > 0;
               return outstanding.length > 0 || needsReviewer
                 ? [{
@@ -1376,7 +1343,7 @@ export const sendReviewReminders = (
       return replay;
     }
 
-    const [eventRow, members, assignments, completed, recusals] = yield* Effect.all([
+    const [eventRow, members, assignments, completed] = yield* Effect.all([
       database(() => db.select({ name: events.name, slug: events.slug }).from(events).where(eq(events.id, input.eventId)).limit(1)),
       database(() => db.select({ userId: eventMembers.userId, name: users.name, email: users.email }).from(eventMembers)
         .innerJoin(users, eq(users.id, eventMembers.userId))
@@ -1389,21 +1356,17 @@ export const sendReviewReminders = (
         ))),
       database(() => db.select({ submissionId: reviews.submissionId, reviewerUserId: reviews.reviewerUserId })
         .from(reviews).where(and(eq(reviews.eventId, input.eventId), eq(reviews.roundId, input.roundId), eq(reviews.ai, false)))),
-      database(() => db.select({ submissionId: reviewRecusals.submissionId, reviewerUserId: reviewRecusals.reviewerUserId })
-        .from(reviewRecusals).where(and(eq(reviewRecusals.eventId, input.eventId), eq(reviewRecusals.roundId, input.roundId)))),
     ]);
     const event = eventRow[0];
     if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
     const targetSet = requestedReviewerIds.length > 0 ? new Set(requestedReviewerIds) : null;
     const pairKey = (submissionId: string, reviewerUserId: string | null) => `${submissionId}\u0000${reviewerUserId ?? ""}`;
     const completedSet = new Set(completed.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
-    const recusalSet = new Set(recusals.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
     const recipients = members.flatMap((member) => {
       if (targetSet && !targetSet.has(member.userId)) return [];
       const outstandingCount = assignments.filter((assignment) =>
         assignment.reviewerUserId === member.userId &&
-        !completedSet.has(pairKey(assignment.submissionId, member.userId)) &&
-        !recusalSet.has(pairKey(assignment.submissionId, member.userId))
+        !completedSet.has(pairKey(assignment.submissionId, member.userId))
       ).length;
       return outstandingCount > 0 && member.email
         ? [{ ...member, name: member.name ?? "Reviewer", outstandingCount }]
@@ -1638,70 +1601,7 @@ export const bulkAssignReviewers = (
     };
     const keyHash = yield* sha256(input.idempotencyKey);
     const requestHash = yield* sha256(JSON.stringify(normalizedRequest));
-    const readReplay = (): Effect.Effect<BulkAssignReviewersOutput | null, AppError> =>
-      Effect.gen(function* () {
-        const [record] = yield* database(() => db.select().from(idempotencyRecords).where(and(
-          eq(idempotencyRecords.eventId, input.eventId),
-          eq(idempotencyRecords.operationId, "review.bulkAssignReviewers"),
-          eq(idempotencyRecords.principalId, principalId),
-          eq(idempotencyRecords.keyHash, keyHash),
-        )).limit(1));
-        if (!record) return null;
-        if (record.requestHash !== requestHash) {
-          return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different bulk assignment" }));
-        }
-        return yield* Schema.decodeUnknown(BulkAssignReviewersOutput)(record.responseBody).pipe(
-          Effect.map((output) => ({ ...output, idempotent: true })),
-          Effect.mapError((error) => new External({ service: "database", detail: `Invalid bulk-assignment replay: ${String(error)}` })),
-        );
-      });
-    const replay = yield* readReplay();
-    if (replay) return replay;
-
-    const [reviewerRows, submissionRows, existingRows, recusalRows] = yield* Effect.all([
-      database(() => db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(
-        eq(eventMembers.eventId, input.eventId),
-        eq(eventMembers.role, "reviewer"),
-        inArray(eventMembers.userId, reviewerUserIds),
-      ))),
-      database(() => db.select({ id: submissions.id }).from(submissions).innerJoin(
-        forms,
-        and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
-      ).where(and(
-        eq(submissions.eventId, input.eventId),
-        eq(forms.kind, "cfp"),
-        inArray(submissions.id, submissionIds),
-      ))),
-      database(() => db.select({
-        submissionId: reviewAssignments.submissionId,
-        reviewerUserId: reviewAssignments.reviewerUserId,
-      }).from(reviewAssignments).where(and(
-        eq(reviewAssignments.eventId, input.eventId),
-        eq(reviewAssignments.roundId, input.roundId),
-        eq(reviewAssignments.status, "assigned"),
-        inArray(reviewAssignments.submissionId, submissionIds),
-        inArray(reviewAssignments.reviewerUserId, reviewerUserIds),
-      ))),
-      database(() => db.select({
-        submissionId: reviewRecusals.submissionId,
-        reviewerUserId: reviewRecusals.reviewerUserId,
-      }).from(reviewRecusals).where(and(
-        eq(reviewRecusals.eventId, input.eventId),
-        eq(reviewRecusals.roundId, input.roundId),
-        inArray(reviewRecusals.submissionId, submissionIds),
-        inArray(reviewRecusals.reviewerUserId, reviewerUserIds),
-      ))),
-    ]);
-    if (reviewerRows.length !== reviewerUserIds.length) {
-      return yield* Effect.fail(new Validation({ message: "Every selected reviewer must be an event member with the reviewer role" }));
-    }
-    if (submissionRows.length !== submissionIds.length) {
-      return yield* Effect.fail(new Validation({ message: "Every selected proposal must belong to this event CFP" }));
-    }
-
     const pairKey = (submissionId: string, reviewerUserId: string) => `${submissionId}\u0000${reviewerUserId}`;
-    const existing = new Set(existingRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
-    const recusals = new Set(recusalRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
     const desired = normalizedSubmissionIds.flatMap((submissionId, submissionIndex) => {
       const selected = input.strategy === "all"
         ? normalizedReviewerUserIds
@@ -1709,144 +1609,195 @@ export const bulkAssignReviewers = (
           normalizedReviewerUserIds[(submissionIndex * input.reviewsPerSubmission + offset) % normalizedReviewerUserIds.length]!
         );
       return selected.map((reviewerUserId) => ({ submissionId, reviewerUserId }));
-    }).filter((pair) => !recusals.has(pairKey(pair.submissionId, pair.reviewerUserId)));
-    const createdAt = now();
-    const missing = desired.filter((pair) => !existing.has(pairKey(pair.submissionId, pair.reviewerUserId)));
+    });
+    type ReservationPlan = {
+      readonly assignments: readonly { readonly id: string; readonly submissionId: string; readonly reviewerUserId: string }[];
+      readonly changeId: string;
+      readonly auditId: string;
+    };
+    const reservationPlan = (value: unknown): ReservationPlan | null => {
+      if (!value || typeof value !== "object") return null;
+      const candidate = value as Record<string, unknown>;
+      if (typeof candidate.changeId !== "string" || typeof candidate.auditId !== "string" || !Array.isArray(candidate.assignments)) return null;
+      const assignments = candidate.assignments.flatMap((assignment) => {
+        if (!assignment || typeof assignment !== "object") return [];
+        const row = assignment as Record<string, unknown>;
+        return typeof row.id === "string" && typeof row.submissionId === "string" && typeof row.reviewerUserId === "string"
+          ? [{ id: row.id, submissionId: row.submissionId, reviewerUserId: row.reviewerUserId }]
+          : [];
+      });
+      return assignments.length === candidate.assignments.length
+        ? { assignments, changeId: candidate.changeId, auditId: candidate.auditId }
+        : null;
+    };
+    const readRecord = () => database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, input.eventId),
+      eq(idempotencyRecords.operationId, "review.bulkAssignReviewers"),
+      eq(idempotencyRecords.principalId, principalId),
+      eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1)).pipe(Effect.map((rows) => rows[0] ?? null));
+    const decodeCompleted = (body: unknown) => Schema.decodeUnknown(BulkAssignReviewersOutput)(body).pipe(
+      Effect.mapError((error) => new External({ service: "database", detail: `Invalid bulk-assignment replay: ${String(error)}` })),
+    );
+
+    let record = yield* readRecord();
+    if (record?.requestHash !== undefined && record.requestHash !== requestHash) {
+      return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different bulk assignment" }));
+    }
+    if (record?.status === "completed") {
+      const replay = yield* decodeCompleted(record.responseBody);
+      return { ...replay, idempotent: true };
+    }
+
+    let plan = record ? reservationPlan(record.responseBody) : null;
+    let resumed = record !== null;
+    if (record && !plan) {
+      return yield* Effect.fail(new External({ service: "database", detail: "Invalid in-progress bulk-assignment reservation" }));
+    }
+    if (!record) {
+      const [reviewerRows, submissionRows, existingRows] = yield* Effect.all([
+        database(() => db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(
+          eq(eventMembers.eventId, input.eventId),
+          eq(eventMembers.role, "reviewer"),
+          inArray(eventMembers.userId, reviewerUserIds),
+        ))),
+        database(() => db.select({ id: submissions.id }).from(submissions).innerJoin(
+          forms,
+          and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+        ).where(and(
+          eq(submissions.eventId, input.eventId),
+          eq(forms.kind, "cfp"),
+          inArray(submissions.id, submissionIds),
+        ))),
+        database(() => db.select({
+          submissionId: reviewAssignments.submissionId,
+          reviewerUserId: reviewAssignments.reviewerUserId,
+        }).from(reviewAssignments).where(and(
+          eq(reviewAssignments.eventId, input.eventId),
+          eq(reviewAssignments.roundId, input.roundId),
+          eq(reviewAssignments.status, "assigned"),
+          inArray(reviewAssignments.submissionId, submissionIds),
+          inArray(reviewAssignments.reviewerUserId, reviewerUserIds),
+        ))),
+      ]);
+      if (reviewerRows.length !== reviewerUserIds.length) {
+        return yield* Effect.fail(new Validation({ message: "Every selected reviewer must be an event member with the reviewer role" }));
+      }
+      if (submissionRows.length !== submissionIds.length) {
+        return yield* Effect.fail(new Validation({ message: "Every selected proposal must belong to this event CFP" }));
+      }
+      const existing = new Set(existingRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+      const createdAt = now();
+      const idempotencyId = id("idempotency");
+      const initialPlan: ReservationPlan = {
+        assignments: desired
+          .filter((pair) => !existing.has(pairKey(pair.submissionId, pair.reviewerUserId)))
+          .map((pair) => ({ id: id("review_assignment"), ...pair })),
+        changeId: id("change"),
+        auditId: id("audit"),
+      };
+      plan = initialPlan;
+      yield* database(() => db.batch([
+        db.insert(idempotencyRecords).values({
+          id: idempotencyId,
+          eventId: input.eventId,
+          operationId: "review.bulkAssignReviewers",
+          principalId,
+          keyHash,
+          requestHash,
+          status: "in_progress",
+          responseStatus: null,
+          responseBody: initialPlan,
+          expiresAt: new Date(createdAt.getTime() + 86_400_000),
+          completedAt: null,
+          createdAt,
+        }),
+        ...(initialPlan.assignments.length > 0 ? [db.insert(reviewAssignments).values(initialPlan.assignments.map((assignment) => ({
+          ...assignment,
+          eventId: input.eventId,
+          roundId: input.roundId,
+          version: 1,
+          createdAt,
+          updatedAt: createdAt,
+        }))).onConflictDoNothing()] : []),
+      ])).pipe(
+        Effect.catchAll((failure) => Effect.gen(function* () {
+          const concurrent = yield* readRecord();
+          if (!concurrent) return yield* Effect.fail(failure);
+          if (concurrent.requestHash !== requestHash) {
+            return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different bulk assignment" }));
+          }
+          record = concurrent;
+          plan = reservationPlan(concurrent.responseBody);
+          resumed = true;
+          if (!plan) return yield* Effect.fail(failure);
+        })),
+      );
+      record = record ?? (yield* readRecord());
+    }
+
+    if (!record || !plan) {
+      return yield* Effect.fail(new External({ service: "database", detail: "Bulk-assignment reservation disappeared before completion" }));
+    }
+    const createdIds = plan.assignments.length === 0
+      ? []
+      : yield* database(() => db.select({ id: reviewAssignments.id }).from(reviewAssignments).where(and(
+        eq(reviewAssignments.eventId, input.eventId),
+        inArray(reviewAssignments.id, plan!.assignments.map((assignment) => assignment.id)),
+      )));
+    const activeRows = yield* database(() => db.select({
+      submissionId: reviewAssignments.submissionId,
+      reviewerUserId: reviewAssignments.reviewerUserId,
+    }).from(reviewAssignments).where(and(
+      eq(reviewAssignments.eventId, input.eventId),
+      eq(reviewAssignments.roundId, input.roundId),
+      eq(reviewAssignments.status, "assigned"),
+      inArray(reviewAssignments.submissionId, submissionIds),
+      inArray(reviewAssignments.reviewerUserId, reviewerUserIds),
+    )));
+    const active = new Set(activeRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+    if (desired.some((pair) => !active.has(pairKey(pair.submissionId, pair.reviewerUserId)))) {
+      return yield* Effect.fail(new External({ service: "database", detail: "Bulk assignment reservation did not produce every desired active assignment" }));
+    }
     const output: BulkAssignReviewersOutput = {
-      createdCount: missing.length,
-      existingCount: desired.length - missing.length,
+      createdCount: createdIds.length,
+      existingCount: desired.length - createdIds.length,
       assignmentCount: desired.length,
       idempotent: false,
     };
-    const idempotencyId = id("idempotency");
+    const completedAt = now();
     yield* database(() => db.batch([
-      db.insert(idempotencyRecords).values({
-        id: idempotencyId,
-        eventId: input.eventId,
-        operationId: "review.bulkAssignReviewers",
-        principalId,
-        keyHash,
-        requestHash,
+      db.update(idempotencyRecords).set({
         status: "completed",
         responseStatus: 200,
         responseBody: output,
-        expiresAt: new Date(createdAt.getTime() + 86_400_000),
-        completedAt: createdAt,
-        createdAt,
-      }),
-      ...(missing.length > 0 ? [db.insert(reviewAssignments).values(missing.map((pair) => ({
-        id: id("review_assignment"),
-        eventId: input.eventId,
-        roundId: input.roundId,
-        submissionId: pair.submissionId,
-        reviewerUserId: pair.reviewerUserId,
-        version: 1,
-        createdAt,
-        updatedAt: createdAt,
-      })))] : []),
+        completedAt,
+      }).where(and(eq(idempotencyRecords.id, record!.id), eq(idempotencyRecords.status, "in_progress"))),
       db.insert(domainChanges).values({
-        id: id("change"), eventId: input.eventId, aggregateType: "reviewAssignmentBatch", aggregateId: idempotencyId,
+        id: plan!.changeId, eventId: input.eventId, aggregateType: "reviewAssignmentBatch", aggregateId: record!.id,
         aggregateVersion: 1, eventType: "review.assignments.bulkCreated", audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds }],
         payload: { roundId: input.roundId, ...output }, actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
-        requestId: input.requestId, idempotencyRecordId: idempotencyId, occurredAt: createdAt,
-      }),
+        requestId: input.requestId, idempotencyRecordId: record!.id, occurredAt: completedAt,
+      }).onConflictDoNothing(),
       db.insert(auditLog).values({
-        id: id("audit"), eventId: input.eventId, requestId: input.requestId,
+        id: plan!.auditId, eventId: input.eventId, requestId: input.requestId,
         actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
         action: "review.bulkAssignReviewers", resourceType: "reviewRound", resourceId: input.roundId,
         before: null, after: { strategy: input.strategy, submissionIds, reviewerUserIds, ...output },
-        metadata: { idempotencyRecordId: idempotencyId }, occurredAt: createdAt,
-      }),
+        metadata: { idempotencyRecordId: record!.id }, occurredAt: completedAt,
+      }).onConflictDoNothing(),
     ])).pipe(
       Effect.catchAll((failure) => Effect.gen(function* () {
-        const committed = yield* readReplay();
-        if (committed) return;
-        return yield* Effect.fail(failure);
+        const concurrent = yield* readRecord();
+        if (concurrent?.status !== "completed") return yield* Effect.fail(failure);
       })),
     );
-    return output;
-  });
-
-export const recuseReviewer = (
-  input: RecuseReviewerInput,
-): Effect.Effect<RecuseReviewerOutput, AppError, Db | CurrentUser> =>
-  Effect.gen(function* () {
-    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
-    if (viewer.actorApiKeyId || viewer.role !== "reviewer") {
-      return yield* Effect.fail(new Forbidden({ reason: "Only an assigned human reviewer can record a recusal" }));
+    const completed = yield* readRecord();
+    if (!completed || completed.status !== "completed") {
+      return yield* Effect.fail(new External({ service: "database", detail: "Bulk assignment did not finalize its idempotency record" }));
     }
-    const round = yield* loadRound(input.eventId, input.roundId);
-    if (round.status === "complete") {
-      return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot receive recusals" }));
-    }
-    const { db } = yield* Db;
-    const keyHash = yield* sha256(input.idempotencyKey);
-    const requestHash = yield* sha256(JSON.stringify({
-      eventId: input.eventId,
-      roundId: input.roundId,
-      submissionId: input.submissionId,
-      reason: input.reason?.trim() || null,
-    }));
-    const readReplay = (): Effect.Effect<RecuseReviewerOutput | null, AppError> => Effect.gen(function* () {
-      const [record] = yield* database(() => db.select().from(idempotencyRecords).where(and(
-        eq(idempotencyRecords.eventId, input.eventId),
-        eq(idempotencyRecords.operationId, "review.recuseReviewer"),
-        eq(idempotencyRecords.principalId, viewer.userId),
-        eq(idempotencyRecords.keyHash, keyHash),
-      )).limit(1));
-      if (!record) return null;
-      if (record.requestHash !== requestHash) {
-        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for another recusal" }));
-      }
-      return yield* Schema.decodeUnknown(RecuseReviewerOutput)(record.responseBody).pipe(
-        Effect.map((output) => ({ ...output, idempotent: true })),
-        Effect.mapError((error) => new External({ service: "database", detail: `Invalid recusal replay: ${String(error)}` })),
-      );
-    });
-    const replay = yield* readReplay();
-    if (replay) return replay;
-    yield* requireAssignedReviewer(viewer, input.eventId, input.roundId, input.submissionId);
-    const [reviewer] = yield* database(() => db.select({ name: users.name }).from(users).where(eq(users.id, viewer.userId)).limit(1));
-    const createdAt = now();
-    const recusal = {
-      id: id("review_recusal"),
-      roundId: input.roundId,
-      submissionId: input.submissionId,
-      reviewerUserId: viewer.userId,
-      reviewerName: reviewer?.name ?? "Reviewer",
-      reason: input.reason?.trim() || null,
-      createdAt: createdAt.getTime(),
-    };
-    const output: RecuseReviewerOutput = { recusal, idempotent: false };
-    const idempotencyId = id("idempotency");
-    yield* database(() => db.batch([
-      db.insert(idempotencyRecords).values({
-        id: idempotencyId, eventId: input.eventId, operationId: "review.recuseReviewer", principalId: viewer.userId,
-        keyHash, requestHash, status: "completed", responseStatus: 201, responseBody: output,
-        expiresAt: new Date(createdAt.getTime() + 86_400_000), completedAt: createdAt, createdAt,
-      }),
-      db.insert(reviewRecusals).values({
-        id: recusal.id, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId,
-        reviewerUserId: viewer.userId, reason: recusal.reason, createdAt,
-      }),
-      db.insert(domainChanges).values({
-        id: id("change"), eventId: input.eventId, aggregateType: "reviewRecusal", aggregateId: recusal.id,
-        aggregateVersion: 1, eventType: "review.reviewer.recused", audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: [viewer.userId] }],
-        payload: recusal, actorUserId: viewer.userId, requestId: input.requestId, idempotencyRecordId: idempotencyId, occurredAt: createdAt,
-      }),
-      db.insert(auditLog).values({
-        id: id("audit"), eventId: input.eventId, requestId: input.requestId, actorUserId: viewer.userId,
-        action: "review.recuseReviewer", resourceType: "submission", resourceId: input.submissionId,
-        before: null, after: recusal, metadata: { idempotencyRecordId: idempotencyId }, occurredAt: createdAt,
-      }),
-    ])).pipe(
-      Effect.catchAll((failure) => Effect.gen(function* () {
-        const committed = yield* readReplay();
-        if (committed) return;
-        return yield* Effect.fail(failure);
-      })),
-    );
-    return output;
+    const stored = yield* decodeCompleted(completed.responseBody);
+    return { ...stored, idempotent: resumed };
   });
 
 export const recuseAssignment = (
@@ -2147,7 +2098,7 @@ export const appendReviewComment = (
         eq(reviewRounds.status, "active"),
       )).limit(1));
       if (!activeRound) {
-        return yield* Effect.fail(new Forbidden({ reason: "Committee comments require an active assigned review round" }));
+        return yield* Effect.fail(new Forbidden({ reason: "Committee comments require an active review round" }));
       }
       yield* requireAssignedReviewer(viewer, input.eventId, activeRound.id, input.submissionId);
     }

@@ -16,8 +16,6 @@ import {
   ExportReviewResultsInput,
   ExportReviewResultsOutput,
   GetWorkbenchInput,
-  RecuseReviewerInput,
-  RecuseReviewerOutput,
   RequestAiSuggestionInput,
   RequestAiSuggestionOutput,
   RejectSubmissionInput,
@@ -43,7 +41,6 @@ import {
   createReviewRound,
   exportReviewResults,
   getWorkbench,
-  recuseReviewer,
   requestAiSuggestion,
   rejectSubmission,
   recuseAssignment,
@@ -322,29 +319,6 @@ const requestAiSuggestionOperation = {
   emits: ["review.aiSuggestion.created"],
 } as const satisfies AnyOperationDef;
 
-const recuseReviewerOperation = {
-  id: "review.recuseReviewer",
-  kind: "command",
-  input: RecuseReviewerInput,
-  output: RecuseReviewerOutput,
-  authorize: humanReviewWrite,
-  invoke: recuseReviewer,
-  rest: {
-    method: "post",
-    path: "/events/:eventId/review/rounds/:roundId/submissions/:submissionId/recusal",
-    input: {
-      path: ["eventId", "roundId", "submissionId"],
-      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
-      body: ["reason"],
-    },
-    summary: "Recuse the assigned reviewer from one proposal",
-    successStatus: 201,
-  },
-  idempotency: "required",
-  concurrency: "none",
-  emits: ["review.reviewer.recused"],
-} as const satisfies AnyOperationDef;
-
 const rejectSubmissionOperation = {
   id: "review.rejectSubmission",
   kind: "command",
@@ -504,7 +478,6 @@ export const operations = [
   exportReviewResultsOperation,
   getWorkbenchOperation,
   recuseAssignmentOperation,
-  recuseReviewerOperation,
   rejectSubmissionOperation,
   requestAiSuggestionOperation,
   revokeAcceptanceOperation,
