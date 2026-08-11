@@ -271,14 +271,14 @@ function TaskFields({
             {eventSlug ? (
               linkedFormId ? (
                 <a
-                  className="inline-flex text-xs font-black uppercase tracking-wide text-accent underline underline-offset-2"
+                  className="inline-flex text-xs font-black uppercase tracking-wide text-accent-deep underline underline-offset-2"
                   href={organizerFormPath(eventSlug, linkedFormId)}
                 >
                   Open form
                 </a>
               ) : (
                 <a
-                  className="inline-flex text-xs font-black uppercase tracking-wide text-accent underline underline-offset-2"
+                  className="inline-flex text-xs font-black uppercase tracking-wide text-accent-deep underline underline-offset-2"
                   href={`/e/${encodeURIComponent(eventSlug)}/forms`}
                 >
                   Create a form
