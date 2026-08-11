@@ -310,7 +310,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(11);
+    expect(migrations).toHaveLength(12);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -325,7 +325,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(11);
+    expect(migrations).toHaveLength(12);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -486,7 +486,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(11);
+    expect(migrations).toHaveLength(12);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -581,10 +581,10 @@ describe("baseline migration parity", () => {
     ).run()).rejects.toThrow();
   });
 
-  it("upgrades existing review assignments as active and permits historical recusal plus reassignment", async () => {
+  it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(11);
+    expect(migrations).toHaveLength(12);
     await applyOneByOne(db, migrations.slice(0, 10));
     const now = 1_700_000_000_000;
     await db.batch([
@@ -596,6 +596,7 @@ describe("baseline migration parity", () => {
       db.prepare("INSERT INTO submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, version, created_at, updated_at) VALUES ('recusal-submission', 'recusal-event', 'recusal-form', 'recusal-form-v1', 'Recusal proposal', 'submitted', ?, 1, ?, ?)").bind(now, now, now),
       db.prepare("INSERT INTO review_rounds (id, event_id, name, `order`, status, rubric, version, created_at, updated_at) VALUES ('recusal-round', 'recusal-event', 'Review', 1, 'active', '{\"criteria\":[{\"key\":\"clarity\",\"label\":\"Clarity\",\"max\":5}]}', 1, ?, ?)").bind(now, now),
       db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, version, created_at, updated_at) VALUES ('recusal-assignment-old', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO assets (id, event_id, uploader_user_id, filename, content_type, size, version, created_at, updated_at) VALUES ('legacy-asset', 'recusal-event', 'recusal-user', 'legacy.pdf', 'application/pdf', 42, 3, ?, ?)").bind(now, now),
     ]);
 
     await applyOneByOne(db, migrations.slice(10));
@@ -608,6 +609,19 @@ describe("baseline migration parity", () => {
       recused_at: null,
       version: 1,
     });
+    expect(await db.prepare(
+      "SELECT speaker_id, purpose, supersedes_asset_id, restored_from_asset_id, current, version FROM assets WHERE id = 'legacy-asset'",
+    ).first()).toEqual({
+      speaker_id: null,
+      purpose: null,
+      supersedes_asset_id: null,
+      restored_from_asset_id: null,
+      current: 1,
+      version: 3,
+    });
+    expect(await db.prepare(
+      "SELECT starts_at, ends_at, blind FROM review_rounds WHERE id = 'recusal-round'",
+    ).first()).toEqual({ starts_at: null, ends_at: null, blind: 0 });
     await db.prepare("UPDATE review_assignments SET status = 'recused', recusal_reason = 'Conflict', recused_at = ?, version = 2, updated_at = ? WHERE id = 'recusal-assignment-old'").bind(now + 1, now + 1).run();
     await db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-new', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 2, now + 2).run();
     await expect(db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-duplicate', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 3, now + 3).run()).rejects.toThrow(/review_assignments/);

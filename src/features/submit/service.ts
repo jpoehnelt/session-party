@@ -684,6 +684,7 @@ export const createPublicSubmission = (
               ? sql<string | null>`null`.as("company")
               : sql<string | null>`${publicSpeakers.primary.organization}`.as("company"),
             bio: sql<string | null>`null`.as("bio"),
+            workflowStatus: sql<string>`'Invited'`.as("workflow_status"),
             headshotAssetId: sql<string | null>`null`.as("headshot_asset_id"),
             links: sql<unknown>`null`.as("links"),
             visible: sql<boolean>`1`.as("visible"),
@@ -733,6 +734,7 @@ export const createPublicSubmission = (
                   ? sql<string | null>`null`.as("company")
                   : sql<string | null>`${speaker.organization}`.as("company"),
                 bio: sql<string | null>`null`.as("bio"),
+                workflowStatus: sql<string>`'Invited'`.as("workflow_status"),
                 headshotAssetId: sql<string | null>`null`.as("headshot_asset_id"),
                 links: sql<unknown>`null`.as("links"),
                 visible: sql<boolean>`1`.as("visible"),

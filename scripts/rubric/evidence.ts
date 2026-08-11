@@ -68,12 +68,12 @@ export const evidencePlan = {
   ],
   "CFP-10": [
     test(eventsService, "adds an existing user by normalized email, lists it, and records replayable evidence"),
-    test(reviewRoute, "renders scoring and the private committee conversation for an unassigned event reviewer"),
+    test(reviewRoute, "renders scoring and the private committee conversation for an assigned event reviewer"),
     gap("No rubric probe proves the reviewer shell omits every organizer/admin capability."),
   ],
   "CFP-11": [
-    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without an assignment or status change"),
-    test(reviewRoute, "renders scoring and the private committee conversation for an unassigned event reviewer"),
+    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without requiring assignment or changing status"),
+    test(reviewRoute, "renders scoring and the private committee conversation for an assigned event reviewer"),
   ],
   "CFP-12": [
     test(reviewService, "atomically resolves a same-version acceptance and rejection race"),
@@ -111,7 +111,7 @@ export const evidencePlan = {
     gap("There is no independent reviewer-pool configuration UI per round."),
   ],
   "ABS-03": [
-    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without an assignment or status change"),
+    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without requiring assignment or changing status"),
     gap("The scorecard supports bounded numeric scores and a comment, but not dropdown and free-text criterion types."),
   ],
   "ABS-04": [gap("Rubric criteria have no configurable weights or weighted aggregate calculation.")],
@@ -131,7 +131,7 @@ export const evidencePlan = {
   "ABS-13": [gap("The institutional archive is JSON; review results have no CSV/XLSX export.")],
   "ABS-14": [
     test(reviewService, "limits AI input, labels the suggestion, and never transitions submission status"),
-    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without an assignment or status change"),
+    test(reviewService, "lets an event reviewer save complete bounded 1–5 scores without requiring assignment or changing status"),
   ],
 
   "SPK-01": [

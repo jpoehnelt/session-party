@@ -78,6 +78,13 @@
       "when": 1786383604624,
       "tag": "0010_true_albert_cleary",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786392743647,
+      "tag": "0011_solid_imperial_guard",
+      "breakpoints": true
     }
   ]
 }

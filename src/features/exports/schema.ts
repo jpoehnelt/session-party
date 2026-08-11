@@ -97,7 +97,10 @@ export const ArchiveReview = Schema.Struct({
   reviewerUserId: NullableId,
   ai: Schema.Boolean,
   score: Schema.Number,
-  scores: Schema.Union(Schema.Record({ key: Schema.String, value: Schema.Number }), Schema.Null),
+  scores: Schema.Union(
+    Schema.Record({ key: Schema.String, value: Schema.Union(Schema.Number, Schema.String) }),
+    Schema.Null,
+  ),
   comment: NullableText,
   version: Schema.Int.pipe(Schema.positive()),
   createdAt: UnixTimestampMs,

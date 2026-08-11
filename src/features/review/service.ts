@@ -8,6 +8,8 @@ import {
   forms,
   formVersionFields,
   idempotencyRecords,
+  mailDeliveries,
+  mailDeliverySnapshots,
   reviewAssignments,
   reviewComments,
   reviewRounds,
@@ -22,7 +24,7 @@ import {
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
-import { AiService, CurrentUser, Db } from "@/server/services";
+import { AiService, CurrentUser, Db, MailQueue } from "@/server/services";
 import { prepareAirtableSubmissionProjection } from "@/server/sync/airtable-outbox";
 import {
   AcceptSubmissionOutput,
@@ -33,15 +35,20 @@ import {
   type AdvanceReviewRoundInput,
   type AssignReviewerInput,
   type AssignReviewerOutput,
+  type BulkAssignReviewersInput,
+  BulkAssignReviewersOutput,
   type CriterionScore,
   CreateReviewRoundOutput,
   type CreateReviewRoundInput,
   type GetWorkbenchInput,
   type HumanReview,
-  type RequestAiSuggestionInput,
-  type RequestAiSuggestionOutput,
+  ExportReviewResultsOutput,
+  type ExportReviewResultsInput,
+  type ReviewExportRow,
   RecuseAssignmentOutput,
   type RecuseAssignmentInput,
+  type RequestAiSuggestionInput,
+  type RequestAiSuggestionOutput,
   RejectSubmissionOutput,
   type RejectSubmissionInput,
   RevokeAcceptanceOutput,
@@ -52,9 +59,13 @@ import {
   type ReviewWorkbench,
   type SaveScoreInput,
   type SaveScoreOutput,
+  SendReviewRemindersOutput,
+  type SendReviewRemindersInput,
   type SubmissionReviewDetail,
   type SubmissionReviewSummary,
   type SubmissionStatus,
+  UpdateReviewRoundOutput,
+  type UpdateReviewRoundInput,
 } from "./schema";
 import { compareReviewQueue } from "./ordering";
 
@@ -159,6 +170,9 @@ const loadRound = (eventId: string, roundId: string) =>
       name: round.name,
       order: round.order,
       status: round.status,
+      startsAt: round.startsAt ? round.startsAt.getTime() : null,
+      endsAt: round.endsAt ? round.endsAt.getTime() : null,
+      blind: round.blind,
       rubric,
       version: round.version,
     } satisfies ReviewRound;
@@ -172,9 +186,38 @@ const roundFromRow = (
   name: row.name,
   order: row.order,
   status: row.status,
+  startsAt: row.startsAt ? row.startsAt.getTime() : null,
+  endsAt: row.endsAt ? row.endsAt.getTime() : null,
+  blind: row.blind,
   rubric,
   version: row.version,
 });
+
+const requireAssignedReviewer = (
+  viewer: Viewer,
+  eventId: string,
+  roundId: string,
+  submissionId: string,
+): Effect.Effect<void, AppError, Db> =>
+  viewer.role !== "reviewer"
+    ? Effect.void
+    : Effect.gen(function* () {
+      const { db } = yield* Db;
+      const assignments = yield* database(() =>
+        db.select({ status: reviewAssignments.status }).from(reviewAssignments).where(and(
+          eq(reviewAssignments.eventId, eventId),
+          eq(reviewAssignments.roundId, roundId),
+          eq(reviewAssignments.submissionId, submissionId),
+          eq(reviewAssignments.reviewerUserId, viewer.userId),
+        )),
+      );
+      if (
+        !assignments.some(({ status }) => status === "assigned") &&
+        assignments.some(({ status }) => status === "recused")
+      ) {
+        return yield* Effect.fail(new Conflict({ message: "This review assignment has been recused" }));
+      }
+    });
 
 const normalizeRoundRubric = (
   rubric: ReviewRubricType,
@@ -191,53 +234,101 @@ const normalizeRoundRubric = (
       return Effect.fail(new Validation({ message: `Rubric criterion '${key}' is duplicated` }));
     }
     keys.add(key);
+    const options = criterion.options?.map((option) => ({
+      value: option.value.trim(),
+      label: option.label.trim(),
+      score: option.score,
+    })) ?? [];
+    if (criterion.type === "dropdown") {
+      if (options.length < 2 || options.some((option) => !option.value || !option.label)) {
+        return Effect.fail(new Validation({ message: `Dropdown criterion '${label}' requires at least two labeled options` }));
+      }
+      if (new Set(options.map((option) => option.value)).size !== options.length) {
+        return Effect.fail(new Validation({ message: `Dropdown criterion '${label}' has duplicate option values` }));
+      }
+    }
     criteria.push({
       key,
       label,
       ...(criterion.description?.trim() ? { description: criterion.description.trim() } : {}),
+      type: criterion.type,
+      weight: criterion.type === "text" ? 0 : criterion.weight,
+      required: criterion.required,
       max: 5,
+      ...(criterion.type === "dropdown" ? { options } : {}),
     });
   }
   return Effect.succeed({ criteria: [criteria[0]!, ...criteria.slice(1)] });
 };
 
+const validateRoundSchedule = (
+  startsAt: number | null,
+  endsAt: number | null,
+): Effect.Effect<void, Validation> =>
+  startsAt !== null && endsAt !== null && endsAt <= startsAt
+    ? Effect.fail(new Validation({ message: "Review round end must be after its start" }))
+    : Effect.void;
+
 const validateScores = (
   rubric: ReviewRubricType,
   scores: readonly CriterionScore[],
-): Effect.Effect<Readonly<Record<string, number>>, Validation> => {
-  const expected = new Set(rubric.criteria.map((criterion) => criterion.key));
-  const result: Record<string, number> = {};
+): Effect.Effect<Readonly<Record<string, number | string>>, Validation> => {
+  const criteria = new Map(rubric.criteria.map((criterion) => [criterion.key, criterion]));
+  const result: Record<string, number | string> = {};
   for (const entry of scores) {
-    if (!expected.has(entry.criterionKey)) {
+    const criterion = criteria.get(entry.criterionKey);
+    if (!criterion) {
       return Effect.fail(new Validation({ message: `Unknown rubric criterion '${entry.criterionKey}'` }));
     }
-    if (result[entry.criterionKey] !== undefined) {
+    if (Object.hasOwn(result, entry.criterionKey)) {
       return Effect.fail(new Validation({ message: `Rubric criterion '${entry.criterionKey}' was scored more than once` }));
     }
-    if (!Number.isInteger(entry.score) || entry.score < 1 || entry.score > 5) {
-      return Effect.fail(new Validation({ message: "Rubric scores must be whole numbers from 1 to 5" }));
+    if (criterion.type === "numeric") {
+      if (typeof entry.score !== "number" || !Number.isInteger(entry.score) || entry.score < 1 || entry.score > 5) {
+        return Effect.fail(new Validation({ message: `Numeric criterion '${criterion.label}' requires a whole number from 1 to 5` }));
+      }
+    } else if (criterion.type === "dropdown") {
+      if (typeof entry.score !== "string" || !criterion.options?.some((option) => option.value === entry.score)) {
+        return Effect.fail(new Validation({ message: `Dropdown criterion '${criterion.label}' requires one configured option` }));
+      }
+    } else if (typeof entry.score !== "string" || !entry.score.trim()) {
+      return Effect.fail(new Validation({ message: `Text criterion '${criterion.label}' requires a response` }));
     }
-    result[entry.criterionKey] = entry.score;
+    result[entry.criterionKey] = typeof entry.score === "string" ? entry.score.trim() : entry.score;
   }
-  if (Object.keys(result).length !== expected.size) {
-    return Effect.fail(new Validation({ message: "Every rubric criterion requires a score" }));
+  const missing = rubric.criteria.filter((criterion) => criterion.required && !Object.hasOwn(result, criterion.key));
+  if (missing.length > 0) {
+    return Effect.fail(new Validation({ message: `Required rubric criteria are incomplete: ${missing.map((criterion) => criterion.label).join(", ")}` }));
   }
   return Effect.succeed(result);
 };
 
-const averageScore = (scores: Readonly<Record<string, number>>) => {
-  const values = Object.values(scores);
-  return values.reduce((total, value) => total + value, 0) / values.length;
+const averageScore = (rubric: ReviewRubricType, scores: Readonly<Record<string, number | string>>) => {
+  let weightedTotal = 0;
+  let weightTotal = 0;
+  for (const criterion of rubric.criteria) {
+    if (criterion.type === "text" || criterion.weight <= 0) continue;
+    const response = scores[criterion.key];
+    const value = criterion.type === "numeric"
+      ? typeof response === "number" ? response : null
+      : criterion.options?.find((option) => option.value === response)?.score ?? null;
+    if (value === null) continue;
+    weightedTotal += value * criterion.weight;
+    weightTotal += criterion.weight;
+  }
+  return weightTotal === 0 ? null : weightedTotal / weightTotal;
 };
+
+const visibleAggregateScore = (score: number) => score === 0 ? null : score;
 
 const orderedScores = (
   rubric: ReviewRubricType,
-  scores: Readonly<Record<string, number>> | null,
+  scores: Readonly<Record<string, number | string>> | null,
 ): readonly CriterionScore[] =>
   rubric.criteria.flatMap((criterion) => {
     const score = scores?.[criterion.key];
-    return typeof score === "number" && score >= 1 && score <= 5
-      ? [{ criterionKey: criterion.key, score: score as CriterionScore["score"] }]
+    return (typeof score === "number" && score >= 1 && score <= 5) || (typeof score === "string" && score.length > 0)
+      ? [{ criterionKey: criterion.key, score }]
       : [];
   });
 
@@ -290,6 +381,7 @@ export const createReviewRound = (
     yield* requireOrganizer(viewer);
     const name = input.name.trim();
     if (!name) return yield* Effect.fail(new Validation({ message: "Review round name cannot be blank" }));
+    yield* validateRoundSchedule(input.startsAt, input.endsAt);
     const rubric = yield* normalizeRoundRubric(input.rubric);
     const { db } = yield* Db;
     const principalId = roundCommandPrincipalId(viewer);
@@ -298,6 +390,9 @@ export const createReviewRound = (
       eventId: input.eventId,
       name,
       initialStatus: input.initialStatus,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      blind: input.blind,
       rubric,
       expectedRoundCount: input.expectedRoundCount,
     }));
@@ -348,6 +443,9 @@ export const createReviewRound = (
       name,
       order: existingRows.length + 1,
       status: input.initialStatus,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      blind: input.blind,
       rubric,
       version: 1,
     };
@@ -374,6 +472,9 @@ export const createReviewRound = (
         name,
         order: round.order,
         status: round.status,
+        startsAt: input.startsAt === null ? null : new Date(input.startsAt),
+        endsAt: input.endsAt === null ? null : new Date(input.endsAt),
+        blind: input.blind,
         rubric,
         version: 1,
         createdAt,
@@ -420,6 +521,137 @@ export const createReviewRound = (
         if (current.length !== input.expectedRoundCount) {
           return yield* Effect.fail(new Conflict({ message: "Review rounds changed; reload before creating another round" }));
         }
+        return yield* Effect.fail(failure);
+      })),
+    );
+  });
+
+export const updateReviewRound = (
+  input: UpdateReviewRoundInput,
+): Effect.Effect<UpdateReviewRoundOutput, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    yield* requireOrganizer(viewer);
+    const name = input.name.trim();
+    if (!name) return yield* Effect.fail(new Validation({ message: "Review round name cannot be blank" }));
+    yield* validateRoundSchedule(input.startsAt, input.endsAt);
+    const rubric = yield* normalizeRoundRubric(input.rubric);
+    const { db } = yield* Db;
+    const principalId = roundCommandPrincipalId(viewer);
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      roundId: input.roundId,
+      name,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      blind: input.blind,
+      rubric,
+      expectedVersion: input.expectedVersion,
+    }));
+    const readReplay = (): Effect.Effect<UpdateReviewRoundOutput | null, AppError> =>
+      Effect.gen(function* () {
+        const [record] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+          eq(idempotencyRecords.eventId, input.eventId),
+          eq(idempotencyRecords.operationId, "review.updateRound"),
+          eq(idempotencyRecords.principalId, principalId),
+          eq(idempotencyRecords.keyHash, keyHash),
+        )).limit(1));
+        if (!record) return null;
+        if (record.requestHash !== requestHash) {
+          return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different review-round update" }));
+        }
+        return yield* Schema.decodeUnknown(UpdateReviewRoundOutput)(record.responseBody).pipe(
+          Effect.map((output) => ({ ...output, idempotent: true })),
+          Effect.mapError((error) => new External({ service: "database", detail: `Invalid review-round update replay: ${String(error)}` })),
+        );
+      });
+    const replay = yield* readReplay();
+    if (replay) return replay;
+
+    const [row, existingReviews] = yield* Effect.all([
+      database(() => db.select().from(reviewRounds).where(and(
+        eq(reviewRounds.eventId, input.eventId),
+        eq(reviewRounds.id, input.roundId),
+      )).limit(1)),
+      database(() => db.select({ id: reviews.id }).from(reviews).where(and(
+        eq(reviews.eventId, input.eventId),
+        eq(reviews.roundId, input.roundId),
+      )).limit(1)),
+    ]);
+    const currentRow = row[0];
+    if (!currentRow) return yield* Effect.fail(new NotFound({ entity: "reviewRound", id: input.roundId }));
+    if (currentRow.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Review round changed; reload before saving" }));
+    }
+    const current = roundFromRow(currentRow, yield* decodeRubric(currentRow.rubric));
+    if (existingReviews.length > 0 && JSON.stringify(current.rubric) !== JSON.stringify(rubric)) {
+      return yield* Effect.fail(new Conflict({ message: "A rubric cannot change after scoring has started" }));
+    }
+    const updatedAt = now();
+    const after: ReviewRound = {
+      ...current,
+      name,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      blind: input.blind,
+      rubric,
+      version: current.version + 1,
+    };
+    const output: UpdateReviewRoundOutput = { round: after, idempotent: false };
+    const idempotencyId = id("idempotency");
+    const commit = database(() => db.batch([
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId,
+        eventId: input.eventId,
+        operationId: "review.updateRound",
+        principalId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 200,
+        responseBody: output,
+        expiresAt: new Date(updatedAt.getTime() + 86_400_000),
+        completedAt: updatedAt,
+        createdAt: updatedAt,
+      }),
+      db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewRoundClaim", aggregateId: input.roundId,
+        aggregateVersion: after.version, eventType: "review.round.versionClaim", audiences: [{ kind: "admins" }],
+        payload: { expectedVersion: current.version }, actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        requestId: input.requestId, idempotencyRecordId: idempotencyId, occurredAt: updatedAt,
+      }),
+      db.update(reviewRounds).set({
+        name,
+        startsAt: input.startsAt === null ? null : new Date(input.startsAt),
+        endsAt: input.endsAt === null ? null : new Date(input.endsAt),
+        blind: input.blind,
+        rubric,
+        version: after.version,
+        updatedAt,
+      }).where(and(
+        eq(reviewRounds.eventId, input.eventId),
+        eq(reviewRounds.id, input.roundId),
+        eq(reviewRounds.version, current.version),
+      )),
+      db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewRound", aggregateId: input.roundId,
+        aggregateVersion: after.version, eventType: "review.round.updated", audiences: [{ kind: "admins" }], payload: after,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId, requestId: input.requestId,
+        idempotencyRecordId: idempotencyId, occurredAt: updatedAt,
+      }),
+      db.insert(auditLog).values({
+        id: id("audit"), eventId: input.eventId, requestId: input.requestId,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        action: "review.updateRound", resourceType: "reviewRound", resourceId: input.roundId,
+        before: current, after, metadata: { idempotencyRecordId: idempotencyId }, occurredAt: updatedAt,
+      }),
+    ]));
+    return yield* commit.pipe(
+      Effect.as(output),
+      Effect.catchAll((failure) => Effect.gen(function* () {
+        const committed = yield* readReplay();
+        if (committed) return committed;
         return yield* Effect.fail(failure);
       })),
     );
@@ -632,14 +864,7 @@ export const getWorkbench = (
     );
     const rounds: ReviewRound[] = [];
     for (const row of roundRows) {
-      rounds.push({
-        id: row.id,
-        name: row.name,
-        order: row.order,
-        status: row.status,
-        rubric: yield* decodeRubric(row.rubric),
-        version: row.version,
-      });
+      rounds.push(roundFromRow(row, yield* decodeRubric(row.rubric)));
     }
     const selectedRound = input.roundId
       ? rounds.find((round) => round.id === input.roundId)
@@ -659,12 +884,14 @@ export const getWorkbench = (
           recusalReason: reviewAssignments.recusalReason,
           recusedAt: reviewAssignments.recusedAt,
           version: reviewAssignments.version,
+          updatedAt: reviewAssignments.updatedAt,
           reviewerName: users.name,
         })
         .from(reviewAssignments)
         .innerJoin(users, eq(users.id, reviewAssignments.reviewerUserId))
         .where(eq(reviewAssignments.eventId, input.eventId)),
     );
+    const recusalRows = assignmentRows.filter((assignment) => assignment.status === "recused");
     const relevantRoundId = selectedRound?.id;
     const reviewerSubmissionIds = new Set(
       assignmentRows
@@ -706,21 +933,46 @@ export const getWorkbench = (
       db.select().from(reviews).where(eq(reviews.eventId, input.eventId)),
     );
     const visibleHumanReviews = reviewRows.filter((review) => !review.ai);
+    const reviewerProgress = reviewerRows.map((reviewer) => {
+      const reviewerAssignments = assignmentRows.filter((assignment) =>
+        assignment.reviewerUserId === reviewer.userId &&
+        assignment.status === "assigned" &&
+        (!relevantRoundId || assignment.roundId === relevantRoundId)
+      );
+      const completedCount = reviewerAssignments.filter((assignment) =>
+        visibleHumanReviews.some((review) =>
+          review.roundId === assignment.roundId &&
+          review.submissionId === assignment.submissionId &&
+          review.reviewerUserId === reviewer.userId
+        )
+      ).length;
+      return {
+        reviewerUserId: reviewer.userId,
+        reviewerName: reviewer.name ?? "Reviewer",
+        assignedCount: reviewerAssignments.length,
+        completedCount,
+        outstandingCount: reviewerAssignments.length - completedCount,
+        completionPercent: reviewerAssignments.length === 0 ? 0 : completedCount / reviewerAssignments.length * 100,
+      };
+    });
     const summaries = submissionRows.map((submission): SubmissionReviewSummary => {
       const assignments = assignmentRows.filter(
-        (assignment) => assignment.status === "assigned" && assignment.submissionId === submission.id && (!relevantRoundId || assignment.roundId === relevantRoundId),
+        (assignment) => assignment.submissionId === submission.id &&
+          assignment.status === "assigned" &&
+          (!relevantRoundId || assignment.roundId === relevantRoundId),
       );
       const humanReviews = visibleHumanReviews.filter(
         (review) => review.submissionId === submission.id && (!relevantRoundId || review.roundId === relevantRoundId),
       );
-      const score = humanReviews.length === 0
+      const scoredReviews = humanReviews.filter((review) => review.score !== 0);
+      const completedAssignmentCount = assignments.filter((assignment) =>
+        humanReviews.some((review) => review.reviewerUserId === assignment.reviewerUserId)
+      ).length;
+      const score = scoredReviews.length === 0
         ? null
-        : humanReviews.reduce((total, review) => total + review.score, 0) / humanReviews.length;
-      const completedAssignments = assignments.filter((assignment) => humanReviews.some(
-        (review) => review.reviewerUserId === assignment.reviewerUserId,
-      ));
+        : scoredReviews.reduce((total, review) => total + review.score, 0) / scoredReviews.length;
       const reviewState = humanReviews.length > 0
-        ? assignments.length > 0 && completedAssignments.length >= assignments.length
+        ? assignments.length > 0 && completedAssignmentCount === assignments.length
           ? "complete"
           : "in_progress"
         : assignments.length > 0
@@ -802,7 +1054,8 @@ export const getWorkbench = (
         (answer) => answer.semanticKey === "submissionAbstract" && typeof answer.value === "string",
       )?.value;
       const detailAssignments = assignmentRows
-        .filter((assignment) => assignment.submissionId === submissionId && (!relevantRoundId || assignment.roundId === relevantRoundId))
+        .filter((assignment) => assignment.submissionId === submissionId &&
+          (!relevantRoundId || assignment.roundId === relevantRoundId))
         .map((assignment) => ({
           id: assignment.id,
           reviewerUserId: assignment.reviewerUserId,
@@ -818,7 +1071,7 @@ export const getWorkbench = (
           id: review.id,
           reviewerUserId: review.reviewerUserId!,
           reviewerName: memberRows.find((member) => member.userId === review.reviewerUserId)?.name ?? "Former committee member",
-          score: review.score,
+          score: visibleAggregateScore(review.score),
           scores: selectedRound ? orderedScores(selectedRound.rubric, review.scores) : [],
           comment: review.comment,
           version: review.version,
@@ -830,7 +1083,7 @@ export const getWorkbench = (
         .map((review) => ({
           id: review.id,
           label: "AI suggestion — requires human confirmation" as const,
-          score: review.score,
+          score: visibleAggregateScore(review.score),
           scores: selectedRound ? orderedScores(selectedRound.rubric, review.scores) : [],
           comment: review.comment ?? "",
           version: review.version,
@@ -840,7 +1093,12 @@ export const getWorkbench = (
       selected = {
         ...selectedSummary,
         abstract: typeof abstract === "string" ? abstract : "",
-        speakers: speakerRows,
+        speakers: selectedRound?.blind && viewer.role === "reviewer"
+          ? []
+          : speakerRows.map((speaker) => ({
+            ...speaker,
+            role: speaker.isPrimary ? "Primary presenter" : "Co-presenter",
+          })),
         round: selectedRound ?? null,
         assignments: detailAssignments,
         reviews: detailHumanReviews,
@@ -851,6 +1109,28 @@ export const getWorkbench = (
           body: comment.body,
           createdAt: toMillis(comment.createdAt),
         })),
+        recusals: recusalRows
+          .filter((recusal) => recusal.submissionId === submissionId && (!relevantRoundId || recusal.roundId === relevantRoundId))
+          .map((recusal) => ({
+            id: recusal.id,
+            roundId: recusal.roundId,
+            submissionId: recusal.submissionId,
+            reviewerUserId: recusal.reviewerUserId,
+            reviewerName: recusal.reviewerName ?? "Reviewer",
+            reason: recusal.recusalReason,
+            createdAt: toMillis(recusal.recusedAt ?? recusal.updatedAt),
+          })),
+        recusedByMe: assignmentRows.some((assignment) =>
+          assignment.status === "recused" &&
+          assignment.submissionId === submissionId &&
+          assignment.reviewerUserId === viewer.userId &&
+          (!relevantRoundId || assignment.roundId === relevantRoundId)
+        ) && !assignmentRows.some((assignment) =>
+          assignment.status === "assigned" &&
+          assignment.submissionId === submissionId &&
+          assignment.reviewerUserId === viewer.userId &&
+          (!relevantRoundId || assignment.roundId === relevantRoundId)
+        ),
         aiSuggestions,
         acceptance: yield* loadAcceptance(input.eventId, submissionId),
       };
@@ -860,19 +1140,22 @@ export const getWorkbench = (
       ? null
       : (() => {
           const roundAssignments = assignmentRows.filter((assignment) => assignment.roundId === selectedRound.id);
-          const activeAssignments = roundAssignments.filter((assignment) => assignment.status === "assigned");
+          const activeAssignments = roundAssignments.filter((assignment) =>
+            assignment.status === "assigned"
+          );
           const roundHumanReviews = visibleHumanReviews.filter((review) => review.roundId === selectedRound.id);
           const assignmentIsComplete = (assignment: typeof activeAssignments[number]) => roundHumanReviews.some(
             (review) => review.submissionId === assignment.submissionId && review.reviewerUserId === assignment.reviewerUserId,
           );
           const completedReviewCount = activeAssignments.filter(assignmentIsComplete).length;
+          const recusalCount = roundAssignments.filter((assignment) => assignment.status === "recused").length;
           return {
             roundId: selectedRound.id,
             roundName: selectedRound.name,
             assignedReviewCount: activeAssignments.length,
             completedReviewCount,
             outstandingReviewCount: activeAssignments.length - completedReviewCount,
-            recusalCount: roundAssignments.length - activeAssignments.length,
+            recusalCount,
             reviewers: reviewerRows.map((reviewer) => {
               const reviewerAssignments = activeAssignments.filter((assignment) => assignment.reviewerUserId === reviewer.userId);
               const reviewerCompleted = reviewerAssignments.filter(assignmentIsComplete).length;
@@ -895,10 +1178,10 @@ export const getWorkbench = (
               const active = activeAssignments.filter((assignment) => assignment.submissionId === submission.id);
               const completed = active.filter(assignmentIsComplete);
               const outstanding = active.filter((assignment) => !assignmentIsComplete(assignment));
-              const recusals = roundAssignments.filter(
+              const submissionRecusalCount = roundAssignments.filter(
                 (assignment) => assignment.status === "recused" && assignment.submissionId === submission.id,
-              );
-              const needsReviewer = active.length === 0 && recusals.length > 0;
+              ).length;
+              const needsReviewer = active.length === 0 && submissionRecusalCount > 0;
               return outstanding.length > 0 || needsReviewer
                 ? [{
                     submissionId: submission.id,
@@ -906,7 +1189,7 @@ export const getWorkbench = (
                     assignedReviewCount: active.length,
                     completedReviewCount: completed.length,
                     outstandingReviewerNames: outstanding.map((assignment) => assignment.reviewerName ?? "Reviewer").sort(),
-                    recusalCount: recusals.length,
+                    recusalCount: submissionRecusalCount,
                     needsReviewer,
                   }]
                 : [];
@@ -928,6 +1211,7 @@ export const getWorkbench = (
         userId: reviewer.userId,
         name: reviewer.name ?? "Reviewer",
       })),
+      reviewerProgress,
       rounds,
       progress,
       order: input.order ?? "coverage",
@@ -941,6 +1225,232 @@ export const getWorkbench = (
       },
       lastUpdatedAt: toMillis(event.updatedAt),
     };
+  });
+
+export const exportReviewResults = (
+  input: ExportReviewResultsInput,
+): Effect.Effect<ExportReviewResultsOutput, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:read"]);
+    yield* requireOrganizer(viewer);
+    const { db } = yield* Db;
+    const [eventRow, round, submissionRows, reviewRows] = yield* Effect.all([
+      database(() => db.select({ name: events.name }).from(events).where(eq(events.id, input.eventId)).limit(1)),
+      loadRound(input.eventId, input.roundId),
+      database(() => db.select({
+        id: submissions.id,
+        title: submissions.title,
+        category: submissions.category,
+        status: submissions.status,
+      }).from(submissions).innerJoin(
+        forms,
+        and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+      ).where(and(eq(submissions.eventId, input.eventId), eq(forms.kind, "cfp"))).orderBy(asc(submissions.title))),
+      database(() => db.select({
+        submissionId: reviews.submissionId,
+        reviewerUserId: reviews.reviewerUserId,
+        reviewerName: users.name,
+        score: reviews.score,
+        scores: reviews.scores,
+        comment: reviews.comment,
+        updatedAt: reviews.updatedAt,
+      }).from(reviews).leftJoin(users, eq(users.id, reviews.reviewerUserId)).where(and(
+        eq(reviews.eventId, input.eventId),
+        eq(reviews.roundId, input.roundId),
+        eq(reviews.ai, false),
+      )).orderBy(asc(users.name), asc(reviews.submissionId))),
+    ]);
+    const event = eventRow[0];
+    if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
+    const rows = submissionRows.flatMap<ReviewExportRow>((submission): ReviewExportRow[] => {
+      const submissionReviews = reviewRows.filter((review) => review.submissionId === submission.id);
+      if (submissionReviews.length === 0) {
+        return [{
+          submissionId: submission.id,
+          title: submission.title,
+          category: submission.category,
+          status: submission.status,
+          reviewerUserId: null,
+          reviewerName: null,
+          aggregateScore: null,
+          responses: [],
+          comment: null,
+          completedAt: null,
+        }];
+      }
+      return submissionReviews.map((review) => ({
+        submissionId: submission.id,
+        title: submission.title,
+        category: submission.category,
+        status: submission.status,
+        reviewerUserId: review.reviewerUserId,
+        reviewerName: review.reviewerName,
+        aggregateScore: visibleAggregateScore(review.score),
+        responses: orderedScores(round.rubric, review.scores),
+        comment: review.comment,
+        completedAt: toMillis(review.updatedAt),
+      }));
+    });
+    return { eventName: event.name, round, rows };
+  });
+
+const escapeHtml = (value: string) => value
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
+
+export const sendReviewReminders = (
+  input: SendReviewRemindersInput,
+): Effect.Effect<SendReviewRemindersOutput, AppError, Db | CurrentUser | MailQueue> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    yield* requireOrganizer(viewer);
+    const round = yield* loadRound(input.eventId, input.roundId);
+    const requestedReviewerIds = [...new Set(input.reviewerUserIds)];
+    if (requestedReviewerIds.length === 0) {
+      return yield* Effect.fail(new Validation({ message: "Select at least one reviewer to remind" }));
+    }
+    if (requestedReviewerIds.length !== input.reviewerUserIds.length) {
+      return yield* Effect.fail(new Validation({ message: "Reminder recipients cannot contain duplicates" }));
+    }
+    const { db } = yield* Db;
+    const queue = yield* MailQueue;
+    const principalId = roundCommandPrincipalId(viewer);
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      roundId: input.roundId,
+      reviewerUserIds: [...requestedReviewerIds].sort(),
+    }));
+    const readReplay = (): Effect.Effect<SendReviewRemindersOutput | null, AppError> => Effect.gen(function* () {
+      const [record] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, input.eventId),
+        eq(idempotencyRecords.operationId, "review.sendReminders"),
+        eq(idempotencyRecords.principalId, principalId),
+        eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1));
+      if (!record) return null;
+      if (record.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different reminder audience" }));
+      }
+      return yield* Schema.decodeUnknown(SendReviewRemindersOutput)(record.responseBody).pipe(
+        Effect.map((output) => ({ ...output, idempotent: true })),
+        Effect.mapError((error) => new External({ service: "database", detail: `Invalid reminder replay: ${String(error)}` })),
+      );
+    });
+    const replay = yield* readReplay();
+    if (replay) {
+      yield* queue.wake().pipe(Effect.catchAll(() => Effect.void));
+      return replay;
+    }
+
+    const [eventRow, members, assignments, completed] = yield* Effect.all([
+      database(() => db.select({ name: events.name, slug: events.slug }).from(events).where(eq(events.id, input.eventId)).limit(1)),
+      database(() => db.select({ userId: eventMembers.userId, name: users.name, email: users.email }).from(eventMembers)
+        .innerJoin(users, eq(users.id, eventMembers.userId))
+        .where(and(eq(eventMembers.eventId, input.eventId), eq(eventMembers.role, "reviewer")))),
+      database(() => db.select({ submissionId: reviewAssignments.submissionId, reviewerUserId: reviewAssignments.reviewerUserId })
+        .from(reviewAssignments).where(and(
+          eq(reviewAssignments.eventId, input.eventId),
+          eq(reviewAssignments.roundId, input.roundId),
+          eq(reviewAssignments.status, "assigned"),
+        ))),
+      database(() => db.select({ submissionId: reviews.submissionId, reviewerUserId: reviews.reviewerUserId })
+        .from(reviews).where(and(eq(reviews.eventId, input.eventId), eq(reviews.roundId, input.roundId), eq(reviews.ai, false)))),
+    ]);
+    const event = eventRow[0];
+    if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
+    const targetSet = new Set(requestedReviewerIds);
+    const pairKey = (submissionId: string, reviewerUserId: string | null) => `${submissionId}\u0000${reviewerUserId ?? ""}`;
+    const completedSet = new Set(completed.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+    const recipients = members.flatMap((member) => {
+      if (!targetSet.has(member.userId)) return [];
+      const outstandingCount = assignments.filter((assignment) =>
+        assignment.reviewerUserId === member.userId &&
+        !completedSet.has(pairKey(assignment.submissionId, member.userId))
+      ).length;
+      return outstandingCount > 0 && member.email
+        ? [{ ...member, name: member.name ?? "Reviewer", outstandingCount }]
+        : [];
+    });
+    const createdAt = now();
+    const reviewUrl = `${queue.appOrigin}/e/${encodeURIComponent(event.slug)}/review?roundId=${encodeURIComponent(input.roundId)}&assignedToMe=true`;
+    const rows = recipients.map((recipient, index) => {
+      const snapshotId = id("mail_snapshot");
+      const deliveryId = id("mail_delivery");
+      const subject = `${recipient.outstandingCount} ${round.name} review${recipient.outstandingCount === 1 ? "" : "s"} outstanding`;
+      const text = `Hi ${recipient.name},\n\nYou have ${recipient.outstandingCount} outstanding ${round.name} review${recipient.outstandingCount === 1 ? "" : "s"} for ${event.name}.\n\nOpen your assigned queue: ${reviewUrl}`;
+      const html = `<p>Hi ${escapeHtml(recipient.name)},</p><p>You have <strong>${recipient.outstandingCount}</strong> outstanding ${escapeHtml(round.name)} review${recipient.outstandingCount === 1 ? "" : "s"} for ${escapeHtml(event.name)}.</p><p><a href="${escapeHtml(reviewUrl)}">Open your assigned queue</a></p>`;
+      return {
+        snapshot: {
+          id: snapshotId,
+          eventId: input.eventId,
+          templateId: null,
+          recipientUserId: recipient.userId,
+          recipientEmail: recipient.email!,
+          recipientName: recipient.name,
+          fromEmail: queue.fromEmail,
+          replyToEmail: null,
+          subject,
+          renderedHtml: html,
+          renderedText: text,
+          icsFilename: null,
+          icsContent: null,
+          createdAt,
+        },
+        delivery: {
+          id: deliveryId,
+          snapshotId,
+          idempotencyKey: `review-reminder:${keyHash}:${index}`,
+          status: "pending" as const,
+          scheduledFor: createdAt,
+          availableAt: createdAt,
+          attemptCount: 0,
+          maxAttempts: 8,
+          createdAt,
+        },
+      };
+    });
+    const output: SendReviewRemindersOutput = {
+      queuedCount: rows.length,
+      skippedCount: targetSet.size - rows.length,
+      reviewerUserIds: recipients.map((recipient) => recipient.userId),
+      idempotent: false,
+    };
+    const idempotencyId = id("idempotency");
+    yield* database(() => db.batch([
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId, eventId: input.eventId, operationId: "review.sendReminders", principalId,
+        keyHash, requestHash, status: "completed", responseStatus: 202, responseBody: output,
+        expiresAt: new Date(createdAt.getTime() + 86_400_000), completedAt: createdAt, createdAt,
+      }),
+      ...(rows.length > 0 ? [
+        db.insert(mailDeliverySnapshots).values(rows.map((row) => row.snapshot)),
+        db.insert(mailDeliveries).values(rows.map((row) => row.delivery)),
+      ] : []),
+      db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewReminderBatch", aggregateId: idempotencyId,
+        aggregateVersion: 1, eventType: "review.reminders.enqueued", audiences: [{ kind: "admins" }], payload: output,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId, requestId: input.requestId,
+        idempotencyRecordId: idempotencyId, occurredAt: createdAt,
+      }),
+      db.insert(auditLog).values({
+        id: id("audit"), eventId: input.eventId, requestId: input.requestId,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        action: "review.sendReminders", resourceType: "reviewRound", resourceId: input.roundId,
+        before: null, after: output, metadata: { idempotencyRecordId: idempotencyId }, occurredAt: createdAt,
+      }),
+    ])).pipe(
+      Effect.catchAll((failure) => Effect.gen(function* () {
+        const committed = yield* readReplay();
+        if (committed) return;
+        return yield* Effect.fail(failure);
+      })),
+    );
+    yield* queue.wake().pipe(Effect.catchAll(() => Effect.void));
+    return output;
   });
 
 export const assignReviewer = (
@@ -973,7 +1483,13 @@ export const assignReviewer = (
           .limit(1),
       ),
       database(() => db.select({ name: users.name }).from(eventMembers).innerJoin(users, eq(users.id, eventMembers.userId)).where(and(eq(eventMembers.eventId, input.eventId), eq(eventMembers.userId, input.reviewerUserId), eq(eventMembers.role, "reviewer"))).limit(1)),
-      database(() => db.select().from(reviewAssignments).where(and(eq(reviewAssignments.eventId, input.eventId), eq(reviewAssignments.roundId, input.roundId), eq(reviewAssignments.submissionId, input.submissionId), eq(reviewAssignments.reviewerUserId, input.reviewerUserId), eq(reviewAssignments.status, "assigned"))).limit(1)),
+      database(() => db.select().from(reviewAssignments).where(and(
+        eq(reviewAssignments.eventId, input.eventId),
+        eq(reviewAssignments.roundId, input.roundId),
+        eq(reviewAssignments.submissionId, input.submissionId),
+        eq(reviewAssignments.reviewerUserId, input.reviewerUserId),
+        eq(reviewAssignments.status, "assigned"),
+      )).limit(1)),
     ]);
     if (!submission[0]) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
     if (!reviewer[0]) return yield* Effect.fail(new Validation({ message: "Assignments require an event member with the reviewer role" }));
@@ -1054,6 +1570,237 @@ export const assignReviewer = (
       ]),
     );
     return { assignment, created: true };
+  });
+
+export const bulkAssignReviewers = (
+  input: BulkAssignReviewersInput,
+): Effect.Effect<BulkAssignReviewersOutput, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    yield* requireOrganizer(viewer);
+    const round = yield* loadRound(input.eventId, input.roundId);
+    if (round.status === "complete") {
+      return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot receive new assignments" }));
+    }
+    const submissionIds = [...new Set(input.submissionIds)];
+    const reviewerUserIds = [...new Set(input.reviewerUserIds)];
+    if (submissionIds.length !== input.submissionIds.length || reviewerUserIds.length !== input.reviewerUserIds.length) {
+      return yield* Effect.fail(new Validation({ message: "Bulk assignment selections cannot contain duplicates" }));
+    }
+    if (input.reviewsPerSubmission > reviewerUserIds.length) {
+      return yield* Effect.fail(new Validation({ message: "Reviews per submission cannot exceed selected reviewers" }));
+    }
+    const { db } = yield* Db;
+    const principalId = roundCommandPrincipalId(viewer);
+    const normalizedSubmissionIds = [...submissionIds].sort();
+    const normalizedReviewerUserIds = [...reviewerUserIds].sort();
+    const normalizedRequest = {
+      eventId: input.eventId,
+      roundId: input.roundId,
+      submissionIds: normalizedSubmissionIds,
+      reviewerUserIds: normalizedReviewerUserIds,
+      reviewsPerSubmission: input.reviewsPerSubmission,
+      strategy: input.strategy,
+    };
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify(normalizedRequest));
+    const pairKey = (submissionId: string, reviewerUserId: string) => `${submissionId}\u0000${reviewerUserId}`;
+    const desired = normalizedSubmissionIds.flatMap((submissionId, submissionIndex) => {
+      const selected = input.strategy === "all"
+        ? normalizedReviewerUserIds
+        : Array.from({ length: input.reviewsPerSubmission }, (_, offset) =>
+          normalizedReviewerUserIds[(submissionIndex * input.reviewsPerSubmission + offset) % normalizedReviewerUserIds.length]!
+        );
+      return selected.map((reviewerUserId) => ({ submissionId, reviewerUserId }));
+    });
+    type ReservationPlan = {
+      readonly assignments: readonly { readonly id: string; readonly submissionId: string; readonly reviewerUserId: string }[];
+      readonly changeId: string;
+      readonly auditId: string;
+    };
+    const reservationPlan = (value: unknown): ReservationPlan | null => {
+      if (!value || typeof value !== "object") return null;
+      const candidate = value as Record<string, unknown>;
+      if (typeof candidate.changeId !== "string" || typeof candidate.auditId !== "string" || !Array.isArray(candidate.assignments)) return null;
+      const assignments = candidate.assignments.flatMap((assignment) => {
+        if (!assignment || typeof assignment !== "object") return [];
+        const row = assignment as Record<string, unknown>;
+        return typeof row.id === "string" && typeof row.submissionId === "string" && typeof row.reviewerUserId === "string"
+          ? [{ id: row.id, submissionId: row.submissionId, reviewerUserId: row.reviewerUserId }]
+          : [];
+      });
+      return assignments.length === candidate.assignments.length
+        ? { assignments, changeId: candidate.changeId, auditId: candidate.auditId }
+        : null;
+    };
+    const readRecord = () => database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, input.eventId),
+      eq(idempotencyRecords.operationId, "review.bulkAssignReviewers"),
+      eq(idempotencyRecords.principalId, principalId),
+      eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1)).pipe(Effect.map((rows) => rows[0] ?? null));
+    const decodeCompleted = (body: unknown) => Schema.decodeUnknown(BulkAssignReviewersOutput)(body).pipe(
+      Effect.mapError((error) => new External({ service: "database", detail: `Invalid bulk-assignment replay: ${String(error)}` })),
+    );
+
+    let record = yield* readRecord();
+    if (record?.requestHash !== undefined && record.requestHash !== requestHash) {
+      return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different bulk assignment" }));
+    }
+    if (record?.status === "completed") {
+      const replay = yield* decodeCompleted(record.responseBody);
+      return { ...replay, idempotent: true };
+    }
+
+    let plan = record ? reservationPlan(record.responseBody) : null;
+    let resumed = record !== null;
+    if (record && !plan) {
+      return yield* Effect.fail(new External({ service: "database", detail: "Invalid in-progress bulk-assignment reservation" }));
+    }
+    if (!record) {
+      const [reviewerRows, submissionRows, existingRows] = yield* Effect.all([
+        database(() => db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(
+          eq(eventMembers.eventId, input.eventId),
+          eq(eventMembers.role, "reviewer"),
+          inArray(eventMembers.userId, reviewerUserIds),
+        ))),
+        database(() => db.select({ id: submissions.id }).from(submissions).innerJoin(
+          forms,
+          and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+        ).where(and(
+          eq(submissions.eventId, input.eventId),
+          eq(forms.kind, "cfp"),
+          inArray(submissions.id, submissionIds),
+        ))),
+        database(() => db.select({
+          submissionId: reviewAssignments.submissionId,
+          reviewerUserId: reviewAssignments.reviewerUserId,
+        }).from(reviewAssignments).where(and(
+          eq(reviewAssignments.eventId, input.eventId),
+          eq(reviewAssignments.roundId, input.roundId),
+          eq(reviewAssignments.status, "assigned"),
+          inArray(reviewAssignments.submissionId, submissionIds),
+          inArray(reviewAssignments.reviewerUserId, reviewerUserIds),
+        ))),
+      ]);
+      if (reviewerRows.length !== reviewerUserIds.length) {
+        return yield* Effect.fail(new Validation({ message: "Every selected reviewer must be an event member with the reviewer role" }));
+      }
+      if (submissionRows.length !== submissionIds.length) {
+        return yield* Effect.fail(new Validation({ message: "Every selected proposal must belong to this event CFP" }));
+      }
+      const existing = new Set(existingRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+      const createdAt = now();
+      const idempotencyId = id("idempotency");
+      const initialPlan: ReservationPlan = {
+        assignments: desired
+          .filter((pair) => !existing.has(pairKey(pair.submissionId, pair.reviewerUserId)))
+          .map((pair) => ({ id: id("review_assignment"), ...pair })),
+        changeId: id("change"),
+        auditId: id("audit"),
+      };
+      plan = initialPlan;
+      yield* database(() => db.batch([
+        db.insert(idempotencyRecords).values({
+          id: idempotencyId,
+          eventId: input.eventId,
+          operationId: "review.bulkAssignReviewers",
+          principalId,
+          keyHash,
+          requestHash,
+          status: "in_progress",
+          responseStatus: null,
+          responseBody: initialPlan,
+          expiresAt: new Date(createdAt.getTime() + 86_400_000),
+          completedAt: null,
+          createdAt,
+        }),
+        ...(initialPlan.assignments.length > 0 ? [db.insert(reviewAssignments).values(initialPlan.assignments.map((assignment) => ({
+          ...assignment,
+          eventId: input.eventId,
+          roundId: input.roundId,
+          version: 1,
+          createdAt,
+          updatedAt: createdAt,
+        }))).onConflictDoNothing()] : []),
+      ])).pipe(
+        Effect.catchAll((failure) => Effect.gen(function* () {
+          const concurrent = yield* readRecord();
+          if (!concurrent) return yield* Effect.fail(failure);
+          if (concurrent.requestHash !== requestHash) {
+            return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different bulk assignment" }));
+          }
+          record = concurrent;
+          plan = reservationPlan(concurrent.responseBody);
+          resumed = true;
+          if (!plan) return yield* Effect.fail(failure);
+        })),
+      );
+      record = record ?? (yield* readRecord());
+    }
+
+    if (!record || !plan) {
+      return yield* Effect.fail(new External({ service: "database", detail: "Bulk-assignment reservation disappeared before completion" }));
+    }
+    const createdIds = plan.assignments.length === 0
+      ? []
+      : yield* database(() => db.select({ id: reviewAssignments.id }).from(reviewAssignments).where(and(
+        eq(reviewAssignments.eventId, input.eventId),
+        inArray(reviewAssignments.id, plan!.assignments.map((assignment) => assignment.id)),
+      )));
+    const activeRows = yield* database(() => db.select({
+      submissionId: reviewAssignments.submissionId,
+      reviewerUserId: reviewAssignments.reviewerUserId,
+    }).from(reviewAssignments).where(and(
+      eq(reviewAssignments.eventId, input.eventId),
+      eq(reviewAssignments.roundId, input.roundId),
+      eq(reviewAssignments.status, "assigned"),
+      inArray(reviewAssignments.submissionId, submissionIds),
+      inArray(reviewAssignments.reviewerUserId, reviewerUserIds),
+    )));
+    const active = new Set(activeRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+    if (desired.some((pair) => !active.has(pairKey(pair.submissionId, pair.reviewerUserId)))) {
+      return yield* Effect.fail(new External({ service: "database", detail: "Bulk assignment reservation did not produce every desired active assignment" }));
+    }
+    const output: BulkAssignReviewersOutput = {
+      createdCount: createdIds.length,
+      existingCount: desired.length - createdIds.length,
+      assignmentCount: desired.length,
+      idempotent: false,
+    };
+    const completedAt = now();
+    yield* database(() => db.batch([
+      db.update(idempotencyRecords).set({
+        status: "completed",
+        responseStatus: 200,
+        responseBody: output,
+        completedAt,
+      }).where(and(eq(idempotencyRecords.id, record!.id), eq(idempotencyRecords.status, "in_progress"))),
+      db.insert(domainChanges).values({
+        id: plan!.changeId, eventId: input.eventId, aggregateType: "reviewAssignmentBatch", aggregateId: record!.id,
+        aggregateVersion: 1, eventType: "review.assignments.bulkCreated", audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds }],
+        payload: { roundId: input.roundId, ...output }, actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        requestId: input.requestId, idempotencyRecordId: record!.id, occurredAt: completedAt,
+      }).onConflictDoNothing(),
+      db.insert(auditLog).values({
+        id: plan!.auditId, eventId: input.eventId, requestId: input.requestId,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        action: "review.bulkAssignReviewers", resourceType: "reviewRound", resourceId: input.roundId,
+        before: null, after: { strategy: input.strategy, submissionIds, reviewerUserIds, ...output },
+        metadata: { idempotencyRecordId: record!.id }, occurredAt: completedAt,
+      }).onConflictDoNothing(),
+    ])).pipe(
+      Effect.catchAll((failure) => Effect.gen(function* () {
+        const concurrent = yield* readRecord();
+        if (concurrent?.status !== "completed") return yield* Effect.fail(failure);
+      })),
+    );
+    const completed = yield* readRecord();
+    if (!completed || completed.status !== "completed") {
+      return yield* Effect.fail(new External({ service: "database", detail: "Bulk assignment did not finalize its idempotency record" }));
+    }
+    const stored = yield* decodeCompleted(completed.responseBody);
+    return { ...stored, idempotent: resumed };
   });
 
 export const recuseAssignment = (
@@ -1249,6 +1996,7 @@ export const saveScore = (
     if (round.status !== "active") {
       return yield* Effect.fail(new Conflict({ message: "Human scoring is available only while the review round is active" }));
     }
+    yield* requireAssignedReviewer(viewer, input.eventId, input.roundId, input.submissionId);
     const scoreRecord = yield* validateScores(round.rubric, input.scores);
     const { db } = yield* Db;
     const [submission] = yield* database(() =>
@@ -1269,20 +2017,6 @@ export const saveScore = (
         .limit(1),
     );
     if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
-    const assignmentHistory = yield* database(() =>
-      db.select({ status: reviewAssignments.status }).from(reviewAssignments).where(and(
-        eq(reviewAssignments.eventId, input.eventId),
-        eq(reviewAssignments.roundId, input.roundId),
-        eq(reviewAssignments.submissionId, input.submissionId),
-        eq(reviewAssignments.reviewerUserId, viewer.userId),
-      )),
-    );
-    if (
-      assignmentHistory.some((assignment) => assignment.status === "recused")
-      && !assignmentHistory.some((assignment) => assignment.status === "assigned")
-    ) {
-      return yield* Effect.fail(new Conflict({ message: "This assignment was recused; an organizer must reassign it before you can score" }));
-    }
     const [existing] = yield* database(() =>
       db.select().from(reviews).where(and(eq(reviews.eventId, input.eventId), eq(reviews.roundId, input.roundId), eq(reviews.submissionId, input.submissionId), eq(reviews.reviewerUserId, viewer.userId), eq(reviews.ai, false))).limit(1),
     );
@@ -1299,7 +2033,8 @@ export const saveScore = (
     const savedAt = now();
     const reviewId = existing?.id ?? id("review");
     const version = (existing?.version ?? 0) + 1;
-    const score = averageScore(scoreRecord);
+    const score = averageScore(round.rubric, scoreRecord);
+    const persistedScore = score ?? 0;
     const [reviewerName, committeeReviewers] = yield* Effect.all([
       database(() => db.select({ name: users.name }).from(users).where(eq(users.id, viewer.userId)).limit(1)),
       database(() => db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(
@@ -1318,8 +2053,8 @@ export const saveScore = (
       updatedAt: savedAt.getTime(),
     };
     const writeReview = existing
-      ? db.update(reviews).set({ score, scores: scoreRecord, comment: input.comment ?? null, version, updatedAt: savedAt }).where(and(eq(reviews.id, reviewId), eq(reviews.version, input.expectedVersion)))
-      : db.insert(reviews).values({ id: reviewId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: viewer.userId, ai: false, score, scores: scoreRecord, comment: input.comment ?? null, version, createdAt: savedAt, updatedAt: savedAt });
+      ? db.update(reviews).set({ score: persistedScore, scores: scoreRecord, comment: input.comment ?? null, version, updatedAt: savedAt }).where(and(eq(reviews.id, reviewId), eq(reviews.version, input.expectedVersion)))
+      : db.insert(reviews).values({ id: reviewId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: viewer.userId, ai: false, score: persistedScore, scores: scoreRecord, comment: input.comment ?? null, version, createdAt: savedAt, updatedAt: savedAt });
     yield* database(() =>
       db.batch([
         writeReview,
@@ -1360,6 +2095,16 @@ export const appendReviewComment = (
     if (!body) return yield* Effect.fail(new Validation({ message: "Committee comments cannot be blank" }));
 
     const { db } = yield* Db;
+    if (viewer.role === "reviewer") {
+      const [activeRound] = yield* database(() => db.select({ id: reviewRounds.id }).from(reviewRounds).where(and(
+        eq(reviewRounds.eventId, input.eventId),
+        eq(reviewRounds.status, "active"),
+      )).limit(1));
+      if (!activeRound) {
+        return yield* Effect.fail(new Forbidden({ reason: "Committee comments require an active review round" }));
+      }
+      yield* requireAssignedReviewer(viewer, input.eventId, activeRound.id, input.submissionId);
+    }
     const [submission] = yield* database(() =>
       db
         .select({ id: submissions.id })
@@ -1498,6 +2243,7 @@ export const requestAiSuggestion = (
     if (round.status !== "active") {
       return yield* Effect.fail(new Conflict({ message: "AI suggestions are available only while the review round is active" }));
     }
+    yield* requireAssignedReviewer(viewer, input.eventId, input.roundId, input.submissionId);
     const { db } = yield* Db;
     const [submission] = yield* database(() =>
       db
@@ -1542,14 +2288,24 @@ export const requestAiSuggestion = (
       Effect.flatMap((value) => Schema.decodeUnknown(AiResponse)(value)),
       Effect.mapError((error) => error instanceof External ? error : new External({ service: "ai", detail: `Invalid suggestion: ${String(error)}` })),
     );
-    const scoreEntries = round.rubric.criteria.map((criterion) => ({
-      criterionKey: criterion.key,
-      score: response.scores[criterion.key] as CriterionScore["score"],
-    }));
+    const scoreEntries = round.rubric.criteria.map((criterion): CriterionScore => {
+      const suggested = response.scores[criterion.key] ?? 3;
+      if (criterion.type === "dropdown") {
+        const option = [...(criterion.options ?? [])].sort((left, right) =>
+          Math.abs(left.score - suggested) - Math.abs(right.score - suggested)
+        )[0];
+        return { criterionKey: criterion.key, score: option?.value ?? String(suggested) };
+      }
+      if (criterion.type === "text") {
+        return { criterionKey: criterion.key, score: response.comment };
+      }
+      return { criterionKey: criterion.key, score: suggested as CriterionScore["score"] };
+    });
     const scoreRecord = yield* validateScores(round.rubric, scoreEntries);
     const createdAt = now();
     const suggestionId = id("review_ai");
-    const score = averageScore(scoreRecord);
+    const score = averageScore(round.rubric, scoreRecord);
+    const persistedScore = score ?? 0;
     const committeeReviewerIds = yield* database(() =>
       db.select({ reviewerUserId: eventMembers.userId }).from(eventMembers).where(and(
         eq(eventMembers.eventId, input.eventId),
@@ -1558,7 +2314,7 @@ export const requestAiSuggestion = (
     );
     yield* database(() =>
       db.batch([
-        db.insert(reviews).values({ id: suggestionId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: null, ai: true, score, scores: scoreRecord, comment: response.comment, version: 1, createdAt, updatedAt: createdAt }),
+        db.insert(reviews).values({ id: suggestionId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: null, ai: true, score: persistedScore, scores: scoreRecord, comment: response.comment, version: 1, createdAt, updatedAt: createdAt }),
         db.insert(domainChanges).values({
           id: id("change"), eventId: input.eventId, aggregateType: "reviewAiSuggestion", aggregateId: suggestionId,
           aggregateVersion: 1, eventType: "review.aiSuggestion.created",

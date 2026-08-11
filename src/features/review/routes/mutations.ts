@@ -5,22 +5,30 @@ import {
   AdvanceReviewRoundOutput,
   AppendReviewCommentOutput,
   AssignReviewerOutput,
+  BulkAssignReviewersOutput,
   CreateReviewRoundOutput,
+  ExportReviewResultsOutput,
   RequestAiSuggestionOutput,
   RejectSubmissionOutput,
   RecuseAssignmentOutput,
   RevokeAcceptanceOutput,
   SaveScoreOutput,
+  SendReviewRemindersOutput,
+  UpdateReviewRoundOutput,
   type AcceptSubmissionInput,
   type AdvanceReviewRoundInput,
   type AppendReviewCommentInput,
   type AssignReviewerInput,
+  type BulkAssignReviewersInput,
   type CreateReviewRoundInput,
+  type ExportReviewResultsInput,
   type RequestAiSuggestionInput,
   type RejectSubmissionInput,
   type RecuseAssignmentInput,
   type RevokeAcceptanceInput,
   type SaveScoreInput,
+  type SendReviewRemindersInput,
+  type UpdateReviewRoundInput,
 } from "../schema";
 
 interface MutationRequest<T> {
@@ -112,11 +120,68 @@ export function createReviewRoundRequest(input: CreateReviewRoundInput) {
     body: {
       name: input.name,
       initialStatus: input.initialStatus,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      blind: input.blind,
       rubric: input.rubric,
       expectedRoundCount: input.expectedRoundCount,
     },
     schema: CreateReviewRoundOutput,
   });
+}
+
+export function updateReviewRoundRequest(input: UpdateReviewRoundInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/rounds/${segment(input.roundId)}`,
+    method: "PUT",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: {
+      name: input.name,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      blind: input.blind,
+      rubric: input.rubric,
+      expectedVersion: input.expectedVersion,
+    },
+    schema: UpdateReviewRoundOutput,
+  });
+}
+
+export function bulkAssignReviewersRequest(input: BulkAssignReviewersInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/assignments/bulk`,
+    method: "POST",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: {
+      roundId: input.roundId,
+      submissionIds: input.submissionIds,
+      reviewerUserIds: input.reviewerUserIds,
+      reviewsPerSubmission: input.reviewsPerSubmission,
+      strategy: input.strategy,
+    },
+    schema: BulkAssignReviewersOutput,
+  });
+}
+
+export function sendReviewRemindersRequest(input: SendReviewRemindersInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/rounds/${segment(input.roundId)}/reminders`,
+    method: "POST",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: { reviewerUserIds: input.reviewerUserIds },
+    schema: SendReviewRemindersOutput,
+  });
+}
+
+export async function exportReviewResultsRequest(input: ExportReviewResultsInput) {
+  const response = await fetch(
+    `/api/v1/events/${segment(input.eventId)}/review/rounds/${segment(input.roundId)}/export`,
+  );
+  if (!response.ok) throw new ApiError(response.status, await responseMessage(response));
+  return Schema.decodeUnknownSync(ExportReviewResultsOutput)(await response.json());
 }
 
 export function advanceReviewRoundRequest(input: AdvanceReviewRoundInput) {

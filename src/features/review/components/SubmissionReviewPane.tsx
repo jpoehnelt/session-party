@@ -98,7 +98,7 @@ function ScoreRationales({
       ) : (
         <ol className="mt-4 divide-y-2 divide-line-strong border-y-2 border-line-strong" aria-label="Human score rationales">
           {reviews.map((review) => {
-            const scoreByCriterion: Record<string, number> = {};
+            const scoreByCriterion: Record<string, number | string> = {};
             for (const entry of review.scores) scoreByCriterion[entry.criterionKey] = entry.score;
             const author = review.reviewerUserId === viewerUserId ? `You · ${review.reviewerName}` : review.reviewerName;
             return (
@@ -111,18 +111,31 @@ function ScoreRationales({
                         {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(review.updatedAt)} {timezone} · version {review.version}
                       </p>
                     </div>
-                    <Badge tone="neutral">Human · {review.score.toFixed(1)} / 5</Badge>
+                    <Badge tone="neutral">Human · {review.score === null ? "Unscored" : `${review.score.toFixed(1)} / 5`}</Badge>
                   </header>
                   <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-ink-secondary">
                     {review.comment || "No written comment supplied."}
                   </p>
                   <dl className="mt-3 flex flex-wrap gap-2">
-                    {submission.round?.rubric.criteria.map((criterion) => (
-                      <div key={criterion.key} className="rounded-control border-2 border-line-strong bg-surface-muted px-2.5 py-1.5">
-                        <dt className="inline text-[10px] font-black uppercase tracking-[0.06em] text-ink-faint">{criterion.label}: </dt>
-                        <dd className="inline font-mono text-xs font-black tabular-nums text-ink">{scoreByCriterion[criterion.key] ?? "—"} / 5</dd>
-                      </div>
-                    ))}
+                    {submission.round?.rubric.criteria.map((criterion) => {
+                      const value = scoreByCriterion[criterion.key];
+                      const rendered = value === undefined
+                        ? "—"
+                        : criterion.type === "text"
+                          ? String(value)
+                          : criterion.type === "dropdown"
+                            ? (() => {
+                                const option = criterion.options?.find((candidate) => candidate.value === value);
+                                return option ? `${option.label} (${option.score} / 5)` : "—";
+                              })()
+                            : `${value} / 5`;
+                      return (
+                        <div key={criterion.key} className="rounded-control border-2 border-line-strong bg-surface-muted px-2.5 py-1.5">
+                          <dt className="inline text-[10px] font-black uppercase tracking-[0.06em] text-ink-faint">{criterion.label}: </dt>
+                          <dd className="inline font-mono text-xs font-black tabular-nums text-ink">{rendered}</dd>
+                        </div>
+                      );
+                    })}
                   </dl>
                 </article>
               </li>
@@ -152,8 +165,9 @@ export function SubmissionReviewPane({
   const recusedWithoutReassignment = submission.assignments.some(
     (assignment) => assignment.reviewerUserId === viewerUserId && assignment.status === "recused",
   ) && !currentAssignment;
-  const canScore = round?.status === "active" && !recusedWithoutReassignment;
-  const canRequestAi = round?.status === "active";
+  const hasReviewAccess = organizer || (!submission.recusedByMe && !recusedWithoutReassignment);
+  const canScore = round?.status === "active" && hasReviewAccess;
+  const canRequestAi = round?.status === "active" && hasReviewAccess;
   const primarySpeaker = submission.speakers.find((speaker) => speaker.isPrimary);
   const [selectedReviewerUserId, setSelectedReviewerUserId] = useState("");
   const [scores, setScores] = useState<readonly CriterionScore[]>(currentReview?.scores ?? []);
@@ -237,7 +251,7 @@ export function SubmissionReviewPane({
   };
 
   const saveReview = () => {
-    if (!round || !canScore || scores.length !== round.rubric.criteria.length) return;
+    if (!round || !canScore || !allCriteriaScored) return;
     const completeScores = scores as readonly [CriterionScore, ...CriterionScore[]];
     void runMutation("score", () => saveScoreRequest({
       eventId,
@@ -312,8 +326,8 @@ export function SubmissionReviewPane({
   };
 
   const allCriteriaScored = Boolean(
-    round && round.rubric.criteria.every(
-      (criterion) => scores.some((score) => score.criterionKey === criterion.key),
+    round && scores.length > 0 && round.rubric.criteria.every(
+      (criterion) => !criterion.required || scores.some((score) => score.criterionKey === criterion.key),
     ),
   );
 
@@ -327,7 +341,11 @@ export function SubmissionReviewPane({
         </div>
         <h2 id={`proposal-heading-${submission.id}`} className="mt-3 max-w-4xl text-3xl font-black leading-tight tracking-[-0.045em] text-ink">{submission.title}</h2>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm font-semibold text-ink">
-          <span>{submission.speakers.map((speaker) => `${speaker.displayName}${speaker.isPrimary ? " (primary)" : ""}`).join(", ")}</span>
+          <span>
+            {round?.blind && submission.speakers.length === 0
+              ? "Presenter identities hidden for blind review"
+              : submission.speakers.map((speaker) => `${speaker.displayName}${speaker.isPrimary ? " (primary)" : ""}`).join(", ")}
+          </span>
           <span>Submitted {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(submission.submittedAt)} {timezone}</span>
         </div>
       </header>
@@ -390,7 +408,7 @@ export function SubmissionReviewPane({
       </Card>
 
       <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Reviewer assignments">
-        <p className="mb-3 text-sm text-ink-secondary">Assignments are optional workload markers. Every event reviewer can open and score this proposal.</p>
+        <p className="mb-3 text-sm text-ink-secondary">Assignments organize reviewer worklists; every event reviewer can open and score committee proposals unless they recuse. Owners and admins retain committee-wide access.</p>
         {submission.assignments.length === 0 ? (
           <p className="text-sm text-ink-faint">No reviewers are assigned in this round.</p>
         ) : (
@@ -432,6 +450,16 @@ export function SubmissionReviewPane({
             </Button>
           </div>
         ) : null}
+        {submission.recusals.length > 0 && (
+          <div className="mt-3 space-y-2 border-t-2 border-line-strong pt-3" aria-label="Reviewer recusals">
+            {submission.recusals.map((recusal) => (
+              <p key={recusal.id} className="text-sm text-ink-secondary">
+                <span className="font-black text-ink">{recusal.reviewerName}</span> recused
+                {recusal.reason ? ` · ${recusal.reason}` : ""}
+              </p>
+            ))}
+          </div>
+        )}
         {organizer && round && (
           <div className="mt-4 grid gap-2 border-t-2 border-line-strong pt-4 sm:grid-cols-[minmax(14rem,1fr)_auto] sm:items-end">
             <Select
@@ -538,7 +566,9 @@ export function SubmissionReviewPane({
             )}
           </div>
           <p className="mt-3 text-sm leading-6 text-ink-secondary">{suggestion.comment}</p>
-          <p className="mt-2 text-xs text-ink-faint">Input limited to: title, abstract, rubric. Suggested average {suggestion.score.toFixed(1)} / 5.</p>
+          <p className="mt-2 text-xs text-ink-faint">
+            Input limited to: title, abstract, rubric. Suggested average {suggestion.score === null ? "unscored" : `${suggestion.score.toFixed(1)} / 5`}.
+          </p>
         </Card>
       ))}
 
