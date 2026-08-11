@@ -2168,6 +2168,40 @@ describe("review and acceptance slice", () => {
       })]);
   });
 
+  it("keeps a legacy accepted submission reviewable when its provisioning fact is missing", async () => {
+    const { submissionId, version } = await seedTransitionSubmission("accepted", 2);
+    const [association] = await db.select().from(submissionSpeakers).where(eq(submissionSpeakers.submissionId, submissionId));
+    const acceptedAt = new Date(fixtureClock + transitionSubmissionSequence * 1_000);
+    await db.insert(acceptanceEvents).values({
+      id: `legacy-acceptance-${submissionId}`,
+      eventId: fixtureEventId,
+      submissionId,
+      primarySubmissionSpeakerId: association!.id,
+      primarySpeakerId: fixturePrimarySpeakerId,
+      primaryAssociationIsPrimary: true,
+      type: "accepted",
+      submissionVersion: version,
+      actorUserId: fixtureOwnerId,
+      occurredAt: acceptedAt,
+    });
+
+    const workbench = await runAs(owner, getWorkbench({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      selectedSubmissionId: submissionId,
+      page: 1,
+      pageSize: 100,
+    }));
+
+    expect(workbench.selected?.acceptance).toEqual({
+      acceptanceEventId: `legacy-acceptance-${submissionId}`,
+      submissionVersion: version,
+      acceptedAt: acceptedAt.getTime(),
+      provisioningId: null,
+      provisioningStatus: "missing",
+    });
+  });
+
   it("undoes acceptance with append-only revocation evidence and revokes provisioning", async () => {
     const input = {
       eventId: fixtureEventId,

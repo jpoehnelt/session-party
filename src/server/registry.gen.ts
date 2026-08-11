@@ -18755,15 +18755,23 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                           "type": "integer"
                         },
                         "provisioningId": {
-                          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                          "maxLength": 128,
-                          "minLength": 1,
-                          "pattern": "^[A-Za-z0-9_-]+$",
-                          "title": "maxLength(128)",
-                          "type": "string"
+                          "anyOf": [
+                            {
+                              "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "title": "maxLength(128)",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "provisioningStatus": {
                           "enum": [
+                            "missing",
                             "pending",
                             "claimed",
                             "provisioned",
@@ -47210,15 +47218,23 @@ export const openApi = {
                                       "type": "integer"
                                     },
                                     "provisioningId": {
-                                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                                      "maxLength": 128,
-                                      "minLength": 1,
-                                      "pattern": "^[A-Za-z0-9_-]+$",
-                                      "title": "maxLength(128)",
-                                      "type": "string"
+                                      "anyOf": [
+                                        {
+                                          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                                          "maxLength": 128,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9_-]+$",
+                                          "title": "maxLength(128)",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
                                     },
                                     "provisioningStatus": {
                                       "enum": [
+                                        "missing",
                                         "pending",
                                         "claimed",
                                         "provisioned",

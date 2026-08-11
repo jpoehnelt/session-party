@@ -484,7 +484,8 @@ describe("speaker portal content", () => {
       onRetry: noop,
     }));
     expect(linked).toContain("Speaker account linked");
-    expect(linked).toContain("Check portal access");
+    expect(linked).toContain("Open portal workspace");
+    expect(linked).toContain("linked and provisioned");
     expect(linked).not.toContain("speaker@example.com");
   });
 

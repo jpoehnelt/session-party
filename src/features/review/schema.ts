@@ -251,8 +251,9 @@ export const AcceptanceSummary = Schema.Struct({
   acceptanceEventId: EntityId,
   submissionVersion: Schema.Int.pipe(Schema.positive()),
   acceptedAt: UnixTimestampMs,
-  provisioningId: EntityId,
+  provisioningId: Schema.NullOr(EntityId),
   provisioningStatus: Schema.Literal(
+    "missing",
     "pending",
     "claimed",
     "provisioned",

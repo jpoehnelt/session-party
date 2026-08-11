@@ -375,9 +375,13 @@ const loadAcceptance = (eventId: string, submissionId: string) =>
         .limit(1),
     );
     if (!provisioning) {
-      return yield* Effect.fail(
-        new External({ service: "database", detail: `Acceptance '${latest.id}' has no provisioning fact` }),
-      );
+      return {
+        acceptanceEventId: latest.id,
+        submissionVersion: latest.submissionVersion,
+        acceptedAt: toMillis(latest.occurredAt),
+        provisioningId: null,
+        provisioningStatus: "missing" as const,
+      };
     }
     return {
       acceptanceEventId: latest.id,

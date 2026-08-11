@@ -24,8 +24,9 @@ import {
   type SubmissionAnswer,
 } from "@/features/submit/schema";
 import { PublicField, visibleFields } from "@/features/submit/routes/public-submit";
-import type {
-  ClaimSpeakerOutput,
+import {
+  inferUploadTaskPurpose,
+  type ClaimSpeakerOutput,
   PortalResource,
   PortalSnapshot,
   PortalTask,
@@ -142,7 +143,8 @@ export default function SpeakerPortalRoute() {
         idempotencyKey,
       });
       setClaim(result);
-      toast("Speaker account linked", { tone: "success" });
+      toast("Speaker account linked — portal ready", { tone: "success" });
+      retry();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Speaker account could not be linked";
       setClaimError(message);
@@ -280,10 +282,10 @@ export function SpeakerClaimPrompt({
         <EmptyState
           title={claim ? "Speaker account linked" : "Claim your speaker access"}
           description={claim
-            ? "Your accepted speaker record is linked. The event team can now finish provisioning; check again after they do."
+            ? "Your accepted speaker record is linked and provisioned. Open your portal workspace."
             : "If this account email matches the accepted submission’s speaker email, link it securely to continue onboarding."}
           action={claim
-            ? <Button className={`${productionButtonClass} bg-[#caff4a] text-[#171714]`} type="button" onClick={onRetry}>Check portal access</Button>
+            ? <Button className={`${productionButtonClass} bg-[#caff4a] text-[#171714]`} type="button" onClick={onRetry}>Open portal workspace</Button>
             : (
               <Button className={`${productionButtonClass} bg-[#caff4a] text-[#171714]`} type="button" loading={busy} disabled={busy} onClick={onClaim}>
                 Claim speaker access
@@ -683,7 +685,10 @@ function UploadWorkspace({
   readonly onUpload: (input: UploadPortalAssetInput) => void;
 }) {
   const [purpose, setPurpose] = useState<UploadPortalAssetInput["purpose"]>("slides");
-  const uploadTask = tasks.find((task) => task.kind === "upload");
+  const compatibleUploadTasks = tasks.filter((task) =>
+    task.kind === "upload" && inferUploadTaskPurpose(task) === purpose
+  );
+  const uploadTask = compatibleUploadTasks.length === 1 ? compatibleUploadTasks[0] : undefined;
   return (
     <section className={`space-y-5 border-[3px] border-[#171714] bg-[#fffdf7] p-5 shadow-[7px_7px_0_#ff714f] sm:p-7 ${productionFormClass}`} aria-labelledby="uploads-heading">
       <div>
@@ -698,6 +703,11 @@ function UploadWorkspace({
         <option value="document">Document</option>
         <option value="headshot">Headshot</option>
       </Select>
+      {tasks.some((task) => task.kind === "upload") && !uploadTask ? (
+        <p className="text-sm font-medium text-[#4f4a40]">
+          This file will be saved without completing a checklist task because no single {purpose} upload task matches it.
+        </p>
+      ) : null}
       <Dropzone
         className="rounded-none border-2 border-[#171714] bg-[#ece8dc] [&>div]:rounded-none [&>div]:border-2 [&>div]:border-[#171714] [&>div]:bg-[#caff4a] [&>div]:text-[#171714] [&_button]:font-black [&_button]:text-[#3e268f]"
         multiple={false}
