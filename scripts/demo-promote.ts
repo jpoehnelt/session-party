@@ -1,12 +1,28 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import {
+  assertCompatibleDemoUsers,
+  assertExactProductionTarget,
+  buildDemoReplacementSql,
+  demoTarget,
+  fixtureUserCollisionSql,
+  type DemoUserIdentity,
+  type ProductionEventIdentity,
+} from "./demo-reconcile";
 
-const eventId = "demo-event";
-const eventSlug = "ai-engineer-sandbox";
-const productionConfirmation = "ai-engineer-sandbox";
+const { eventId, eventSlug, productionConfirmation } = demoTarget;
+const localIsolationEventId = "demo-other-event";
 const applyProduction = process.argv.includes("--apply-production");
+const prepareReconciliation = process.argv.includes("--prepare-reconciliation");
+const inspectProduction = process.argv.includes("--inspect-production");
+if (prepareReconciliation && applyProduction) {
+  throw new Error("Reconciliation preparation is deliberately dry-run-only; remove --apply-production.");
+}
+if (prepareReconciliation && !inspectProduction) {
+  throw new Error("Reconciliation preparation requires the read-only --inspect-production preflight.");
+}
 const outputArgument = process.argv.find((argument) => argument.startsWith("--output="));
 const temporaryDirectory = mkdtempSync(join(tmpdir(), "session-party-demo-"));
 const outputPath = outputArgument
@@ -60,11 +76,16 @@ SELECT
   (SELECT count(*) FROM submissions s INNER JOIN forms f ON f.event_id = s.event_id AND f.id = s.form_id WHERE s.event_id = '${eventId}' AND f.kind = 'cfp' AND s.status = 'accepted') AS accepted,
   (SELECT count(*) FROM speaker_provisioning WHERE event_id = '${eventId}' AND status = 'provisioned') AS provisioned,
   (SELECT count(*) FROM talks WHERE event_id = '${eventId}' AND submission_id IS NOT NULL) AS canonical_talks,
+  (SELECT count(*) FROM talks WHERE event_id = '${eventId}' AND submission_id IS NOT NULL AND trim(coalesce(description, '')) <> '') AS described_talks,
+  (SELECT count(DISTINCT date(starts_at / 1000, 'unixepoch')) FROM talks WHERE event_id = '${eventId}' AND submission_id IS NOT NULL AND starts_at IS NOT NULL) AS schedule_days,
   (SELECT count(*) FROM tracks WHERE event_id = '${eventId}') AS tracks,
   (SELECT count(*) FROM rooms WHERE event_id = '${eventId}') AS rooms,
   (SELECT count(*) FROM tasks WHERE event_id = '${eventId}') AS tasks,
   (SELECT count(*) FROM pages WHERE event_id = '${eventId}') AS resources,
   (SELECT count(*) FROM assets WHERE event_id = '${eventId}') AS assets,
+  (SELECT count(*) FROM speakers s WHERE s.event_id = '${eventId}' AND s.visible = 1 AND s.profile_review_status = 'approved' AND EXISTS (SELECT 1 FROM acceptance_events a WHERE a.event_id = s.event_id AND a.primary_speaker_id = s.id AND a.type = 'accepted')) AS public_speakers,
+  (SELECT count(*) FROM speakers s WHERE s.event_id = '${eventId}' AND s.visible = 1 AND s.profile_review_status = 'approved' AND trim(coalesce(s.title, '')) <> '' AND trim(coalesce(s.company, '')) <> '' AND trim(coalesce(s.bio, '')) <> '' AND EXISTS (SELECT 1 FROM acceptance_events a WHERE a.event_id = s.event_id AND a.primary_speaker_id = s.id AND a.type = 'accepted')) AS complete_public_profiles,
+  (SELECT count(*) FROM speakers s WHERE s.event_id = '${eventId}' AND s.visible = 1 AND s.profile_review_status = 'approved' AND s.headshot_asset_id IS NOT NULL AND EXISTS (SELECT 1 FROM acceptance_events a WHERE a.event_id = s.event_id AND a.primary_speaker_id = s.id AND a.type = 'accepted')) AS public_headshots,
   (SELECT count(*) FROM event_members m INNER JOIN users u ON u.id = m.user_id WHERE m.event_id = '${eventId}' AND m.role = 'owner' AND u.email = 'sbek-organizer@example.com') AS organizer_personas,
   (SELECT count(*) FROM event_members m INNER JOIN users u ON u.id = m.user_id WHERE m.event_id = '${eventId}' AND m.role = 'reviewer' AND u.email = 'sbek-reviewer@example.com') AS reviewer_personas,
   (SELECT count(*) FROM speakers s INNER JOIN users u ON u.id = s.user_id WHERE s.event_id = '${eventId}' AND s.display_name = 'Priya Raman' AND u.email = 'sbek-speaker@example.com') AS speaker_personas,
@@ -79,11 +100,16 @@ type Verification = {
   readonly accepted: number;
   readonly provisioned: number;
   readonly canonical_talks: number;
+  readonly described_talks: number;
+  readonly schedule_days: number;
   readonly tracks: number;
   readonly rooms: number;
   readonly tasks: number;
   readonly resources: number;
   readonly assets: number;
+  readonly public_speakers: number;
+  readonly complete_public_profiles: number;
+  readonly public_headshots: number;
   readonly organizer_personas: number;
   readonly reviewer_personas: number;
   readonly speaker_personas: number;
@@ -121,6 +147,25 @@ const queryRows = (remote: boolean, sql: string): readonly Record<string, unknow
   return decoded[0]?.results ?? [];
 };
 
+const queryRowsAtState = (state: string, sql: string): readonly Record<string, unknown>[] => {
+  const output = run([
+    "wrangler",
+    "d1",
+    "execute",
+    "session-party",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    state,
+    "--json",
+    "--command",
+    sql,
+  ], true);
+  const decoded = JSON.parse(output) as Array<{ readonly results?: readonly Record<string, unknown>[] }>;
+  return decoded[0]?.results ?? [];
+};
+
 const query = (remote: boolean, sql: string): Record<string, unknown> => {
   const row = queryRows(remote, sql)[0];
   if (!row) throw new Error("D1 verification query returned no row");
@@ -136,11 +181,16 @@ const verifyDemo = (row: Record<string, unknown>, location: "local" | "productio
     accepted: 30,
     provisioned: 30,
     canonical_talks: 18,
+    described_talks: 18,
+    schedule_days: 3,
     tracks: 4,
     rooms: 4,
     tasks: 5,
     resources: 1,
-    assets: 3,
+    assets: 32,
+    public_speakers: 30,
+    complete_public_profiles: 30,
+    public_headshots: 30,
     organizer_personas: 1,
     reviewer_personas: 1,
     speaker_personas: 1,
@@ -156,11 +206,23 @@ const verifyDemo = (row: Record<string, unknown>, location: "local" | "productio
   return counts;
 };
 
-const localInventory = query(false, "SELECT count(*) AS events FROM events;");
-if (localInventory.events !== 1) {
-  throw new Error(`Local promotion source must contain exactly the demo event; found ${String(localInventory.events)} events.`);
+const localEventIds = queryRows(false, "SELECT id FROM events ORDER BY id;").map((row) => row.id);
+if (
+  localEventIds.length !== 2
+  || localEventIds[0] !== eventId
+  || localEventIds[1] !== localIsolationEventId
+) {
+  throw new Error(
+    `Local promotion source must contain only the demo event and its tenancy-isolation fixture; found ${JSON.stringify(localEventIds)}.`,
+  );
 }
 const localCounts = verifyDemo(query(false, verificationSql), "local");
+const localUsers = queryRows(false, "SELECT id, email FROM users ORDER BY id;").map((row): DemoUserIdentity => {
+  if (typeof row.id !== "string" || typeof row.email !== "string") {
+    throw new Error(`Invalid local demo user identity: ${JSON.stringify(row)}`);
+  }
+  return { id: row.id, email: row.email };
+});
 const localAssets = queryRows(
   false,
   `SELECT id, content_type, size FROM assets WHERE event_id = '${eventId}' ORDER BY id;`,
@@ -233,6 +295,7 @@ const provenance = [
 const insertsByTable = new Map<string, string[]>();
 for (const line of exported.split("\n")) {
   if (!line.startsWith("INSERT INTO ")) continue;
+  if (line.includes(`'${localIsolationEventId}'`)) continue;
   const table = /^INSERT INTO "([^"]+)"/.exec(line)?.[1];
   if (!table || !snapshotTables.includes(table as typeof snapshotTables[number])) {
     throw new Error(`Unexpected table in demo export: ${table ?? line.slice(0, 80)}`);
@@ -252,6 +315,13 @@ const productionImportBatches = snapshotTables.flatMap((table) => {
 writeFileSync(
   outputPath,
   `${provenance}PRAGMA defer_foreign_keys=TRUE;\n${orderedInserts.join("\n")}\n`,
+  "utf8",
+);
+
+const validationReplacementPath = join(temporaryDirectory, "replace-demo-event.sql");
+writeFileSync(
+  validationReplacementPath,
+  buildDemoReplacementSql(orderedInserts, "demo-owner", 1_800_000_000_000),
   "utf8",
 );
 
@@ -302,13 +372,134 @@ const validationRow = validationDecoded[0]?.results?.[0];
 if (!validationRow) throw new Error("Isolated demo import validation returned no row");
 verifyDemo(validationRow, "local");
 
+run([
+  "wrangler",
+  "d1",
+  "execute",
+  "session-party",
+  "--local",
+  "--config",
+  "wrangler.local.jsonc",
+  "--persist-to",
+  validationState,
+  "--command",
+  `INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at)
+   VALUES ('reconciliation-unrelated-event', 'reconciliation-unrelated-event', 'Must survive demo replacement', 'UTC', 1, 1, 1);
+   UPDATE talks SET description = NULL, starts_at = 1789664400000 WHERE event_id = '${eventId}';
+   UPDATE speakers SET title = NULL, company = NULL, bio = NULL, headshot_asset_id = NULL WHERE event_id = '${eventId}';`,
+]);
+run([
+  "wrangler",
+  "d1",
+  "execute",
+  "session-party",
+  "--local",
+  "--config",
+  "wrangler.local.jsonc",
+  "--persist-to",
+  validationState,
+  "--file",
+  validationReplacementPath,
+]);
+verifyDemo(queryRowsAtState(validationState, verificationSql)[0] ?? {}, "local");
+const isolatedInventory = queryRowsAtState(
+  validationState,
+  "SELECT id, slug, name FROM events ORDER BY id;",
+);
+if (
+  isolatedInventory.length !== 2
+  || !isolatedInventory.some((row) => row.id === "reconciliation-unrelated-event" && row.name === "Must survive demo replacement")
+) {
+  throw new Error(`Isolated replacement touched unrelated event state: ${JSON.stringify(isolatedInventory)}`);
+}
+
 if (!applyProduction) {
+  let production: null | {
+    readonly totalEvents: unknown;
+    readonly target: readonly ProductionEventIdentity[];
+    readonly currentCounts: Record<string, unknown>;
+    readonly compatibleFixtureUsers: number;
+  } = null;
+  let replacementOutputPath: string | null = null;
+  let assetOutputDirectory: string | null = null;
+  let assetManifestPath: string | null = null;
+  if (inspectProduction) {
+    const target = queryRows(
+      true,
+      `SELECT id, slug FROM events WHERE id = '${eventId}' OR slug = '${eventSlug}' ORDER BY id;`,
+    ).map((row): ProductionEventIdentity => {
+      if (typeof row.id !== "string" || typeof row.slug !== "string") {
+        throw new Error(`Invalid production event identity: ${JSON.stringify(row)}`);
+      }
+      return { id: row.id, slug: row.slug };
+    });
+    assertExactProductionTarget(target);
+    const collidingUsers = queryRows(true, fixtureUserCollisionSql(localUsers)).map((row): DemoUserIdentity => {
+      if (typeof row.id !== "string" || typeof row.email !== "string") {
+        throw new Error(`Invalid production demo user identity: ${JSON.stringify(row)}`);
+      }
+      return { id: row.id, email: row.email };
+    });
+    assertCompatibleDemoUsers(localUsers, collidingUsers);
+    production = {
+      totalEvents: query(true, "SELECT count(*) AS events FROM events;").events,
+      target,
+      currentCounts: query(true, verificationSql),
+      compatibleFixtureUsers: collidingUsers.length,
+    };
+    if (prepareReconciliation) {
+      const productionOwnerEmail = process.env.SESSION_PARTY_PRODUCTION_OWNER_EMAIL?.trim().toLowerCase();
+      if (
+        !productionOwnerEmail
+        || productionOwnerEmail.length > 254
+        || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(productionOwnerEmail)
+      ) {
+        throw new Error("Set SESSION_PARTY_PRODUCTION_OWNER_EMAIL to the existing production organizer account.");
+      }
+      const ownerRows = queryRows(
+        true,
+        `SELECT id FROM users WHERE lower(email) = ${sqlQuote(productionOwnerEmail)} ORDER BY id;`,
+      );
+      if (ownerRows.length !== 1 || typeof ownerRows[0]?.id !== "string" || !/^[A-Za-z0-9_-]+$/.test(ownerRows[0].id)) {
+        throw new Error(`Production owner lookup requires exactly one existing account; found ${ownerRows.length}.`);
+      }
+      replacementOutputPath = outputPath.endsWith(".sql")
+        ? `${outputPath.slice(0, -4)}.replacement.sql`
+        : `${outputPath}.replacement.sql`;
+      writeFileSync(
+        replacementOutputPath,
+        buildDemoReplacementSql(orderedInserts, ownerRows[0].id, Date.now()),
+        { encoding: "utf8", mode: 0o600, flag: "wx" },
+      );
+      const preparedAssetOutputDirectory = `${replacementOutputPath}.assets`;
+      assetOutputDirectory = preparedAssetOutputDirectory;
+      mkdirSync(preparedAssetOutputDirectory, { recursive: false, mode: 0o700 });
+      for (const asset of localAssets) copyFileSync(asset.file, join(preparedAssetOutputDirectory, asset.id));
+      assetManifestPath = `${replacementOutputPath}.assets.json`;
+      writeFileSync(assetManifestPath, `${JSON.stringify(localAssets.map((asset) => ({
+        id: asset.id,
+        key: `portal/${eventId}/${asset.id}`,
+        contentType: asset.contentType,
+        size: asset.size,
+        file: join(preparedAssetOutputDirectory, asset.id),
+      })), null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    }
+  }
   console.log(JSON.stringify({
     prepared: true,
     applyProduction: false,
     outputPath,
+    replacementOutputPath,
+    assetOutputDirectory,
+    assetManifestPath,
     copiedAssets: localAssets.length,
+    replacementSimulation: {
+      passed: true,
+      lockedTarget: demoTarget,
+      unrelatedEventPreserved: true,
+    },
     counts: localCounts,
+    production,
   }, null, 2));
   process.exit(0);
 }
