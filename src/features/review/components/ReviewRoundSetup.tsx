@@ -17,6 +17,7 @@ const starterRubric = {
 
 const requestId = (operation: string) => `${operation}-${crypto.randomUUID()}`;
 const criterionKey = () => `criterion_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+const optionValue = () => `option_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
 
 const statusTone = {
   pending: "neutral",
@@ -257,7 +258,7 @@ export function ReviewRoundSetup({
                 <legend className="px-2 text-[10px] font-black uppercase tracking-[0.1em]">{String(index + 1).padStart(2, "0")} · {criterion.type}</legend>
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
                   <Input label="Label" value={criterion.label} maxLength={120} onChange={(event) => updateCriterion(criterion.key, (value) => ({ ...value, label: event.target.value }))} />
-                  <Input label="Weight" type="number" min={0} max={100} step="0.5" disabled={criterion.type === "text"} value={criterion.weight} onChange={(event) => updateCriterion(criterion.key, (value) => ({ ...value, weight: Number(event.target.value) }))} />
+                  <Input label="Weight" type="number" min={0} max={100} step="0.5" disabled={criterion.type === "text"} value={criterion.weight} onChange={(event) => updateCriterion(criterion.key, (value) => ({ ...value, weight: Number(event.target.value) || 0 }))} />
                 </div>
                 <Textarea label="Guidance" rows={2} maxLength={500} value={criterion.description ?? ""} onChange={(event) => updateCriterion(criterion.key, (value) => ({ ...value, description: event.target.value }))} />
                 {criterion.type === "dropdown" && (
@@ -266,7 +267,7 @@ export function ReviewRoundSetup({
                       <div key={`${criterion.key}:${optionIndex}`} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_6rem_auto] sm:items-end">
                         <Input label={`Option ${optionIndex + 1}`} value={option.label} onChange={(event) => updateCriterion(criterion.key, (value) => ({
                           ...value,
-                          options: value.options?.map((candidate, candidateIndex) => candidateIndex === optionIndex ? { ...candidate, label: event.target.value, value: `option_${optionIndex + 1}` } : candidate),
+                          options: value.options?.map((candidate, candidateIndex) => candidateIndex === optionIndex ? { ...candidate, label: event.target.value } : candidate),
                         }))} />
                         <Input label="Score" type="number" min={1} max={5} value={option.score} onChange={(event) => updateCriterion(criterion.key, (value) => ({
                           ...value,
@@ -277,7 +278,7 @@ export function ReviewRoundSetup({
                     ))}
                     <Button size="sm" variant="secondary" onClick={() => updateCriterion(criterion.key, (value) => ({
                       ...value,
-                      options: [...(value.options ?? []), { value: `option_${(value.options?.length ?? 0) + 1}`, label: "New option", score: 3 }],
+                      options: [...(value.options ?? []), { value: optionValue(), label: "New option", score: 3 }],
                     }))}>+ option</Button>
                   </div>
                 )}
