@@ -1,5 +1,6 @@
 import { Conflict, External, Forbidden, NotFound, Validation, type AppError } from "contracts/errors";
 import { eventAuthorization, type ApiScope } from "contracts/principal";
+import { clientRoutes } from "contracts/routes";
 import {
   acceptanceEvents,
   assetComments,
@@ -3165,7 +3166,7 @@ export const sendSpeakerMessages = (input: SendSpeakerMessagesInput): Effect.Eff
     return [{ speaker, email, recipientName: userName ?? speaker.displayName, outstanding, next }];
   });
   const createdAt = now();
-  const portalUrl = `${queue.appOrigin}/e/${encodeURIComponent(event.slug)}/portal`;
+  const portalUrl = `${queue.appOrigin}${clientRoutes.portal(encodeURIComponent(event.slug))}`;
   const deliveries = recipients.map((recipient, index) => {
     const snapshotId = id("mail_snapshot");
     const invite = input.kind === "invite";
@@ -3267,7 +3268,7 @@ export const enqueueAutomatedDueTaskReminders = (runAt = now()): Effect.Effect<{
     if (existingKeys.has(deliveryKey)) return [];
     const snapshotId = id("mail_snapshot");
     const next = candidate.outstanding[0]!;
-    const portalUrl = `${queue.appOrigin}/e/${encodeURIComponent(candidate.event.slug)}/portal`;
+    const portalUrl = `${queue.appOrigin}${clientRoutes.portal(encodeURIComponent(candidate.event.slug))}`;
     const subject = `${candidate.outstanding.length} ${candidate.event.name} task${candidate.outstanding.length === 1 ? "" : "s"} due`;
     const dueText = next.dueAt && next.dueAt <= runAt ? "is overdue" : `is due ${next.dueAt?.toISOString().slice(0, 10) ?? "soon"}`;
     const text = `Hi ${candidate.recipientName},\n\nYour next speaker task, “${next.name}”, ${dueText}. You have ${candidate.outstanding.length} due or overdue task${candidate.outstanding.length === 1 ? "" : "s"}.\n\nOpen your speaker portal: ${portalUrl}`;
