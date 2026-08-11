@@ -119,6 +119,100 @@ test("speaker directory search, selection, and bulk-action disabled state remain
   await expect(invite).toBeDisabled();
 });
 
+test("speaker editor exposes only managed profiles and preserves a stale writer until recovery", async ({ context, page, request, baseURL }, testInfo) => {
+  desktopOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const collectionPath = `/api/v1/events/${EVENT_ID}/portal/speakers`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  type Speaker = Readonly<{
+    id: string;
+    displayName: string;
+    contactEmail: string | null;
+    title: string | null;
+    company: string | null;
+    bio: string | null;
+    workflowStatus: string;
+    visible: boolean;
+    version: number;
+  }>;
+  const loadManaged = async (): Promise<Speaker> => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    const directory = await response.json() as { readonly speakers: readonly { readonly source: string; readonly speaker: Speaker }[] };
+    return directory.speakers.find(({ source, speaker }) => source === "manual" && speaker.contactEmail === "dana.operations@sessionparty.local")!.speaker;
+  };
+  const initial = await loadManaged();
+  const body = (speaker: Speaker) => ({
+    displayName: speaker.displayName,
+    contactEmail: speaker.contactEmail,
+    title: speaker.title,
+    company: speaker.company,
+    bio: speaker.bio,
+    workflowStatus: speaker.workflowStatus,
+    visible: speaker.visible,
+    expectedVersion: speaker.version,
+  });
+  const itemPath = `${collectionPath}/${initial.id}`;
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/speakers");
+  const peer = await context.newPage();
+  await installDeterministicBrowser(peer);
+  await peer.goto(`/e/${EVENT}/speakers`, { waitUntil: "domcontentloaded" });
+  await peer.locator("h1").waitFor({ state: "visible" });
+
+  const editor = async (target: Page) => {
+    const search = target.getByRole("searchbox", { name: "Search speakers" });
+    await search.fill("dana.operations@sessionparty.local");
+    const row = target.locator("tbody tr").filter({ hasText: "Dana Operations" });
+    await expect(row).toHaveCount(1);
+    await row.getByText("Edit profile", { exact: true }).click();
+    return row;
+  };
+
+  try {
+    const search = page.getByRole("searchbox", { name: "Search speakers" });
+    await search.fill("Priya Raman");
+    const acceptedRow = page.locator("tbody tr").filter({ hasText: "Priya Raman" }).filter({ hasText: "Provisioned" });
+    await expect(acceptedRow).toHaveCount(1);
+    await expect(acceptedRow.getByText("Edit profile", { exact: true })).toHaveCount(0);
+    await expect(acceptedRow).toContainText("Profile details are managed by this accepted speaker in their portal.");
+
+    const row = await editor(page);
+    const peerRow = await editor(peer);
+    const winningTitle = `QA speaker winner ${Date.now()}`;
+    await row.getByLabel("Title").fill(winningTitle);
+    await row.getByRole("button", { name: "Save speaker" }).click();
+    await expect(page.getByText("Speaker updated").last()).toBeVisible();
+
+    const losingTitle = `QA stale speaker ${Date.now()}`;
+    await peerRow.getByLabel("Title").fill(losingTitle);
+    await peerRow.getByRole("button", { name: "Save speaker" }).click();
+    await expect(peer.getByText("Speaker changed; reload before saving").last()).toBeVisible();
+    await expect(peerRow.getByLabel("Title")).toHaveValue(losingTitle);
+
+    const restoreRow = await editor(page);
+    await restoreRow.getByLabel("Title").fill(initial.title ?? "");
+    await restoreRow.getByRole("button", { name: "Save speaker" }).click();
+    await expect(page.getByText("Speaker updated").last()).toBeVisible();
+    await page.reload();
+    const verifiedRow = await editor(page);
+    await expect(verifiedRow.getByLabel("Title")).toHaveValue(initial.title ?? "");
+  } finally {
+    const current = await loadManaged();
+    if (current.displayName !== initial.displayName
+      || current.contactEmail !== initial.contactEmail
+      || current.title !== initial.title
+      || current.company !== initial.company
+      || current.bio !== initial.bio
+      || current.workflowStatus !== initial.workflowStatus
+      || current.visible !== initial.visible) {
+      const restored = await request.put(itemPath, { headers: ownerHeaders, data: { ...body(initial), expectedVersion: current.version } });
+      expect(restored.status()).toBe(200);
+    }
+    await peer.close();
+  }
+});
+
 test("task and resource destructive dialogs both cancel without mutation", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";

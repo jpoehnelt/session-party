@@ -497,6 +497,22 @@ for (let index = 1; index < acceptedSubmissions.length; index += 1) {
   acceptedPeople.push({ submission: candidate, acceptance });
 }
 
+const managedSpeaker = await request<SpeakerProfile>(`/events/${eventId}/portal/speakers`, {
+  method: "POST",
+  session: ownerSession,
+  expectedStatus: 201,
+  body: {
+    displayName: "Dana Operations",
+    contactEmail: "dana.operations@sessionparty.local",
+    title: "Developer Experience Lead",
+    company: "Session Party Labs",
+    bio: "A directly managed speaker fixture for reversible organizer workflow testing.",
+    workflowStatus: "Invited",
+    visible: false,
+    idempotencyKey: "demo-create-managed-speaker-v1",
+  },
+});
+
 const tasks = await Promise.all([
   ["Complete your speaker profile", "Add a biography and public link.", "profile", null, 1],
   ["Upload a headshot", "PNG, JPEG, or WebP.", "upload", null, 2],
@@ -750,6 +766,7 @@ console.log(JSON.stringify({
   forms: { cfp: publishedCfp.id, task: publishedTaskForm.id },
   submission: submission.submissionId,
   speaker: accepted.primarySpeakerId,
+  managedSpeaker: managedSpeaker.id,
   provisioning: accepted.provisioningId,
   tasks: tasks.map(({ id }) => id),
   scale: {

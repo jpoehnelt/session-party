@@ -439,7 +439,7 @@ export function OrganizerSpeakersContent({
                 ) : (
                   <Button size="sm" variant="secondary" className={productionButtonClass} loading={busySpeakerId === item.speaker.id} onClick={() => onProvision(item)}>Provision</Button>
                 )}
-                {onUpdate ? (
+                {onUpdate && item.source === "manual" ? (
                   <details>
                     <summary className="cursor-pointer text-xs font-bold underline">Edit profile</summary>
                     <form className="mt-3 min-w-72 space-y-3" onSubmit={(event) => { event.preventDefault(); onUpdate(item, event.currentTarget); }}>
@@ -454,6 +454,8 @@ export function OrganizerSpeakersContent({
                       <Button size="sm" type="submit" loading={busySpeakerId === item.speaker.id}>Save speaker</Button>
                     </form>
                   </details>
+                ) : item.source === "accepted" ? (
+                  <p className="max-w-48 text-xs text-ink-faint">Profile details are managed by this accepted speaker in their portal.</p>
                 ) : null}
               </div>
             ),

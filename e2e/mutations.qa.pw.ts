@@ -210,6 +210,126 @@ test("communication template updates enforce role, idempotency, optimistic concu
   });
 });
 
+test("managed speaker updates enforce source ownership, email identity, optimistic concurrency, and restoration", async ({ request }, testInfo) => {
+  desktopOnly(testInfo);
+  const collectionPath = `/api/v1/events/${EVENT_ID}/portal/speakers`;
+  const ownerHeaders = headers(OWNER_SESSION);
+  type DirectoryItem = Readonly<{
+    speaker: Readonly<{
+      id: string;
+      displayName: string;
+      contactEmail: string | null;
+      title: string | null;
+      company: string | null;
+      bio: string | null;
+      workflowStatus: string;
+      visible: boolean;
+      version: number;
+    }>;
+    source: "accepted" | "manual";
+  }>;
+  const loadDirectory = async () => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return responseBody(response) as Promise<{ readonly speakers: readonly DirectoryItem[] }>;
+  };
+  const initialDirectory = await loadDirectory();
+  const managed = initialDirectory.speakers.find(({ source, speaker }) => source === "manual" && speaker.contactEmail === "dana.operations@sessionparty.local");
+  const accepted = initialDirectory.speakers.find(({ source, speaker }) => source === "accepted" && speaker.contactEmail !== null);
+  expect(managed).toBeDefined();
+  expect(accepted).toBeDefined();
+  const initial = managed!.speaker;
+  const itemPath = `${collectionPath}/${initial.id}`;
+  const body = (patch: Partial<typeof initial>, expectedVersion = initial.version) => ({
+    displayName: initial.displayName,
+    contactEmail: initial.contactEmail,
+    title: initial.title,
+    company: initial.company,
+    bio: initial.bio,
+    workflowStatus: initial.workflowStatus,
+    visible: initial.visible,
+    expectedVersion,
+    ...patch,
+  });
+  const publicBeforeResponse = await request.get("/api/v1/public/events/ai-engineer-sandbox/speakers");
+  expect(publicBeforeResponse.status()).toBe(200);
+  const publicBefore = await responseBody(publicBeforeResponse);
+
+  try {
+    const reviewerDenied = await request.put(itemPath, {
+      headers: headers(REVIEWER_SESSION),
+      data: body({ title: "Reviewer must not edit" }),
+    });
+    expect(reviewerDenied.status()).toBe(403);
+
+    const acceptedPath = `${collectionPath}/${accepted!.speaker.id}`;
+    const acceptedDenied = await request.put(acceptedPath, {
+      headers: ownerHeaders,
+      data: {
+        displayName: accepted!.speaker.displayName,
+        contactEmail: accepted!.speaker.contactEmail,
+        title: accepted!.speaker.title,
+        company: accepted!.speaker.company,
+        bio: accepted!.speaker.bio,
+        workflowStatus: accepted!.speaker.workflowStatus,
+        visible: accepted!.speaker.visible,
+        expectedVersion: accepted!.speaker.version,
+      },
+    });
+    expect(acceptedDenied.status()).toBe(409);
+
+    const duplicateEmail = await request.put(itemPath, {
+      headers: ownerHeaders,
+      data: body({ contactEmail: accepted!.speaker.contactEmail }),
+    });
+    expect(duplicateEmail.status()).toBe(409);
+
+    const update = (title: string, bio: string) => request.put(itemPath, {
+      headers: ownerHeaders,
+      data: body({ title, bio, workflowStatus: "QA Editing" }),
+    });
+    const competing = await Promise.all([
+      update("QA speaker writer A", "QA biography writer A"),
+      update("QA speaker writer B", "QA biography writer B"),
+    ]);
+    expect(competing.map((response) => response.status()).sort()).toEqual([200, 409]);
+
+    const current = (await loadDirectory()).speakers.find(({ speaker }) => speaker.id === initial.id)!.speaker;
+    expect(["QA speaker writer A", "QA speaker writer B"]).toContain(current.title);
+    expect(current.version).toBe(initial.version + 1);
+
+    const stale = await request.put(itemPath, {
+      headers: ownerHeaders,
+      data: body({ title: "QA stale speaker overwrite" }),
+    });
+    expect(stale.status()).toBe(409);
+    expect(JSON.stringify(await responseBody(stale))).not.toMatch(/stack|cause|sql|database/i);
+  } finally {
+    const current = (await loadDirectory()).speakers.find(({ speaker }) => speaker.id === initial.id)?.speaker;
+    if (current && current.version !== initial.version) {
+      const restored = await request.put(itemPath, {
+        headers: ownerHeaders,
+        data: body({}, current.version),
+      });
+      expect(restored.status()).toBe(200);
+    }
+  }
+
+  const final = (await loadDirectory()).speakers.find(({ speaker }) => speaker.id === initial.id)!.speaker;
+  expect(final).toMatchObject({
+    displayName: initial.displayName,
+    contactEmail: initial.contactEmail,
+    title: initial.title,
+    company: initial.company,
+    bio: initial.bio,
+    workflowStatus: initial.workflowStatus,
+    visible: initial.visible,
+  });
+  const publicAfterResponse = await request.get("/api/v1/public/events/ai-engineer-sandbox/speakers");
+  expect(publicAfterResponse.status()).toBe(200);
+  expect(await responseBody(publicAfterResponse)).toEqual(publicBefore);
+});
+
 test("event API keys expose their secret once, honor scope and event boundaries, and stop working after revocation", async ({ request }, testInfo) => {
   desktopOnly(testInfo);
   const collectionPath = `/api/v1/events/${EVENT_ID}/api-keys`;
