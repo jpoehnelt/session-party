@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import { installDeterministicBrowser } from "./helpers/visual-readiness";
 
 const EVENT = "ai-engineer-sandbox";
+const EVENT_ID = "demo-event";
 const OWNER_SESSION = "demo-owner-session";
+const ADMIN_SESSION = "demo-admin-session";
+const ADMIN_EMAIL = "admin@sessionparty.local";
 
 async function signIn(context: BrowserContext, baseURL: string, session = OWNER_SESSION): Promise<void> {
   const origin = new URL(baseURL);
@@ -203,6 +206,134 @@ test("settings role-change dialog can be cancelled without changing persisted me
   await expect(dialog).toBeHidden();
   await page.reload();
   await expect(page.getByRole("combobox", { name: /Role for admin@sessionparty\.local/ })).toHaveValue(original);
+});
+
+test("settings rejects a stale second organizer without overwriting the winning metadata", async ({ context, page, request, baseURL }, testInfo) => {
+  desktopChromiumOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  const eventPath = `/api/v1/events/${EVENT_ID}`;
+  const initialResponse = await request.get(eventPath, { headers: ownerHeaders });
+  expect(initialResponse.status()).toBe(200);
+  const initial = await initialResponse.json() as { readonly location: string | null; readonly version: number };
+  const peer = await context.newPage();
+
+  try {
+    await openOwnerPage(context, page, runtimeBaseURL, "/settings");
+    await installDeterministicBrowser(peer);
+    await peer.goto(`/e/${EVENT}/settings`, { waitUntil: "domcontentloaded" });
+    await peer.getByRole("heading", { level: 1, name: "Event settings" }).waitFor({ state: "visible" });
+    await expect(page.getByRole("textbox", { name: "Location" })).toHaveValue(initial.location ?? "");
+    await expect(peer.getByRole("textbox", { name: "Location" })).toHaveValue(initial.location ?? "");
+
+    await page.getByRole("textbox", { name: "Location" }).fill("QA competing writer A");
+    await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Event settings saved" }).first()).toBeVisible();
+
+    await peer.getByRole("textbox", { name: "Location" }).fill("QA stale writer B");
+    await peer.getByRole("button", { name: "Save settings" }).click();
+    await expect(peer.getByRole("alert").filter({ hasText: /Event changed; reload before saving/i }).first()).toBeVisible();
+
+    const canonicalResponse = await request.get(eventPath, { headers: ownerHeaders });
+    expect(canonicalResponse.status()).toBe(200);
+    const canonical = await canonicalResponse.json() as { readonly location: string | null; readonly version: number };
+    expect(canonical.location).toBe("QA competing writer A");
+    expect(canonical.version).toBe(initial.version + 1);
+  } finally {
+    await peer.close();
+    const currentResponse = await request.get(eventPath, { headers: ownerHeaders });
+    if (currentResponse.ok()) {
+      const current = await currentResponse.json() as { readonly location: string | null; readonly version: number };
+      if (current.location !== initial.location) {
+        const restored = await request.patch(eventPath, {
+          headers: ownerHeaders,
+          data: { expectedVersion: current.version, location: initial.location },
+        });
+        expect(restored.status()).toBe(200);
+      }
+    }
+  }
+});
+
+test("settings member controls apply role changes and removal immediately, then restore the fixture", async ({ context, page, request, baseURL }, testInfo) => {
+  desktopChromiumOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  const adminHeaders = { Cookie: `sp_session=${ADMIN_SESSION}` };
+  const collectionPath = `/api/v1/events/${EVENT_ID}/members`;
+  const members = async () => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<readonly { readonly id: string; readonly email: string; readonly role: string; readonly version: number }[]>;
+  };
+  const ensureAdminBaseline = async () => {
+    const current = (await members()).find(({ email }) => email === ADMIN_EMAIL);
+    if (!current) {
+      const response = await request.post(collectionPath, {
+        headers: ownerHeaders,
+        data: { email: ADMIN_EMAIL, role: "admin", idempotencyKey: "qa-ui-member-finally-add" },
+      });
+      expect([200, 201]).toContain(response.status());
+    } else if (current.role !== "admin") {
+      const response = await request.patch(`${collectionPath}/${current.id}`, {
+        headers: ownerHeaders,
+        data: { role: "admin", expectedVersion: current.version, idempotencyKey: "qa-ui-member-finally-role" },
+      });
+      expect(response.status()).toBe(200);
+    }
+  };
+
+  try {
+    await openOwnerPage(context, page, runtimeBaseURL, "/settings");
+    let row = page.getByRole("row").filter({ hasText: ADMIN_EMAIL });
+    await expect(row).toBeVisible();
+
+    await row.getByRole("combobox", { name: `Role for ${ADMIN_EMAIL}` }).selectOption("reviewer");
+    await row.getByRole("button", { name: "Change role" }).click();
+    let dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText(/permissions change immediately/i);
+    await dialog.getByRole("button", { name: "Change role" }).click();
+    await expect(row.getByText("reviewer", { exact: true }).first()).toBeVisible();
+
+    const demotedSession = await request.get(collectionPath, { headers: adminHeaders });
+    expect(demotedSession.status()).toBe(403);
+
+    await row.getByRole("combobox", { name: `Role for ${ADMIN_EMAIL}` }).selectOption("admin");
+    await row.getByRole("button", { name: "Change role" }).click();
+    dialog = page.getByRole("alertdialog");
+    await dialog.getByRole("button", { name: "Change role" }).click();
+    await expect(row.getByText("admin", { exact: true }).first()).toBeVisible();
+    expect((await request.get(collectionPath, { headers: adminHeaders })).status()).toBe(200);
+
+    await row.getByRole("button", { name: "Remove" }).click();
+    dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText(/lose their admin access.*immediately/i);
+    await dialog.getByRole("button", { name: "Remove member" }).click();
+    await expect(row).toHaveCount(0);
+    expect((await request.get(`/api/v1/events/${EVENT_ID}`, { headers: adminHeaders })).status()).toBe(403);
+
+    await page.getByRole("textbox", { name: "Existing account email" }).fill(ADMIN_EMAIL);
+    await page.getByRole("combobox", { name: "Role", exact: true }).selectOption("admin");
+    await page.getByRole("button", { name: "Add member" }).click();
+    row = page.getByRole("row").filter({ hasText: ADMIN_EMAIL });
+    await expect(row).toBeVisible();
+    await expect(row.getByText("admin", { exact: true }).first()).toBeVisible();
+    expect((await request.get(collectionPath, { headers: adminHeaders })).status()).toBe(200);
+
+    await signIn(context, runtimeBaseURL, ADMIN_SESSION);
+    await page.goto(`/e/${EVENT}/settings`);
+    await page.getByRole("heading", { level: 1, name: "Event settings" }).waitFor({ state: "visible" });
+    const addRole = page.getByRole("combobox", { name: "Role", exact: true });
+    await expect(addRole.locator("option")).toHaveText(["Reviewer"]);
+    const ownRow = page.getByRole("row").filter({ hasText: ADMIN_EMAIL });
+    await expect(ownRow.getByText("Owner access required")).toBeVisible();
+    await expect(ownRow.getByRole("button", { name: /Change role|Remove/ })).toHaveCount(0);
+    const reviewerRow = page.getByRole("row").filter({ hasText: "sbek-reviewer@example.com" });
+    await expect(reviewerRow.getByRole("button", { name: "Remove" })).toBeVisible();
+    await expect(reviewerRow.getByRole("button", { name: "Change role" })).toHaveCount(0);
+  } finally {
+    await ensureAdminBaseline();
+  }
 });
 
 test("browser history, logout, and a second tab converge on signed-out state", async ({ context, page, baseURL }, testInfo) => {

@@ -200,11 +200,11 @@ describe("events service", () => {
 
     const first = await runAs(
       owner,
-      updateEvent(created.id, { name: "Versioned event — first update" }),
+      updateEvent(created.id, { expectedVersion: created.version, name: "Versioned event — first update" }),
     );
     const second = await runAs(
       owner,
-      updateEvent(created.id, { location: "Updated venue" }),
+      updateEvent(created.id, { expectedVersion: first.version, location: "Updated venue" }),
     );
 
     expect(first.version).toBe(created.version + 1);
@@ -212,6 +212,37 @@ describe("events service", () => {
 
     const persisted = await runAs(owner, getEvent(created.id));
     expect(persisted).toEqual(second);
+    const changes = await drizzle(env.DB).select().from(domainChanges).where(eq(domainChanges.eventId, created.id));
+    const audits = await drizzle(env.DB).select().from(auditLog).where(eq(auditLog.eventId, created.id));
+    expect(changes.map(({ eventType, aggregateVersion }) => ({ eventType, aggregateVersion }))).toEqual([
+      { eventType: "events.updated", aggregateVersion: first.version },
+      { eventType: "events.updated", aggregateVersion: second.version },
+    ]);
+    expect(audits.map(({ action, before, after }) => ({
+      action,
+      beforeVersion: (before as { version: number }).version,
+      afterVersion: (after as { version: number }).version,
+    }))).toEqual([
+      { action: "events.update", beforeVersion: created.version, afterVersion: first.version },
+      { action: "events.update", beforeVersion: first.version, afterVersion: second.version },
+    ]);
+  });
+
+  it("allows exactly one competing metadata writer and records evidence only for the winner", async () => {
+    const created = await runAs(owner, createEvent({ name: "Concurrent event", slug: "concurrent-event" }));
+    const competing = await Promise.all([
+      runEitherAs(owner, updateEvent(created.id, { expectedVersion: created.version, location: "Writer A" })),
+      runEitherAs(owner, updateEvent(created.id, { expectedVersion: created.version, location: "Writer B" })),
+    ]);
+    expect(competing.filter((result) => result._tag === "Right")).toHaveLength(1);
+    expect(competing.filter((result) => result._tag === "Left")).toEqual([
+      expect.objectContaining({ left: expect.objectContaining({ _tag: "Conflict" }) }),
+    ]);
+    const persisted = await runAs(owner, getEvent(created.id));
+    expect(["Writer A", "Writer B"]).toContain(persisted.location);
+    expect(persisted.version).toBe(created.version + 1);
+    expect(await drizzle(env.DB).select().from(domainChanges).where(eq(domainChanges.eventId, created.id))).toHaveLength(1);
+    expect(await drizzle(env.DB).select().from(auditLog).where(eq(auditLog.eventId, created.id))).toHaveLength(1);
   });
 
   it("fails with Conflict for a duplicate slug", async () => {
@@ -242,6 +273,7 @@ describe("events service", () => {
     await expectFailure(
       owner,
       updateEvent(created.id, {
+        expectedVersion: created.version,
         startsAt: Date.UTC(2026, 7, 24),
         endsAt: Date.UTC(2026, 7, 14),
       }),
@@ -263,24 +295,24 @@ describe("events service", () => {
 
     const ownerUpdate = await runAs(
       owner,
-      updateEvent(created.id, { name: "Owner changed" }),
+      updateEvent(created.id, { expectedVersion: created.version, name: "Owner changed" }),
     );
     expect(ownerUpdate.name).toBe("Owner changed");
 
     const adminUpdate = await runAs(
       admin,
-      updateEvent(created.id, { location: "Admin changed" }),
+      updateEvent(created.id, { expectedVersion: ownerUpdate.version, location: "Admin changed" }),
     );
     expect(adminUpdate.location).toBe("Admin changed");
 
     await expectFailure(
       reviewer,
-      updateEvent(created.id, { name: "Reviewer changed" }),
+      updateEvent(created.id, { expectedVersion: adminUpdate.version, name: "Reviewer changed" }),
       "Forbidden",
     );
     await expectFailure(
       outsider,
-      updateEvent(created.id, { name: "Outsider changed" }),
+      updateEvent(created.id, { expectedVersion: adminUpdate.version, name: "Outsider changed" }),
       "Forbidden",
     );
 
@@ -314,9 +346,13 @@ describe("events service", () => {
       createEvent({ name: "Other", slug: "key-other" }),
     );
     const readKey = apiKeyPrincipal("target-reader", target.id, ["event:read"]);
-    const writeKey = apiKeyPrincipal("target-writer", target.id, [
-      "event:write",
-    ]);
+    const issuedWriteKey = await runAs(owner, createEventApiKey({
+      eventId: target.id,
+      name: "Target writer",
+      scopes: ["event:write"],
+      expiresAt: Date.now() + 2 * 60 * 60_000,
+    }));
+    const writeKey = apiKeyPrincipal(issuedWriteKey.apiKey.id, target.id, ["event:write"]);
     const crossEventKey = apiKeyPrincipal("other-reader", other.id, [
       "event:read",
     ]);
@@ -326,13 +362,13 @@ describe("events service", () => {
     await expectFailure(writeKey, getEvent(target.id), "Forbidden");
     await expectFailure(
       readKey,
-      updateEvent(target.id, { name: "Read key changed" }),
+      updateEvent(target.id, { expectedVersion: target.version, name: "Read key changed" }),
       "Forbidden",
     );
 
     const updated = await runAs(
       writeKey,
-      updateEvent(target.id, { name: "Write key changed" }),
+      updateEvent(target.id, { expectedVersion: target.version, name: "Write key changed" }),
     );
     expect(updated.name).toBe("Write key changed");
 

@@ -2,7 +2,9 @@ import { expect, test, type APIRequestContext, type TestInfo } from "@playwright
 
 const EVENT_ID = "demo-event";
 const OWNER_SESSION = "demo-owner-session";
+const ADMIN_SESSION = "demo-admin-session";
 const REVIEWER_SESSION = "demo-reviewer-session";
+const ADMIN_EMAIL = "admin@sessionparty.local";
 
 function desktopOnly(testInfo: TestInfo): void {
   test.skip(testInfo.project.name !== "desktop-chromium", "Mutation transport behavior is browser-independent");
@@ -153,6 +155,136 @@ test("event API keys expose their secret once, honor scope and event boundaries,
   const revokedRead = await request.get(`/api/v1/events/${EVENT_ID}/forms`, { headers: bearer });
   expect(revokedRead.status()).toBe(401);
   expect(JSON.stringify(await responseBody(revokedRead))).not.toMatch(/stack|cause|hash|secret/i);
+});
+
+test("member commands enforce escalation, last-owner safety, concurrency, immediate revocation, replay, and cleanup", async ({ request }, testInfo) => {
+  desktopOnly(testInfo);
+  const collectionPath = `/api/v1/events/${EVENT_ID}/members`;
+  const ownerHeaders = headers(OWNER_SESSION);
+  const listMembers = async () => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return responseBody(response) as Promise<readonly {
+      readonly id: string;
+      readonly email: string;
+      readonly role: "owner" | "admin" | "reviewer";
+      readonly version: number;
+    }[]>;
+  };
+  const ensureAdminBaseline = async () => {
+    const members = await listMembers();
+    const admin = members.find(({ email }) => email === ADMIN_EMAIL);
+    if (!admin) {
+      const restored = await request.post(collectionPath, {
+        headers: ownerHeaders,
+        data: { email: ADMIN_EMAIL, role: "admin", idempotencyKey: "qa-member-finally-add-admin" },
+      });
+      expect([200, 201]).toContain(restored.status());
+      return;
+    }
+    if (admin.role !== "admin") {
+      const restored = await request.patch(`${collectionPath}/${admin.id}`, {
+        headers: ownerHeaders,
+        data: { role: "admin", expectedVersion: admin.version, idempotencyKey: "qa-member-finally-restore-admin" },
+      });
+      expect(restored.status()).toBe(200);
+    }
+  };
+
+  try {
+    const initial = await listMembers();
+    const owner = initial.find(({ role }) => role === "owner");
+    const admin = initial.find(({ email }) => email === ADMIN_EMAIL);
+    const reviewer = initial.find(({ role }) => role === "reviewer");
+    expect(owner).toBeDefined();
+    expect(admin).toBeDefined();
+    expect(reviewer).toBeDefined();
+
+    const reviewerDenied = await request.post(collectionPath, {
+      headers: headers(REVIEWER_SESSION),
+      data: { email: ADMIN_EMAIL, role: "reviewer", idempotencyKey: "qa-reviewer-member-denied" },
+    });
+    expect(reviewerDenied.status()).toBe(403);
+
+    const adminEscalationDenied = await request.patch(`${collectionPath}/${reviewer!.id}`, {
+      headers: headers(ADMIN_SESSION),
+      data: { role: "admin", expectedVersion: reviewer!.version, idempotencyKey: "qa-admin-escalation-denied" },
+    });
+    expect(adminEscalationDenied.status()).toBe(403);
+
+    const adminSelfDemotionDenied = await request.patch(`${collectionPath}/${admin!.id}`, {
+      headers: headers(ADMIN_SESSION),
+      data: { role: "reviewer", expectedVersion: admin!.version, idempotencyKey: "qa-admin-self-demotion-denied" },
+    });
+    expect(adminSelfDemotionDenied.status()).toBe(403);
+
+    const lastOwnerRemoval = await request.delete(`${collectionPath}/${owner!.id}`, {
+      headers: ownerHeaders,
+      data: { expectedVersion: owner!.version, idempotencyKey: "qa-last-owner-removal-denied" },
+    });
+    expect(lastOwnerRemoval.status()).toBe(409);
+
+    const update = (role: "owner" | "reviewer", key: string) => request.patch(`${collectionPath}/${admin!.id}`, {
+      headers: ownerHeaders,
+      data: { role, expectedVersion: admin!.version, idempotencyKey: key },
+    });
+    const competing = await Promise.all([
+      update("owner", "qa-member-competing-owner"),
+      update("reviewer", "qa-member-competing-reviewer"),
+    ]);
+    expect(competing.map((response) => response.status()).sort()).toEqual([200, 409]);
+
+    let currentAdmin = (await listMembers()).find(({ email }) => email === ADMIN_EMAIL)!;
+    expect(currentAdmin.version).toBe(admin!.version + 1);
+    expect(["owner", "reviewer"]).toContain(currentAdmin.role);
+
+    const staleOverwrite = await request.patch(`${collectionPath}/${currentAdmin.id}`, {
+      headers: ownerHeaders,
+      data: { role: "admin", expectedVersion: admin!.version, idempotencyKey: "qa-member-stale-overwrite" },
+    });
+    expect(staleOverwrite.status()).toBe(409);
+    expect(JSON.stringify(await responseBody(staleOverwrite))).not.toMatch(/stack|cause|sql|database/i);
+
+    const restore = await request.patch(`${collectionPath}/${currentAdmin.id}`, {
+      headers: ownerHeaders,
+      data: { role: "admin", expectedVersion: currentAdmin.version, idempotencyKey: "qa-member-restore-before-delete" },
+    });
+    expect(restore.status()).toBe(200);
+    currentAdmin = (await responseBody(restore) as { readonly member: typeof currentAdmin }).member;
+
+    const deleteKey = "qa-member-delete-replay";
+    const remove = () => request.delete(`${collectionPath}/${currentAdmin.id}`, {
+      headers: ownerHeaders,
+      data: { expectedVersion: currentAdmin.version, idempotencyKey: deleteKey },
+    });
+    const removed = await remove();
+    expect(removed.status()).toBe(200);
+    expect(await responseBody(removed)).toMatchObject({ memberId: currentAdmin.id, deleted: true, idempotent: false });
+    const replayedRemoval = await remove();
+    expect(replayedRemoval.status()).toBe(200);
+    expect(await responseBody(replayedRemoval)).toMatchObject({ memberId: currentAdmin.id, deleted: true, idempotent: true });
+
+    const revokedSession = await request.get(`/api/v1/events/${EVENT_ID}`, { headers: headers(ADMIN_SESSION) });
+    expect(revokedSession.status()).toBe(403);
+
+    const addKey = "qa-member-add-replay";
+    const add = () => request.post(collectionPath, {
+      headers: ownerHeaders,
+      data: { email: ADMIN_EMAIL, role: "admin", idempotencyKey: addKey },
+    });
+    const added = await add();
+    expect(added.status()).toBe(201);
+    const addedBody = await responseBody(added) as { readonly member: { readonly id: string }; readonly created: boolean; readonly idempotent: boolean };
+    expect(addedBody).toMatchObject({ created: true, idempotent: false });
+    const replayedAdd = await add();
+    expect(replayedAdd.status()).toBe(201);
+    expect(await responseBody(replayedAdd)).toMatchObject({ member: { id: addedBody.member.id }, created: true, idempotent: true });
+
+    const restoredSession = await request.get(collectionPath, { headers: headers(ADMIN_SESSION) });
+    expect(restoredSession.status()).toBe(200);
+  } finally {
+    await ensureAdminBaseline();
+  }
 });
 
 test("task and resource commands enforce validation, role boundaries, stale writes, and cleanup", async ({ request }, testInfo) => {

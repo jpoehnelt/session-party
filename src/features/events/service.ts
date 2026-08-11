@@ -393,35 +393,98 @@ export const updateEvent = (
     const { db } = yield* Db;
     const event = yield* findEvent(idOrSlug);
     yield* authorizeCurrent(eventWriteAuthorization, event.id);
+    const principal = yield* CurrentUser;
+    const { expectedVersion, ...changes } = input;
+
+    if (event.version !== expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Event changed; reload before saving" }));
+    }
 
     yield* validateDateOrder(
-      input.startsAt === undefined ? event.startsAt?.getTime() ?? null : input.startsAt,
-      input.endsAt === undefined ? event.endsAt?.getTime() ?? null : input.endsAt,
+      changes.startsAt === undefined ? event.startsAt?.getTime() ?? null : changes.startsAt,
+      changes.endsAt === undefined ? event.endsAt?.getTime() ?? null : changes.endsAt,
     );
 
-    if (input.slug && input.slug !== event.slug) {
+    if (changes.slug && changes.slug !== event.slug) {
       const [slugOwner] = yield* database(() =>
-        db.select({ id: events.id }).from(events).where(eq(events.slug, input.slug!)).limit(1),
+        db.select({ id: events.id }).from(events).where(eq(events.slug, changes.slug!)).limit(1),
       );
       if (slugOwner) {
-        return yield* Effect.fail(new Conflict({ message: `Event slug '${input.slug}' is already in use` }));
+        return yield* Effect.fail(new Conflict({ message: `Event slug '${changes.slug}' is already in use` }));
       }
     }
 
-    const [updated] = yield* database(() =>
+    const occurredAt = new Date();
+    const version = expectedVersion + 1;
+    const values = {
+      ...changes,
+      ...dates(changes),
+      name: changes.name?.trim(),
+      updatedAt: occurredAt,
+      version,
+    };
+    const anticipated = { ...event, ...values };
+    const requestId = `event:update:${commandId("request")}`;
+    const change = {
+      id: commandId("change"), eventId: event.id, aggregateType: "event", aggregateId: event.id,
+      aggregateVersion: version, eventType: "events.updated", audiences: [{ kind: "admins" }],
+      payload: { eventId: event.id, version },
+      actorUserId: principal.kind === "browser-session" ? principal.userId : null,
+      actorApiKeyId: principal.kind === "api-key" ? principal.apiKeyId : null,
+      requestId, idempotencyRecordId: null, occurredAt,
+    } as const;
+    const changeSelection = {
+      sequence: sql<number | null>`null`.as("sequence"),
+      id: sql<string>`${change.id}`.as("id"),
+      eventId: sql<string>`${change.eventId}`.as("event_id"),
+      aggregateType: sql<string>`${change.aggregateType}`.as("aggregate_type"),
+      aggregateId: sql<string>`${change.aggregateId}`.as("aggregate_id"),
+      aggregateVersion: sql<number>`${change.aggregateVersion}`.as("aggregate_version"),
+      eventType: sql<string>`${change.eventType}`.as("event_type"),
+      audiences: sql<typeof change.audiences>`${JSON.stringify(change.audiences)}`.as("audiences"),
+      payload: sql<typeof change.payload>`${JSON.stringify(change.payload)}`.as("payload"),
+      actorUserId: sql<string | null>`${change.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`${change.actorApiKeyId}`.as("actor_api_key_id"),
+      requestId: sql<string>`${change.requestId}`.as("request_id"),
+      idempotencyRecordId: sql<null>`null`.as("idempotency_record_id"),
+      occurredAt: sql<Date>`${occurredAt.getTime()}`.as("occurred_at"),
+    };
+    const committed = yield* database(() => db.batch([
+      db.insert(domainChanges).values(change),
       db
         .update(events)
-        .set({
-          ...input,
-          ...dates(input),
-          name: input.name?.trim(),
-          updatedAt: new Date(),
-          version: sql`${events.version} + 1`,
-        })
-        .where(eq(events.id, event.id))
+        .set(values)
+        .where(and(eq(events.id, event.id), eq(events.version, expectedVersion)))
         .returning(),
-    );
-    if (!updated) return yield* Effect.fail(new NotFound({ entity: "event", id: idOrSlug }));
+      db.insert(domainChanges).select(db.select(changeSelection).from(events).where(and(
+        eq(events.id, event.id),
+        or(sql`${events.version} <> ${version}`, sql`${events.updatedAt} <> ${occurredAt.getTime()}`),
+      ))),
+      db.insert(auditLog).select(db.select({
+        id: sql<string>`${commandId("audit")}`.as("id"),
+        eventId: events.id,
+        requestId: sql<string>`${requestId}`.as("request_id"),
+        actorUserId: sql<string | null>`${change.actorUserId}`.as("actor_user_id"),
+        actorApiKeyId: sql<string | null>`${change.actorApiKeyId}`.as("actor_api_key_id"),
+        action: sql<string>`'events.update'`.as("action"),
+        resourceType: sql<string>`'event'`.as("resource_type"),
+        resourceId: events.id,
+        before: sql<unknown>`${JSON.stringify(event)}`.as("before"),
+        after: sql<unknown>`${JSON.stringify(anticipated)}`.as("after"),
+        metadata: sql<null>`null`.as("metadata"),
+        occurredAt: sql<Date>`${occurredAt.getTime()}`.as("occurred_at"),
+      }).from(events).where(and(eq(events.id, event.id), eq(events.version, version), eq(events.updatedAt, occurredAt)))),
+    ])).pipe(Effect.either);
+    if (committed._tag === "Left") {
+      const [current] = yield* database(() => db.select({ version: events.version }).from(events).where(eq(events.id, event.id)).limit(1));
+      if (!current) return yield* Effect.fail(new NotFound({ entity: "event", id: idOrSlug }));
+      if (current.version !== expectedVersion) {
+        return yield* Effect.fail(new Conflict({ message: "Event changed; reload before saving" }));
+      }
+      return yield* Effect.fail(committed.left);
+    }
+    const updated = committed.right[1][0];
+    if (!updated) return yield* Effect.fail(new Conflict({ message: "Event changed; reload before saving" }));
     return updated;
   }).pipe(
     Effect.catchTag("External", (error) => eventDatabaseFailure(error, input.slug ?? idOrSlug)),

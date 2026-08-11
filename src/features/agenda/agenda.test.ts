@@ -2017,6 +2017,7 @@ describe("agenda service", () => {
       await runEventAs(
         seeded.user,
         updateEvent(seeded.eventId, {
+          expectedVersion: 1,
           name: "Conference publication-event-race updated",
         }),
       );
@@ -2026,8 +2027,12 @@ describe("agenda service", () => {
 
     const result = await stalePublication;
     expect(result).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
-    await expect(seeded.db.select().from(domainChanges).where(eq(domainChanges.eventId, seeded.eventId))).resolves.toHaveLength(0);
-    await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(0);
+    await expect(seeded.db.select().from(domainChanges).where(eq(domainChanges.eventId, seeded.eventId))).resolves.toEqual([
+      expect.objectContaining({ eventType: "events.updated", aggregateVersion: 2 }),
+    ]);
+    await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toEqual([
+      expect.objectContaining({ action: "events.update", resourceType: "event" }),
+    ]);
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(0);
   });
 

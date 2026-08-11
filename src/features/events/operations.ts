@@ -78,8 +78,8 @@ export const operations = [
     id: "events.update", kind: "command", input: UpdateEventOperationInput, output: EventOutput,
     authorize: authenticatedAuthorization,
     invoke: ({ idOrSlug, ...input }: typeof UpdateEventOperationInput.Type) => updateEvent(idOrSlug, input),
-    rest: { method: "patch", path: "/events/:idOrSlug", input: { path: ["idOrSlug"], body: ["name", "slug", "description", "location", "timezone", "startsAt", "endsAt", "accentColor"] }, successStatus: 200 },
-    idempotency: "none", concurrency: "none", emits: [],
+    rest: { method: "patch", path: "/events/:idOrSlug", input: { path: ["idOrSlug"], body: ["expectedVersion", "name", "slug", "description", "location", "timezone", "startsAt", "endsAt", "accentColor"] }, successStatus: 200 },
+    idempotency: "none", concurrency: "required", emits: ["events.updated"],
   },
   {
     id: "events.listAccess", kind: "query", input: Schema.Struct({}), output: Schema.Array(EventAccess),

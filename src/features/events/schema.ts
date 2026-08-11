@@ -7,6 +7,7 @@ const OptionalText = Schema.optional(Schema.Union(Schema.String, Schema.Null));
 const OptionalTimestamp = Schema.optional(Schema.Union(Schema.Number, Schema.Null));
 
 export const UpdateEventInput = Schema.Struct({
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
   name: Schema.optional(Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200))),
   slug: Schema.optional(
     Schema.String.pipe(

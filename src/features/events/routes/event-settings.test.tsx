@@ -7,6 +7,7 @@ import EventSettingsPage, {
   ApiAccessPanel,
   apiKeyPresets,
   buildEventPatch,
+  canManageMember,
   createEventApiKey,
   EventSettingsForm,
   fetchEventMetadata,
@@ -56,6 +57,17 @@ afterEach(() => {
 describe("event metadata settings route", () => {
   it("exports the feature-discovered settings path", () => {
     expect(path).toBe("/e/:eventSlug/settings");
+  });
+
+  it("projects member-management capabilities without offering admin escalation", () => {
+    expect(canManageMember("owner", "owner")).toBe(true);
+    expect(canManageMember("owner", "admin")).toBe(true);
+    expect(canManageMember("owner", "reviewer")).toBe(true);
+    expect(canManageMember("admin", "owner")).toBe(false);
+    expect(canManageMember("admin", "admin")).toBe(false);
+    expect(canManageMember("admin", "reviewer")).toBe(true);
+    expect(canManageMember("reviewer", "reviewer")).toBe(false);
+    expect(canManageMember(null, "reviewer")).toBe(false);
   });
 
   it("resolves the URL slug through events.get and decodes the canonical event", async () => {
@@ -152,6 +164,7 @@ describe("event metadata settings route", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(eventPayload), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const patch: UpdateEventInput = {
+      expectedVersion: event.version,
       name: "Production Summit",
       slug: "production-summit-2026",
       description: "Canonical description",
@@ -170,7 +183,7 @@ describe("event metadata settings route", () => {
     expect(request.method).toBe("PATCH");
     expect(JSON.parse(String(request.body))).toEqual(patch);
     expect(Object.keys(JSON.parse(String(request.body))).sort()).toEqual(
-      ["accentColor", "description", "endsAt", "location", "name", "slug", "startsAt", "timezone"].sort(),
+      ["accentColor", "description", "endsAt", "expectedVersion", "location", "name", "slug", "startsAt", "timezone"].sort(),
     );
   });
 
@@ -190,6 +203,7 @@ describe("event metadata settings route", () => {
     );
 
     const updated = await updateEventMetadata(event.id, {
+      expectedVersion: event.version,
       name: canonicalPayload.name,
       slug: canonicalPayload.slug,
     });
