@@ -731,14 +731,14 @@ test("task editor completes a conditional create, update, reload, and delete lif
     const type = createForm.getByLabel("Task type");
     for (const kind of ["profile", "upload", "link", "confirm"] as const) {
       await type.selectOption(kind);
-      await expect(createForm.getByLabel("Form ID")).toHaveCount(0);
+      await expect(createForm.getByLabel("Form", { exact: true })).toHaveCount(0);
     }
     await type.selectOption("form");
-    const formId = createForm.getByLabel("Form ID");
+    const formId = createForm.getByLabel("Form", { exact: true });
     await expect(formId).toHaveAttribute("required", "");
     await createForm.getByRole("button", { name: "Create task" }).click();
-    expect(await formId.evaluate((input: HTMLInputElement) => input.validity.valueMissing)).toBe(true);
-    await formId.fill(primaryForm!.id);
+    expect(await formId.evaluate((select: HTMLSelectElement) => select.validity.valueMissing)).toBe(true);
+    await formId.selectOption(primaryForm!.id);
     await createForm.getByRole("checkbox").first().check();
     await createForm.getByRole("button", { name: "Create task" }).click();
     await expect(page.getByText("Task created", { exact: true }).first()).toBeVisible();
@@ -750,7 +750,7 @@ test("task editor completes a conditional create, update, reload, and delete lif
     await expect(editForm).toHaveCount(1);
     await editForm.getByLabel("Task name").fill(updatedName);
     await editForm.getByLabel("Task type").selectOption("confirm");
-    await expect(editForm.getByLabel("Form ID")).toHaveCount(0);
+    await expect(editForm.getByLabel("Form", { exact: true })).toHaveCount(0);
     await editForm.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText("Task updated", { exact: true }).first()).toBeVisible();
     expect((await loadTasks()).find(({ name }) => name === updatedName)).toMatchObject({ kind: "confirm", formId: null, order: 981 });
