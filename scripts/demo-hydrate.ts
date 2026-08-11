@@ -700,9 +700,9 @@ const [publicSpeakers, publicAgenda] = await Promise.all([
   request<{ readonly speakers: readonly unknown[] }>(`/public/events/${eventSlug}/speakers`),
   request<{ readonly revision: number; readonly talks: readonly unknown[] }>(`/public/events/${eventSlug}/agenda/published`),
 ]);
-if (publicSpeakers.speakers.length !== 30 || publicAgenda.talks.length !== 18) {
+if (publicSpeakers.speakers.length !== 32 || publicAgenda.talks.length !== 18) {
   throw new Error(
-    `Public demo scale mismatch: expected 30 speakers and 18 talks, received ${publicSpeakers.speakers.length} speakers and ${publicAgenda.talks.length} talks`,
+    `Public demo scale mismatch: expected 32 speakers and 18 talks, received ${publicSpeakers.speakers.length} speakers and ${publicAgenda.talks.length} talks`,
   );
 }
 
