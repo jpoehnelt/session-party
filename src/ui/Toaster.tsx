@@ -75,7 +75,7 @@ export function Toaster() {
           role={item.tone === "danger" ? "alert" : "status"}
           onOpenChange={(nextOpen) => { if (!nextOpen) dismiss(item.id); }}
           className={cx(
-            "pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-control border-2 px-4 py-3 font-bold shadow-pop motion-reduce:animate-none",
+            "pointer-events-auto flex w-full animate-slide-down items-start gap-3 rounded-control border-2 px-4 py-3 font-bold shadow-pop motion-reduce:animate-none",
             TONES[item.tone],
           )}
         >
@@ -96,7 +96,7 @@ export function Toaster() {
       ))}
       <Toast.Viewport
         aria-label="Notifications"
-        className="pointer-events-none fixed inset-x-4 bottom-4 z-[60] flex max-h-screen flex-col items-end gap-2 outline-none sm:inset-x-auto sm:right-5 sm:w-96"
+        className="pointer-events-none fixed inset-x-4 top-[calc(env(safe-area-inset-top)+1rem)] z-[60] flex max-h-[calc(100dvh-2rem)] flex-col items-end gap-2 outline-none sm:inset-x-auto sm:right-5 sm:top-5 sm:w-96"
       />
     </Toast.Provider>
   );
