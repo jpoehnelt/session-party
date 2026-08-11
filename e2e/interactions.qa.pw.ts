@@ -731,14 +731,14 @@ test("task editor completes a conditional create, update, reload, and delete lif
     const type = createForm.getByLabel("Task type");
     for (const kind of ["profile", "upload", "link", "confirm"] as const) {
       await type.selectOption(kind);
-      await expect(createForm.getByLabel("Form ID")).toHaveCount(0);
+      await expect(createForm.getByLabel("Form", { exact: true })).toHaveCount(0);
     }
     await type.selectOption("form");
-    const formId = createForm.getByLabel("Form ID");
+    const formId = createForm.getByLabel("Form", { exact: true });
     await expect(formId).toHaveAttribute("required", "");
     await createForm.getByRole("button", { name: "Create task" }).click();
-    expect(await formId.evaluate((input: HTMLInputElement) => input.validity.valueMissing)).toBe(true);
-    await formId.fill(primaryForm!.id);
+    expect(await formId.evaluate((select: HTMLSelectElement) => select.validity.valueMissing)).toBe(true);
+    await formId.selectOption(primaryForm!.id);
     await createForm.getByRole("checkbox").first().check();
     await createForm.getByRole("button", { name: "Create task" }).click();
     await expect(page.getByText("Task created", { exact: true }).first()).toBeVisible();
@@ -750,7 +750,7 @@ test("task editor completes a conditional create, update, reload, and delete lif
     await expect(editForm).toHaveCount(1);
     await editForm.getByLabel("Task name").fill(updatedName);
     await editForm.getByLabel("Task type").selectOption("confirm");
-    await expect(editForm.getByLabel("Form ID")).toHaveCount(0);
+    await expect(editForm.getByLabel("Form", { exact: true })).toHaveCount(0);
     await editForm.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText("Task updated", { exact: true }).first()).toBeVisible();
     expect((await loadTasks()).find(({ name }) => name === updatedName)).toMatchObject({ kind: "confirm", formId: null, order: 981 });
@@ -1673,6 +1673,129 @@ test("settings member controls apply role changes and removal immediately, then 
     await expect(reviewerRow.getByRole("button", { name: "Change role" })).toHaveCount(0);
   } finally {
     await ensureAdminBaseline();
+  }
+});
+
+test("settings API-key controls validate, disclose once, copy, cancel, revoke, and reject the bearer", async ({ context, page, request, baseURL }, testInfo) => {
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const collectionPath = `/api/v1/events/${EVENT_ID}/api-keys`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  const runName = `QA UI key ${testInfo.project.name} ${Date.now()}`;
+  type ApiKeyMetadata = Readonly<{
+    id: string;
+    name: string;
+    scopes: readonly string[];
+    revokedAt: string | null;
+    version: number;
+  }>;
+  const listKeys = async (): Promise<readonly ApiKeyMetadata[]> => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<readonly ApiKeyMetadata[]>;
+  };
+  const cleanup = async () => {
+    const current = (await listKeys()).find(({ name }) => name === runName);
+    if (!current || current.revokedAt) return;
+    const response = await request.delete(`${collectionPath}/${current.id}`, {
+      headers: ownerHeaders,
+      data: { expectedVersion: current.version },
+    });
+    expect(response.status()).toBe(200);
+  };
+
+  if (testInfo.project.name === "desktop-chromium") {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: runtimeBaseURL });
+  }
+  await openOwnerPage(context, page, runtimeBaseURL, "/settings");
+  const panel = page.getByRole("heading", { name: "MCP & API access" }).locator("xpath=ancestor::section[1]");
+  const name = panel.getByRole("textbox", { name: "Key name" });
+  const create = panel.getByRole("button", { name: "Create key" });
+
+  try {
+    await create.click();
+    expect(await name.evaluate((field: HTMLInputElement) => field.validity.valueMissing)).toBe(true);
+    expect((await listKeys()).some((key) => key.name === runName)).toBe(false);
+
+    const preset = panel.getByRole("combobox", { name: "Access preset" });
+    for (const value of ["read", "agenda", "onboarding", "full"]) {
+      await preset.selectOption(value);
+      await expect(panel.getByLabel("Selected API scopes").locator("span").first()).toBeVisible();
+    }
+    await preset.selectOption("agenda");
+    const lifetime = panel.getByRole("combobox", { name: "Expires in" });
+    for (const value of ["30", "90", "365"]) await lifetime.selectOption(value);
+    await lifetime.selectOption("30");
+
+    if (testInfo.project.name === "desktop-chromium") {
+      await panel.getByRole("button", { name: "Copy endpoint" }).click();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${runtimeBaseURL}/mcp`);
+    }
+
+    await name.fill(runName);
+    await create.click();
+    await expect(page.getByText("API key created. Copy the secret now.", { exact: true })).toBeVisible();
+    const secretCode = panel.getByTestId("api-key-secret");
+    await expect(secretCode).toBeVisible();
+    const secret = (await secretCode.textContent())?.trim();
+    expect(secret).toMatch(/^spk_[A-Za-z0-9_-]{20,}$/);
+    const row = panel.locator("tbody tr").filter({ hasText: runName });
+    await expect(row).toContainText("Active");
+    await expect(row).toContainText("agenda:write");
+
+    const allowed = await request.get(`/api/v1/events/${EVENT_ID}`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(allowed.status()).toBe(200);
+
+    if (testInfo.project.name === "desktop-chromium") {
+      await panel.getByRole("button", { name: "Copy secret" }).click();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(secret);
+      await panel.getByRole("button", { name: "Copy configuration" }).click();
+      const config = JSON.parse(await page.evaluate(() => navigator.clipboard.readText())) as {
+        readonly mcpServers: { readonly "session-party": { readonly url: string; readonly headers: { readonly Authorization: string } } };
+      };
+      expect(config.mcpServers["session-party"]).toEqual({
+        type: "http",
+        url: `${runtimeBaseURL}/mcp`,
+        headers: { Authorization: `Bearer ${secret}` },
+      });
+    }
+
+    await panel.getByRole("button", { name: "Dismiss" }).click();
+    await expect(secretCode).toHaveCount(0);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "MCP & API access" })).toBeVisible();
+    await expect(page.getByTestId("api-key-secret")).toHaveCount(0);
+    const reloadedPanel = page.getByRole("heading", { name: "MCP & API access" }).locator("xpath=ancestor::section[1]");
+    const reloadedRow = reloadedPanel.locator("tbody tr").filter({ hasText: runName });
+    await expect(reloadedRow).toContainText("Active");
+
+    const revoke = reloadedRow.getByRole("button", { name: "Revoke" });
+    await revoke.click();
+    const dialog = page.getByRole("alertdialog", { name: `Revoke ${runName}?` });
+    await expect(dialog).toContainText("immediately rejects every request");
+    await dialog.getByRole("button", { name: "Keep key" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(revoke).toBeFocused();
+    await expect(reloadedRow).toContainText("Active");
+
+    await revoke.click();
+    await page.getByRole("alertdialog", { name: `Revoke ${runName}?` }).getByRole("button", { name: "Revoke key" }).click();
+    await expect(page.getByText("API key revoked.", { exact: true })).toBeVisible();
+    await expect(reloadedRow).toContainText("Revoked");
+    await expect(reloadedRow.getByRole("button", { name: "Revoke" })).toHaveCount(0);
+
+    const metadata = await listKeys();
+    const persisted = metadata.find(({ name: keyName }) => keyName === runName);
+    expect(persisted?.revokedAt).not.toBeNull();
+    expect(JSON.stringify(metadata)).not.toContain(secret);
+    expect(JSON.stringify(metadata)).not.toMatch(/"secret"\s*:/i);
+    const rejected = await request.get(`/api/v1/events/${EVENT_ID}`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    expect(rejected.status()).toBe(401);
+  } finally {
+    await cleanup();
   }
 });
 
