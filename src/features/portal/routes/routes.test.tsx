@@ -765,6 +765,15 @@ describe("organizer content and workflows", () => {
     expect(taskMarkup).toContain("Save changes");
     expect(taskMarkup).toContain("Delete task");
     expect(taskMarkup).toContain("Review speaker profile");
+    expect(taskMarkup).not.toContain('name="formId"');
+
+    const formTaskMarkup = renderToStaticMarkup(createElement(OrganizerTasksContent, {
+      tasks: [{ ...task, id: "task-form", kind: "form", formId: "form-travel", name: "Travel details" }],
+      onCreate: noop,
+      onUpdate: noop,
+      onDelete: noop,
+    }));
+    expect(formTaskMarkup).toMatch(/<input[^>]*required=""[^>]*name="formId"|<input[^>]*name="formId"[^>]*required=""/);
 
     const resourceMarkup = renderToStaticMarkup(createElement(OrganizerResourcesContent, {
       resources: [resource],

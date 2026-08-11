@@ -365,6 +365,159 @@ test("task and resource destructive dialogs both cancel without mutation", async
   await expect(dialog).toBeHidden();
 });
 
+test("task editor completes a conditional create, update, reload, and delete lifecycle", async ({ context, page, request, baseURL }, testInfo) => {
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const collectionPath = `/api/v1/events/${EVENT_ID}/portal/tasks`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  const taskName = `QA UI task ${testInfo.project.name}`;
+  const updatedName = `${taskName} updated`;
+  type Task = Readonly<{ id: string; name: string; kind: string; formId: string | null; order: number; speakerIds: readonly string[]; version: number }>;
+  const loadTasks = async (): Promise<readonly Task[]> => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<readonly Task[]>;
+  };
+  const cleanup = async (): Promise<void> => {
+    const current = (await loadTasks()).find(({ name }) => name === taskName || name === updatedName);
+    if (!current) return;
+    const removed = await request.delete(`${collectionPath}/${current.id}`, { headers: ownerHeaders, data: { expectedVersion: current.version } });
+    expect(removed.status()).toBe(200);
+  };
+  const formForName = (name: string) => page.locator("form").filter({ has: page.locator(`input[name="name"][value="${name}"]`) });
+  const formsResponse = await request.get(`/api/v1/events/${EVENT_ID}/forms`, { headers: ownerHeaders });
+  expect(formsResponse.status()).toBe(200);
+  const forms = await formsResponse.json() as readonly { readonly id: string; readonly purpose: string }[];
+  const primaryForm = forms.find(({ purpose }) => purpose === "primary-cfp");
+  expect(primaryForm).toBeDefined();
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/tasks");
+  try {
+    const createForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Create task" }) });
+    const name = createForm.getByLabel("Task name");
+    await createForm.getByRole("button", { name: "Create task" }).click();
+    expect(await name.evaluate((input: HTMLInputElement) => input.validity.valueMissing)).toBe(true);
+    await name.fill(taskName);
+    await createForm.getByLabel("Order").fill("981");
+    await createForm.getByLabel("Instructions").fill("Disposable task lifecycle — Unicode ✓");
+    await createForm.getByLabel("Due date").fill("2026-08-20T14:30");
+    const type = createForm.getByLabel("Task type");
+    for (const kind of ["profile", "upload", "link", "confirm"] as const) {
+      await type.selectOption(kind);
+      await expect(createForm.getByLabel("Form ID")).toHaveCount(0);
+    }
+    await type.selectOption("form");
+    const formId = createForm.getByLabel("Form ID");
+    await expect(formId).toHaveAttribute("required", "");
+    await createForm.getByRole("button", { name: "Create task" }).click();
+    expect(await formId.evaluate((input: HTMLInputElement) => input.validity.valueMissing)).toBe(true);
+    await formId.fill(primaryForm!.id);
+    await createForm.getByRole("checkbox").first().check();
+    await createForm.getByRole("button", { name: "Create task" }).click();
+    await expect(page.getByText("Task created", { exact: true }).first()).toBeVisible();
+
+    const created = (await loadTasks()).find(({ name }) => name === taskName);
+    expect(created).toMatchObject({ kind: "form", formId: primaryForm!.id, order: 981 });
+    expect(created!.speakerIds).toHaveLength(1);
+    const editForm = formForName(taskName);
+    await expect(editForm).toHaveCount(1);
+    await editForm.getByLabel("Task name").fill(updatedName);
+    await editForm.getByLabel("Task type").selectOption("confirm");
+    await expect(editForm.getByLabel("Form ID")).toHaveCount(0);
+    await editForm.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText("Task updated", { exact: true }).first()).toBeVisible();
+    expect((await loadTasks()).find(({ name }) => name === updatedName)).toMatchObject({ kind: "confirm", formId: null, order: 981 });
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("h1").waitFor({ state: "visible" });
+    const reloaded = formForName(updatedName);
+    await expect(reloaded.getByLabel("Task type")).toHaveValue("confirm");
+    await reloaded.getByRole("button", { name: "Delete task" }).click();
+    const deleteDialog = page.getByRole("alertdialog", { name: `Delete ${updatedName}?` });
+    await deleteDialog.getByRole("button", { name: "Keep task" }).click();
+    await expect(reloaded).toHaveCount(1);
+    await reloaded.getByRole("button", { name: "Delete task" }).click();
+    await page.getByRole("alertdialog", { name: `Delete ${updatedName}?` }).getByRole("button", { name: "Delete task" }).click();
+    await expect(formForName(updatedName)).toHaveCount(0);
+    expect((await loadTasks()).some(({ name }) => name === updatedName)).toBe(false);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("resource editor preserves rejected input and completes a create, update, reload, and delete lifecycle", async ({ context, page, request, baseURL }, testInfo) => {
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const collectionPath = `/api/v1/events/${EVENT_ID}/portal/resources`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  const token = `${testInfo.project.name}-${Date.now()}`.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const slug = `qa-ui-resource-${token}`;
+  const title = `QA UI resource ${testInfo.project.name}`;
+  const updatedTitle = `${title} updated`;
+  type Resource = Readonly<{ id: string; slug: string; title: string; body: string | null; embedUrl: string | null; audience: string; order: number; version: number }>;
+  const loadResources = async (): Promise<readonly Resource[]> => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<readonly Resource[]>;
+  };
+  const cleanup = async (): Promise<void> => {
+    const current = (await loadResources()).find((resource) => resource.slug === slug);
+    if (!current) return;
+    const removed = await request.delete(`${collectionPath}/${current.id}`, { headers: ownerHeaders, data: { expectedVersion: current.version } });
+    expect(removed.status()).toBe(200);
+  };
+  const formForTitle = (value: string) => page.locator("form").filter({ has: page.locator(`input[name="title"][value="${value}"]`) });
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/resources");
+  try {
+    const createForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Create resource" }) });
+    await createForm.getByLabel("Title").fill(title);
+    const slugInput = createForm.getByLabel("Slug");
+    await slugInput.fill("Invalid Slug");
+    await createForm.getByRole("button", { name: "Create resource" }).click();
+    expect(await slugInput.evaluate((input: HTMLInputElement) => input.validity.patternMismatch)).toBe(true);
+    await slugInput.fill(slug);
+    await createForm.getByLabel("Order").fill("982");
+    await createForm.getByLabel("Resource text").fill("Disposable resource lifecycle — 東京");
+    const audience = createForm.getByLabel("Audience");
+    await audience.selectOption("public");
+    await audience.selectOption("speakers");
+    const embed = createForm.getByLabel("Approved embed URL");
+    await embed.fill("https://youtube.com.evil.example/embed/unsafe");
+    await createForm.getByRole("button", { name: "Create resource" }).click();
+    await expect(page.getByText("Embed URL must use an allowlisted HTTPS provider", { exact: true }).first()).toBeVisible();
+    await expect(createForm.getByLabel("Title")).toHaveValue(title);
+    expect((await loadResources()).some((resource) => resource.slug === slug)).toBe(false);
+
+    await embed.fill("https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ");
+    await createForm.getByRole("button", { name: "Create resource" }).click();
+    await expect(page.getByText("Resource created", { exact: true }).first()).toBeVisible();
+    expect((await loadResources()).find((resource) => resource.slug === slug)).toMatchObject({ title, audience: "speakers", order: 982 });
+
+    const editForm = formForTitle(title);
+    await expect(editForm).toHaveCount(1);
+    await editForm.getByLabel("Title").fill(updatedTitle);
+    await editForm.getByLabel("Audience").selectOption("public");
+    await editForm.getByLabel("Resource text").fill("Updated public resource — Unicode ✓");
+    await editForm.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText("Resource updated", { exact: true }).first()).toBeVisible();
+    expect((await loadResources()).find((resource) => resource.slug === slug)).toMatchObject({ title: updatedTitle, audience: "public", body: "Updated public resource — Unicode ✓" });
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("h1").waitFor({ state: "visible" });
+    const reloaded = formForTitle(updatedTitle);
+    await expect(reloaded.getByLabel("Audience")).toHaveValue("public");
+    await reloaded.getByRole("button", { name: "Delete resource" }).click();
+    const deleteDialog = page.getByRole("alertdialog", { name: `Delete ${updatedTitle}?` });
+    await deleteDialog.getByRole("button", { name: "Keep resource" }).click();
+    await expect(reloaded).toHaveCount(1);
+    await reloaded.getByRole("button", { name: "Delete resource" }).click();
+    await page.getByRole("alertdialog", { name: `Delete ${updatedTitle}?` }).getByRole("button", { name: "Delete resource" }).click();
+    await expect(formForTitle(updatedTitle)).toHaveCount(0);
+    expect((await loadResources()).some((resource) => resource.slug === slug)).toBe(false);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("agenda views, setup, and live-show controls are keyboard-reachable and reversible", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/agenda");
