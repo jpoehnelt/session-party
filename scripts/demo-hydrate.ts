@@ -463,8 +463,13 @@ await request(`/events/${eventId}/portal/speakers/${encode(accepted.primarySpeak
   body: { provisioningId: claimed.provisioningId, expectedVersion: claimed.provisioningVersion },
 });
 
-const acceptedPeople: Array<{ readonly submission: SubmissionOutput; readonly acceptance: AcceptanceOutput }> = [
-  { submission, acceptance: accepted },
+const acceptedPeople: Array<{
+  readonly submission: SubmissionOutput;
+  readonly acceptance: AcceptanceOutput;
+  readonly claim: ClaimOutput;
+  readonly speaker: (typeof fixtureSpeakers)[number];
+}> = [
+  { submission, acceptance: accepted, claim: claimed, speaker: fixtureSpeakers[0]! },
 ];
 for (let index = 1; index < acceptedSubmissions.length; index += 1) {
   const candidate = acceptedSubmissions[index]!;
@@ -494,7 +499,7 @@ for (let index = 1; index < acceptedSubmissions.length; index += 1) {
     session: ownerSession,
     body: { provisioningId: claim.provisioningId, expectedVersion: claim.provisioningVersion },
   });
-  acceptedPeople.push({ submission: candidate, acceptance });
+  acceptedPeople.push({ submission: candidate, acceptance, claim, speaker });
 }
 
 const managedSpeaker = await request<SpeakerProfile>(`/events/${eventId}/portal/speakers`, {
@@ -625,6 +630,37 @@ await request(`/events/${eventId}/portal/tasks/${encode(tasks[4]!.id)}/completio
   session: speakerSession,
   body: { completed: true, data: { source: "demo-hydrator" }, idempotencyKey: "demo-confirm-participation-v1" },
 });
+
+for (const [index, person] of acceptedPeople.entries()) {
+  const snapshot = await request<{ readonly speaker: SpeakerProfile }>(`/events/${eventId}/portal`, {
+    session: person.speaker.session,
+  });
+  const draft = index === 0
+    ? snapshot.speaker
+    : await request<SpeakerProfile>(`/events/${eventId}/portal/profile`, {
+        method: "PUT",
+        session: person.speaker.session,
+        body: {
+          expectedVersion: snapshot.speaker.version,
+          idempotencyKey: `demo-speaker-profile-${index + 1}-v1`,
+          displayName: person.speaker.name,
+          title: "AI Systems Practitioner",
+          company: "Session Party Community",
+          bio: `${person.speaker.name} builds practical AI systems and shares lessons from operating them in production.`,
+          links: [],
+        },
+      });
+  const submittedProfile = await request<SpeakerProfile>(`/events/${eventId}/portal/profile/review`, {
+    method: "POST",
+    session: person.speaker.session,
+    body: { expectedVersion: draft.version },
+  });
+  await request<SpeakerProfile>(`/events/${eventId}/portal/speakers/${encode(person.claim.speakerId)}/profile-review`, {
+    method: "POST",
+    session: ownerSession,
+    body: { expectedVersion: submittedProfile.version, decision: "approved", note: null },
+  });
+}
 
 const createdTalk = await request<AgendaMutation>(`/events/${eventId}/agenda/talks`, {
   method: "POST",
