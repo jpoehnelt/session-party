@@ -94,6 +94,7 @@ import {
   type UploadPortalAssetInput,
   type UploadPortalAssetOutput,
   type UploadManagedSpeakerHeadshotInput,
+  inferUploadTaskPurpose,
   type SendSpeakerMessagesInput,
   SendSpeakerMessagesOutput as SendSpeakerMessagesOutputSchema,
   type SendSpeakerMessagesOutput,
@@ -1289,7 +1290,7 @@ export const claimSpeaker = (
   }
   if (
     row.speaker.userId === actor.userId &&
-    (row.provisioning.status === "claimed" || row.provisioning.status === "provisioned")
+    row.provisioning.status === "provisioned"
   ) {
     return {
       eventId: event.id,
@@ -1301,7 +1302,11 @@ export const claimSpeaker = (
       provisioningStatus: row.provisioning.status,
     };
   }
-  if (row.provisioning.status !== "pending" && row.provisioning.status !== "retry") {
+  if (
+    row.provisioning.status !== "pending" &&
+    row.provisioning.status !== "retry" &&
+    row.provisioning.status !== "claimed"
+  ) {
     return yield* Effect.fail(
       new Conflict({ message: "This accepted speaker claim is not available" }),
     );
@@ -1319,7 +1324,7 @@ export const claimSpeaker = (
     provisioningId: row.provisioning.id,
     speakerVersion: nextSpeakerVersion,
     provisioningVersion: nextProvisioningVersion,
-    provisioningStatus: "claimed",
+    provisioningStatus: "provisioned",
   };
   const idempotency = idempotencyInsert(
     event.id,
@@ -1423,7 +1428,7 @@ export const claimSpeaker = (
     eq(speakerProvisioning.acceptanceEventId, row.acceptance.id),
     eq(speakerProvisioning.primarySpeakerId, row.speaker.id),
     eq(speakerProvisioning.version, row.provisioning.version),
-    inArray(speakerProvisioning.status, ["pending", "retry"]),
+    inArray(speakerProvisioning.status, ["pending", "retry", "claimed"]),
     currentAcceptanceGuard,
     sql`exists (
       select 1 from speakers as claimed_speaker
@@ -1439,7 +1444,7 @@ export const claimSpeaker = (
     eq(speakerProvisioning.acceptanceEventId, row.acceptance.id),
     eq(speakerProvisioning.primarySpeakerId, row.speaker.id),
     eq(speakerProvisioning.version, nextProvisioningVersion),
-    eq(speakerProvisioning.status, "claimed"),
+    eq(speakerProvisioning.status, "provisioned"),
     eq(speakers.eventId, event.id),
     eq(speakers.id, row.speaker.id),
     eq(speakers.userId, actor.userId),
@@ -1496,7 +1501,7 @@ export const claimSpeaker = (
       after: sql<Record<string, unknown>>`${JSON.stringify({
         userId: actor.userId,
         speakerVersion: nextSpeakerVersion,
-        provisioningStatus: "claimed",
+        provisioningStatus: "provisioned",
         provisioningVersion: nextProvisioningVersion,
       })}`.as("after"),
       metadata: sql<null>`null`.as("metadata"),
@@ -1511,7 +1516,8 @@ export const claimSpeaker = (
   );
   const transitionProvisioning = db.update(speakerProvisioning)
     .set({
-      status: "claimed",
+      status: "provisioned",
+      provisionedAt: claimedAt,
       leaseOwner: null,
       leaseExpiresAt: null,
       lastError: null,
@@ -1542,7 +1548,7 @@ export const claimSpeaker = (
               and claim_provisioning.acceptance_event_id = ${row.acceptance.id}
               and claim_provisioning.primary_speaker_id = ${row.speaker.id}
               and claim_provisioning.version = ${row.provisioning.version}
-              and claim_provisioning.status in ('pending', 'retry')
+              and claim_provisioning.status in ('pending', 'retry', 'claimed')
           )`,
           currentAcceptanceGuard,
         ))
@@ -1597,7 +1603,7 @@ export const claimSpeaker = (
   }
   if (
     current?.speaker.userId === actor.userId &&
-    (current.provisioning.status === "claimed" || current.provisioning.status === "provisioned")
+    current.provisioning.status === "provisioned"
   ) {
     return {
       eventId: event.id,
@@ -2290,6 +2296,12 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
     if (found.kind !== "upload") {
       return yield* Effect.fail(
         new Validation({ message: "Asset uploads can complete only upload tasks" }),
+      );
+    }
+    const taskPurpose = inferUploadTaskPurpose(found);
+    if (taskPurpose !== null && taskPurpose !== input.purpose) {
+      return yield* Effect.fail(
+        new Validation({ message: `The ${found.name} task cannot be completed by a ${input.purpose} upload` }),
       );
     }
     if (found.targetMode === "selected") {

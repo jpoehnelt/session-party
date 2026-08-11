@@ -285,6 +285,18 @@ export const UploadPortalAssetInput = Schema.Struct({
 });
 export type UploadPortalAssetInput = typeof UploadPortalAssetInput.Type;
 
+export const inferUploadTaskPurpose = (
+  task: Pick<PortalTask, "name" | "description">,
+): UploadPortalAssetInput["purpose"] | null => {
+  const text = `${task.name} ${task.description ?? ""}`.toLowerCase();
+  const matches = ([
+    ["headshot", /\b(head[ -]?shot|portrait|profile (?:photo|image)|speaker (?:photo|image))s?\b/],
+    ["slides", /\b(slides?|slide ?deck|presentation|powerpoint|pptx?)\b/],
+    ["document", /\b(documents?|supporting (?:file|material)|handouts?|worksheet|brief)\b/],
+  ] as const).filter(([, pattern]) => pattern.test(text));
+  return matches.length === 1 ? matches[0]![0] : null;
+};
+
 export const UploadPortalAssetOutput = Schema.Struct({
   asset: PortalAsset,
   task: Schema.NullOr(PortalTask),

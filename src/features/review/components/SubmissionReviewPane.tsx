@@ -586,13 +586,20 @@ export function SubmissionReviewPane({
 
       {submission.acceptance ? (
         <Card className="[&>header]:bg-production-lime [&>header_h3]:text-ink" title="Acceptance decision">
-          <Badge tone="success">Accepted · provisioning {submission.acceptance.provisioningStatus}</Badge>
+          <Badge tone={submission.acceptance.provisioningStatus === "missing" ? "warning" : "success"}>
+            Accepted · provisioning {submission.acceptance.provisioningStatus}
+          </Badge>
+          {submission.acceptance.provisioningStatus === "missing" ? (
+            <p role="alert" className="mt-2 text-sm text-danger">
+              This legacy acceptance is missing its speaker provisioning record. The acceptance remains visible; repair provisioning before changing it.
+            </p>
+          ) : null}
           <p className="mt-2 text-sm text-ink-secondary">Acceptance is recorded in the audit history. No email was sent.</p>
           {organizer && (
             <div className="mt-4">
               <Button
                 variant="danger"
-                disabled={pendingOperation !== undefined}
+                disabled={pendingOperation !== undefined || submission.acceptance.provisioningStatus === "missing"}
                 loading={pendingOperation === "revoke"}
                 onClick={revokeAcceptance}
               >

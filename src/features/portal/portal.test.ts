@@ -17,6 +17,7 @@ import {
   mailDeliverySnapshots,
   pages,
   speakers,
+  speakerProvisioning,
   speakerContacts,
   speakerProfiles,
   submissionSpeakers,
@@ -304,7 +305,7 @@ describe("portal service", () => {
       .toMatchObject({ memberRole: null, speakerPortal: true });
   });
 
-  it("claims the current accepted primary speaker by normalized immutable email and enables provisioning", async () => {
+  it("claims and provisions the current accepted primary speaker atomically by normalized immutable email", async () => {
     const setup = await fixture({
       linkedUserId: null,
       speakerEmail: `  ${speakerUser.email.toUpperCase()}  `,
@@ -323,7 +324,7 @@ describe("portal service", () => {
       provisioningId: setup.provisioningId,
       speakerVersion: 2,
       provisioningVersion: 2,
-      provisioningStatus: "claimed",
+      provisioningStatus: "provisioned",
     });
     await expect(runAs(speakerUser, claimSpeaker(input))).resolves.toEqual(claimed);
 
@@ -343,12 +344,6 @@ describe("portal service", () => {
       eq(auditLog.action, "portal.speaker.claimed"),
     ))).toHaveLength(1);
 
-    await runAs(owner, provisionSpeaker({
-      eventId: setup.eventId,
-      speakerId: setup.speakerId,
-      provisioningId: setup.provisioningId,
-      expectedVersion: claimed.provisioningVersion,
-    }));
     await expect(runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug }))).resolves.toMatchObject({
       provisioningStatus: "provisioned",
       speaker: { id: setup.speakerId },
@@ -393,6 +388,32 @@ describe("portal service", () => {
       .toMatchObject({ memberRole: null, speakerPortal: true });
   });
 
+  it("finishes provisioning a previously claimed accepted speaker", async () => {
+    const setup = await fixture({ linkedUserId: speakerUser.userId });
+    const claimedAt = new Date();
+    const db = drizzle(env.DB);
+    await db.update(speakerProvisioning).set({
+      status: "claimed",
+      version: 2,
+      updatedAt: claimedAt,
+    }).where(eq(speakerProvisioning.id, setup.provisioningId));
+
+    const claimed = await runAs(speakerUser, claimSpeaker({
+      eventId: setup.eventSlug,
+      idempotencyKey: `finish-claimed-${setup.eventId}`,
+    }));
+
+    expect(claimed).toMatchObject({
+      speakerId: setup.speakerId,
+      provisioningVersion: 3,
+      provisioningStatus: "provisioned",
+    });
+    await expect(runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug }))).resolves.toMatchObject({
+      provisioningStatus: "provisioned",
+      speaker: { id: setup.speakerId },
+    });
+  });
+
   it("preserves organizer membership while linking and provisioning the same user as a speaker", async () => {
     const setup = await fixture({ linkedUserId: null });
     const createdAt = new Date();
@@ -406,7 +427,7 @@ describe("portal service", () => {
       updatedAt: createdAt,
     });
 
-    const claimed = await runAs(speakerUser, claimSpeaker({
+    await runAs(speakerUser, claimSpeaker({
       eventId: setup.eventSlug,
       idempotencyKey: `dual-role-claim-${setup.eventId}`,
     }));
@@ -416,13 +437,6 @@ describe("portal service", () => {
       eq(eventMembers.userId, speakerUser.userId),
     ));
     expect(membershipAfterClaim).toMatchObject({ role: "owner", version: 1 });
-
-    await runAs(speakerUser, provisionSpeaker({
-      eventId: setup.eventId,
-      speakerId: setup.speakerId,
-      provisioningId: setup.provisioningId,
-      expectedVersion: claimed.provisioningVersion,
-    }));
 
     await expect(runAs(speakerUser, getPortalDashboard({ eventId: setup.eventId })))
       .resolves.toMatchObject({ event: { id: setup.eventId } });
@@ -520,8 +534,8 @@ describe("portal service", () => {
     ]);
     expect(first._tag).toBe("Right");
     expect(second._tag).toBe("Right");
-    if (first._tag === "Right") expect(first.right.provisioningStatus).toBe("claimed");
-    if (second._tag === "Right") expect(second.right.provisioningStatus).toBe("claimed");
+    if (first._tag === "Right") expect(first.right.provisioningStatus).toBe("provisioned");
+    if (second._tag === "Right") expect(second.right.provisioningStatus).toBe("provisioned");
 
     const db = drizzle(env.DB);
     const [speaker] = await db.select().from(speakers).where(eq(speakers.id, setup.speakerId));
@@ -801,6 +815,41 @@ describe("portal service", () => {
       version: 2,
     });
     expect(await drizzle(env.DB).select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, setup.eventId))).toHaveLength(2);
+  });
+
+  it("does not complete a headshot task with a slides upload", async () => {
+    const setup = await fixture();
+    const task = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Upload a headshot",
+      description: "Add your speaker portrait.",
+      kind: "upload",
+      formId: null,
+      dueAt: null,
+      order: 1,
+    }));
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+
+    await expectFailure(speakerUser, uploadPortalAsset({
+      eventId: setup.eventId,
+      taskId: task.id,
+      purpose: "slides",
+      filename: "session.pdf",
+      contentType: "application/pdf",
+      contentBase64: validPdfBase64,
+      expectedVersion: 0,
+      idempotencyKey: `mismatched-upload-${setup.eventId}`,
+    }), "Validation");
+
+    const db = drizzle(env.DB);
+    expect(await db.select().from(assets).where(eq(assets.eventId, setup.eventId))).toHaveLength(0);
+    expect(await db.select().from(taskCompletions).where(eq(taskCompletions.eventId, setup.eventId))).toHaveLength(0);
+    expect(await db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, setup.eventId))).toHaveLength(0);
   });
 
   it("accepts a decoded 10 MiB upload for every asset kind", async () => {
