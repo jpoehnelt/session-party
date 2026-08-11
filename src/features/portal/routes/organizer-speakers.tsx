@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { Avatar, Badge, Button, Card, Checkbox, Input, ReadinessThread, Select, Table, Textarea, Toaster, toast } from "@/ui";
 import type { CreateManagedSpeakerInput, SendSpeakerMessagesInput, SpeakerDirectory, SpeakerDirectoryItem, UpdateManagedSpeakerInput } from "../schema";
-import { createManagedSpeaker, getSpeakerDirectory, importSpeakersCsv, provisionSpeaker, sendSpeakerMessages, updateManagedSpeaker, updateSpeakerPublication, uploadManagedSpeakerHeadshot } from "./api";
+import { createManagedSpeaker, getSpeakerDirectory, importSpeakersCsv, provisionSpeaker, reviewSpeakerProfile, sendSpeakerMessages, updateManagedSpeaker, updateSpeakerPublication, uploadManagedSpeakerHeadshot } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
 import {
   ProductionHeader,
@@ -165,6 +165,19 @@ export default function OrganizerSpeakersRoute() {
           contentBase64: await fileBase64(file),
           idempotencyKey: crypto.randomUUID(),
         }), "Headshot updated")}
+        onReview={(item, decision) => {
+          const note = decision === "changes_requested"
+            ? window.prompt("What should the speaker change?")
+            : null;
+          if (decision === "changes_requested" && !note?.trim()) return;
+          return mutate(item.speaker.id, () => reviewSpeakerProfile({
+            eventId: state.data.event.id,
+            speakerId: item.speaker.id,
+            expectedVersion: item.speaker.version,
+            decision,
+            note,
+          }), decision === "approved" ? "Event profile approved" : "Profile changes requested");
+        }}
       />
       <Toaster />
     </>
@@ -181,6 +194,7 @@ export function OrganizerSpeakersContent({
   onImportCsv,
   onMessage,
   onUploadHeadshot,
+  onReview,
 }: {
   readonly directory: SpeakerDirectory;
   readonly busySpeakerId?: string | null;
@@ -191,6 +205,7 @@ export function OrganizerSpeakersContent({
   readonly onImportCsv?: (csv: string) => void;
   readonly onMessage?: (speakerIds: readonly string[], kind: "invite" | "reminder") => void;
   readonly onUploadHeadshot?: (speaker: SpeakerDirectoryItem, file: File) => void;
+  readonly onReview?: (speaker: SpeakerDirectoryItem, decision: "approved" | "changes_requested") => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<SpeakerDirectoryFilter>("all");
@@ -370,7 +385,7 @@ export function OrganizerSpeakersContent({
               <div className="flex min-w-48 items-center gap-3">
                 <Avatar name={item.speaker.displayName} size="md" />
                 <div className="min-w-0">
-                  <p className="truncate font-semibold text-ink">{item.speaker.displayName}</p>
+                  <a className="truncate font-semibold text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={`/e/${encodeURIComponent(directory.event.slug)}/speakers/${encodeURIComponent(item.speaker.id)}`}>{item.speaker.displayName}</a>
                   <p className="truncate text-xs text-ink-faint">
                     {[item.speaker.title, item.speaker.company].filter(Boolean).join(" · ") || "Profile pending"}
                   </p>
@@ -428,12 +443,17 @@ export function OrganizerSpeakersContent({
             key: "publication",
             header: "Public gallery",
             render: (item) => (
-              <Checkbox
-                label={item.speaker.visible ? "Visible" : "Hidden"}
-                checked={item.speaker.visible}
-                disabled={busySpeakerId === item.speaker.id || item.provisioningStatus !== "provisioned"}
-                onChange={(event) => onVisibility(item, event.currentTarget.checked)}
-              />
+              <div className="space-y-2">
+                <Badge tone={item.speaker.profileReviewStatus === "approved" ? "success" : item.speaker.profileReviewStatus === "changes_requested" ? "danger" : "neutral"}>
+                  {item.speaker.profileReviewStatus.replace("_", " ")}
+                </Badge>
+                <Checkbox
+                  label={item.speaker.visible ? "Visible" : "Hidden"}
+                  checked={item.speaker.visible}
+                  disabled={busySpeakerId === item.speaker.id || item.provisioningStatus !== "provisioned" || item.speaker.profileReviewStatus !== "approved"}
+                  onChange={(event) => onVisibility(item, event.currentTarget.checked)}
+                />
+              </div>
             ),
           },
           {
@@ -448,6 +468,12 @@ export function OrganizerSpeakersContent({
                 ) : (
                   <Button size="sm" variant="secondary" className={productionButtonClass} loading={busySpeakerId === item.speaker.id} onClick={() => onProvision(item)}>Provision</Button>
                 )}
+                {onReview && item.speaker.profileReviewStatus === "in_review" ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" loading={busySpeakerId === item.speaker.id} onClick={() => onReview(item, "approved")}>Approve profile</Button>
+                    <Button size="sm" variant="secondary" disabled={busySpeakerId === item.speaker.id} onClick={() => onReview(item, "changes_requested")}>Request changes</Button>
+                  </div>
+                ) : null}
                 {onUpdate && item.source === "manual" ? (
                   <details>
                     <summary className="cursor-pointer text-xs font-bold underline">Edit profile</summary>

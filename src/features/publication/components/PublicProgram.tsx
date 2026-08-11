@@ -166,18 +166,24 @@ function talksForSpeaker(
 function SpeakerLines({
   talk,
   speakers,
+  className,
 }: {
   readonly talk: PublicAgendaTalk;
-  readonly speakers: ReadonlyMap<string, PublicSpeaker>;
+  readonly speakers?: ReadonlyMap<string, PublicSpeaker>;
+  readonly className?: string;
 }) {
   return (
-    <ul className="space-y-1.5 border-l-4 border-production-sky pl-3 text-sm text-ink-secondary" aria-label="Speakers">
+    <ul className={className ?? "space-y-1.5 border-l-4 border-production-sky pl-3 text-sm text-ink-secondary"} aria-label="Speakers">
       {talk.speakerNames.map((name) => {
-        const speaker = speakers.get(normalize(name));
+        const speaker = speakers?.get(normalize(name));
+        const publishedProfile = talk.speakerProfiles?.find((candidate) => candidate.name === name);
+        const publicProfileSlug = speaker?.publicProfileSlug ?? publishedProfile?.slug;
         const identity = [speaker?.title, speaker?.company].filter(Boolean).join(" at ");
         return (
           <li key={name}>
-            <span className="font-black text-ink">{name}</span>
+            {publicProfileSlug ? (
+              <a className="font-black text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(publicProfileSlug)}`}>{name}</a>
+            ) : <span className="font-black text-ink">{name}</span>}
             {identity ? ` — ${identity}` : ""}
           </li>
         );
@@ -345,7 +351,9 @@ function SpeakerDetail({
       <div className="flex items-start gap-4 border-2 border-line-strong bg-production-sky/35 p-4 shadow-[3px_3px_0_#171714]">
         <Avatar name={speaker.displayName} src={speaker.headshotUrl ?? undefined} size="lg" />
         <div>
-          <p className="text-lg font-black tracking-[-0.025em] text-ink">{speaker.displayName}</p>
+          <p className="text-lg font-black tracking-[-0.025em] text-ink">
+            {speaker.publicProfileSlug ? <a className="underline decoration-2 underline-offset-4 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(speaker.publicProfileSlug)}`}>{speaker.displayName}</a> : speaker.displayName}
+          </p>
           <p className="text-sm text-ink-secondary">
             {[speaker.title, speaker.company].filter(Boolean).join(" at ") || "Profile details coming soon"}
           </p>
@@ -442,6 +450,7 @@ function SpeakersSurface({
             bio: speaker.bio ?? undefined,
             headshotUrl: speaker.headshotUrl ?? undefined,
             links: speaker.links,
+            profileUrl: speaker.publicProfileSlug ? `/speakers/${encodeURIComponent(speaker.publicProfileSlug)}` : undefined,
           }))}
           onSelect={(item) => {
             const speaker = filtered.find(({ id }) => id === item.id);
@@ -454,20 +463,23 @@ function SpeakersSurface({
             const sessions = talksForSpeaker(agenda, speaker);
             return (
               <li key={speaker.id}>
-                <button
-                  type="button"
-                  className={`flex min-h-24 w-full items-center gap-4 px-4 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/60 ${index % 2 === 0 ? "bg-surface hover:bg-production-sky/35" : "bg-production-lime/20 hover:bg-production-lime/45"}`}
-                  onClick={() => onSelect(speaker)}
-                >
+                <div className={`flex min-h-24 w-full flex-wrap items-center gap-4 px-4 py-4 text-left transition-colors ${index % 2 === 0 ? "bg-surface hover:bg-production-sky/35" : "bg-production-lime/20 hover:bg-production-lime/45"}`}>
                   <Avatar name={speaker.displayName} src={speaker.headshotUrl ?? undefined} size="md" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-lg font-black tracking-[-0.025em] text-ink">{speaker.displayName}</span>
+                  <span className="min-w-48 flex-1">
+                    {speaker.publicProfileSlug ? (
+                      <a className="block text-lg font-black tracking-[-0.025em] text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(speaker.publicProfileSlug)}`}>{speaker.displayName}</a>
+                    ) : (
+                      <span className="block text-lg font-black tracking-[-0.025em] text-ink">{speaker.displayName}</span>
+                    )}
                     <span className="block text-sm text-ink-secondary">
                       {[speaker.title, speaker.company].filter(Boolean).join(" at ") || "Profile details coming soon"}
                     </span>
                   </span>
                   <Badge tone={sessions.length > 0 ? "accent" : "neutral"}>{sessions.length} {sessions.length === 1 ? "session" : "sessions"}</Badge>
-                </button>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => onSelect(speaker)}>
+                    <span className="sr-only">{speaker.displayName} </span>Event details
+                  </Button>
+                </div>
               </li>
             );
           })}
@@ -523,13 +535,15 @@ function AgendaSurface({
             <h2 className="border-2 border-line-strong bg-ink px-3 py-3 text-base font-black uppercase text-production-lime shadow-[4px_4px_0_#7857ff]">{formatTime(time, agenda.timezone)}</h2>
             <div className="grid gap-3 lg:grid-cols-2">
               {talks.filter((talk) => talk.startsAt === time).map((talk, index) => (
-                <button key={talk.id} type="button" className="text-left" onClick={() => onSelect(talk)}>
+                <div key={talk.id} className="text-left">
                   <Card className={`h-full rounded-none transition-transform hover:-translate-y-1 [&>div]:border-t-8 ${index % 2 === 0 ? "[&>div]:border-production-sky" : "[&>div]:border-production-coral"}`}>
-                    <p className="text-lg font-black leading-tight tracking-[-0.025em] text-ink">{talk.title}</p>
-                    <p className="mt-2 text-sm text-ink-secondary">{talk.speakerNames.join(", ")}</p>
+                    <button type="button" className="text-left" onClick={() => onSelect(talk)}>
+                      <span className="text-lg font-black leading-tight tracking-[-0.025em] text-ink underline-offset-2 hover:underline">{talk.title}</span>
+                    </button>
+                    <SpeakerLines className="mt-2 text-sm text-ink-secondary" talk={talk} />
                     <p className="mt-3 border-t-2 border-line-strong pt-2 text-[10px] font-black uppercase tracking-[0.1em] text-ink-faint">{talk.room ?? "Room TBA"} · {talk.track ?? "General"}</p>
                   </Card>
-                </button>
+                </div>
               ))}
             </div>
           </section>

@@ -7,6 +7,7 @@ import type {
 } from "contracts/protocol";
 import { Badge, Button, Card, Input, Select } from "@/ui";
 import type { AgendaSnapshot } from "../schema";
+import { SpeakerLinks } from "./SpeakerLinks";
 
 type ShowAction = "select" | "start" | "hold" | "resume" | "complete" | "reset";
 
@@ -15,6 +16,7 @@ interface LiveShowControlProps {
   readonly state: ShowRunState;
   readonly cues: readonly ShowCue[];
   readonly disabled?: boolean;
+  readonly eventSlug?: string;
   readonly onControl: (action: ShowAction, talkId?: string) => void;
   readonly onCue: (kind: ShowCueKind, target: ShowCueTarget, message: string) => void;
   readonly onSurfaceChange: (surface: string) => void;
@@ -41,6 +43,7 @@ export function LiveShowControl({
   state,
   cues,
   disabled = false,
+  eventSlug,
   onControl,
   onCue,
   onSurfaceChange,
@@ -122,7 +125,11 @@ export function LiveShowControl({
           <div className="border-2 border-on-accent bg-production-lime p-5 text-ink shadow-[4px_4px_0_#7857ff]">
             <p className="text-[10px] font-black uppercase tracking-[0.16em]">Now on stage</p>
             <p className="mt-2 text-2xl font-black tracking-[-0.04em]">{currentTalk?.title ?? "Select the first session"}</p>
-            <p className="mt-1 text-sm font-bold text-ink/70">{currentTalk?.speakerNames.join(", ") || "The run of show is standing by."}</p>
+            {currentTalk ? (
+              <SpeakerLinks className="mt-1 block text-sm font-bold text-ink/70" eventSlug={eventSlug} speakerIds={currentTalk.speakerIds} speakerNames={currentTalk.speakerNames} />
+            ) : (
+              <p className="mt-1 text-sm font-bold text-ink/70">The run of show is standing by.</p>
+            )}
           </div>
           <div className={`grid place-items-center border-2 border-on-accent p-4 text-center ${remaining < 0 ? "bg-production-coral text-ink" : "bg-surface text-ink"}`}>
             <p className="text-[10px] font-black uppercase tracking-[0.14em]">{remaining < 0 ? "Over" : "Remaining"}</p>
@@ -156,7 +163,7 @@ export function LiveShowControl({
             <div className="border-l-4 border-production-sky bg-surface-muted px-4 py-3">
               <p className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-secondary">Next on deck</p>
               <p className="mt-1 font-black text-ink">{nextTalk?.title ?? "End of run"}</p>
-              <p className="text-xs font-semibold text-ink-secondary">{nextTalk?.speakerNames.join(", ")}</p>
+              {nextTalk && <SpeakerLinks className="text-xs font-semibold text-ink-secondary" eventSlug={eventSlug} speakerIds={nextTalk.speakerIds} speakerNames={nextTalk.speakerNames} />}
             </div>
             <Select
               label="This screen"

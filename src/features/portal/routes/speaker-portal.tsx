@@ -37,8 +37,10 @@ import {
   claimSpeakerAccount,
   getSpeakerTaskForm,
   getSpeakerPortal,
+  importReusableProfile,
   setSpeakerTaskCompletion,
   submitSpeakerTaskForm,
+  submitProfileReview,
   updateSpeakerProfile,
   uploadSpeakerAsset,
 } from "./api";
@@ -223,6 +225,14 @@ export default function SpeakerPortalRoute() {
         busyAction={mutation}
         error={mutationError}
         onSaveProfile={(input) => mutate("Profile", () => updateSpeakerProfile(eventSlug, input))}
+        onImportReusableProfile={() => mutate("Reusable profile", () => importReusableProfile(eventSlug, {
+          eventId: snapshot.event.id,
+          expectedVersion: snapshot.speaker.version,
+        }))}
+        onSubmitProfileReview={() => mutate("Profile review", () => submitProfileReview(eventSlug, {
+          eventId: snapshot.event.id,
+          expectedVersion: snapshot.speaker.version,
+        }))}
         onToggleTask={(task, completed) =>
           mutate("Task", () =>
             setSpeakerTaskCompletion(eventSlug, {
@@ -290,6 +300,8 @@ export interface SpeakerPortalContentProps {
   readonly busyAction?: string | null;
   readonly error?: string | null;
   readonly onSaveProfile: (input: UpdateProfileInput) => void;
+  readonly onImportReusableProfile?: () => void;
+  readonly onSubmitProfileReview?: () => void;
   readonly onToggleTask: (task: PortalTask, completed: boolean) => void;
   readonly onUpload: (input: UploadPortalAssetInput) => void;
   readonly onSubmitTaskForm: (
@@ -304,6 +316,8 @@ export function SpeakerPortalContent({
   busyAction = null,
   error = null,
   onSaveProfile,
+  onImportReusableProfile = () => undefined,
+  onSubmitProfileReview = () => undefined,
   onToggleTask,
   onUpload,
   onSubmitTaskForm,
@@ -373,6 +387,8 @@ export function SpeakerPortalContent({
             profile={snapshot.speaker}
             loading={busyAction === "Profile"}
             onSave={onSaveProfile}
+            onImport={onImportReusableProfile}
+            onSubmitReview={onSubmitProfileReview}
           />
           <UploadWorkspace
             eventId={snapshot.event.id}
@@ -573,35 +589,53 @@ function ProfileEditor({
   profile,
   loading,
   onSave,
+  onImport,
+  onSubmitReview,
 }: {
   readonly profile: SpeakerProfile;
   readonly loading: boolean;
   readonly onSave: (input: UpdateProfileInput) => void;
+  readonly onImport: () => void;
+  readonly onSubmitReview: () => void;
 }) {
   const [linkCount, setLinkCount] = useState(Math.max(profile.links.length, 1));
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     onSave(profileInput(profile, event.currentTarget));
   };
+  const locked = profile.profileReviewStatus === "in_review" || (profile.profileReviewStatus === "approved" && profile.profileSubmittedAt !== null);
+  const statusLabel = profile.profileReviewStatus === "in_review" ? "In organizer review"
+    : profile.profileReviewStatus === "changes_requested" ? "Changes requested"
+      : profile.profileReviewStatus === "approved" ? "Approved and locked"
+        : "Draft";
   return (
     <form
       className={`space-y-5 border-[3px] border-[#171714] bg-[#fffdf7] p-5 shadow-[7px_7px_0_#171714] sm:p-7 ${productionFormClass}`}
       onSubmit={submit}
       aria-labelledby="profile-heading"
     >
-      <div>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
         <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#3e268f]">Profile desk / Public identity</p>
         <h2 id="profile-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Speaker profile</h2>
-        <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">This information is used by the event team and, when published, the speaker gallery.</p>
+        <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">This event keeps a reviewed snapshot. It never changes automatically when you edit your reusable profile.</p>
+        </div>
+        <Badge tone={profile.profileReviewStatus === "approved" ? "success" : profile.profileReviewStatus === "changes_requested" ? "danger" : "neutral"}>{statusLabel}</Badge>
       </div>
+      {profile.profileReviewNote && <Alert tone="warning"><AlertTitle>Organizer note</AlertTitle><AlertDescription>{profile.profileReviewNote}</AlertDescription></Alert>}
+      <div className="flex flex-wrap gap-3">
+        <Button className={productionButtonClass} type="button" variant="secondary" disabled={locked || loading} onClick={onImport}>Copy from reusable profile</Button>
+        <a className={`${productionButtonClass} inline-flex items-center px-3 py-2 text-xs font-black uppercase`} href="/speaker/profile">Manage reusable profile</a>
+      </div>
+      <fieldset disabled={locked || loading} className="contents">
       <div className="grid gap-4 sm:grid-cols-2">
         <Input name="displayName" label="Display name" required defaultValue={profile.displayName} />
         <Input name="title" label="Title" defaultValue={profile.title ?? ""} />
         <Input name="company" label="Company" defaultValue={profile.company ?? ""} />
       </div>
       <Textarea name="bio" label="Biography" rows={6} defaultValue={profile.bio ?? ""} />
-      <fieldset className="space-y-3">
-        <legend className="text-xs font-black uppercase tracking-[0.12em] text-[#171714]">Public links</legend>
+      <div className="space-y-3">
+        <p className="text-xs font-black uppercase tracking-[0.12em] text-[#171714]">Public links</p>
         {Array.from({ length: linkCount }, (_, index) => (
           <div key={index} className="grid gap-3 sm:grid-cols-[minmax(8rem,0.4fr)_minmax(0,1fr)]">
             <Input name="linkLabel" aria-label={`Link ${index + 1} label`} placeholder="Website" defaultValue={profile.links[index]?.label ?? ""} />
@@ -616,8 +650,14 @@ function ProfileEditor({
           </div>
         ))}
         <Button className={productionButtonClass} type="button" variant="ghost" size="sm" onClick={() => setLinkCount((count) => count + 1)}>Add another link</Button>
+      </div>
       </fieldset>
-      <Button className={`${productionButtonClass} bg-[#896aff] text-[#171714]`} type="submit" loading={loading}>Save profile</Button>
+      <div className="flex flex-wrap gap-3">
+        <Button className={`${productionButtonClass} bg-[#896aff] text-[#171714]`} type="submit" loading={loading} disabled={locked}>Save profile</Button>
+        {(profile.profileReviewStatus === "draft" || profile.profileReviewStatus === "changes_requested") && (
+          <Button className={`${productionButtonClass} bg-[#caff4a] text-[#171714]`} type="button" loading={loading} onClick={onSubmitReview}>Submit for review</Button>
+        )}
+      </div>
       {profile.pendingSyncFields.length > 0 && (
         <p className="text-sm text-ink-secondary">
           Pending organizer sync: {profile.pendingSyncFields.join(", ")}

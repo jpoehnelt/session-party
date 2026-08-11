@@ -20,6 +20,7 @@ import { RubricScorecard } from "./RubricScorecard";
 
 export interface SubmissionReviewPaneProps {
   readonly eventId: string;
+  readonly eventSlug?: string;
   readonly submission: SubmissionReviewDetail;
   readonly viewerRole: "owner" | "admin" | "reviewer";
   readonly viewerUserId: string;
@@ -149,6 +150,7 @@ function ScoreRationales({
 
 export function SubmissionReviewPane({
   eventId,
+  eventSlug,
   submission,
   viewerRole,
   viewerUserId,
@@ -344,7 +346,17 @@ export function SubmissionReviewPane({
           <span>
             {round?.blind && submission.speakers.length === 0
               ? "Presenter identities hidden for blind review"
-              : submission.speakers.map((speaker) => `${speaker.displayName}${speaker.isPrimary ? " (primary)" : ""}`).join(", ")}
+              : submission.speakers.map((speaker, index) => (
+                <span key={speaker.id}>
+                  {index > 0 && ", "}
+                  {eventSlug ? (
+                    <a className="underline decoration-2 underline-offset-3" href={`/e/${encodeURIComponent(eventSlug)}/speakers/${encodeURIComponent(speaker.id)}`}>
+                      {speaker.displayName}
+                    </a>
+                  ) : speaker.displayName}
+                  {speaker.isPrimary ? " (primary)" : ""}
+                </span>
+              ))}
           </span>
           <span>Submitted {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(submission.submittedAt)} {timezone}</span>
         </div>

@@ -64,6 +64,7 @@ The aggregate onboarding/chase dashboard is product-critical even though the com
 | AI review identity | AI suggestions are `reviews` rows with `ai=true` and no reviewer; only a separate human-authored row enters human evidence. Event-scoped MCP/API keys may request labeled AI suggestions with `reviews:write`, but never human-score, accept, or act on behalf of a reviewer |
 | Committee review | Reviewers see and mutate only proposals with an exact active assignment in the selected round; owner/admin retain committee-wide access. Organizer progress is derived from assignments and human reviews. Recusal is a versioned assignment state with preserved reason/history and permits a later replacement assignment. Rubric score rationale and conversation messages remain distinct records |
 | Institutional memory | Stable IDs survive every JSON projection; submission-speaker links freeze the submitted presenter role plus nullable title/organization-at-time for new records, legacy links receive truthful primary/co-presenter fallbacks rather than guessed custom roles, and the organizer archive includes speakers, submissions, answers, sessions, reviews, decisions, and onboarding evidence |
+| Speaker profile ownership | A speaker owns one reusable cross-event profile with an opt-in public slug. Every event uses an independently reviewed snapshot: reusable-profile changes never drift into an event automatically; speakers deliberately copy them into an editable event draft, submission locks it for organizer review, requested changes reopen it, and approval locks the event version. Event visibility remains a separate organizer-controlled choice. |
 | Internal contention records | `forms.primaryClaim` and `forms.versionClaim` are approved internal-only `domainChanges` records committed atomically with idempotency/audit evidence; they are not semantic operation emits and are never broadcast |
 | Cloudflare account | `jpoehnelt` (`9cfedefc6185f3dad8ab91241b401135`) |
 | Airtable bonus target | Base `apphFjgebe5pq9gez`; initial table `tblA29jIMOPD42pDj`; optional view `viwsCbJ68dks4nb0s` |
@@ -260,7 +261,7 @@ Security defaults adopted by authorization “according to PLAN.md” unless the
 
 - **Review:** reviewers see and score only their exact active assignments. Owners/admins retain committee-wide access. Speakers never see reviewer identities, comments, or scores.
 - **Decision notifications:** accepted and rejected cohorts are selectable separately; dispatch requires explicit review/authorization of exact template, audience, reply-to, and timing, then shows durable queue confirmation.
-- **Public projection:** event name/description/dates/timezone/location/banner/accent; visible speaker name/title/company/bio/headshot/approved links; published talk title/description/time/duration/room/track/public speaker names. Never expose email, form answers, reviews, tasks, assets not explicitly public, audit, or integration state.
+- **Public projection:** event name/description/dates/timezone/location/banner/accent; approved and visible event-speaker name/title/company/bio/headshot/approved links; published talk title/description/time/duration/room/track/public speaker names. An opt-in reusable speaker page may aggregate only event appearances already present in a public speaker publication and talks already present in a public agenda publication. Never expose email, form answers, review notes/state, tasks, assets not explicitly public, audit, or integration state.
 - **Embeds:** sandboxed iframes from `youtube-nocookie.com`, `youtube.com`, `player.vimeo.com`, and `docs.google.com`; no scripts, raw same-origin HTML, or arbitrary providers.
 - **Uploads:** headshots JPEG/PNG/WebP ≤10 MB; slides PDF/PPT/PPTX ≤100 MB; supporting docs PDF/DOC/DOCX ≤25 MB; reject HTML/SVG/executables and serve documents as attachments.
 - **Abuse budgets:** Turnstile in production for magic-link requests and public CFP submission; magic links ≤5/email/hour and ≤20/IP/hour; CFP ≤10/IP/hour and ≤3/normalized-email/form/day; MCP ≤120 requests/key/minute; email ≤500 recipients/event/day after an organizer confirms the campaign/template/audience (scheduled delivery and retries then run automatically); AI ≤200 requests/event/day.
@@ -351,6 +352,8 @@ Organizer:
 Speaker/public:
 
 ```text
+/speaker/profile
+/speakers/:speakerSlug
 /e/:eventSlug/portal/*
 /submit/:eventSlug/:formId
 /embed/:eventSlug/speakers
@@ -374,6 +377,7 @@ One feature directory owns each route and operation prefix. A producer may serve
 | `tasks` | `/e/:eventSlug/tasks` | `tasks.*` | `/events/:eventId/tasks/**`, `/events/:eventId/speakers/:speakerId/task-completions/**` | definitions use owner/admin; completion requires exact speaker-self proof; organizer shell |
 | `resources` | `/e/:eventSlug/resources` | `resources.*` | `/events/:eventId/resources/**` | owner/admin writes; exact event speaker reads; organizer management route |
 | `portal` | `/e/:eventSlug/portal/*` | `portal.*` | `/events/:eventId/portal/**` | browser session plus exact `speakers.userId` ownership; bare; consumes speakers/tasks/resources and owns provisioning orchestration, not their stores |
+| `profiles` | `/speaker/profile`, `/speakers/:speakerSlug` | `profiles.*` | `/speaker-profile`, `/public/speakers/:slug` | reusable profile writes require the exact browser-session owner; public read requires explicit profile visibility and returns only already-public event/talk projections |
 | `dashboard` | `/e/:eventSlug/dashboard` | `dashboard.*` | `/events/:eventId/dashboard/**` | optional best-effort aggregate after portal/tasks/resources and the core walkthrough |
 | `comms` | `/e/:eventSlug/comms` | `comms.*` | `/events/:eventId/comms/**` | owner/admin or communications scope; accepted only with scheduled personalized text/HTML, confirmed-agenda ICS, durable dispatch, and recipient-visible delivery evidence |
 | `integrations` | `/e/:eventSlug/integrations` | `integrations.*` | `/events/:eventId/integrations/**` | owner/admin or integrations scope; Accelevents one-way import is required and fixture/live modes are explicit; Airtable administration is bonus |
@@ -713,7 +717,7 @@ Maximum: one release owner, two demo operators, up to three isolated bug owners.
 The nine brief feature areas define scope, with the dashboard explicitly best-effort:
 
 1. **CFP forms — required:** one primary form with one-or-more track options/routing, optional additional forms, conditional fields, public mobile submission, closed-state and idempotency proof
-2. **Speaker portal — required:** primary-speaker account; accepted submission/profile/tasks together; bio/headshot/slides/supporting docs; task-linked forms; speaker-only resources/wiki with safe embeds; independent co-speaker accounts are P1
+2. **Speaker portal — required:** primary-speaker account; accepted submission/event-locked profile/tasks together; reusable speaker-owned cross-event profile; explicit copy into an event draft; organizer approve/request-changes review; separate event/public visibility controls; bio/headshot/slides/supporting docs; task-linked forms; speaker-only resources/wiki with safe embeds; independent co-speaker accounts are P1
 3. **Communications — required:** accepted/rejected cohort notifications plus bulk outstanding-task reminders; organizers review the exact audience/template/timing and see durable queue confirmation; immutable personalized text/HTML, scheduled reminders, auditable actual dispatch, valid confirmed-agenda ICS with no video link, room details when assigned, and updated invite after schedule changes
 4. **Reviews — required:** rounds, assignments, bounded rubric scores, optional labeled AI assist
 5. **Agenda — required:** backlog, drag/move alternative, room/speaker conflicts, list/day/week/track/room views

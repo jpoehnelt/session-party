@@ -16,6 +16,7 @@ export interface SpeakerGalleryItem {
   bio?: string;
   headshotUrl?: string;
   links?: readonly SpeakerGalleryLink[];
+  profileUrl?: string;
 }
 
 export interface SpeakerGalleryProps {
@@ -67,6 +68,11 @@ export function SpeakerGallery({
                 ))}
               </div>
             )}
+            {speaker.profileUrl && (
+              <a href={speaker.profileUrl} className="mt-3 inline-flex text-sm font-black text-accent-deep underline decoration-2 underline-offset-4">
+                Full speaker profile
+              </a>
+            )}
           </Card>
         </li>
       ))}
@@ -83,6 +89,7 @@ export interface ScheduleListItem {
   startsAt: string;
   durationMin: number;
   speakerNames: readonly string[];
+  speakerProfiles?: readonly { name: string; slug: string }[];
 }
 
 export interface ScheduleListProps {
@@ -123,7 +130,14 @@ export function ScheduleList({
           </div>}
           <div className="min-w-0 px-4 py-4">
             {visible.has("title") && <h3 className="text-lg font-black tracking-[-0.025em] text-ink">{talk.title}</h3>}
-            {visible.has("speakers") && <p className="mt-1 text-sm text-ink-secondary">{talk.speakerNames.join(", ")}</p>}
+            {visible.has("speakers") && (
+              <p className="mt-1 text-sm text-ink-secondary">
+                {talk.speakerNames.map((name, index) => {
+                  const profile = talk.speakerProfiles?.find((candidate) => candidate.name === name);
+                  return <span key={`${name}-${index}`}>{index > 0 ? ", " : ""}{profile ? <a className="font-bold underline decoration-1 underline-offset-2 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(profile.slug)}`}>{name}</a> : name}</span>;
+                })}
+              </p>
+            )}
             {((visible.has("room") && talk.room) || (visible.has("track") && talk.track)) && (
               <p className="mt-1 text-xs text-ink-faint">{[
                 visible.has("room") ? talk.room : null,

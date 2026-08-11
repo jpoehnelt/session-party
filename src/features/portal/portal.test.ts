@@ -18,6 +18,7 @@ import {
   pages,
   speakers,
   speakerContacts,
+  speakerProfiles,
   submissionSpeakers,
   submissions,
   taskCompletions,
@@ -54,17 +55,20 @@ import {
   getSpeakerDirectory,
   logSpeakerContact,
   importSpeakersCsv,
+  importReusableProfile,
   listPortalTasks,
   getPublicSpeakers,
   updateSpeakerProfile,
   updateManagedSpeaker,
   uploadManagedSpeakerHeadshot,
   restoreContentVersion,
+  reviewSpeakerProfile,
   downloadContent,
   sendSpeakerMessages,
   enqueueAutomatedDueTaskReminders,
   provisionSpeaker,
   setTaskCompletion,
+  submitProfileReview,
   updatePortalResource,
   updatePortalTask,
   updateSpeakerPublication,
@@ -1528,5 +1532,66 @@ describe("portal service", () => {
     await publishSpeakerGallery(setup.eventId, [manual.id], 2);
     const hidden = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
     expect(hidden.speakers).toEqual([expect.objectContaining({ id: manual.id, displayName: "Managed keynote" })]);
+  });
+
+  it("copies a reusable profile into an event snapshot and locks it through organizer review", async () => {
+    const setup = await fixture();
+    const db = drizzle(env.DB);
+    const createdAt = new Date();
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    await db.insert(speakerProfiles).values({
+      id: `reusable-${setup.speakerId}`,
+      userId: speakerUser.userId,
+      slug: `reusable-${sequence}`,
+      displayName: "Reusable speaker name",
+      title: "Staff engineer",
+      company: "Portable Profiles",
+      bio: "A complete reusable biography.",
+      headshotUrl: null,
+      links: [{ label: "Website", url: "https://speaker.example.com" }],
+      visible: true,
+      version: 3,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.update(speakers).set({
+      profileReviewStatus: "changes_requested",
+      profileReviewNote: "Please use your current biography.",
+      version: 2,
+      updatedAt: createdAt,
+    }).where(and(eq(speakers.eventId, setup.eventId), eq(speakers.id, setup.speakerId)));
+
+    const imported = await runAs(speakerUser, importReusableProfile({ eventId: setup.eventId, expectedVersion: 2 }));
+    expect(imported).toMatchObject({
+      displayName: "Reusable speaker name",
+      profileSourceVersion: 3,
+      profileReviewStatus: "draft",
+      version: 3,
+    });
+    const submitted = await runAs(speakerUser, submitProfileReview({ eventId: setup.eventId, expectedVersion: 3 }));
+    expect(submitted).toMatchObject({ profileReviewStatus: "in_review", version: 4 });
+    await expectFailure(speakerUser, updateSpeakerProfile({
+      eventId: setup.eventId,
+      expectedVersion: 4,
+      idempotencyKey: `locked-profile-${setup.eventId}`,
+      displayName: "Should not save",
+      title: null,
+      company: null,
+      bio: "Locked biography",
+      links: [],
+    }), "Conflict");
+    const approved = await runAs(owner, reviewSpeakerProfile({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      expectedVersion: 4,
+      decision: "approved",
+      note: null,
+    }));
+    expect(approved).toMatchObject({ profileReviewStatus: "approved", version: 5 });
   });
 });

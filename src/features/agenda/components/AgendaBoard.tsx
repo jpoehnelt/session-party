@@ -9,6 +9,7 @@ import type {
   RealtimeIntentState,
 } from "../schema";
 import { ConflictIndicator } from "./ConflictIndicator";
+import { SpeakerLinks } from "./SpeakerLinks";
 
 export interface AgendaMoveTarget {
   readonly trackId: string | null;
@@ -25,6 +26,7 @@ export interface AgendaBoardProps {
   readonly collaborators?: readonly AgendaCollaborator[];
   readonly presence?: readonly PresenceUser[];
   readonly disabled?: boolean;
+  readonly eventSlug?: string;
   readonly onCreateTalk: (proposal: BacklogProposal) => void;
   readonly onSelectTalk: (talk: AgendaTalk) => void;
   readonly onMoveTalk: (talk: AgendaTalk, target: AgendaMoveTarget) => void;
@@ -86,6 +88,7 @@ export function AgendaBoard({
   collaborators = [],
   presence = [],
   disabled = false,
+  eventSlug,
   onCreateTalk,
   onSelectTalk,
   onMoveTalk,
@@ -307,7 +310,7 @@ export function AgendaBoard({
                     </button>
                   ),
                 },
-                { key: "speakerNames", header: "Speakers", render: (talk) => talk.speakerNames.join(", ") },
+                { key: "speakerNames", header: "Speakers", render: (talk) => <SpeakerLinks eventSlug={eventSlug} speakerIds={talk.speakerIds} speakerNames={talk.speakerNames} /> },
                 {
                   key: "startsAt",
                   header: `Start (${agenda.timezone})`,
@@ -418,7 +421,7 @@ export function AgendaBoard({
                                 <span className="text-[10px] font-black uppercase tracking-[0.1em] text-ink-faint">{talk.durationMin}m</span>
                               </span>
                               <span className="mt-2 block text-base font-black leading-tight tracking-[-0.025em] text-ink">{talk.title}</span>
-                              <span className="mt-1.5 block border-t border-line pt-1.5 text-xs font-semibold text-ink-secondary">{talk.speakerNames.join(", ")}</span>
+                              <SpeakerLinks className="mt-1.5 block border-t border-line pt-1.5 text-xs font-semibold text-ink-secondary" eventSlug={eventSlug} speakerIds={talk.speakerIds} speakerNames={talk.speakerNames} />
                             </button>
                             {collaborator && (
                               <p className="mt-2 bg-production-yellow px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-ink">

@@ -100,6 +100,7 @@ export default function OrganizerTasksRoute() {
       <OrganizerTasksContent
         tasks={state.data.tasks}
         speakers={state.data.speakers}
+        eventSlug={eventSlug}
         busyId={busyId}
         onCreate={(form) => mutate("new", (eventId) => createTask(eventId, createTaskInput(eventId, form)), "Task created")}
         onUpdate={(task, form) => mutate(task.id, (eventId) => updateTask(eventId, updateTaskInput(eventId, task, form)), "Task updated")}
@@ -113,6 +114,7 @@ export default function OrganizerTasksRoute() {
 export function OrganizerTasksContent({
   tasks,
   speakers = [],
+  eventSlug,
   busyId = null,
   onCreate,
   onUpdate,
@@ -120,6 +122,7 @@ export function OrganizerTasksContent({
 }: {
   readonly tasks: readonly PortalTaskDefinition[];
   readonly speakers?: readonly SpeakerDirectoryItem[];
+  readonly eventSlug?: string;
   readonly busyId?: string | null;
   readonly onCreate: (form: HTMLFormElement) => void;
   readonly onUpdate: (task: PortalTaskDefinition, form: HTMLFormElement) => void;
@@ -145,6 +148,7 @@ export function OrganizerTasksContent({
       <Card className={productionCardClass} title="New cue / Create task">
         <TaskFields
           speakers={speakers}
+          eventSlug={eventSlug}
           submitLabel="Create task"
           loading={busyId === "new"}
           onSubmit={(event) => {
@@ -170,6 +174,7 @@ export function OrganizerTasksContent({
                 <TaskFields
                   task={task}
                   speakers={speakers}
+                  eventSlug={eventSlug}
                   submitLabel="Save changes"
                   loading={busyId === task.id}
                   onSubmit={(event) => {
@@ -206,6 +211,7 @@ export function OrganizerTasksContent({
 function TaskFields({
   task,
   speakers = [],
+  eventSlug,
   submitLabel,
   loading,
   onSubmit,
@@ -213,6 +219,7 @@ function TaskFields({
 }: {
   readonly task?: PortalTaskDefinition;
   readonly speakers?: readonly SpeakerDirectoryItem[];
+  readonly eventSlug?: string;
   readonly submitLabel: string;
   readonly loading: boolean;
   readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -239,13 +246,22 @@ function TaskFields({
         <p className="text-xs text-ink-muted">Leave every speaker unchecked to assign this task to all current and future speakers.</p>
         <div className="grid max-h-48 gap-2 overflow-auto sm:grid-cols-2">
           {speakers.map((item) => (
-            <Checkbox
-              key={item.speaker.id}
-              name="speakerIds"
-              value={item.speaker.id}
-              label={`${item.speaker.displayName} · ${item.speaker.workflowStatus}`}
-              defaultChecked={task?.speakerIds.includes(item.speaker.id) ?? false}
-            />
+            <div className="flex items-start justify-between gap-2" key={item.speaker.id}>
+              <Checkbox
+                name="speakerIds"
+                value={item.speaker.id}
+                label={`${item.speaker.displayName} · ${item.speaker.workflowStatus}`}
+                defaultChecked={task?.speakerIds.includes(item.speaker.id) ?? false}
+              />
+              {eventSlug && (
+                <a
+                  className="shrink-0 text-xs font-black uppercase tracking-wide text-accent underline underline-offset-2"
+                  href={`/e/${encodeURIComponent(eventSlug)}/speakers/${encodeURIComponent(item.speaker.id)}`}
+                >
+                  Profile
+                </a>
+              )}
+            </div>
           ))}
         </div>
       </fieldset>

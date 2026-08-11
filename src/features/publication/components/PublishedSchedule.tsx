@@ -233,6 +233,7 @@ export function PublishedSchedule({
                 startsAt: new Date(talk.startsAt).toISOString(),
                 durationMin: talk.durationMin,
                 speakerNames: talk.speakerNames,
+                speakerProfiles: talk.speakerProfiles,
                 ...(talk.description === null ? {} : { description: talk.description }),
                 ...(talk.track === null ? {} : { track: talk.track }),
                 ...(talk.room === null ? {} : { room: talk.room }),

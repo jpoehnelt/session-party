@@ -31,6 +31,7 @@ const agenda: PublishedAgenda = {
       startsAt: START,
       durationMin: 30,
       speakerNames: ["Priya Raman"],
+      speakerProfiles: [{ name: "Priya Raman", slug: "priya-raman" }],
     },
     {
       id: "talk-docs",
@@ -66,6 +67,7 @@ const gallery: PublicSpeakerGallery = {
       company: "Latticework Systems",
       bio: "Priya builds high-scale developer infrastructure.",
       headshotUrl: null,
+      publicProfileSlug: "priya-raman",
       links: [],
     },
     {
@@ -173,6 +175,12 @@ describe("public program", () => {
       expect(markup).toContain("Priya Raman");
       expect(markup).toContain("Principal Engineer");
       expect(markup).toContain("Latticework Systems");
+    }
+  });
+
+  it("links public speaker references to the reusable profile across every public program surface", () => {
+    for (const surface of ["sessions", "agenda", "schedule", "speakers", "gallery"] as const) {
+      expect(render(surface)).toContain('href="/speakers/priya-raman"');
     }
   });
 });

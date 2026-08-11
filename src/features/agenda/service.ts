@@ -15,6 +15,7 @@ import {
   mailDeliverySnapshots,
   rooms,
   speakerProvisioning,
+  speakerProfiles,
   speakers,
   submissionAnswers,
   submissionSpeakers,
@@ -1728,8 +1729,11 @@ export const publishAgenda = (
             speakerId: speakers.id,
             name: speakers.displayName,
             visible: speakers.visible,
+            profileReviewStatus: speakers.profileReviewStatus,
             version: speakers.version,
             updatedAt: speakers.updatedAt,
+            profileSlug: speakerProfiles.slug,
+            profileVisible: speakerProfiles.visible,
           })
           .from(talkSpeakers)
           .innerJoin(
@@ -1740,6 +1744,7 @@ export const publishAgenda = (
             speakers,
             and(eq(speakers.eventId, talkSpeakers.eventId), eq(speakers.id, talkSpeakers.speakerId)),
           )
+          .leftJoin(speakerProfiles, eq(speakerProfiles.id, speakers.profileSourceId))
           .where(and(eq(talkSpeakers.eventId, input.eventId), eq(talks.status, "confirmed")))
           .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id)),
       ),
@@ -1756,10 +1761,13 @@ export const publishAgenda = (
         company: speakers.company,
         bio: speakers.bio,
         headshotAssetId: speakers.headshotAssetId,
+        headshotUrl: speakers.headshotUrl,
+        publicProfileSlug: sql<string | null>`case when ${speakerProfiles.visible} = 1 then ${speakerProfiles.slug} else null end`,
         links: speakers.links,
-      }).from(speakers).where(and(
+      }).from(speakers).leftJoin(speakerProfiles, eq(speakerProfiles.id, speakers.profileSourceId)).where(and(
         eq(speakers.eventId, input.eventId),
         eq(speakers.visible, true),
+        eq(speakers.profileReviewStatus, "approved"),
         inArray(speakers.id, [...eligibleSpeakerIds]),
       )).orderBy(asc(speakers.displayName), asc(speakers.id))),
     ]);
@@ -1781,11 +1789,17 @@ export const publishAgenda = (
     const trackNames = new Map(trackRows.map(({ id, name }) => [id, name] as const));
     const roomNames = new Map(roomRows.map(({ id, name }) => [id, name] as const));
     const visibleSpeakerNames = new Map<string, string[]>();
+    const visibleSpeakerProfiles = new Map<string, { name: string; slug: string }[]>();
     for (const row of speakerRows) {
-      if (!row.visible) continue;
+      if (!row.visible || row.profileReviewStatus !== "approved") continue;
       const names = visibleSpeakerNames.get(row.talkId) ?? [];
       names.push(row.name);
       visibleSpeakerNames.set(row.talkId, names);
+      if (row.profileVisible && row.profileSlug) {
+        const profiles = visibleSpeakerProfiles.get(row.talkId) ?? [];
+        profiles.push({ name: row.name, slug: row.profileSlug });
+        visibleSpeakerProfiles.set(row.talkId, profiles);
+      }
     }
     const confirmedTalks = agendaTalks
       .filter((talk): talk is AgendaTalk & { startsAt: number } =>
@@ -1808,10 +1822,10 @@ export const publishAgenda = (
     }
     const speakerProjection = JSON.stringify(
       speakerRows
-        .map(({ talkId, speakerId, name, visible, version }) => ({
+        .map(({ talkId, speakerId, name, visible, profileReviewStatus, version }) => ({
           talkId,
           speakerId,
-          publicDisplayName: visible ? name : null,
+          publicDisplayName: visible && profileReviewStatus === "approved" ? name : null,
           version,
         }))
         .sort((left, right) =>
@@ -1829,6 +1843,9 @@ export const publishAgenda = (
       startsAt: talk.startsAt,
       durationMin: talk.durationMin,
       speakerNames: visibleSpeakerNames.get(talk.id) ?? [],
+      ...((visibleSpeakerProfiles.get(talk.id)?.length ?? 0) > 0
+        ? { speakerProfiles: visibleSpeakerProfiles.get(talk.id) }
+        : {}),
     }));
     const revision = currentRevision + 1;
     const calendarRevision = calendarProjectionRevision(
@@ -2515,7 +2532,9 @@ export const publishAgenda = (
                 publication_talk_speaker.talk_id,
                 publication_speaker.id as speaker_id,
                 case
-                  when publication_speaker.visible = 1 then publication_speaker.display_name
+                  when publication_speaker.visible = 1
+                    and publication_speaker.profile_review_status = 'approved'
+                    then publication_speaker.display_name
                   else null
                 end as public_name,
                 publication_speaker.version
