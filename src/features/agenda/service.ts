@@ -2532,7 +2532,9 @@ export const publishAgenda = (
                 publication_talk_speaker.talk_id,
                 publication_speaker.id as speaker_id,
                 case
-                  when publication_speaker.visible = 1 then publication_speaker.display_name
+                  when publication_speaker.visible = 1
+                    and publication_speaker.profile_review_status = 'approved'
+                    then publication_speaker.display_name
                   else null
                 end as public_name,
                 publication_speaker.version

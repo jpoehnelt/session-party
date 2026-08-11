@@ -476,7 +476,9 @@ function SpeakersSurface({
                     </span>
                   </span>
                   <Badge tone={sessions.length > 0 ? "accent" : "neutral"}>{sessions.length} {sessions.length === 1 ? "session" : "sessions"}</Badge>
-                  <Button type="button" size="sm" variant="secondary" onClick={() => onSelect(speaker)}>Event details</Button>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => onSelect(speaker)}>
+                    <span className="sr-only">{speaker.displayName} </span>Event details
+                  </Button>
                 </div>
               </li>
             );

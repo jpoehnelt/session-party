@@ -2079,6 +2079,27 @@ describe("agenda service", () => {
     ))).resolves.toHaveLength(0);
   });
 
+  it("publishes a visible in-review speaker as private without tripping the projection interlock", async () => {
+    const seeded = await seedAgenda("publication-speaker-in-review", { scheduled: true });
+    await seeded.db
+      .update(speakers)
+      .set({ profileReviewStatus: "in_review", profileSubmittedAt: new Date(FIXED_NOW) })
+      .where(and(eq(speakers.eventId, seeded.eventId), eq(speakers.id, seeded.speakerA)));
+
+    const publication = await runAs(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publish-speaker-in-review-0001",
+    }));
+
+    expect(publication).toMatchObject({
+      revision: 1,
+      talks: [{ speakerNames: [] }],
+    });
+  });
+
   it("rejects a visible-to-private race without publication evidence and permits a clean retry", async () => {
     const seeded = await seedAgenda("publication-speaker-private-race", { scheduled: true });
     const barrier = publicationBarrier();

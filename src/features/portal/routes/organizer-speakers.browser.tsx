@@ -15,6 +15,7 @@ vi.mock("./api", () => ({
   getSpeakerDirectory: apiMocks.getSpeakerDirectory,
   importSpeakersCsv: vi.fn(),
   provisionSpeaker: vi.fn(),
+  reviewSpeakerProfile: vi.fn(),
   sendSpeakerMessages: apiMocks.sendSpeakerMessages,
   updateManagedSpeaker: vi.fn(),
   updateSpeakerPublication: vi.fn(),
