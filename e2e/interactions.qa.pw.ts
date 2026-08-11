@@ -939,6 +939,114 @@ test("agenda talk editor protects drafts, validates mutations, preserves the pub
   expect(await loadPublicAgenda()).toEqual(publicBefore);
 });
 
+test("agenda card drag-and-drop and keyboard placement move the canonical talk and restore it", async ({ context, page, request, baseURL }, testInfo) => {
+  desktopChromiumOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const agendaPath = `/api/v1/events/${EVENT_ID}/agenda`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  type Talk = Readonly<{
+    id: string;
+    title: string;
+    trackId: string | null;
+    roomId: string | null;
+    startsAt: number | null;
+    durationMin: number;
+    status: "draft" | "confirmed" | "cancelled";
+    version: number;
+  }>;
+  type Agenda = Readonly<{
+    tracks: readonly Readonly<{ id: string; name: string }>[];
+    talks: readonly Talk[];
+  }>;
+  const loadAgenda = async (): Promise<Agenda> => {
+    const response = await request.get(agendaPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<Agenda>;
+  };
+  const initialAgenda = await loadAgenda();
+  const preferredTrackId = initialAgenda.tracks[0]?.id;
+  const initialTalk = initialAgenda.talks.find(({ status, startsAt, trackId }) =>
+    status === "confirmed" && startsAt !== null && trackId === preferredTrackId);
+  expect(initialTalk).toBeDefined();
+  const initialTrackIndex = initialAgenda.tracks.findIndex(({ id }) => id === initialTalk!.trackId);
+  const initialTrack = initialAgenda.tracks[initialTrackIndex];
+  const alternateTrack = initialAgenda.tracks.find(({ id }) => id !== initialTalk!.trackId);
+  expect(initialTrack).toBeDefined();
+  expect(alternateTrack).toBeDefined();
+  const idempotency = (kind: string) => `qa-agenda-drag-${kind}-${Date.now()}`;
+  const editSelector = `button[aria-label^=${JSON.stringify(`Edit ${initialTalk!.title}.`)}]`;
+  const editButton = () => page.locator(editSelector).first();
+  const restore = async (): Promise<void> => {
+    const current = (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id);
+    expect(current).toBeDefined();
+    if (
+      current!.trackId !== initialTalk!.trackId
+      || current!.roomId !== initialTalk!.roomId
+      || current!.startsAt !== initialTalk!.startsAt
+      || current!.durationMin !== initialTalk!.durationMin
+    ) {
+      const response = await request.patch(`${agendaPath}/talks/${current!.id}/position`, {
+        headers: ownerHeaders,
+        data: {
+          trackId: initialTalk!.trackId,
+          roomId: initialTalk!.roomId,
+          startsAt: initialTalk!.startsAt,
+          durationMin: initialTalk!.durationMin,
+          expectedVersion: current!.version,
+          idempotencyKey: idempotency("restore"),
+        },
+      });
+      expect(response.status()).toBe(200);
+    }
+  };
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/agenda");
+  try {
+    await page.getByRole("tab", { name: "Track" }).click();
+    const source = editButton();
+    const invalidTarget = page.getByText(/\d+ active/, { exact: true }).first();
+    const versionBeforeInvalidDrop = initialTalk!.version;
+    let dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+    await source.dispatchEvent("dragstart", { dataTransfer });
+    await invalidTarget.dispatchEvent("dragover", { dataTransfer });
+    await invalidTarget.dispatchEvent("drop", { dataTransfer });
+    await source.dispatchEvent("dragend", { dataTransfer });
+    await expect.poll(async () => (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id)?.version).toBe(versionBeforeInvalidDrop);
+
+    const targetLane = page.getByRole("region", { name: alternateTrack!.name });
+    dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+    await source.dispatchEvent("dragstart", { dataTransfer });
+    await targetLane.dispatchEvent("dragenter", { dataTransfer });
+    await targetLane.dispatchEvent("dragover", { dataTransfer });
+    await targetLane.dispatchEvent("drop", { dataTransfer });
+    await source.dispatchEvent("dragend", { dataTransfer });
+    await expect(page.getByText("Talk moved", { exact: true }).first()).toBeVisible();
+    await expect.poll(async () => (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id)?.trackId).toBe(alternateTrack!.id);
+    await expect(targetLane.locator(editSelector)).toBeVisible();
+
+    const movedEditButton = targetLane.locator(editSelector);
+    await movedEditButton.focus();
+    await movedEditButton.press("Enter");
+    const editor = page.getByRole("dialog", { name: initialTalk!.title });
+    const track = editor.getByLabel("Track");
+    await track.focus();
+    await track.pressSequentially(initialTrack!.name, { delay: 25 });
+    await expect(track).toHaveValue(initialTrack!.id);
+    const save = editor.getByRole("button", { name: "Save schedule" });
+    await save.focus();
+    await save.press("Enter");
+    await expect(page.getByText("Talk scheduled", { exact: true }).first()).toBeVisible();
+    await expect.poll(async () => (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id)?.trackId).toBe(initialTrack!.id);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("h1").waitFor({ state: "visible" });
+    await page.getByRole("tab", { name: "Track" }).click();
+    await expect(page.getByRole("region", { name: initialTrack!.name }).locator(editSelector)).toBeVisible();
+  } finally {
+    await restore();
+  }
+});
+
 test("communications protects unsaved edits and rejects a stale template writer without losing its draft", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/comms");

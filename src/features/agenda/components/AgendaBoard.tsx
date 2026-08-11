@@ -387,26 +387,26 @@ export function AgendaBoard({
                         return (
                           <li
                             key={talk.id}
-                            draggable={!disabled}
-                            onDragStart={(event) => {
-                              setDraggedTalkId(talk.id);
-                              event.dataTransfer.effectAllowed = "move";
-                              event.dataTransfer.setData("text/agenda-talk", talk.id);
-                              onFocusTalk?.(talk);
-                            }}
-                            onDragEnd={() => {
-                              setDraggedTalkId(null);
-                              onReleaseTalk?.();
-                            }}
                             className={`border-2 bg-surface p-3 shadow-[3px_3px_0_#171714] transition motion-reduce:transition-none ${
                               selectedTalkId === talk.id ? "border-accent bg-accent-soft ring-2 ring-accent ring-offset-2" : "border-line-strong"
                             } ${draggedTalkId === talk.id ? "opacity-50" : ""}`}
                           >
                             <button
                               type="button"
+                              draggable={!disabled}
                               className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                               aria-label={`Edit ${talk.title}. ${formattedStart}. Press Enter for move controls.`}
                               onClick={() => onSelectTalk(talk)}
+                              onDragStart={(event) => {
+                                setDraggedTalkId(talk.id);
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/agenda-talk", talk.id);
+                                onFocusTalk?.(talk);
+                              }}
+                              onDragEnd={() => {
+                                setDraggedTalkId(null);
+                                onReleaseTalk?.();
+                              }}
                               onKeyDown={(event) => openWithKeyboard(event, talk)}
                             >
                               <span className="flex items-start justify-between gap-2">
