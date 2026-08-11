@@ -47,7 +47,7 @@ export function filterSpeakerDirectory(
   });
 }
 
-function managedSpeakerInput(eventId: string, form: HTMLFormElement): CreateManagedSpeakerInput {
+function managedSpeakerInput(eventId: string, form: HTMLFormElement): Omit<CreateManagedSpeakerInput, "idempotencyKey"> {
   const values = new FormData(form);
   const nullable = (name: string) => String(values.get(name) ?? "").trim() || null;
   return {
@@ -121,7 +121,10 @@ export default function OrganizerSpeakersRoute() {
             visible ? "Speaker published" : "Speaker hidden",
           )
         }
-        onCreate={(form) => mutate("new", () => createManagedSpeaker(state.data.event.id, managedSpeakerInput(state.data.event.id, form)), "Speaker added")}
+        onCreate={(form) => mutate("new", () => createManagedSpeaker(state.data.event.id, {
+          ...managedSpeakerInput(state.data.event.id, form),
+          idempotencyKey: crypto.randomUUID(),
+        }), "Speaker added")}
         onUpdate={(item, form) => mutate(item.speaker.id, () => updateManagedSpeaker(state.data.event.id, {
           ...managedSpeakerInput(state.data.event.id, form),
           speakerId: item.speaker.id,

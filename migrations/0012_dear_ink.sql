@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX `assets_current_lineage_unique` ON `assets` (`event_id`,`speaker_id`,`purpose`) WHERE "assets"."current" = 1 and "assets"."speaker_id" is not null and "assets"."purpose" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX `speakers_event_contact_email_unique` ON `speakers` (`event_id`,lower("contact_email")) WHERE "speakers"."contact_email" is not null;

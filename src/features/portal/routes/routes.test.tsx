@@ -220,6 +220,7 @@ const contentLibrary: ContentLibrary = {
     version: 2,
     speakerId: profile.id,
     speakerName: profile.displayName,
+    speakerVersion: profile.version,
     current: true,
     supersedesAssetId: "asset-history",
     restoredFromAssetId: null,
@@ -235,6 +236,7 @@ const contentLibrary: ContentLibrary = {
     version: 1,
     speakerId: profile.id,
     speakerName: profile.displayName,
+    speakerVersion: profile.version,
     current: false,
     supersedesAssetId: null,
     restoredFromAssetId: null,
@@ -458,7 +460,7 @@ describe("speaker portal content", () => {
     expect(markup).toContain("Speaker production guide");
     expect(markup).toContain("sandbox=");
     expect(markup).toContain("Save profile");
-    expect(markup).toContain("Up to 10 MiB with the current upload transport");
+    expect(markup).toContain("headshots up to 10 MiB, slides up to 100 MiB, and documents up to 25 MiB");
   });
 
   it("offers incomplete linked forms without bypassing their completion prerequisite", () => {
@@ -583,16 +585,21 @@ describe("speaker portal content", () => {
       contentBase64: "QQ==",
     });
   });
-  it("rejects files over 10 MiB before reading or encoding them", async () => {
+  it("applies purpose-specific upload limits before reading or encoding files", async () => {
     const arrayBuffer = vi.fn();
     const file = {
-      size: PORTAL_UPLOAD_MAX_BYTES + 1,
+      size: PORTAL_UPLOAD_MAX_BYTES.headshot + 1,
       arrayBuffer,
     } as unknown as File;
-    await expect(fileAsBase64(file)).rejects.toThrow(
-      "File exceeds 10 MiB with the current upload transport",
+    await expect(fileAsBase64(file, "headshot")).rejects.toThrow(
+      "File exceeds 10 MiB for headshot",
     );
     expect(arrayBuffer).not.toHaveBeenCalled();
+    const slide = {
+      size: PORTAL_UPLOAD_MAX_BYTES.headshot + 1,
+      arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([65]).buffer),
+    } as unknown as File;
+    await expect(fileAsBase64(slide, "slides")).resolves.toBe("QQ==");
   });
 
 });

@@ -354,11 +354,19 @@ export const CreateManagedSpeakerInput = Schema.Struct({
   bio: NullableText,
   workflowStatus: NonEmptyText,
   visible: Schema.Boolean,
+  idempotencyKey: IdempotencyKey,
 });
 export type CreateManagedSpeakerInput = typeof CreateManagedSpeakerInput.Type;
 
 export const UpdateManagedSpeakerInput = Schema.Struct({
-  ...CreateManagedSpeakerInput.fields,
+  eventId: EntityId,
+  displayName: NonEmptyText,
+  contactEmail: Schema.String.pipe(Schema.pattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)),
+  title: NullableText,
+  company: NullableText,
+  bio: NullableText,
+  workflowStatus: NonEmptyText,
+  visible: Schema.Boolean,
   speakerId: EntityId,
   expectedVersion: Schema.Int.pipe(Schema.positive()),
 });
@@ -418,6 +426,7 @@ export const ContentAsset = Schema.Struct({
   ...PortalAsset.fields,
   speakerId: EntityId,
   speakerName: NonEmptyText,
+  speakerVersion: Schema.Int.pipe(Schema.positive()),
   current: Schema.Boolean,
   supersedesAssetId: Schema.NullOr(EntityId),
   restoredFromAssetId: Schema.NullOr(EntityId),
@@ -443,6 +452,9 @@ export type AddContentCommentInput = typeof AddContentCommentInput.Type;
 export const RestoreContentVersionInput = Schema.Struct({
   eventId: EntityId,
   assetId: EntityId,
+  expectedCurrentAssetId: EntityId,
+  expectedCurrentVersion: Schema.Int.pipe(Schema.positive()),
+  expectedSpeakerVersion: Schema.Int.pipe(Schema.positive()),
   idempotencyKey: IdempotencyKey,
 });
 export type RestoreContentVersionInput = typeof RestoreContentVersionInput.Type;

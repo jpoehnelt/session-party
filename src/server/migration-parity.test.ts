@@ -310,7 +310,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -325,7 +325,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -486,7 +486,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -584,7 +584,7 @@ describe("baseline migration parity", () => {
   it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     await applyOneByOne(db, migrations.slice(0, 10));
     const now = 1_700_000_000_000;
     await db.batch([

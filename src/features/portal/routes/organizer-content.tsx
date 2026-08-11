@@ -102,9 +102,20 @@ export default function OrganizerContentRoute() {
       onComment={(asset, body) => perform(asset.id, () => addContentComment(state.data.event.id, {
         eventId: state.data.event.id, assetId: asset.id, body, idempotencyKey: crypto.randomUUID(),
       }), "Comment added")}
-      onRestore={(asset) => perform(asset.id, () => restoreContentVersion(state.data.event.id, {
-        eventId: state.data.event.id, assetId: asset.id, idempotencyKey: crypto.randomUUID(),
-      }), "Version restored")}
+      onRestore={(asset) => {
+        const current = state.data.assets.find((candidate) =>
+          candidate.speakerId === asset.speakerId && candidate.purpose === asset.purpose && candidate.current
+        );
+        if (!current) return Promise.resolve();
+        return perform(asset.id, () => restoreContentVersion(state.data.event.id, {
+          eventId: state.data.event.id,
+          assetId: asset.id,
+          expectedCurrentAssetId: current.id,
+          expectedCurrentVersion: current.version,
+          expectedSpeakerVersion: asset.speakerVersion,
+          idempotencyKey: crypto.randomUUID(),
+        }), "Version restored");
+      }}
       onDownload={(asset) => perform(`download:${asset.id}`, async () => {
         const output = await fetchAsset(asset);
         saveBlob(output.asset.filename, fromBase64(output.contentBase64), output.asset.contentType);

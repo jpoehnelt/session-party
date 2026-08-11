@@ -812,7 +812,8 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
         "company",
         "bio",
         "workflowStatus",
-        "visible"
+        "visible",
+        "idempotencyKey"
       ],
       "path": [
         "eventId"
@@ -1032,6 +1033,9 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
   {
     "input": {
       "body": [
+        "expectedCurrentAssetId",
+        "expectedCurrentVersion",
+        "expectedSpeakerVersion",
         "idempotencyKey"
       ],
       "path": [
@@ -10292,6 +10296,13 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "title": "maxLength(255)",
           "type": "string"
         },
+        "idempotencyKey": {
+          "description": "a string at most 255 character(s) long",
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "maxLength(255)",
+          "type": "string"
+        },
         "title": {
           "anyOf": [
             {
@@ -10321,7 +10332,8 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "company",
         "bio",
         "workflowStatus",
-        "visible"
+        "visible",
+        "idempotencyKey"
       ],
       "type": "object"
     },
@@ -10855,6 +10867,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "title": "maxLength(500)",
                 "type": "string"
               },
+              "speakerVersion": {
+                "$ref": "#/$defs/Int",
+                "description": "a positive number",
+                "exclusiveMinimum": 0,
+                "title": "positive"
+              },
               "supersedesAssetId": {
                 "anyOf": [
                   {
@@ -10892,6 +10910,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "version",
               "speakerId",
               "speakerName",
+              "speakerVersion",
               "current",
               "supersedesAssetId",
               "restoredFromAssetId",
@@ -14243,6 +14262,13 @@ export const mcpTools: readonly McpToolDescriptor[] = [
   {
     "description": "Restore a retained speaker content version without deleting history.",
     "inputSchema": {
+      "$defs": {
+        "Int": {
+          "description": "an integer",
+          "title": "int",
+          "type": "integer"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
@@ -14260,6 +14286,25 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "title": "maxLength(255)",
           "type": "string"
         },
+        "expectedCurrentAssetId": {
+          "description": "a string at most 255 character(s) long",
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "maxLength(255)",
+          "type": "string"
+        },
+        "expectedCurrentVersion": {
+          "$ref": "#/$defs/Int",
+          "description": "a positive number",
+          "exclusiveMinimum": 0,
+          "title": "positive"
+        },
+        "expectedSpeakerVersion": {
+          "$ref": "#/$defs/Int",
+          "description": "a positive number",
+          "exclusiveMinimum": 0,
+          "title": "positive"
+        },
         "idempotencyKey": {
           "description": "a string at most 255 character(s) long",
           "maxLength": 255,
@@ -14271,6 +14316,9 @@ export const mcpTools: readonly McpToolDescriptor[] = [
       "required": [
         "eventId",
         "assetId",
+        "expectedCurrentAssetId",
+        "expectedCurrentVersion",
+        "expectedSpeakerVersion",
         "idempotencyKey"
       ],
       "type": "object"
@@ -14395,6 +14443,12 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "title": "maxLength(500)",
           "type": "string"
         },
+        "speakerVersion": {
+          "$ref": "#/$defs/Int",
+          "description": "a positive number",
+          "exclusiveMinimum": 0,
+          "title": "positive"
+        },
         "supersedesAssetId": {
           "anyOf": [
             {
@@ -14432,6 +14486,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "version",
         "speakerId",
         "speakerName",
+        "speakerVersion",
         "current",
         "supersedesAssetId",
         "restoredFromAssetId",
@@ -34068,6 +34123,12 @@ export const openApi = {
                             "title": "maxLength(500)",
                             "type": "string"
                           },
+                          "speakerVersion": {
+                            "$ref": "#/$defs/Int",
+                            "description": "a positive number",
+                            "exclusiveMinimum": 0,
+                            "title": "positive"
+                          },
                           "supersedesAssetId": {
                             "anyOf": [
                               {
@@ -34105,6 +34166,7 @@ export const openApi = {
                           "version",
                           "speakerId",
                           "speakerName",
+                          "speakerVersion",
                           "current",
                           "supersedesAssetId",
                           "restoredFromAssetId",
@@ -34541,6 +34603,12 @@ export const openApi = {
                           "title": "maxLength(500)",
                           "type": "string"
                         },
+                        "speakerVersion": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a positive number",
+                          "exclusiveMinimum": 0,
+                          "title": "positive"
+                        },
                         "supersedesAssetId": {
                           "anyOf": [
                             {
@@ -34578,6 +34646,7 @@ export const openApi = {
                         "version",
                         "speakerId",
                         "speakerName",
+                        "speakerVersion",
                         "current",
                         "supersedesAssetId",
                         "restoredFromAssetId",
@@ -34646,6 +34715,25 @@ export const openApi = {
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "expectedCurrentAssetId": {
+                    "description": "a string at most 255 character(s) long",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "title": "maxLength(255)",
+                    "type": "string"
+                  },
+                  "expectedCurrentVersion": {
+                    "$ref": "#/$defs/Int",
+                    "description": "a positive number",
+                    "exclusiveMinimum": 0,
+                    "title": "positive"
+                  },
+                  "expectedSpeakerVersion": {
+                    "$ref": "#/$defs/Int",
+                    "description": "a positive number",
+                    "exclusiveMinimum": 0,
+                    "title": "positive"
+                  },
                   "idempotencyKey": {
                     "description": "a string at most 255 character(s) long",
                     "maxLength": 255,
@@ -34655,6 +34743,9 @@ export const openApi = {
                   }
                 },
                 "required": [
+                  "expectedCurrentAssetId",
+                  "expectedCurrentVersion",
+                  "expectedSpeakerVersion",
                   "idempotencyKey"
                 ],
                 "type": "object"
@@ -34785,6 +34876,12 @@ export const openApi = {
                       "title": "maxLength(500)",
                       "type": "string"
                     },
+                    "speakerVersion": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a positive number",
+                      "exclusiveMinimum": 0,
+                      "title": "positive"
+                    },
                     "supersedesAssetId": {
                       "anyOf": [
                         {
@@ -34822,6 +34919,7 @@ export const openApi = {
                     "version",
                     "speakerId",
                     "speakerName",
+                    "speakerVersion",
                     "current",
                     "supersedesAssetId",
                     "restoredFromAssetId",
@@ -34853,7 +34951,7 @@ export const openApi = {
           "eventId": "eventId",
           "kind": "event"
         },
-        "x-concurrency": "none",
+        "x-concurrency": "required",
         "x-emits": [
           "portal.asset.version.restored"
         ],
@@ -37876,6 +37974,13 @@ export const openApi = {
                     "title": "maxLength(500)",
                     "type": "string"
                   },
+                  "idempotencyKey": {
+                    "description": "a string at most 255 character(s) long",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "title": "maxLength(255)",
+                    "type": "string"
+                  },
                   "title": {
                     "anyOf": [
                       {
@@ -37904,7 +38009,8 @@ export const openApi = {
                   "company",
                   "bio",
                   "workflowStatus",
-                  "visible"
+                  "visible",
+                  "idempotencyKey"
                 ],
                 "type": "object"
               }
@@ -38092,7 +38198,7 @@ export const openApi = {
         "x-emits": [
           "portal.speaker.managed.created"
         ],
-        "x-idempotency": "none",
+        "x-idempotency": "required",
         "x-operation-kind": "command"
       }
     },
@@ -39146,6 +39252,12 @@ export const openApi = {
                       "title": "maxLength(500)",
                       "type": "string"
                     },
+                    "speakerVersion": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a positive number",
+                      "exclusiveMinimum": 0,
+                      "title": "positive"
+                    },
                     "supersedesAssetId": {
                       "anyOf": [
                         {
@@ -39183,6 +39295,7 @@ export const openApi = {
                     "version",
                     "speakerId",
                     "speakerName",
+                    "speakerVersion",
                     "current",
                     "supersedesAssetId",
                     "restoredFromAssetId",

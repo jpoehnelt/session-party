@@ -103,6 +103,9 @@ export const assets = sqliteTable(
   },
   (t) => [
     uniqueIndex("assets_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("assets_current_lineage_unique")
+      .on(t.eventId, t.speakerId, t.purpose)
+      .where(sql`${t.current} = 1 and ${t.speakerId} is not null and ${t.purpose} is not null`),
     index("assets_event").on(t.eventId),
     index("assets_speaker_purpose").on(t.eventId, t.speakerId, t.purpose, t.current),
     index("assets_uploader").on(t.uploaderUserId),
@@ -370,6 +373,9 @@ export const speakers = sqliteTable(
   (t) => [
     uniqueIndex("speakers_event_id_unique").on(t.eventId, t.id),
     uniqueIndex("speakers_event_user_unique").on(t.eventId, t.userId),
+    uniqueIndex("speakers_event_contact_email_unique")
+      .on(t.eventId, sql`lower(${t.contactEmail})`)
+      .where(sql`${t.contactEmail} is not null`),
     index("speakers_event_visible").on(t.eventId, t.visible),
     index("speakers_user").on(t.userId),
     foreignKey({ columns: [t.eventId, t.headshotAssetId], foreignColumns: [assets.eventId, assets.id], name: "speakers_headshot_fk" })

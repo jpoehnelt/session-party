@@ -130,9 +130,9 @@ const createManagedSpeakerOperation = {
   output: SpeakerProfile,
   authorize: organizerSpeakerWrite,
   invoke: createManagedSpeaker,
-  rest: { method: "post", path: "/events/:eventId/portal/speakers", input: { path: ["eventId"], body: ["displayName", "contactEmail", "title", "company", "bio", "workflowStatus", "visible"] }, summary: "Add a speaker directly to the event", successStatus: 201 },
+  rest: { method: "post", path: "/events/:eventId/portal/speakers", input: { path: ["eventId"], body: ["displayName", "contactEmail", "title", "company", "bio", "workflowStatus", "visible", "idempotencyKey"] }, summary: "Add a speaker directly to the event", successStatus: 201 },
   mcp: { name: "portal_create_managed_speaker", description: "Add a directly managed event speaker without requiring a CFP acceptance." },
-  idempotency: "none",
+  idempotency: "required",
   concurrency: "none",
   emits: ["portal.speaker.managed.created"],
 } as const satisfies AnyOperationDef;
@@ -185,10 +185,10 @@ const restoreContentVersionOperation = {
   output: ContentAsset,
   authorize: organizerContentWrite,
   invoke: restoreContentVersion,
-  rest: { method: "post", path: "/events/:eventId/portal/content/:assetId/restore", input: { path: ["eventId", "assetId"], body: ["idempotencyKey"] }, summary: "Restore a historical content version as the new current version", successStatus: 201 },
+  rest: { method: "post", path: "/events/:eventId/portal/content/:assetId/restore", input: { path: ["eventId", "assetId"], body: ["expectedCurrentAssetId", "expectedCurrentVersion", "expectedSpeakerVersion", "idempotencyKey"] }, summary: "Restore a historical content version as the new current version", successStatus: 201 },
   mcp: { name: "portal_restore_content_version", description: "Restore a retained speaker content version without deleting history." },
   idempotency: "required",
-  concurrency: "none",
+  concurrency: "required",
   emits: ["portal.asset.version.restored"],
 } as const satisfies AnyOperationDef;
 
