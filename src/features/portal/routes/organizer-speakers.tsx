@@ -135,12 +135,25 @@ export default function OrganizerSpeakersRoute() {
           csv,
           idempotencyKey: crypto.randomUUID(),
         }), "Speaker CSV imported")}
-        onMessage={(speakerIds, kind) => mutate("messages", () => sendSpeakerMessages(state.data.event.id, {
-          eventId: state.data.event.id,
-          speakerIds: speakerIds as SendSpeakerMessagesInput["speakerIds"],
-          kind,
-          idempotencyKey: crypto.randomUUID(),
-        }), kind === "invite" ? "Invitations queued" : "Reminders queued")}
+        onMessage={(speakerIds, kind) => {
+          const recipients = state.data.speakers
+            .filter((item) => speakerIds.includes(item.speaker.id))
+            .map((item) => item.speaker.displayName)
+            .join(", ");
+          const authorized = window.confirm(
+            `Queue ${kind === "invite" ? "portal invitation" : "outstanding-task reminder"} emails now?\n\n`
+            + `Audience: ${recipients}\n`
+            + `Template: personalized ${kind === "invite" ? "portal access link" : "task count, next due task, and portal link"}\n`
+            + "Reply-to: none\nDelivery: immediately after the durable outbox commit",
+          );
+          if (!authorized) return;
+          return mutate("messages", () => sendSpeakerMessages(state.data.event.id, {
+            eventId: state.data.event.id,
+            speakerIds: speakerIds as SendSpeakerMessagesInput["speakerIds"],
+            kind,
+            idempotencyKey: crypto.randomUUID(),
+          }), kind === "invite" ? "Invitations queued" : "Reminders queued");
+        }}
         onUploadHeadshot={(item, file) => mutate(item.speaker.id, async () => uploadManagedSpeakerHeadshot(state.data.event.id, {
           eventId: state.data.event.id,
           speakerId: item.speaker.id,

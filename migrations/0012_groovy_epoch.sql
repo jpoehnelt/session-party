@@ -12,4 +12,26 @@ CREATE TABLE `managed_speaker_emails` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `managed_speaker_emails_event_email_unique` ON `managed_speaker_emails` (`event_id`,`normalized_email`);--> statement-breakpoint
 CREATE UNIQUE INDEX `managed_speaker_emails_event_speaker_unique` ON `managed_speaker_emails` (`event_id`,`speaker_id`);--> statement-breakpoint
+UPDATE `assets`
+SET `current` = 0
+WHERE `current` = 1
+  AND `speaker_id` IS NOT NULL
+  AND `purpose` IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM `assets` AS `preferred`
+    WHERE `preferred`.`event_id` = `assets`.`event_id`
+      AND `preferred`.`speaker_id` = `assets`.`speaker_id`
+      AND `preferred`.`purpose` = `assets`.`purpose`
+      AND `preferred`.`current` = 1
+      AND (
+        `preferred`.`version` > `assets`.`version`
+        OR (`preferred`.`version` = `assets`.`version` AND `preferred`.`created_at` > `assets`.`created_at`)
+        OR (
+          `preferred`.`version` = `assets`.`version`
+          AND `preferred`.`created_at` = `assets`.`created_at`
+          AND `preferred`.`id` > `assets`.`id`
+        )
+      )
+  );--> statement-breakpoint
 CREATE UNIQUE INDEX `assets_current_lineage_unique` ON `assets` (`event_id`,`speaker_id`,`purpose`) WHERE "assets"."current" = 1 and "assets"."speaker_id" is not null and "assets"."purpose" is not null;

@@ -269,7 +269,7 @@ const eligibleProvisionedSpeakerIds = (
 ): Effect.Effect<ReadonlySet<string>, External, Db> => Effect.gen(function* () {
   if (eventIds.length === 0) return new Set<string>();
   const { db } = yield* Db;
-  const [acceptances, provisioning] = yield* Effect.all([
+  const [acceptances, provisioning, managed] = yield* Effect.all([
     database(() => db.select({
       id: acceptanceEvents.id,
       eventId: acceptanceEvents.eventId,
@@ -282,6 +282,9 @@ const eligibleProvisionedSpeakerIds = (
       acceptanceEventId: speakerProvisioning.acceptanceEventId,
       status: speakerProvisioning.status,
     }).from(speakerProvisioning).where(inArray(speakerProvisioning.eventId, eventIds))),
+    database(() => db.select({ speakerId: managedSpeakerEmails.speakerId })
+      .from(managedSpeakerEmails)
+      .where(inArray(managedSpeakerEmails.eventId, eventIds))),
   ]);
   const latestBySubmission = new Map<string, (typeof acceptances)[number]>();
   for (const acceptance of acceptances) {
@@ -291,11 +294,14 @@ const eligibleProvisionedSpeakerIds = (
   const provisioned = new Set(provisioning
     .filter((row) => row.status === "provisioned")
     .map((row) => row.acceptanceEventId));
-  return new Set([...latestBySubmission.values()].flatMap((acceptance) =>
+  return new Set([
+    ...managed.map((row) => row.speakerId),
+    ...[...latestBySubmission.values()].flatMap((acceptance) =>
     acceptance.type === "accepted" && acceptance.primarySpeakerId && provisioned.has(acceptance.id)
       ? [acceptance.primarySpeakerId]
       : []
-  ));
+    ),
+  ]);
 });
 
 const taskDefinitionView = (
@@ -483,7 +489,10 @@ const selfSpeaker = (eventId: string) => Effect.gen(function* () {
     eq(speakers.userId, actor.userId),
   )).limit(1));
   if (!speaker) return yield* Effect.fail(new Forbidden({ reason: "This browser session is not linked to a speaker for this event" }));
-  const acceptance = yield* loadCurrentProvisioning(eventId, speaker.id);
+  const [managedIdentity] = yield* database(() => db.select({ id: managedSpeakerEmails.id }).from(managedSpeakerEmails).where(and(
+    eq(managedSpeakerEmails.eventId, eventId), eq(managedSpeakerEmails.speakerId, speaker.id),
+  )).limit(1));
+  const acceptance = managedIdentity ? null : yield* loadCurrentProvisioning(eventId, speaker.id);
   return { actor, speaker, acceptance };
 });
 
@@ -1142,9 +1151,85 @@ export const claimSpeaker = (
     typeof answer.value === "string" && normalizedEmail(answer.value) === email
   );
   if (matches.length === 0) {
-    return yield* Effect.fail(
-      new Forbidden({ reason: "No current accepted primary speaker matches this account email" }),
+    const [managed] = yield* database(() => db.select({ speaker: speakers }).from(managedSpeakerEmails)
+      .innerJoin(speakers, and(
+        eq(speakers.eventId, managedSpeakerEmails.eventId),
+        eq(speakers.id, managedSpeakerEmails.speakerId),
+      ))
+      .where(and(
+        eq(managedSpeakerEmails.eventId, event.id),
+        eq(managedSpeakerEmails.normalizedEmail, email),
+      ))
+      .limit(1));
+    if (!managed) {
+      return yield* Effect.fail(
+        new Forbidden({ reason: "No current accepted or directly managed speaker matches this account email" }),
+      );
+    }
+    if (managed.speaker.userId !== null && managed.speaker.userId !== actor.userId) {
+      return yield* Effect.fail(new Conflict({ message: "This managed speaker is already linked to another account" }));
+    }
+    const managedResult = (speakerVersion: number): ClaimSpeakerOutput => ({
+      eventId: event.id,
+      speakerId: managed.speaker.id,
+      acceptanceEventId: null,
+      provisioningId: null,
+      speakerVersion,
+      provisioningVersion: 0,
+      provisioningStatus: "provisioned",
+    });
+    if (managed.speaker.userId === actor.userId) return managedResult(managed.speaker.version);
+
+    const claimedAt = now();
+    const nextVersion = managed.speaker.version + 1;
+    const result = managedResult(nextVersion);
+    const idempotency = idempotencyInsert(
+      event.id, "portal.claimSpeaker", actor.userId, keyHash, requestHash, claimedAt,
     );
+    const requestId = id("portal_request");
+    const change = writeChange(
+      event.id, "speaker", managed.speaker.id, nextVersion, "portal.speaker.claimed",
+      { speakerId: managed.speaker.id, userId: actor.userId, source: "manual" },
+      actor, claimedAt, requestId, idempotency.id,
+    );
+    const committed = yield* database(() => db.batch([
+      db.insert(idempotencyRecords).values(idempotency),
+      db.update(speakers).set({
+        userId: actor.userId, version: nextVersion, updatedAt: claimedAt,
+      }).where(and(
+        eq(speakers.eventId, event.id),
+        eq(speakers.id, managed.speaker.id),
+        eq(speakers.version, managed.speaker.version),
+        isNull(speakers.userId),
+        sql`exists (
+          select 1 from managed_speaker_emails as managed_claim
+          where managed_claim.event_id = ${event.id}
+            and managed_claim.speaker_id = ${managed.speaker.id}
+            and managed_claim.normalized_email = ${email}
+        )`,
+      )).returning({ id: speakers.id }),
+      db.insert(domainChanges).values(change),
+      db.insert(auditLog).values({
+        id: id("audit"), eventId: event.id, requestId,
+        actorUserId: actor.actorUserId, actorApiKeyId: null,
+        action: "portal.speaker.claimed", resourceType: "speaker", resourceId: managed.speaker.id,
+        before: { userId: null, speakerVersion: managed.speaker.version, source: "manual" },
+        after: { userId: actor.userId, speakerVersion: nextVersion, source: "manual" },
+        metadata: null, occurredAt: claimedAt,
+      }),
+      db.update(idempotencyRecords).set({
+        status: "completed", responseStatus: 200, responseBody: result,
+        completedAt: claimedAt,
+      }).where(eq(idempotencyRecords.id, idempotency.id)),
+    ])).pipe(Effect.either);
+    if (committed._tag === "Right" && (committed.right[1] as { id: string }[])[0]) return result;
+    const [currentManaged] = yield* database(() => db.select({ userId: speakers.userId, version: speakers.version })
+      .from(speakers).where(and(
+        eq(speakers.eventId, event.id), eq(speakers.id, managed.speaker.id),
+      )).limit(1));
+    if (currentManaged?.userId === actor.userId) return managedResult(currentManaged.version);
+    if (committed._tag === "Left") return yield* Effect.fail(committed.left);
+    return yield* Effect.fail(new Conflict({ message: "The managed speaker claim changed; retry from the latest event state" }));
   }
   if (matches.length > 1) {
     return yield* Effect.fail(
@@ -1529,7 +1614,9 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
   return {
     event: eventView(event),
     speaker: speakerView(speaker, pending),
-    submission: { id: acceptance.submission.id, title: acceptance.submission.title, category: acceptance.submission.category, version: acceptance.submission.version },
+    submission: acceptance
+      ? { id: acceptance.submission.id, title: acceptance.submission.title, category: acceptance.submission.category, version: acceptance.submission.version }
+      : null,
     provisioningStatus: "provisioned",
     tasks: progress.taskViews,
     resources: resources.map(resourceView),
@@ -2830,10 +2917,26 @@ export const createManagedSpeaker = (input: CreateManagedSpeakerInput): Effect.E
 export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.Effect<SpeakerProfile, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
   const actor = yield* organizer(input.eventId, "speakers:write");
   const { db } = yield* Db;
-  const [existing] = yield* database(() => db.select().from(speakers).where(and(
-    eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
-  )).limit(1));
+  const [existingRows, managedRows, airtableRows] = yield* Effect.all([
+    database(() => db.select().from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+    )).limit(1)),
+    database(() => db.select({ id: managedSpeakerEmails.id }).from(managedSpeakerEmails).where(and(
+      eq(managedSpeakerEmails.eventId, input.eventId), eq(managedSpeakerEmails.speakerId, input.speakerId),
+    )).limit(1)),
+    database(() => db.select({ id: airtableRecordLinks.id }).from(airtableRecordLinks).where(and(
+      eq(airtableRecordLinks.eventId, input.eventId),
+      eq(airtableRecordLinks.entityType, "speaker"),
+      eq(airtableRecordLinks.entityId, input.speakerId),
+    )).limit(1)),
+  ]);
+  const existing = existingRows[0];
   if (!existing) return yield* Effect.fail(new NotFound({ entity: "speaker", id: input.speakerId }));
+  if (!managedRows[0] || airtableRows[0]) {
+    return yield* Effect.fail(new Conflict({
+      message: "Only directly managed, non-Airtable speaker profiles can be edited here",
+    }));
+  }
   if (existing.version !== input.expectedVersion) return yield* Effect.fail(new Conflict({ message: "Speaker changed; reload before saving" }));
   const contactEmail = input.contactEmail.trim().toLowerCase();
   const duplicate = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
@@ -2884,7 +2987,17 @@ export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.E
     }),
     db.insert(domainChanges).select(db.select(changeSelection(change)).from(speakers).where(and(
       eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
-      or(ne(speakers.version, version), ne(speakers.contactEmail, contactEmail)),
+      or(
+        ne(speakers.version, version),
+        ne(speakers.contactEmail, contactEmail),
+        ne(speakers.displayName, values.displayName),
+        sql`${speakers.title} is not ${values.title}`,
+        sql`${speakers.company} is not ${values.company}`,
+        sql`${speakers.bio} is not ${values.bio}`,
+        ne(speakers.workflowStatus, values.workflowStatus),
+        ne(speakers.visible, values.visible),
+        ne(speakers.updatedAt, updatedAt),
+      ),
     ))),
     db.insert(auditLog).select(db.select({
       id: sql<string>`${audit.id}`.as("id"),
@@ -2905,11 +3018,19 @@ export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.E
     ))),
   ])).pipe(Effect.either);
   if (committed._tag === "Left") {
-    const [emailOwner] = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
+    const [emailOwner, currentRows] = yield* Effect.all([
+      database(() => db.select({ id: speakers.id }).from(speakers).where(and(
       eq(speakers.eventId, input.eventId), sql`lower(${speakers.contactEmail}) = ${contactEmail}`,
-    )).limit(1));
+      )).limit(1).then((rows) => rows[0])),
+      database(() => db.select({ version: speakers.version }).from(speakers).where(and(
+        eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+      )).limit(1)),
+    ]);
     if (emailOwner && emailOwner.id !== input.speakerId) {
       return yield* Effect.fail(new Conflict({ message: "A speaker with this contact email already exists" }));
+    }
+    if (currentRows[0]?.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Speaker changed; reload before saving" }));
     }
     return yield* Effect.fail(committed.left);
   }
@@ -3024,7 +3145,16 @@ export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<
   const bioIndex = indexOf("bio", "biography");
   const statusIndex = indexOf("workflowstatus", "status");
   const visibleIndex = indexOf("visible", "published");
-  const existing = yield* database(() => db.select().from(speakers).where(eq(speakers.eventId, input.eventId)));
+  const [existing, managedClaims, airtableLinks] = yield* Effect.all([
+    database(() => db.select().from(speakers).where(eq(speakers.eventId, input.eventId))),
+    database(() => db.select({ speakerId: managedSpeakerEmails.speakerId }).from(managedSpeakerEmails)
+      .where(eq(managedSpeakerEmails.eventId, input.eventId))),
+    database(() => db.select({ entityId: airtableRecordLinks.entityId }).from(airtableRecordLinks).where(and(
+      eq(airtableRecordLinks.eventId, input.eventId), eq(airtableRecordLinks.entityType, "speaker"),
+    ))),
+  ]);
+  const directlyManaged = new Set(managedClaims.map((claim) => claim.speakerId));
+  const airtableOwned = new Set(airtableLinks.map((link) => link.entityId));
   const byEmail = new Map(existing.flatMap((speaker) => speaker.contactEmail ? [[speaker.contactEmail.toLowerCase(), speaker] as const] : []));
   const seen = new Set<string>();
   const createdAt = now();
@@ -3046,6 +3176,10 @@ export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<
     const visible = !["false", "0", "no", "hidden"].includes(visibleValue);
     const prior = byEmail.get(contactEmail);
     if (prior) {
+      if (!directlyManaged.has(prior.id) || airtableOwned.has(prior.id)) {
+        skippedCount += 1;
+        continue;
+      }
       updates.push({ existing: prior, values: {
         displayName, title: nullableAt(titleIndex), company: nullableAt(companyIndex), bio: nullableAt(bioIndex),
         workflowStatus, visible, version: prior.version + 1, updatedAt: createdAt,
@@ -3071,7 +3205,13 @@ export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<
     input.eventId, "speaker", profile.id, profile.version, "portal.speaker.csv.imported",
     { speakerId: profile.id }, actor, createdAt, requestId, record.id,
   )]));
-  const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [db.insert(idempotencyRecords).values(record)];
+  const reservation = yield* database(() => db.insert(idempotencyRecords).values(record)).pipe(Effect.either);
+  if (reservation._tag === "Left") {
+    const racedReplay = yield* findReplay(input.eventId, "portal.importSpeakersCsv", principalId, keyHash, requestHash);
+    if (racedReplay !== null) return { ...(yield* decodeReplay(ImportSpeakersCsvOutputSchema, racedReplay)), idempotent: true };
+    return yield* Effect.fail(reservation.left);
+  }
+  const statements: BatchItem<"sqlite">[] = [];
   if (inserts.length > 0) {
     statements.push(db.insert(speakers).values(inserts));
     statements.push(db.insert(managedSpeakerEmails).values(inserts.map((speaker) => ({
@@ -3094,7 +3234,16 @@ export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<
       createdAt, updatedAt: createdAt,
     }), db.insert(domainChanges).values(change), db.insert(domainChanges).select(
       db.select(changeSelection(change)).from(speakers).where(and(
-        eq(speakers.eventId, input.eventId), eq(speakers.id, update.existing.id), ne(speakers.version, nextVersion),
+        eq(speakers.eventId, input.eventId), eq(speakers.id, update.existing.id), or(
+          ne(speakers.version, nextVersion),
+          ne(speakers.displayName, update.values.displayName!),
+          sql`${speakers.title} is not ${update.values.title ?? null}`,
+          sql`${speakers.company} is not ${update.values.company ?? null}`,
+          sql`${speakers.bio} is not ${update.values.bio ?? null}`,
+          ne(speakers.workflowStatus, update.values.workflowStatus!),
+          ne(speakers.visible, update.values.visible!),
+          ne(speakers.updatedAt, createdAt),
+        ),
       )),
     ));
   }
@@ -3107,7 +3256,7 @@ export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<
     }),
     db.update(idempotencyRecords).set({ status: "completed", responseStatus: 200, responseBody: output, completedAt: createdAt }).where(eq(idempotencyRecords.id, record.id)),
   );
-  const committed = yield* database(() => db.batch(statements)).pipe(Effect.either);
+  const committed = yield* database(() => db.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]])).pipe(Effect.either);
   if (committed._tag === "Left") {
     const racedReplay = yield* findReplay(input.eventId, "portal.importSpeakersCsv", principalId, keyHash, requestHash);
     if (racedReplay !== null) return { ...(yield* decodeReplay(ImportSpeakersCsvOutputSchema, racedReplay)), idempotent: true };
@@ -3390,7 +3539,14 @@ export const addContentComment = (input: AddContentCommentInput): Effect.Effect<
   return comment;
 });
 
-export const restoreContentVersion = (input: RestoreContentVersionInput): Effect.Effect<ContentAsset, AppError, Db | CurrentUser | Authorizer | Files> => Effect.gen(function* () {
+export interface RestoreContentVersionTestHooks {
+  readonly beforeCommit?: () => Promise<void>;
+}
+
+export const restoreContentVersion = (
+  input: RestoreContentVersionInput,
+  testHooks?: RestoreContentVersionTestHooks,
+): Effect.Effect<ContentAsset, AppError, Db | CurrentUser | Authorizer | Files> => Effect.gen(function* () {
   const actor = yield* organizer(input.eventId, "content:write");
   const { db } = yield* Db;
   const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
@@ -3455,6 +3611,11 @@ export const restoreContentVersion = (input: RestoreContentVersionInput): Effect
     typeof completion.data === "object" && completion.data !== null && !Array.isArray(completion.data) && Reflect.get(completion.data, "assetId") === current.id
   );
   const requestId = id("portal_request");
+  const restoreChange = writeChange(
+    input.eventId, "asset", restoredId, 1, "portal.asset.version.restored",
+    { speakerId: source.speaker.id, restoredFromAssetId: source.asset.id, supersedesAssetId: current.id },
+    actor, restoredAt, requestId, record.id,
+  );
   const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
     db.insert(idempotencyRecords).values(record),
     db.update(assets).set({ current: false, updatedAt: restoredAt }).where(and(
@@ -3487,14 +3648,20 @@ export const restoreContentVersion = (input: RestoreContentVersionInput): Effect
     statements.push(db.update(taskCompletions).set({
       data: { ...(completion.data as Record<string, unknown>), assetId: restoredId },
       version: completion.version + 1, updatedAt: restoredAt,
-    }).where(and(eq(taskCompletions.eventId, input.eventId), eq(taskCompletions.id, completion.id), eq(taskCompletions.version, completion.version))));
+    }).where(and(eq(taskCompletions.eventId, input.eventId), eq(taskCompletions.id, completion.id), eq(taskCompletions.version, completion.version))),
+    db.insert(domainChanges).select(db.select(changeSelection(restoreChange)).from(events).where(and(
+      eq(events.id, input.eventId),
+      sql`not exists (
+        select 1 from task_completions as restored_completion
+        where restored_completion.event_id = ${input.eventId}
+          and restored_completion.id = ${completion.id}
+          and restored_completion.version = ${completion.version + 1}
+          and json_extract(restored_completion.data, '$.assetId') = ${restoredId}
+      )`,
+    ))));
   }
   statements.push(
-    db.insert(domainChanges).values(writeChange(
-      input.eventId, "asset", restoredId, 1, "portal.asset.version.restored",
-      { speakerId: source.speaker.id, restoredFromAssetId: source.asset.id, supersedesAssetId: current.id },
-      actor, restoredAt, requestId, record.id,
-    )),
+    db.insert(domainChanges).values(restoreChange),
     db.insert(auditLog).values({
       id: id("audit"), eventId: input.eventId, requestId,
       actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
@@ -3504,15 +3671,41 @@ export const restoreContentVersion = (input: RestoreContentVersionInput): Effect
     }),
     db.update(idempotencyRecords).set({ status: "completed", responseStatus: 201, responseBody: result, completedAt: restoredAt }).where(eq(idempotencyRecords.id, record.id)),
   );
+  if (testHooks?.beforeCommit) yield* Effect.promise(testHooks.beforeCommit);
   const committed = yield* database(() => db.batch(statements)).pipe(Effect.either);
   if (committed._tag === "Left") {
     yield* deleteFile(key).pipe(Effect.catchAll(() => Effect.void));
-    const [racedCurrent] = yield* database(() => db.select({ id: assets.id, version: assets.version }).from(assets).where(and(
-      eq(assets.eventId, input.eventId), eq(assets.speakerId, sourceSpeakerId),
-      eq(assets.purpose, sourcePurpose), eq(assets.current, true),
-    )).limit(1));
+    const [currentRows, currentCompletionRows, currentSpeakerRows] = yield* Effect.all([
+      database(() => db.select({ id: assets.id, version: assets.version }).from(assets).where(and(
+        eq(assets.eventId, input.eventId), eq(assets.speakerId, sourceSpeakerId),
+        eq(assets.purpose, sourcePurpose), eq(assets.current, true),
+      )).limit(1)),
+      linkedCompletions.length === 0
+        ? Effect.succeed([] as readonly (typeof taskCompletions.$inferSelect)[])
+        : database(() => db.select().from(taskCompletions).where(and(
+          eq(taskCompletions.eventId, input.eventId),
+          inArray(taskCompletions.id, linkedCompletions.map((completion) => completion.id)),
+        ))),
+      database(() => db.select({ version: speakers.version }).from(speakers).where(and(
+        eq(speakers.eventId, input.eventId), eq(speakers.id, sourceSpeakerId),
+      )).limit(1)),
+    ]);
+    const racedCurrent = currentRows[0];
     if (!racedCurrent || racedCurrent.id !== input.expectedCurrentAssetId || racedCurrent.version !== input.expectedCurrentVersion) {
       return yield* Effect.fail(new Conflict({ message: "Content changed; reload before restoring this version" }));
+    }
+    const currentCompletionById = new Map(currentCompletionRows.map((completion) => [completion.id, completion]));
+    const completionChanged = linkedCompletions.some((completion) => {
+      const latest = currentCompletionById.get(completion.id);
+      return !latest || latest.version !== completion.version
+        || typeof latest.data !== "object" || latest.data === null || Array.isArray(latest.data)
+        || Reflect.get(latest.data, "assetId") !== current.id;
+    });
+    if (completionChanged) {
+      return yield* Effect.fail(new Conflict({ message: "A linked task completion changed; reload before restoring this version" }));
+    }
+    if (sourcePurpose === "headshot" && currentSpeakerRows[0]?.version !== input.expectedSpeakerVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Speaker profile changed; reload before restoring this headshot" }));
     }
     return yield* Effect.fail(committed.left);
   }

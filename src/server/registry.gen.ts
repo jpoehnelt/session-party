@@ -14500,96 +14500,6 @@ export const mcpTools: readonly McpToolDescriptor[] = [
     ]
   },
   {
-    "description": "Queue durable speaker portal invitations or reminders for selected speakers.",
-    "inputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "properties": {
-        "eventId": {
-          "description": "a string at most 255 character(s) long",
-          "maxLength": 255,
-          "minLength": 1,
-          "title": "maxLength(255)",
-          "type": "string"
-        },
-        "idempotencyKey": {
-          "description": "a string at most 255 character(s) long",
-          "maxLength": 255,
-          "minLength": 1,
-          "title": "maxLength(255)",
-          "type": "string"
-        },
-        "kind": {
-          "enum": [
-            "invite",
-            "reminder"
-          ],
-          "type": "string"
-        },
-        "speakerIds": {
-          "description": "an array of at most 200 item(s)",
-          "items": {
-            "description": "a string at most 255 character(s) long",
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "maxLength(255)",
-            "type": "string"
-          },
-          "maxItems": 200,
-          "minItems": 1,
-          "title": "maxItems(200)",
-          "type": "array"
-        }
-      },
-      "required": [
-        "eventId",
-        "speakerIds",
-        "kind",
-        "idempotencyKey"
-      ],
-      "type": "object"
-    },
-    "name": "portal_send_speaker_messages",
-    "operationId": "portal.sendSpeakerMessages",
-    "outputSchema": {
-      "$defs": {
-        "Int": {
-          "description": "an integer",
-          "title": "int",
-          "type": "integer"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "properties": {
-        "idempotent": {
-          "type": "boolean"
-        },
-        "queuedCount": {
-          "$ref": "#/$defs/Int",
-          "description": "a non-negative number",
-          "minimum": 0,
-          "title": "nonNegative"
-        },
-        "skippedCount": {
-          "$ref": "#/$defs/Int",
-          "description": "a non-negative number",
-          "minimum": 0,
-          "title": "nonNegative"
-        }
-      },
-      "required": [
-        "queuedCount",
-        "skippedCount",
-        "idempotent"
-      ],
-      "type": "object"
-    },
-    "requiredScopes": [
-      "speakers:write"
-    ]
-  },
-  {
     "description": "Edit a versioned event speaker profile and workflow status.",
     "inputSchema": {
       "$defs": {
@@ -33905,11 +33815,18 @@ export const openApi = {
                   "additionalProperties": false,
                   "properties": {
                     "acceptanceEventId": {
-                      "description": "a string at most 255 character(s) long",
-                      "maxLength": 255,
-                      "minLength": 1,
-                      "title": "maxLength(255)",
-                      "type": "string"
+                      "anyOf": [
+                        {
+                          "description": "a string at most 255 character(s) long",
+                          "maxLength": 255,
+                          "minLength": 1,
+                          "title": "maxLength(255)",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "eventId": {
                       "description": "a string at most 255 character(s) long",
@@ -33919,11 +33836,18 @@ export const openApi = {
                       "type": "string"
                     },
                     "provisioningId": {
-                      "description": "a string at most 255 character(s) long",
-                      "maxLength": 255,
-                      "minLength": 1,
-                      "title": "maxLength(255)",
-                      "type": "string"
+                      "anyOf": [
+                        {
+                          "description": "a string at most 255 character(s) long",
+                          "maxLength": 255,
+                          "minLength": 1,
+                          "title": "maxLength(255)",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "provisioningStatus": {
                       "enum": [
@@ -33934,9 +33858,9 @@ export const openApi = {
                     },
                     "provisioningVersion": {
                       "$ref": "#/$defs/Int",
-                      "description": "a positive number",
-                      "exclusiveMinimum": 0,
-                      "title": "positive"
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative"
                     },
                     "speakerId": {
                       "description": "a string at most 255 character(s) long",
@@ -33968,7 +33892,7 @@ export const openApi = {
             "description": "Successful operation"
           }
         },
-        "summary": "Claim an accepted primary speaker account by immutable submission email",
+        "summary": "Claim an accepted or directly managed speaker account by verified email",
         "x-authorization": {
           "kind": "browser-session"
         },
@@ -38580,10 +38504,7 @@ export const openApi = {
         "summary": "Queue invitations or outstanding-task reminders for selected speakers",
         "x-authorization": {
           "apiKey": {
-            "kind": "api-key",
-            "scopes": [
-              "speakers:write"
-            ]
+            "kind": "deny"
           },
           "browser": {
             "kind": "event-member",
@@ -51616,10 +51537,6 @@ export const ownershipManifest = {
     {
       "name": "portal_restore_content_version",
       "operationId": "portal.restoreContentVersion"
-    },
-    {
-      "name": "portal_send_speaker_messages",
-      "operationId": "portal.sendSpeakerMessages"
     },
     {
       "name": "portal_update_managed_speaker",

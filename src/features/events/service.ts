@@ -14,6 +14,7 @@ import {
   idempotencyRecords,
   mailDeliveries,
   mailDeliverySnapshots,
+  managedSpeakerEmails,
   reviewerInvitations,
   speakerProvisioning,
   speakers,
@@ -311,7 +312,7 @@ export const listEventAccess = (): Effect.Effect<
       );
     }
 
-    const [memberRows, speakerRows] = yield* Effect.all([
+    const [memberRows, acceptedSpeakerRows, managedSpeakerRows] = yield* Effect.all([
       database(() => db
         .select({ event: events, memberRole: eventMembers.role })
         .from(events)
@@ -352,6 +353,17 @@ export const listEventAccess = (): Effect.Effect<
               )
             )
         )`)),
+      database(() => db
+        .select({ event: events })
+        .from(events)
+        .innerJoin(speakers, and(
+          eq(speakers.eventId, events.id),
+          eq(speakers.userId, principal.userId),
+        ))
+        .innerJoin(managedSpeakerEmails, and(
+          eq(managedSpeakerEmails.eventId, speakers.eventId),
+          eq(managedSpeakerEmails.speakerId, speakers.id),
+        ))),
     ]);
 
     const accessByEvent = new Map<string, EventAccessType>();
@@ -362,7 +374,7 @@ export const listEventAccess = (): Effect.Effect<
         speakerPortal: false,
       });
     }
-    for (const row of speakerRows) {
+    for (const row of [...acceptedSpeakerRows, ...managedSpeakerRows]) {
       const current = accessByEvent.get(row.event.id);
       accessByEvent.set(row.event.id, {
         event: row.event,

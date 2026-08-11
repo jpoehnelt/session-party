@@ -87,7 +87,7 @@ const claimSpeakerOperation = {
   output: ClaimSpeakerOutput,
   authorize: browserSessionAuthorization,
   invoke: claimSpeaker,
-  rest: { method: "post", path: "/events/:eventId/portal/claim", input: { path: ["eventId"], body: ["idempotencyKey"] }, summary: "Claim an accepted primary speaker account by immutable submission email", successStatus: 200 },
+  rest: { method: "post", path: "/events/:eventId/portal/claim", input: { path: ["eventId"], body: ["idempotencyKey"] }, summary: "Claim an accepted or directly managed speaker account by verified email", successStatus: 200 },
   idempotency: "required",
   concurrency: "required",
   emits: ["portal.speaker.claimed"],
@@ -100,6 +100,10 @@ const organizerSpeakerRead = eventAuthorization(
 const organizerSpeakerWrite = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
   { kind: "api-key", scopes: ["speakers:write"] },
+);
+const organizerHumanSpeakerWrite = eventAuthorization(
+  { kind: "event-member", roles: ["owner", "admin"] },
+  { kind: "deny" },
 );
 const organizerContentRead = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
@@ -197,10 +201,9 @@ const sendSpeakerMessagesOperation = {
   kind: "command",
   input: SendSpeakerMessagesInput,
   output: SendSpeakerMessagesOutput,
-  authorize: organizerSpeakerWrite,
+  authorize: organizerHumanSpeakerWrite,
   invoke: sendSpeakerMessages,
   rest: { method: "post", path: "/events/:eventId/portal/speakers/messages", input: { path: ["eventId"], body: ["speakerIds", "kind", "idempotencyKey"] }, summary: "Queue invitations or outstanding-task reminders for selected speakers", successStatus: 202 },
-  mcp: { name: "portal_send_speaker_messages", description: "Queue durable speaker portal invitations or reminders for selected speakers." },
   idempotency: "required",
   concurrency: "none",
   emits: ["portal.speaker.messages.enqueued"],

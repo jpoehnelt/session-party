@@ -23,10 +23,10 @@ export type ClaimSpeakerInput = typeof ClaimSpeakerInput.Type;
 export const ClaimSpeakerOutput = Schema.Struct({
   eventId: EntityId,
   speakerId: EntityId,
-  acceptanceEventId: EntityId,
-  provisioningId: EntityId,
+  acceptanceEventId: Schema.NullOr(EntityId),
+  provisioningId: Schema.NullOr(EntityId),
   speakerVersion: Schema.Int.pipe(Schema.positive()),
-  provisioningVersion: Schema.Int.pipe(Schema.positive()),
+  provisioningVersion: VersionFromZero,
   provisioningStatus: Schema.Literal("claimed", "provisioned"),
 });
 export type ClaimSpeakerOutput = typeof ClaimSpeakerOutput.Type;
