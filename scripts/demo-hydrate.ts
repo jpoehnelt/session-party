@@ -10,6 +10,7 @@ const reviewerSession = "demo-reviewer-session";
 const recusedReviewerSession = "demo-reviewer-recused-session";
 const speakerSession = "demo-speaker-session";
 const DAY_MS = 86_400_000;
+const demoHeadshotBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 const fixtureSpeakerNames = [
   "Priya Raman", "Alex Morgan", "Avery Chen", "Blair Okafor", "Cameron Singh",
@@ -224,6 +225,17 @@ const draftFields = [
     },
   },
   {
+    id: "demo-field-format",
+    type: "radio",
+    label: "Session format",
+    semanticKey: null,
+    helpText: "Choose the format that best matches your delivery plan.",
+    required: true,
+    options: ["Conference talk", "Panel", "Workshop"],
+    logic: null,
+    routing: {},
+  },
+  {
     id: "demo-field-details",
     type: "textarea",
     label: "Workshop exercise plan",
@@ -324,15 +336,18 @@ const cfpFieldIds = {
   speakerName: primary(cfpFields, "Speaker name"),
   speakerEmail: primary(cfpFields, "Speaker email"),
   track: primary(cfpFields, "Best-fit track"),
+  format: primary(cfpFields, "Session format"),
   details: primary(cfpFields, "Workshop exercise plan"),
 };
 const trackOptions = ["AI systems", "Developer tools", "Applied research"] as const;
+const formatOptions = ["Conference talk", "Panel", "Workshop"] as const;
 const acceptedSubmissions: SubmissionOutput[] = [];
 const submittedBacklog: SubmissionOutput[] = [];
 
 for (const [speakerIndex, speaker] of fixtureSpeakers.entries()) {
   for (let proposalIndex = 0; proposalIndex < 2; proposalIndex += 1) {
     const track = trackOptions[(speakerIndex + proposalIndex) % trackOptions.length]!;
+    const format = formatOptions[(speakerIndex + proposalIndex) % formatOptions.length]!;
     const isWalkthrough = speakerIndex === 0 && proposalIndex === 0;
     const answers: Array<{ readonly fieldId: string; readonly value: string }> = [
       {
@@ -350,6 +365,7 @@ for (const [speakerIndex, speaker] of fixtureSpeakers.entries()) {
       { fieldId: cfpFieldIds.speakerName, value: speaker.name },
       { fieldId: cfpFieldIds.speakerEmail, value: speaker.email },
       { fieldId: cfpFieldIds.track, value: track },
+      { fieldId: cfpFieldIds.format, value: format },
     ];
     if (track === "Developer tools") {
       answers.push({
@@ -602,7 +618,7 @@ await request(`/events/${eventId}/portal/assets`, {
     purpose: "headshot",
     filename: "priya-raman.png",
     contentType: "image/png",
-    contentBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    contentBase64: demoHeadshotBase64,
     expectedVersion: profile.version,
     idempotencyKey: "demo-headshot-upload-v1",
   },
@@ -681,11 +697,25 @@ for (const [index, person] of acceptedPeople.entries()) {
     session: person.speaker.session,
     body: { expectedVersion: draft.version },
   });
-  await request<SpeakerProfile>(`/events/${eventId}/portal/speakers/${encode(person.claim.speakerId)}/profile-review`, {
+  const approvedProfile = await request<SpeakerProfile>(`/events/${eventId}/portal/speakers/${encode(person.claim.speakerId)}/profile-review`, {
     method: "POST",
     session: ownerSession,
     body: { expectedVersion: submittedProfile.version, decision: "approved", note: null },
   });
+  if (index > 0) {
+    await request(`/events/${eventId}/portal/speakers/${encode(person.claim.speakerId)}/headshot`, {
+      method: "POST",
+      session: ownerSession,
+      expectedStatus: 201,
+      body: {
+        expectedVersion: approvedProfile.version,
+        filename: `demo-speaker-${String(index + 1).padStart(2, "0")}.png`,
+        contentType: "image/png",
+        contentBase64: demoHeadshotBase64,
+        idempotencyKey: `demo-speaker-headshot-${index + 1}-v1`,
+      },
+    });
+  }
 }
 
 const createdTalk = await request<AgendaMutation>(`/events/${eventId}/agenda/talks`, {
