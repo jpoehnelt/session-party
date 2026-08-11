@@ -1747,7 +1747,10 @@ describe("agenda service", () => {
       expectedEventVersion: 1,
       idempotencyKey: "publish-delivery-immutable-0001",
     }));
-    expect(published.talks[0]).toMatchObject({ speakerNames: ["Ada Rivera"] });
+    expect(published.talks[0]).toMatchObject({
+      speakerNames: ["Ada Rivera"],
+      speakers: [{ id: seeded.speakerA, name: "Ada Rivera" }],
+    });
     expect(published.talks[0]).not.toHaveProperty("speakerIds");
 
     const before = await runAs(

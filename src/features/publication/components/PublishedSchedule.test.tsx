@@ -25,6 +25,7 @@ const agenda: PublishedAgenda = {
       startsAt: STARTS_AT,
       durationMin: 45,
       speakerNames: ["Ada Rivera"],
+      speakers: [{ id: "speaker/ada", name: "Ada Rivera", profileSlug: "ada-rivera" }],
     },
     {
       id: "render-talk-2",
@@ -35,6 +36,7 @@ const agenda: PublishedAgenda = {
       startsAt: STARTS_AT + 86_400_000,
       durationMin: 30,
       speakerNames: ["Grace Lee"],
+      speakerProfiles: [{ name: "Grace Lee", slug: "grace-lee" }],
     },
     {
       id: "render-talk-3",
@@ -64,6 +66,9 @@ describe("published schedule rendering", () => {
       expect(markup).toContain("Harbor");
       expect(markup).toContain("<ol");
       expect(markup).toContain('href="/event/render-summit/sessions/render-talk-1"');
+      expect(markup).toContain('href="/event/render-summit/speakers/speaker%2Fada"');
+      expect(markup).toContain('href="/speakers/grace-lee"');
+      expect(markup).not.toContain('href="/speakers/ada-rivera"');
       expect(markup).not.toContain("<table");
       expect(markup).not.toContain("submissionId");
       expect(markup).not.toContain("version");
@@ -93,5 +98,24 @@ describe("published schedule rendering", () => {
     expect(markup).not.toContain(">Week<");
     expect(markup).not.toContain("schedule-group-");
     expect(markup).toContain('aria-label="All sessions"');
+  });
+
+  it("links duplicate display names by stable event-speaker identity", () => {
+    const markup = renderToStaticMarkup(createElement(PublishedSchedule, {
+      agenda: {
+        ...agenda,
+        talks: [{
+          ...agenda.talks[0]!,
+          speakerNames: ["Alex Kim", "Alex Kim"],
+          speakers: [
+            { id: "speaker-alex-one", name: "Alex Kim" },
+            { id: "speaker-alex-two", name: "Alex Kim" },
+          ],
+        }],
+      },
+    }));
+
+    expect(markup).toContain('href="/event/render-summit/speakers/speaker-alex-one"');
+    expect(markup).toContain('href="/event/render-summit/speakers/speaker-alex-two"');
   });
 });

@@ -3898,6 +3898,33 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 },
                 "type": "array"
               },
+              "speakers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9_-]+$",
+                      "title": "maxLength(128)",
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "profileSlug": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "startsAt": {
                 "description": "a non-negative number",
                 "minimum": 0,
@@ -23292,6 +23319,33 @@ export const openApi = {
                               "required": [
                                 "name",
                                 "slug"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "speakers": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9_-]+$",
+                                  "title": "maxLength(128)",
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "profileSlug": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name"
                               ],
                               "type": "object"
                             },
@@ -55450,6 +55504,33 @@ export const openApi = {
                               "required": [
                                 "name",
                                 "slug"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "speakers": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9_-]+$",
+                                  "title": "maxLength(128)",
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "profileSlug": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name"
                               ],
                               "type": "object"
                             },

@@ -32,6 +32,7 @@ const agenda: PublishedAgenda = {
       startsAt: START,
       durationMin: 30,
       speakerNames: ["Priya Raman"],
+      speakers: [{ id: "speaker-priya", name: "Priya Raman", profileSlug: "priya-raman" }],
       speakerProfiles: [{ name: "Priya Raman", slug: "priya-raman" }],
     },
     {
@@ -43,6 +44,7 @@ const agenda: PublishedAgenda = {
       startsAt: START + 86_400_000,
       durationMin: 45,
       speakerNames: ["Marcus Okafor"],
+      speakers: [{ id: "speaker-marcus", name: "Marcus Okafor" }],
     },
   ],
 };
@@ -195,9 +197,37 @@ describe("public program", () => {
     }
   });
 
-  it("links public speaker references to the reusable profile across every public program surface", () => {
+  it("prefers event-speaker details across every public program surface", () => {
     for (const surface of ["sessions", "agenda", "schedule", "speakers", "gallery"] as const) {
-      expect(render(surface)).toContain('href="/speakers/priya-raman');
+      expect(render(surface)).toContain('href="/event/devflow-conf-2027/speakers/speaker-priya');
     }
+  });
+
+  it("keeps duplicate display names attached to the correct speaker detail", () => {
+    const duplicateAgenda: PublishedAgenda = {
+      ...agenda,
+      talks: [
+        { ...agenda.talks[0]!, id: "talk-alex-one", title: "First Alex session", speakerNames: ["Alex Kim"], speakers: [{ id: "speaker-alex-one", name: "Alex Kim" }] },
+        { ...agenda.talks[1]!, id: "talk-alex-two", title: "Second Alex session", speakerNames: ["Alex Kim"], speakers: [{ id: "speaker-alex-two", name: "Alex Kim" }] },
+      ],
+    };
+    const duplicateGallery: PublicSpeakerGallery = {
+      ...gallery,
+      speakers: [
+        { ...gallery.speakers[0]!, id: "speaker-alex-one", displayName: "Alex Kim" },
+        { ...gallery.speakers[1]!, id: "speaker-alex-two", displayName: "Alex Kim" },
+      ],
+    };
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, {
+      children: createElement(PublicProgram, {
+        agenda: duplicateAgenda,
+        gallery: duplicateGallery,
+        surface: "speakers",
+        detail: { speakerId: "speaker-alex-one" },
+      }),
+    }));
+
+    expect(markup).toContain("First Alex session");
+    expect(markup).not.toContain("Second Alex session");
   });
 });

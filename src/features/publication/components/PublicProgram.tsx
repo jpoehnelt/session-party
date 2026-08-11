@@ -185,8 +185,16 @@ function SurfaceIntro({
   );
 }
 
-function speakerByName(gallery: PublicSpeakerGallery): ReadonlyMap<string, PublicSpeaker> {
-  return new Map(gallery.speakers.map((speaker) => [normalize(speaker.displayName), speaker]));
+interface PublicSpeakerLookup {
+  readonly byId: ReadonlyMap<string, PublicSpeaker>;
+  readonly byName: ReadonlyMap<string, PublicSpeaker>;
+}
+
+function speakerLookup(gallery: PublicSpeakerGallery): PublicSpeakerLookup {
+  return {
+    byId: new Map(gallery.speakers.map((speaker) => [speaker.id, speaker])),
+    byName: new Map(gallery.speakers.map((speaker) => [normalize(speaker.displayName), speaker])),
+  };
 }
 
 function talksForSpeaker(
@@ -194,9 +202,9 @@ function talksForSpeaker(
   speaker: PublicSpeaker,
 ): readonly PublicAgendaTalk[] {
   const name = normalize(speaker.displayName);
-  return agenda.talks.filter((talk) =>
-    talk.speakerNames.some((speakerName) => normalize(speakerName) === name)
-  );
+  return agenda.talks.filter((talk) => talk.speakers
+    ? talk.speakers.some((candidate) => candidate.id === speaker.id)
+    : talk.speakerNames.some((speakerName) => normalize(speakerName) === name));
 }
 
 function SpeakerLines({
@@ -206,26 +214,33 @@ function SpeakerLines({
   className,
 }: {
   readonly talk: PublicAgendaTalk;
-  readonly speakers?: ReadonlyMap<string, PublicSpeaker>;
+  readonly speakers?: PublicSpeakerLookup;
   readonly eventSlug: string;
   readonly className?: string;
 }) {
   return (
     <ul className={className ?? "space-y-1.5 border-l-4 border-production-sky pl-3 text-sm text-ink-secondary"} aria-label="Speakers">
-      {talk.speakerNames.map((name) => {
-        const speaker = speakers?.get(normalize(name));
-        const publishedProfile = talk.speakerProfiles?.find((candidate) => candidate.name === name);
-        const href = speaker
-          ? publicEventSpeakerPath(eventSlug, speaker)
-          : publishedProfile?.slug
-            ? `/speakers/${encodeURIComponent(publishedProfile.slug)}`
-            : undefined;
+      {(talk.speakers ?? talk.speakerNames.map((name) => ({
+        id: "",
+        name,
+        profileSlug: talk.speakerProfiles?.find((candidate) => candidate.name === name)?.slug,
+      }))).map((reference, index) => {
+        const speaker = reference.id
+          ? speakers?.byId.get(reference.id)
+          : speakers?.byName.get(normalize(reference.name));
+        const href = reference.id
+          ? publicEventSpeakerPath(eventSlug, reference)
+          : speaker
+            ? publicEventSpeakerPath(eventSlug, speaker)
+            : reference.profileSlug
+              ? `/speakers/${encodeURIComponent(reference.profileSlug)}`
+              : undefined;
         const identity = [speaker?.title, speaker?.company].filter(Boolean).join(" at ");
         return (
-          <li key={name}>
+          <li key={reference.id || `${reference.name}-${index}`}>
             {href ? (
-              <a className="font-black text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={href}>{name}</a>
-            ) : <span className="font-black text-ink">{name}</span>}
+              <a className="font-black text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={href}>{reference.name}</a>
+            ) : <span className="font-black text-ink">{reference.name}</span>}
             {identity ? ` — ${identity}` : ""}
           </li>
         );
@@ -251,7 +266,7 @@ function SessionDetail({
 }: {
   readonly talk: PublicAgendaTalk;
   readonly agenda: PublishedAgenda;
-  readonly speakers: ReadonlyMap<string, PublicSpeaker>;
+  readonly speakers: PublicSpeakerLookup;
 }) {
   return (
     <div className="space-y-5">
@@ -290,7 +305,7 @@ function SessionsSurface({
   const tracks = [...new Set(agenda.talks.flatMap((talk) => talk.track ? [talk.track] : []))].sort();
   const rooms = [...new Set(agenda.talks.flatMap((talk) => talk.room ? [talk.room] : []))].sort();
   const filtered = agenda.talks.filter((talk) => sessionMatches(talk, query, track, room));
-  const speakers = speakerByName(gallery);
+  const speakers = speakerLookup(gallery);
 
   return (
     <section className="space-y-6" aria-labelledby="public-sessions-title">
@@ -578,7 +593,7 @@ function AgendaSurface({
   const day = days.includes(selectedDay) ? selectedDay : days[0] ?? "";
   const talks = agenda.talks.filter((talk) => localDayKey(talk.startsAt, agenda.timezone) === day);
   const times = [...new Set(talks.map((talk) => talk.startsAt))].sort((a, b) => a - b);
-  const speakers = speakerByName(gallery);
+  const speakers = speakerLookup(gallery);
 
   return (
     <section className="space-y-6" aria-labelledby="public-agenda-title">
@@ -637,7 +652,7 @@ function ScheduleSurface({
   const days = [...new Set(agenda.talks.map((talk) => localDayKey(talk.startsAt, agenda.timezone)))];
   const [selectedDay, setSelectedDay] = useState(days[0] ?? "");
   const day = days.includes(selectedDay) ? selectedDay : days[0] ?? "";
-  const speakers = speakerByName(gallery);
+  const speakers = speakerLookup(gallery);
 
   useEffect(() => {
     try {
@@ -750,7 +765,7 @@ export function PublicProgram({
   readonly detail?: PublicProgramDetail;
 }) {
   const [searchParams] = useSearchParams();
-  const speakers = useMemo(() => speakerByName(gallery), [gallery]);
+  const speakers = useMemo(() => speakerLookup(gallery), [gallery]);
   const selectedTalk = detail.sessionId
     ? agenda.talks.find(({ id }) => id === detail.sessionId)
     : undefined;

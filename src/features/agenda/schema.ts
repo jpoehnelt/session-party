@@ -247,6 +247,13 @@ export const AgendaMutationResult = Schema.Struct({
 });
 export type AgendaMutationResult = typeof AgendaMutationResult.Type;
 
+export const PublicAgendaSpeaker = Schema.Struct({
+  id: EntityId,
+  name: Schema.String,
+  profileSlug: Schema.optional(Schema.String),
+});
+export type PublicAgendaSpeaker = typeof PublicAgendaSpeaker.Type;
+
 export const PublicAgendaTalk = Schema.Struct({
   id: EntityId,
   title: Schema.String,
@@ -257,6 +264,7 @@ export const PublicAgendaTalk = Schema.Struct({
   startsAt: UnixTimestampMs,
   durationMin: Schema.Int.pipe(Schema.positive()),
   speakerNames: Schema.Array(Schema.String),
+  speakers: Schema.optional(Schema.Array(PublicAgendaSpeaker)),
   speakerProfiles: Schema.optional(Schema.Array(Schema.Struct({
     name: Schema.String,
     slug: Schema.String,

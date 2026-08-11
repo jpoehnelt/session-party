@@ -104,6 +104,7 @@ export interface ScheduleListItem {
   startsAt: string;
   durationMin: number;
   speakerNames: readonly string[];
+  speakers?: readonly { id: string; name: string; url?: string }[];
   speakerProfiles?: readonly { name: string; slug: string }[];
 }
 
@@ -151,9 +152,11 @@ export function ScheduleList({
             )}
             {visible.has("speakers") && (
               <p className="mt-1 text-sm text-ink-secondary">
-                {talk.speakerNames.map((name, index) => {
+                {(talk.speakers ?? talk.speakerNames.map((name, index) => {
                   const profile = talk.speakerProfiles?.find((candidate) => candidate.name === name);
-                  return <span key={`${name}-${index}`}>{index > 0 ? ", " : ""}{profile ? <a className="font-bold underline decoration-1 underline-offset-2 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(profile.slug)}`}>{name}</a> : name}</span>;
+                  return { id: `${name}-${index}`, name, ...(profile ? { url: `/speakers/${encodeURIComponent(profile.slug)}` } : {}) };
+                })).map((speaker, index) => {
+                  return <span key={speaker.id}>{index > 0 ? ", " : ""}{speaker.url ? <a className="font-bold underline decoration-1 underline-offset-2 hover:text-accent-deep" href={speaker.url}>{speaker.name}</a> : speaker.name}</span>;
                 })}
               </p>
             )}

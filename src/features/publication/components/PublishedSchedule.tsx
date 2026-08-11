@@ -7,7 +7,7 @@ import type {
 } from "@/features/agenda/schema";
 import type { EmbedAesthetic } from "../embed-design";
 import { SCHEDULE_EMBED_FIELDS, type ScheduleEmbedField } from "../embed-content";
-import { publicSessionPath } from "../links";
+import { publicEventSpeakerPath, publicSessionPath } from "../links";
 
 export interface PublishedScheduleProps {
   readonly agenda: PublishedAgenda;
@@ -235,6 +235,13 @@ export function PublishedSchedule({
                 startsAt: new Date(talk.startsAt).toISOString(),
                 durationMin: talk.durationMin,
                 speakerNames: talk.speakerNames,
+                ...(talk.speakers ? {
+                  speakers: talk.speakers.map((speaker) => ({
+                    id: speaker.id,
+                    name: speaker.name,
+                    url: publicEventSpeakerPath(agenda.eventSlug, speaker),
+                  })),
+                } : {}),
                 speakerProfiles: talk.speakerProfiles,
                 ...(talk.description === null ? {} : { description: talk.description }),
                 ...(talk.track === null ? {} : { track: talk.track }),
