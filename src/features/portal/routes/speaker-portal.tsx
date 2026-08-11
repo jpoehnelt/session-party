@@ -733,7 +733,7 @@ export function ResourceList({ resources }: { readonly resources: readonly Porta
                   src={embedUrl}
                   title={resource.title}
                   loading="lazy"
-                  sandbox="allow-scripts allow-same-origin allow-presentation"
+                  sandbox="allow-scripts allow-same-origin"
                   referrerPolicy="no-referrer"
                   allow="fullscreen"
                 />

@@ -223,11 +223,11 @@ for (const target of ALL_ROUTES) {
   });
 }
 
-test("global shell supports keyboard skip navigation", async ({ context, page, baseURL }) => {
+test("global shell supports keyboard skip navigation", async ({ context, page, baseURL }, testInfo) => {
   await authenticate(context, "owner", baseURL ?? "http://127.0.0.1:5173");
   await page.goto(`/e/${EVENT_SLUG}`);
   await page.locator("h1").waitFor({ state: "visible" });
-  await page.keyboard.press("Tab");
+  await page.keyboard.press(testInfo.project.name === "desktop-webkit" ? "Alt+Tab" : "Tab");
   const skipLink = page.getByRole("link", { name: "Skip to main content" });
   await expect(skipLink).toBeFocused();
   await page.keyboard.press("Enter");

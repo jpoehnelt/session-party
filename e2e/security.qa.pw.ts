@@ -14,7 +14,7 @@ const sessions = {
 } as const;
 
 function desktopOnly(testInfo: TestInfo): void {
-  test.skip(!testInfo.project.name.startsWith("desktop"), "API authorization matrix is viewport-independent");
+  test.skip(testInfo.project.name !== "desktop-chromium", "API authorization matrix is browser-independent");
 }
 
 function cookie(session?: string): Record<string, string> | undefined {

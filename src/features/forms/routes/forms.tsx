@@ -503,12 +503,21 @@ export function FormsWorkspace({
   const [additionalName, setAdditionalName] = useState("");
   const [additionalDescription, setAdditionalDescription] = useState("");
   const [realtimeReady, setRealtimeReady] = useState(false);
+  const createAdditionalTriggerRef = useRef<HTMLButtonElement>(null);
+  const createAdditionalWasOpenRef = useRef(false);
   const selectedIdRef = useRef<string | null>(initialSelectedId);
   selectedIdRef.current = selectedId;
 
   useEffect(() => {
     setRealtimeReady(true);
   }, []);
+
+  useEffect(() => {
+    if (createAdditionalWasOpenRef.current && !createAdditionalOpen) {
+      createAdditionalTriggerRef.current?.focus();
+    }
+    createAdditionalWasOpenRef.current = createAdditionalOpen;
+  }, [createAdditionalOpen]);
 
   const selectForm = useCallback((formId: string | null) => {
     selectedIdRef.current = formId;
@@ -715,6 +724,7 @@ export function FormsWorkspace({
         className="border-[3px] border-[#171714] bg-[#896aff] p-5 text-[#171714] shadow-[7px_7px_0_#171714] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-none [&_h1]:tracking-[-0.055em] [&_h1]:text-[#171714] sm:[&_h1]:text-5xl [&_p]:mt-3 [&_p]:max-w-xl [&_p]:font-semibold [&_p]:text-[#171714]"
         actions={summaries.length > 0 ? (
           <Button
+            ref={createAdditionalTriggerRef}
             className="min-h-11 rounded-none border-2 border-[#171714] bg-[#caff4a] px-5 text-xs font-black uppercase tracking-[0.1em] text-[#171714] shadow-[4px_4px_0_#171714] hover:bg-[#d7ff78]"
             loading={mutation.action === "create"}
             onClick={() => {
@@ -865,6 +875,7 @@ export function FormsWorkspace({
       )}
       <Modal
         open={createAdditionalOpen}
+        returnFocusRef={createAdditionalTriggerRef}
         onClose={() => {
           if (mutation.action !== "create") setCreateAdditionalOpen(false);
         }}

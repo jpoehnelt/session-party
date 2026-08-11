@@ -6,7 +6,7 @@ Specification: `QA_PLAN.md`
 
 ## Automated coverage implemented
 
-`pnpm test:qa` starts a clean local Worker, hydrates the deterministic AI Engineer Sandbox fixture, and runs the Playwright matrix in Desktop Chrome and a Pixel 7 viewport.
+`pnpm test:qa` starts a clean local Worker, hydrates the deterministic AI Engineer Sandbox fixture, and runs the Playwright matrix in Desktop Chrome, Pixel 7 Chrome, Desktop Firefox, and Desktop WebKit.
 
 - 39 owner, admin, reviewer, speaker, public, embed, authentication, invitation, and error routes at both breakpoints.
 - Runtime discovery and JSON evidence for links, buttons, inputs, selects, textareas, summaries, and explicit ARIA roles.
@@ -16,8 +16,10 @@ Specification: `QA_PLAN.md`
 - Safe interaction scenarios for login validation, modal validation/cancel, submission filters and pagination, review filters, contact editing, speaker selection, destructive-dialog cancellation, agenda views/setup/live show, communication tabs/template editing, publish/import confirmation, membership-role cancellation, public-program mobile navigation/session details/schedule controls, and the public CFP's conditional fields, validation, co-speaker controls, Unicode local-draft save, and reload recovery.
 - Authorization checks for signed-out, expired, malformed, cross-event, owner, admin, reviewer, and speaker identities at both the REST and organizer-UI boundaries.
 - Public-projection privacy assertions, immutable publication-revision reconciliation, and hostile login return-target containment.
+- Controlled form mutations cover role denial, concurrent idempotent create replay, mismatched replay, competing optimistic writers, stale overwrite denial, and replay-safe deletion. Controlled API-key mutations cover one-time secret disclosure, scope and cross-event isolation, metadata redaction, and immediate revocation.
+- An explicit 320/375/768/1024/1440/2560 px matrix checks representative public, organizer, table-heavy, agenda, and settings routes for reflow, true clipping, shell mode, and H1 integrity; forced-colors mode covers public sessions, forms, and agenda.
 
-Latest local result: **104 passed, 20 intentionally skipped, 0 failed**. The skips avoid duplicating desktop-only interaction and transport-level security scenarios on mobile and mobile-only scenarios on desktop; route, layout, control, and accessibility coverage still runs at both breakpoints.
+Latest local result: **219 passed, 65 intentionally skipped, 0 failed** across 284 project cases. The skips avoid duplicating browser-independent API/security/mutation/viewport checks and mobile-only interactions in desktop engines; route, control, runtime-error, interaction, and accessibility coverage runs in Chromium, Firefox, and WebKit, with the full route surface also covered on mobile Chromium.
 
 Baseline regression suites also passed before the QA fixes:
 
@@ -40,6 +42,8 @@ Baseline regression suites also passed before the QA fixes:
 | Keyboard access | The horizontally scrollable MCP endpoint was not keyboard focusable on mobile. | Make scrollable code regions focusable. |
 | Public CFP stability | Editing co-speaker fields crashed the React route because a deferred state updater dereferenced a cleared event target. | Capture each input value synchronously before updating the co-speaker collection; verify all four fields plus draft recovery on desktop and mobile. |
 | Signed-out semantics | Twelve private organizer routes rendered access failures without a top-level heading. | Promote route-level failure titles to H1 and scan every signed-out state with axe. |
+| WebKit focus | Pointer-activated controls are not focused by Safari/WebKit, so a controlled dialog could lose its opener on close. | Support an explicit opener reference and restore the form-dialog trigger after every close transition. |
+| WebKit embeds | WebKit rejected `allow-presentation` as an iframe sandbox token and emitted a runtime console error. | Remove the unnecessary token while preserving allowlisted script/same-origin and fullscreen behavior. |
 
 ## Deployed read-only reconciliation
 
@@ -55,10 +59,10 @@ All three pass in the local matrix with this change set. Login, schedule embed, 
 
 The production run is read-only. Publishing, imports, member/role changes, key creation/revocation, deletes, outbound communication, uploads, acceptance decisions, and other mutating/destructive actions remain limited to the deterministic local sandbox. The following plan areas still require dedicated controlled environments or human sessions before a full release sign-off:
 
-- Unassigned/recused personas, live API-key lifecycle authorization, and mutation-level role checks.
+- Unassigned/recused reviewer personas and mutation-level role checks outside forms/API keys.
 - Real provider email, file-storage, Airtable, Accelevents, retry/dead-letter, and audit evidence.
 - Concurrent stale-version, offline/reconnect, Party gap recovery, idempotency-race, and session-expiry cases.
-- Screen-reader manual passes, 200% zoom/high-contrast/manual visual review, non-Chromium browser coverage, and moderated IA first-click studies.
+- Screen-reader manual passes, true browser 200% zoom, manual visual review, mobile Safari/device coverage, and moderated IA first-click studies.
 - Load, Core Web Vitals, slow-network, failure-injection, security-header, CSP, and upload/embed adversarial testing.
 
 Those items remain blockers for claiming the entire `QA_PLAN.md` release gate; they are not silently treated as passes.

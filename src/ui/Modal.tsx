@@ -1,5 +1,5 @@
 import { Dialog } from "radix-ui";
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { IconButton } from "./Button";
 import { cx } from "./cx";
 import { XIcon } from "./icons";
@@ -10,22 +10,38 @@ export interface ModalProps {
   title: string;
   children?: ReactNode;
   footer?: ReactNode;
+  /** Explicit opener for browsers that do not focus buttons on pointer activation. */
+  returnFocusRef?: RefObject<HTMLElement | null>;
   /** Panel width. Defaults to "md" (~32rem). */
   size?: "sm" | "md" | "lg";
 }
 
 const SIZES = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl" } as const;
 
-export function Modal({ open, onClose, title, children, footer, size = "md" }: ModalProps) {
+export function Modal({ open, onClose, title, children, footer, size = "md", returnFocusRef: explicitReturnFocusRef }: ModalProps) {
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const lastPointerTargetRef = useRef<HTMLElement | null>(null);
   const wasOpenRef = useRef(false);
 
+  useEffect(() => {
+    const rememberPointerTarget = (event: PointerEvent) => {
+      lastPointerTargetRef.current = event.target instanceof HTMLElement ? event.target : null;
+    };
+    document.addEventListener("pointerdown", rememberPointerTarget, true);
+    return () => document.removeEventListener("pointerdown", rememberPointerTarget, true);
+  }, []);
+
   if (open && !wasOpenRef.current && typeof document !== "undefined") {
-    returnFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    returnFocusRef.current = explicitReturnFocusRef?.current
+      ?? (activeElement && activeElement !== document.body ? activeElement : lastPointerTargetRef.current);
   }
+  const shouldRestoreFocus = !open && wasOpenRef.current;
   wasOpenRef.current = open;
+
+  useEffect(() => {
+    if (shouldRestoreFocus) (explicitReturnFocusRef?.current ?? returnFocusRef.current)?.focus();
+  }, [explicitReturnFocusRef, shouldRestoreFocus]);
 
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
@@ -35,11 +51,7 @@ export function Modal({ open, onClose, title, children, footer, size = "md" }: M
           <Dialog.Content
             aria-modal="true"
             aria-describedby={undefined}
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              const returnFocus = returnFocusRef.current;
-              requestAnimationFrame(() => returnFocus?.focus());
-            }}
+            onCloseAutoFocus={(event) => event.preventDefault()}
             className={cx(
               "pointer-events-auto relative w-full animate-slide-up rounded-card border-2 border-line-strong bg-surface shadow-pop outline-none motion-reduce:animate-none",
               SIZES[size],
