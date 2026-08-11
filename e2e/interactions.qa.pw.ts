@@ -902,6 +902,24 @@ test("agenda talk editor protects drafts, validates mutations, preserves the pub
     await expect(duration).toHaveValue("4");
     await duration.fill(String(initialTalk!.durationMin));
 
+    await editor.getByLabel("Room (TBD allowed)").selectOption("");
+    await editor.getByLabel(/^Start time/).fill("");
+    await editor.getByRole("button", { name: "Save schedule" }).click();
+    await expect(page.getByText("Draft saved with TBD placement", { exact: true }).first()).toBeVisible();
+    await expect.poll(async () => (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id)).toMatchObject({
+      roomId: null,
+      startsAt: null,
+      status: "draft",
+    });
+    expect(await loadPublicAgenda()).toEqual(publicBefore);
+
+    await editor.getByRole("button", { name: "Auto-place talk" }).click();
+    await expect(page.getByText("Talk auto-placed in the first conflict-free slot", { exact: true }).first()).toBeVisible();
+    await expect.poll(async () => {
+      const talk = (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id);
+      return talk ? { roomPlaced: talk.roomId !== null, startsAtPlaced: talk.startsAt !== null, status: talk.status } : null;
+    }).toEqual({ roomPlaced: true, startsAtPlaced: true, status: "confirmed" });
+
     await editor.getByLabel("Session title").fill(updatedTitle);
     await editor.getByLabel("Session abstract").fill(updatedDescription);
     await editor.getByRole("button", { name: "Save session content" }).click();
