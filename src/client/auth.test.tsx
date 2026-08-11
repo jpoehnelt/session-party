@@ -16,5 +16,8 @@ describe("hackathon demo login", () => {
     expect(markup).toContain("Continue as Reviewer — Sam Whitfield");
     expect(markup).toContain("sbek-organizer@example.com");
     expect(markup).toContain("Email me a sign-in link");
+    expect(markup).toContain("Account access");
+    expect(markup).toContain("Back to Session Party.");
+    expect(markup).not.toContain("Organizer access");
   });
 });

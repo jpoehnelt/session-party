@@ -63,8 +63,8 @@ export default function LoginPage() {
           <span className="grid size-11 place-items-center border-2 border-line-strong bg-production-lime text-xs font-black shadow-[3px_3px_0_#7857ff]">SP</span>
           <p className="text-sm font-black tracking-[-0.02em] text-ink">Session Party</p>
         </div>
-        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Organizer access</p>
-        <h1 className="mt-2 text-4xl font-black tracking-[-0.055em]">Back to the control room.</h1>
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Account access</p>
+        <h1 className="mt-2 text-4xl font-black tracking-[-0.055em]">Back to Session Party.</h1>
         <section className="mt-6 border-2 border-line-strong bg-production-sky p-4" aria-labelledby="demo-access-heading">
           <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Hackathon demo access</p>
           <h2 id="demo-access-heading" className="mt-1 text-xl font-black tracking-[-0.035em]">Choose a role</h2>
