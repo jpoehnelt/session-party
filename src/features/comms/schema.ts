@@ -65,10 +65,14 @@ export type UpdateTemplateInput = typeof UpdateTemplateInput.Type;
 
 export const AudienceEligibility = Schema.Literal("eligible", "missingEmail");
 export type AudienceEligibility = typeof AudienceEligibility.Type;
-export const AudienceDecision = Schema.Literal("accepted", "rejected", "mixed");
+export const AudienceDecision = Schema.Literal("accepted", "rejected");
 export type AudienceDecision = typeof AudienceDecision.Type;
 
+export const audienceRecipientKey = (speakerId: string, decision: AudienceDecision): string =>
+  `${speakerId}:${decision}`;
+
 export const AudienceRecipient = Schema.Struct({
+  recipientKey: Schema.String.pipe(Schema.minLength(1)),
   speakerId: EntityId,
   userId: Schema.Union(EntityId, Schema.Null),
   name: Schema.String,
@@ -99,7 +103,7 @@ export const PreviewCommunicationInput = Schema.Struct({
   textBody: TemplateBody,
   htmlBody: TemplateBody,
   attachIcs: Schema.Boolean,
-  speakerId: Schema.Union(EntityId, Schema.Null),
+  recipientKey: Schema.Union(Schema.String.pipe(Schema.minLength(1)), Schema.Null),
 });
 export type PreviewCommunicationInput = typeof PreviewCommunicationInput.Type;
 
@@ -184,7 +188,7 @@ export const EnqueueCommunicationInput = Schema.Struct({
   eventId: EntityId,
   templateId: EntityId,
   expectedTemplateVersion: ExpectedVersion,
-  recipientSpeakerIds: Schema.NonEmptyArray(EntityId),
+  recipientKeys: Schema.NonEmptyArray(Schema.String.pipe(Schema.minLength(1))),
   replyToEmail: NullableMailbox,
   scheduledFor: Schema.Union(UnixTimestampMs, Schema.Null),
   idempotencyKey: IdempotencyKey,

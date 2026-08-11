@@ -39,7 +39,7 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
   const [preset, setPreset] = useState<EmbedPreset>("agenda");
   const [aesthetic, setAesthetic] = useState<EmbedAesthetic>(DEFAULT_EMBED_DESIGN.aesthetic);
   const [accent, setAccent] = useState(DEFAULT_EMBED_DESIGN.accent);
-  const [track, setTrack] = useState("");
+  const [trackId, setTrackId] = useState("");
   const [fields, setFields] = useState<ReadonlySet<string>>(new Set(PRESETS.schedule[1]!.fields));
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
@@ -59,14 +59,16 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
   }, [agenda.eventId]);
 
   const selected = useMemo(() => definitions?.find(({ id }) => id === editingId) ?? null, [definitions, editingId]);
-  const tracks = [...new Set(agenda.talks.flatMap((talk) => talk.track ? [talk.track] : []))].sort();
+  const tracks = [...new Map(agenda.talks.flatMap((talk) =>
+    talk.trackId && talk.track ? [[talk.trackId, { id: talk.trackId, name: talk.track }] as const] : []
+  )).values()].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 
   const chooseWidget = (next: EmbedWidget) => {
     const nextPreset = PRESETS[next][0]!;
     setWidget(next);
     setPreset(nextPreset.value);
     setFields(new Set(nextPreset.fields));
-    setTrack("");
+    setTrackId("");
   };
   const choosePreset = (next: EmbedPreset) => {
     setPreset(next);
@@ -80,7 +82,7 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
     setPreset("agenda");
     setAesthetic(DEFAULT_EMBED_DESIGN.aesthetic);
     setAccent(DEFAULT_EMBED_DESIGN.accent);
-    setTrack("");
+    setTrackId("");
     setFields(new Set(PRESETS.schedule[1]!.fields));
   };
   const edit = (definition: EmbedDefinition) => {
@@ -90,7 +92,7 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
     setPreset(definition.preset);
     setAesthetic(definition.aesthetic);
     setAccent(definition.accent);
-    setTrack(definition.track ?? "");
+    setTrackId(definition.trackId ?? tracks.find(({ name }) => name === definition.track)?.id ?? "");
     setFields(new Set(definition.fields));
     setStatus(`Editing “${definition.name}”.`);
   };
@@ -105,7 +107,8 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
         preset,
         aesthetic,
         accent: normalizeEmbedAccent(accent),
-        track: widget === "schedule" ? track.trim() || null : null,
+        trackId: widget === "schedule" ? trackId || null : null,
+        track: widget === "schedule" ? tracks.find(({ id }) => id === trackId)?.name ?? null : null,
         fields: widget === "schedule" ? [...fields] as (typeof SCHEDULE_EMBED_FIELDS)[number][] : [],
         enabled: selected?.enabled ?? true,
       } as const;
@@ -132,6 +135,7 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
         preset: definition.preset,
         aesthetic: definition.aesthetic,
         accent: definition.accent,
+        trackId: definition.trackId,
         track: definition.track,
         fields: [...definition.fields],
         enabled: !definition.enabled,
@@ -165,8 +169,8 @@ export function EmbedManager({ agenda }: { readonly agenda: PublishedAgenda }) {
             <option value="bold">Bold &amp; energetic</option><option value="minimal">Clean &amp; minimal</option><option value="editorial">Editorial</option>
           </Select>
           <Input label="Brand color" type="color" value={accent} onChange={(event) => setAccent(event.currentTarget.value)} />
-          {widget === "schedule" ? <Select label="Track filter" value={track} onChange={(event) => setTrack(event.currentTarget.value)}>
-            <option value="">All tracks</option>{tracks.map((value) => <option key={value} value={value}>{value}</option>)}
+          {widget === "schedule" ? <Select label="Track filter" value={trackId} onChange={(event) => setTrackId(event.currentTarget.value)}>
+            <option value="">All tracks</option>{tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}
           </Select> : null}
         </div>
         {widget === "schedule" ? <fieldset className="mt-5 border-2 border-line-strong bg-surface-muted p-4">

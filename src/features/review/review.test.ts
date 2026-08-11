@@ -964,7 +964,7 @@ describe("review and acceptance slice", () => {
     expect(changes[0]).toMatchObject({ eventType: "review.comment.created", aggregateType: "reviewComment" });
     expect(changes[0]?.audiences).toEqual([
       { kind: "admins" },
-      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId, "user_reviewer_dev"] },
+      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId] },
     ]);
     expect(audits).toHaveLength(2);
     expect(audits[0]).toMatchObject({ action: "review.appendComment", actorUserId: fixtureReviewerId });
@@ -1579,6 +1579,14 @@ describe("review and acceptance slice", () => {
     }));
     expect(saved.review.score).toBe(4);
     expect(saved.submissionStatus).not.toBe("accepted");
+    const [scoreChange] = await db.select().from(domainChanges).where(eq(
+      domainChanges.requestId,
+      "request_assigned_score_allowed",
+    ));
+    expect(scoreChange?.audiences).toEqual([
+      { kind: "admins" },
+      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId] },
+    ]);
     const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_30"));
     expect(submission?.status).toBe("submitted");
   });
@@ -1718,6 +1726,11 @@ describe("review and acceptance slice", () => {
     expect(result.submissionStatus).not.toBe("accepted");
     const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_31"));
     expect(submission?.status).toBe("submitted");
+    const [change] = await db.select().from(domainChanges).where(eq(domainChanges.requestId, "request_ai_01"));
+    expect(change?.audiences).toEqual([
+      { kind: "admins" },
+      { kind: "reviewers", reviewerUserIds: [fixtureReviewerId] },
+    ]);
   });
 
   it("queues idempotent reminders only for reviewers with outstanding assignments", async () => {

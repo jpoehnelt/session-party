@@ -1019,6 +1019,7 @@ export const embeds = sqliteTable("embeds", {
   preset: text("preset", { enum: ["sessions", "agenda", "itinerary", "speakerList", "speakerGallery"] }).notNull(),
   aesthetic: text("aesthetic", { enum: ["bold", "minimal", "editorial"] }).notNull().default("bold"),
   accent: text("accent").notNull().default("#7857FF"),
+  trackId: text("track_id"),
   track: text("track"),
   fields: text("fields", { mode: "json" }).$type<readonly string[]>().notNull(),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
@@ -1027,6 +1028,9 @@ export const embeds = sqliteTable("embeds", {
 }, (t) => [
   uniqueIndex("embeds_event_id_unique").on(t.eventId, t.id),
   index("embeds_event_updated").on(t.eventId, t.updatedAt),
+  index("embeds_track").on(t.eventId, t.trackId),
+  foreignKey({ columns: [t.eventId, t.trackId], foreignColumns: [tracks.eventId, tracks.id], name: "embeds_track_fk" })
+    .onDelete("restrict").onUpdate("cascade"),
   check("embeds_name_nonempty", sql`length(trim(${t.name})) > 0`),
   check("embeds_accent_hex", sql`${t.accent} glob '#[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]'`),
   check("embeds_version_positive", sql`${t.version} > 0`),

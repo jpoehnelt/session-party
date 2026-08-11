@@ -11,17 +11,17 @@ import {
 const baseRequest = {
   templateId: "template-1",
   expectedTemplateVersion: 3,
-  recipientSpeakerIds: ["speaker-1"],
+  recipientKeys: ["speaker-1"],
   replyToEmail: "team@example.com",
   idempotencyKey: "comms-enqueue-schedule-001",
 } as const;
 
-const campaignIdentity = (recipientSpeakerIds: readonly string[] = ["speaker-1"]) =>
+const campaignIdentity = (recipientKeys: readonly string[] = ["speaker-1"]) =>
   campaignConfirmationIdentity({
     eventId: "event-1",
     templateId: "template-1",
     templateVersion: 3,
-    recipientSpeakerIds,
+    recipientKeys,
     replyToEmail: "team@example.com",
     sendMode: "now",
     scheduledWallTime: "",
@@ -101,7 +101,7 @@ describe("communications scheduling control", () => {
     const request = buildEnqueueRequest({
       templateId: "template-1",
       expectedTemplateVersion: 3,
-      recipientSpeakerIds: ["speaker-1"],
+      recipientKeys: ["speaker-1"],
       replyToEmail: "team@example.com",
     }, "now", "", "America/Los_Angeles");
     let rejectFirst!: (error: Error) => void;
@@ -147,7 +147,7 @@ describe("communications scheduling control", () => {
       eventId: "event-1",
       templateId: "template-1",
       templateVersion: 3,
-      recipientSpeakerIds: ["speaker-1", "speaker-2"],
+      recipientKeys: ["speaker-1", "speaker-2"],
       replyToEmail: "other@example.com",
       sendMode: "now",
       scheduledWallTime: "",

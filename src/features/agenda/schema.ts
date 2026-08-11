@@ -251,6 +251,7 @@ export const PublicAgendaTalk = Schema.Struct({
   id: EntityId,
   title: Schema.String,
   description: Schema.Union(Schema.String, Schema.Null),
+  trackId: Schema.optional(Schema.Union(EntityId, Schema.Null)),
   track: Schema.Union(Schema.String, Schema.Null),
   room: Schema.Union(Schema.String, Schema.Null),
   startsAt: UnixTimestampMs,
@@ -267,6 +268,8 @@ export const PublishedAgenda = Schema.Struct({
   location: Schema.Union(Schema.String, Schema.Null),
   revision: Schema.Int.pipe(Schema.positive()),
   publishedAt: UnixTimestampMs,
+  calendarRevision: Schema.optional(Schema.Int.pipe(Schema.positive())),
+  calendarUpdatedAt: Schema.optional(UnixTimestampMs),
   talks: Schema.Array(PublicAgendaTalk),
 });
 export type PublishedAgenda = typeof PublishedAgenda.Type;

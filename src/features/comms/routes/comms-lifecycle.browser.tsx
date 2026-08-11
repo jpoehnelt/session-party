@@ -33,6 +33,7 @@ const audience = {
   eventId: "event-1",
   recipients: [
     {
+      recipientKey: "speaker-1:accepted",
       speakerId: "speaker-1",
       userId: "user-1",
       name: "Ada Speaker",
@@ -42,6 +43,7 @@ const audience = {
       eligibility: "eligible" as const,
     },
     {
+      recipientKey: "speaker-2:rejected",
       speakerId: "speaker-2",
       userId: "user-2",
       name: "Lin Applicant",
@@ -190,6 +192,6 @@ describe("rendered campaign confirmation lifecycle", () => {
     const enqueueCall = apiMocks.apiFetch.mock.calls.find(
       ([path, options]) => options?.method === "POST" && path.endsWith("/deliveries"),
     );
-    expect(enqueueCall?.[1].body).toMatchObject({ recipientSpeakerIds: ["speaker-2"] });
+    expect(enqueueCall?.[1].body).toMatchObject({ recipientKeys: ["speaker-2:rejected"] });
   });
 });

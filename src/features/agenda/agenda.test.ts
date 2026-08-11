@@ -1934,8 +1934,8 @@ describe("agenda service", () => {
       seeded.user,
       getPublishedAgenda({ eventSlug: seeded.eventSlug }),
     );
-    expect(stillPublished).toEqual({
-      ...firstPublication,
+    expect(stillPublished).toMatchObject({
+      revision: firstPublication.revision,
       talks: firstPublication.talks.map((talk) => ({
         ...talk,
         room: "Summit",
@@ -1943,6 +1943,7 @@ describe("agenda service", () => {
         durationMin: 30,
       })),
     });
+    expect(stillPublished.calendarRevision).toBeGreaterThan(firstPublication.calendarRevision!);
     const publicationChanges = await seeded.db.select().from(domainChanges).where(and(
       eq(domainChanges.eventId, seeded.eventId),
       eq(domainChanges.aggregateType, "agenda-publication"),

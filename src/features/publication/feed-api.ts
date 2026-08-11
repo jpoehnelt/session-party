@@ -66,6 +66,8 @@ const feedHeaders = (
 ): Headers => {
   const suffix = talkId ? `session-${talkId}` : "schedule";
   const extension = kind === "calendar" ? "ics" : "json";
+  const revision = kind === "calendar" ? agenda.calendarRevision ?? agenda.revision : agenda.revision;
+  const updatedAt = kind === "calendar" ? agenda.calendarUpdatedAt ?? agenda.publishedAt : agenda.publishedAt;
   return new Headers({
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": CACHE_CONTROL,
@@ -73,10 +75,10 @@ const feedHeaders = (
     "Content-Type": kind === "calendar"
       ? "text/calendar; charset=utf-8"
       : "application/json; charset=utf-8",
-    ETag: `"${agenda.eventId}:r${agenda.revision}:c${contentFingerprint(agenda)}:${suffix}:${extension}${track ? `:track:${encodeURIComponent(track)}` : ""}:fields:${[...fields].sort().join(".")}"`,
-    "Last-Modified": new Date(agenda.publishedAt).toUTCString(),
+    ETag: `"${agenda.eventId}:r${revision}:c${contentFingerprint(agenda)}:${suffix}:${extension}${track ? `:track:${encodeURIComponent(track)}` : ""}:fields:${[...fields].sort().join(".")}"`,
+    "Last-Modified": new Date(updatedAt).toUTCString(),
     "X-Content-Type-Options": "nosniff",
-    "X-Session-Party-Revision": String(agenda.revision),
+    "X-Session-Party-Revision": String(revision),
   });
 };
 

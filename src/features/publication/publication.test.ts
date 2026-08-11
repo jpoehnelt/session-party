@@ -22,6 +22,7 @@ import {
 } from "@/features/agenda/operations";
 import { getPublishedAgenda, publishAgenda } from "@/features/agenda/service";
 import { AppLayer, type Authorizer, CurrentUser, Db } from "@/server/services";
+import { filterPublishedAgenda } from "./embed-content";
 import { createEmbed, getPublicEmbed, listEmbeds, updateEmbed } from "./service";
 
 interface TestEnv extends Cloudflare.Env {
@@ -191,6 +192,7 @@ const seedPublication = async (name: string) => {
     eventId,
     eventSlug,
     owner: browserPrincipal(ownerId),
+    trackId,
     visibleSpeakerId,
   };
 };
@@ -210,6 +212,7 @@ describe("publication boundary", () => {
       preset: "agenda",
       aesthetic: "minimal",
       accent: "#005a9c",
+      trackId: seeded.trackId,
       track: "Systems",
       fields: ["title", "time", "room"],
       enabled: true,
@@ -229,6 +232,23 @@ describe("publication boundary", () => {
     expect(publicResponse.status).toBe(200);
     expect(await publicResponse.json()).toEqual(created);
 
+    await runAs(seeded.owner, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publication-stable-embed-track-0001",
+    }));
+    await seeded.db.update(tracks).set({
+      name: "Systems & Scale",
+      version: 2,
+      updatedAt: new Date(Date.now()),
+    }).where(eq(tracks.id, seeded.trackId));
+    const renamed = await Effect.runPromise(getPublicEmbed({ eventSlug: seeded.eventSlug, embedId: created.id }).pipe(Effect.provide(AppLayer(env))));
+    expect(renamed).toMatchObject({ trackId: seeded.trackId, track: "Systems & Scale" });
+    const liveAgenda = await runAs(seeded.owner, getPublishedAgenda({ eventSlug: seeded.eventSlug }));
+    expect(filterPublishedAgenda(liveAgenda, renamed.track, renamed.trackId).talks).toHaveLength(1);
+
     const disabled = await runAs(seeded.owner, updateEmbed({
       eventId: seeded.eventId,
       embedId: created.id,
@@ -238,7 +258,8 @@ describe("publication boundary", () => {
       preset: created.preset,
       aesthetic: created.aesthetic,
       accent: created.accent,
-      track: created.track,
+      trackId: renamed.trackId,
+      track: renamed.track,
       fields: [...created.fields],
       enabled: false,
     }));
@@ -256,7 +277,8 @@ describe("publication boundary", () => {
       preset: created.preset,
       aesthetic: created.aesthetic,
       accent: created.accent,
-      track: created.track,
+      trackId: renamed.trackId,
+      track: renamed.track,
       fields: [...created.fields],
       enabled: true,
     }));
@@ -362,8 +384,8 @@ describe("publication boundary", () => {
       seeded.owner,
       getPublishedAgenda({ eventSlug: seeded.eventSlug }),
     );
-    expect(stillPublished).toEqual({
-      ...published,
+    expect(stillPublished).toMatchObject({
+      revision: published.revision,
       talks: published.talks.map((talk) => ({
         ...talk,
         title: "Unpublished agenda edit",
@@ -371,6 +393,7 @@ describe("publication boundary", () => {
         speakerNames: ["Unpublished speaker edit"],
       })),
     });
+    expect(stillPublished.calendarRevision).toBeGreaterThan(published.calendarRevision!);
     expect(JSON.stringify(stillPublished)).not.toContain("Private Speaker");
   });
 
@@ -423,7 +446,7 @@ describe("publication boundary", () => {
     expect(etag).toBeTruthy();
     const calendar = await calendarResponse.text();
     expect(calendar).toContain(`UID:${seeded.confirmedTalkId}@${seeded.eventId}.session-party`);
-    expect(calendar).toContain("SEQUENCE:1");
+    expect(calendar).toContain(`SEQUENCE:${published.calendarRevision}`);
     expect(calendar).toContain("SUMMARY:Effects at scale");
     expect(calendar).not.toContain("Private cancelled talk");
     expect(calendar).not.toContain("Private Speaker");
@@ -459,7 +482,7 @@ describe("publication boundary", () => {
     await seeded.db.update(talks).set({
       title: "Live feed title",
       version: 2,
-      updatedAt: new Date(FIXED_NOW + 2_000),
+      updatedAt: new Date(published.publishedAt + 2_000),
     }).where(eq(talks.id, seeded.confirmedTalkId));
     const refreshedJson = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/schedule.json`,
@@ -471,6 +494,16 @@ describe("publication boundary", () => {
       revision: 1,
       talks: [expect.objectContaining({ title: "Live feed title" })],
     }));
+    const refreshedCalendar = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.ics`,
+      { headers: { "If-None-Match": etag! } },
+    );
+    expect(refreshedCalendar.status).toBe(200);
+    expect(refreshedCalendar.headers.get("etag")).not.toBe(etag);
+    expect(refreshedCalendar.headers.get("last-modified")).not.toBe(calendarResponse.headers.get("last-modified"));
+    const refreshedCalendarBody = await refreshedCalendar.text();
+    expect(refreshedCalendarBody).toContain(`SEQUENCE:${published.calendarRevision! + 1}`);
+    expect(refreshedCalendarBody).toContain("SUMMARY:Live feed title");
 
     const missingSession = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/sessions/missing-session.ics`,

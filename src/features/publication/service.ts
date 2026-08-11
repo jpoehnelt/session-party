@@ -1,6 +1,6 @@
 import { Conflict, External, NotFound, Validation, type AppError } from "contracts/errors";
 import { eventAuthorization, type Principal } from "contracts/principal";
-import { domainChanges, embeds, events } from "contracts/schema";
+import { domainChanges, embeds, events, tracks } from "contracts/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { nanoid } from "nanoid";
@@ -46,26 +46,41 @@ const validPreset = (widget: EmbedWidget, preset: EmbedPreset): boolean =>
 const normalizedConfiguration = <T extends CreateEmbedInput | UpdateEmbedInput>(input: T) => {
   const name = input.name.trim();
   const accent = input.accent.toUpperCase();
-  const track = input.track?.trim() || null;
   const allowedFields = new Set<string>(SCHEDULE_EMBED_FIELDS);
   const fields = input.widget === "schedule"
     ? [...new Set(input.fields.filter((field): field is ScheduleEmbedField => allowedFields.has(field)))]
     : [];
-  return { name, accent, track, fields };
+  return { name, accent, fields };
 };
 
 const validateConfiguration = (input: CreateEmbedInput | UpdateEmbedInput) => {
   if (!validPreset(input.widget, input.preset)) {
     return Effect.fail(new Validation({ message: "Embed preset does not match the selected widget" }));
   }
-  if (input.widget === "speakerGallery" && (input.track !== null || input.fields.length > 0)) {
+  if (input.widget === "speakerGallery" && (input.trackId != null || input.track !== null || input.fields.length > 0)) {
     return Effect.fail(new Validation({ message: "Speaker gallery embeds do not accept schedule filters" }));
   }
   return Effect.void;
 };
 
+const resolveTrackConfiguration = (input: CreateEmbedInput | UpdateEmbedInput) => Effect.gen(function* () {
+  if (input.widget !== "schedule") return { trackId: null, track: null } as const;
+  const trackId = input.trackId ?? null;
+  const trackName = input.track?.trim() || null;
+  if (trackId === null && trackName === null) return { trackId: null, track: null } as const;
+  const { db } = yield* Db;
+  const [resolved] = yield* database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(and(
+    eq(tracks.eventId, input.eventId),
+    trackId === null ? eq(tracks.name, trackName!) : eq(tracks.id, trackId),
+  )).limit(1));
+  if (!resolved) {
+    return yield* Effect.fail(new Validation({ message: "Embed track filter must reference a current event track" }));
+  }
+  return { trackId: resolved.id, track: resolved.name } as const;
+});
+
 type EmbedRow = typeof embeds.$inferSelect;
-const view = (row: EmbedRow, eventSlug: string): EmbedDefinition => ({
+const view = (row: EmbedRow, eventSlug: string, currentTrackName: string | null = null): EmbedDefinition => ({
   id: row.id,
   eventId: row.eventId,
   eventSlug,
@@ -74,7 +89,8 @@ const view = (row: EmbedRow, eventSlug: string): EmbedDefinition => ({
   preset: row.preset,
   aesthetic: row.aesthetic,
   accent: row.accent,
-  track: row.track,
+  trackId: row.trackId,
+  track: row.trackId === null ? row.track : currentTrackName ?? row.track,
   fields: row.fields as readonly ScheduleEmbedField[],
   enabled: row.enabled,
   version: row.version,
@@ -93,8 +109,10 @@ export const listEmbeds = (input: ListEmbedsInput): Effect.Effect<readonly Embed
   yield* organizer(input.eventId);
   const slug = yield* eventSlug(input.eventId);
   const { db } = yield* Db;
-  const rows = yield* database(() => db.select().from(embeds).where(eq(embeds.eventId, input.eventId)).orderBy(desc(embeds.updatedAt)));
-  return rows.map((row) => view(row, slug));
+  const rows = yield* database(() => db.select({ embed: embeds, currentTrackName: tracks.name }).from(embeds)
+    .leftJoin(tracks, and(eq(tracks.eventId, embeds.eventId), eq(tracks.id, embeds.trackId)))
+    .where(eq(embeds.eventId, input.eventId)).orderBy(desc(embeds.updatedAt)));
+  return rows.map((row) => view(row.embed, slug, row.currentTrackName));
 });
 
 export const createEmbed = (input: CreateEmbedInput): Effect.Effect<EmbedDefinition, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
@@ -103,7 +121,7 @@ export const createEmbed = (input: CreateEmbedInput): Effect.Effect<EmbedDefinit
   const slug = yield* eventSlug(input.eventId);
   const { db } = yield* Db;
   const timestamp = new Date();
-  const config = normalizedConfiguration(input);
+  const config = { ...normalizedConfiguration(input), ...(yield* resolveTrackConfiguration(input)) };
   const row = {
     id: `embed_${nanoid()}`,
     eventId: input.eventId,
@@ -134,7 +152,7 @@ export const createEmbed = (input: CreateEmbedInput): Effect.Effect<EmbedDefinit
       occurredAt: timestamp,
     }),
   ]));
-  return view(row, slug);
+  return view(row, slug, config.track);
 });
 
 export const updateEmbed = (input: UpdateEmbedInput): Effect.Effect<EmbedDefinition, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
@@ -144,6 +162,7 @@ export const updateEmbed = (input: UpdateEmbedInput): Effect.Effect<EmbedDefinit
   const { db } = yield* Db;
   const timestamp = new Date();
   const version = input.expectedVersion + 1;
+  const config = { ...normalizedConfiguration(input), ...(yield* resolveTrackConfiguration(input)) };
   const guard = and(eq(embeds.eventId, input.eventId), eq(embeds.id, input.embedId), eq(embeds.version, input.expectedVersion));
   const changeId = `change_${nanoid()}`;
   const requestId = `publication_request_${nanoid()}`;
@@ -167,7 +186,7 @@ export const updateEmbed = (input: UpdateEmbedInput): Effect.Effect<EmbedDefinit
       occurredAt: sql<Date>`${timestamp.getTime()}`.as("occurred_at"),
     }).from(embeds).where(guard)),
     db.update(embeds).set({
-      ...normalizedConfiguration(input),
+      ...config,
       widget: input.widget,
       preset: input.preset,
       aesthetic: input.aesthetic,
@@ -178,17 +197,18 @@ export const updateEmbed = (input: UpdateEmbedInput): Effect.Effect<EmbedDefinit
   ]));
   const row = rows[0];
   if (!row) return yield* Effect.fail(new Conflict({ message: "Embed changed; reload before saving" }));
-  return view(row, slug);
+  return view(row, slug, config.track);
 });
 
 export const getPublicEmbed = (input: PublicEmbedInput): Effect.Effect<EmbedDefinition, AppError, Db> => Effect.gen(function* () {
   const { db } = yield* Db;
-  const [row] = yield* database(() => db.select({ embed: embeds, slug: events.slug }).from(embeds)
+  const [row] = yield* database(() => db.select({ embed: embeds, slug: events.slug, currentTrackName: tracks.name }).from(embeds)
     .innerJoin(events, eq(events.id, embeds.eventId))
+    .leftJoin(tracks, and(eq(tracks.eventId, embeds.eventId), eq(tracks.id, embeds.trackId)))
     .where(and(eq(events.slug, input.eventSlug), eq(embeds.id, input.embedId), eq(embeds.enabled, true)))
     .limit(1));
   if (!row) return yield* Effect.fail(new NotFound({ entity: "embed", id: input.embedId }));
-  return view(row.embed, row.slug);
+  return view(row.embed, row.slug, row.currentTrackName);
 });
 
 export { authorization as embedOrganizerAuthorization };

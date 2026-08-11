@@ -42,6 +42,7 @@ import {
 } from "./calendar";
 
 import {
+  audienceRecipientKey,
   AudienceSnapshot,
   CommunicationPreview,
   CommunicationTemplate,
@@ -498,17 +499,18 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
         .where(and(eq(submissions.eventId, eventId), inArray(submissions.status, ["accepted", "rejected"])))
         .orderBy(asc(submissions.submittedAt), asc(submissions.id), asc(speakers.id)),
     );
-    const bySpeaker = new Map<string, AudienceRecipient>();
+    const byDecisionRecipient = new Map<string, AudienceRecipient>();
     for (const row of rows) {
-      const existing = bySpeaker.get(row.speakerId);
+      const recipientKey = audienceRecipientKey(row.speakerId, row.decision);
+      const existing = byDecisionRecipient.get(recipientKey);
       if (existing) {
-        bySpeaker.set(row.speakerId, {
+        byDecisionRecipient.set(recipientKey, {
           ...existing,
-          decision: existing.decision === row.decision ? existing.decision : "mixed",
           sessionTitles: [...existing.sessionTitles, row.sessionTitle].sort(),
         });
       } else {
-        bySpeaker.set(row.speakerId, {
+        byDecisionRecipient.set(recipientKey, {
+          recipientKey,
           speakerId: row.speakerId,
           userId: row.userId,
           name: row.speakerName,
@@ -519,7 +521,10 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
         });
       }
     }
-    const recipients = [...bySpeaker.values()].sort((left, right) => left.name.localeCompare(right.name) || left.speakerId.localeCompare(right.speakerId));
+    const recipients = [...byDecisionRecipient.values()].sort((left, right) =>
+      left.name.localeCompare(right.name)
+      || left.speakerId.localeCompare(right.speakerId)
+      || left.decision.localeCompare(right.decision));
     return {
       eventId,
       recipients,
@@ -833,10 +838,14 @@ export const previewCommunication = (
     const queue = yield* MailQueue;
     const event = yield* eventIdentity(input.eventId);
     const audience = yield* loadAudience(input.eventId);
-    const selected = input.speakerId === null
+    const selected = input.recipientKey === null
       ? null
-      : audience.recipients.find((recipient) => recipient.speakerId === input.speakerId) ?? null;
-    if (input.speakerId !== null && (!selected || selected.email === null)) {
+      : audience.recipients.find((recipient) => recipient.recipientKey === input.recipientKey)
+        ?? (() => {
+          const legacyMatches = audience.recipients.filter((recipient) => recipient.speakerId === input.recipientKey);
+          return legacyMatches.length === 1 ? legacyMatches[0]! : null;
+        })();
+    if (input.recipientKey !== null && (!selected || selected.email === null)) {
       return yield* Effect.fail(new Validation({ message: "Preview speaker must be a decided applicant with an email address" }));
     }
     const published = yield* loadPublishedTalks(
@@ -847,7 +856,12 @@ export const previewCommunication = (
     const eventAtPublication = publicationEventIdentity(event, published.publication, published.delivery);
     const portalUrl = speakerPortalUrl(queue.appOrigin, eventAtPublication.slug);
     const personalized = selected
-      ? personalizedContext(selected, eventAtPublication, portalUrl, published.talks.get(selected.speakerId) ?? [])
+      ? personalizedContext(
+          selected,
+          eventAtPublication,
+          portalUrl,
+          selected.decision === "accepted" ? published.talks.get(selected.speakerId) ?? [] : [],
+        )
       : sampleContext(eventAtPublication, portalUrl);
     const rendered = renderCommunication(
       input.subject.trim(),
@@ -884,7 +898,7 @@ export const enqueueCommunication = (
   input: EnqueueCommunicationInput,
 ): Effect.Effect<EnqueueCommunicationResult, AppError, Authorizer | CurrentUser | Db | MailQueue> =>
   Effect.gen(function* () {
-    const normalizedRequest = { ...input, recipientSpeakerIds: [...input.recipientSpeakerIds].sort() };
+    const normalizedRequest = { ...input, recipientKeys: [...input.recipientKeys].sort() };
     const prepared = yield* prepareCommand(
       "comms.enqueueCommunication",
       input.eventId,
@@ -899,11 +913,11 @@ export const enqueueCommunication = (
       return prepared.replay;
     }
     const { db } = yield* Db;
-    const uniqueSpeakerIds = [...new Set(input.recipientSpeakerIds)];
-    if (uniqueSpeakerIds.length !== input.recipientSpeakerIds.length) {
-      return yield* Effect.fail(new Validation({ message: "Each audience speaker may be selected only once" }));
+    const uniqueRecipientKeys = [...new Set(input.recipientKeys)];
+    if (uniqueRecipientKeys.length !== input.recipientKeys.length) {
+      return yield* Effect.fail(new Validation({ message: "Each decision recipient may be selected only once" }));
     }
-    if (uniqueSpeakerIds.length > 500) {
+    if (uniqueRecipientKeys.length > 500) {
       return yield* Effect.fail(new Validation({
         message: "At most 500 recipients may be queued in one request; Scheduler dispatch budgets govern sending",
       }));
@@ -930,12 +944,18 @@ export const enqueueCommunication = (
     );
     const event = yield* eventIdentity(input.eventId);
     const audience = yield* loadAudience(input.eventId);
-    const audienceBySpeaker = new Map(audience.recipients.map((recipient) => [recipient.speakerId, recipient]));
-    const selected = uniqueSpeakerIds.map((speakerId) => audienceBySpeaker.get(speakerId));
+    const audienceByKey = new Map(audience.recipients.map((recipient) => [recipient.recipientKey, recipient]));
+    const selected = uniqueRecipientKeys.map((recipientKey) => {
+      const exact = audienceByKey.get(recipientKey);
+      if (exact) return exact;
+      const legacyMatches = audience.recipients.filter((recipient) => recipient.speakerId === recipientKey);
+      return legacyMatches.length === 1 ? legacyMatches[0] : undefined;
+    });
     if (selected.some((recipient) => !recipient || recipient.email === null)) {
       return yield* Effect.fail(new Validation({ message: "Audience must contain only accepted or rejected applicants with email addresses" }));
     }
     const recipients = selected as readonly (AudienceRecipient & { readonly email: string })[];
+    const uniqueSpeakerIds = [...new Set(recipients.map((recipient) => recipient.speakerId))];
     const published = yield* loadPublishedTalks(input.eventId, event.slug, uniqueSpeakerIds);
     const eventAtPublication = publicationEventIdentity(event, published.publication, published.delivery);
     const portalUrl = speakerPortalUrl(queue.appOrigin, eventAtPublication.slug);
@@ -945,7 +965,7 @@ export const enqueueCommunication = (
         recipient,
         eventAtPublication,
         portalUrl,
-        published.talks.get(recipient.speakerId) ?? [],
+        recipient.decision === "accepted" ? published.talks.get(recipient.speakerId) ?? [] : [],
       ),
     }));
     for (const item of personalized) {
@@ -962,7 +982,7 @@ export const enqueueCommunication = (
       }
       if (unavailable.includes("talk.time") || unavailable.includes("talk.room")) {
         return yield* Effect.fail(new Conflict({
-          message: `Accepted speaker '${item.recipient.name}' has no confirmed agenda talk with a start time and room`,
+          message: `Recipient '${item.recipient.name}' has no confirmed agenda talk with a start time and room`,
         }));
       }
       if (template.attachIcs && item.prepared.talks.length === 0) {
