@@ -400,6 +400,99 @@ test("speaker directory search, selection, and bulk-action disabled state remain
   await expect(invite).toBeDisabled();
 });
 
+test("direct speaker creation validates, resets, preserves a rejected draft, and persists privately", async ({ context, page, request, baseURL }, testInfo) => {
+  desktopOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const collectionPath = `/api/v1/events/${EVENT_ID}/portal/speakers`;
+  const publicPath = `/api/v1/public/events/${EVENT}/speakers`;
+  const ownerHeaders = { Cookie: `sp_session=${OWNER_SESSION}` };
+  type Speaker = Readonly<{
+    id: string;
+    displayName: string;
+    contactEmail: string | null;
+    title: string | null;
+    company: string | null;
+    bio: string | null;
+    workflowStatus: string;
+    visible: boolean;
+  }>;
+  type Directory = Readonly<{ speakers: readonly Readonly<{ source: string; speaker: Speaker }>[] }>;
+  const loadDirectory = async (): Promise<Directory> => {
+    const response = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<Directory>;
+  };
+  const loadPublic = async (): Promise<unknown> => {
+    const response = await request.get(publicPath);
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const initial = await loadDirectory();
+  const duplicateEmail = initial.speakers.find(({ speaker }) => speaker.contactEmail !== null)!.speaker.contactEmail!;
+  const publicBefore = await loadPublic();
+  const suffix = testInfo.project.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const createdName = `QA Direct Speaker ${suffix}`;
+  const createdEmail = `qa-direct-${suffix}@sessionparty.local`;
+
+  await openOwnerPage(context, page, runtimeBaseURL, "/speakers");
+  const form = page.getByRole("button", { name: "Add speaker" }).locator("xpath=ancestor::form");
+  const name = form.getByLabel("Display name");
+  const email = form.getByLabel("Contact email");
+  const status = form.getByLabel("Workflow status");
+  const visible = form.getByLabel("Visible when published");
+
+  await form.getByRole("button", { name: "Add speaker" }).click();
+  expect(await name.evaluate((element) => (element as HTMLInputElement).validity.valueMissing)).toBe(true);
+  expect(await email.evaluate((element) => (element as HTMLInputElement).validity.valueMissing)).toBe(true);
+  expect((await loadDirectory()).speakers).toHaveLength(initial.speakers.length);
+
+  await name.fill("Discard this speaker draft");
+  await email.fill("discard-this-speaker@sessionparty.local");
+  await status.fill("Confirmed");
+  await visible.uncheck();
+  await form.getByRole("button", { name: "Reset" }).click();
+  await expect(name).toHaveValue("");
+  await expect(email).toHaveValue("");
+  await expect(status).toHaveValue("Invited");
+  await expect(visible).toBeChecked();
+
+  await name.fill(createdName);
+  await email.fill(duplicateEmail);
+  await form.getByLabel("Title").fill("QA duplicate draft title");
+  await form.getByRole("button", { name: "Add speaker" }).click();
+  await expect(page.getByText("A speaker with this contact email already exists", { exact: true }).first()).toBeVisible();
+  await expect(name).toHaveValue(createdName);
+  await expect(email).toHaveValue(duplicateEmail);
+  await expect(form.getByLabel("Title")).toHaveValue("QA duplicate draft title");
+  expect((await loadDirectory()).speakers).toHaveLength(initial.speakers.length);
+
+  await email.fill(createdEmail);
+  await form.getByLabel("Title").fill("Principal QA Engineer");
+  await form.getByLabel("Company").fill("Session Party QA");
+  await form.getByLabel("Biography").fill("Created through the disposable sandbox QA workflow.");
+  await form.getByRole("button", { name: "Add speaker" }).click();
+  await expect(page.getByText("Speaker added", { exact: true }).first()).toBeVisible();
+  await expect(name).toHaveValue("");
+  await expect(email).toHaveValue("");
+  await expect(status).toHaveValue("Invited");
+  await expect(visible).toBeChecked();
+  await expect.poll(async () => (await loadDirectory()).speakers.find(({ speaker }) => speaker.contactEmail === createdEmail)?.speaker).toMatchObject({
+    displayName: createdName,
+    title: "Principal QA Engineer",
+    company: "Session Party QA",
+    workflowStatus: "Invited",
+    visible: true,
+  });
+  expect(await loadPublic()).toEqual(publicBefore);
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("searchbox", { name: "Search speakers" }).fill(createdEmail);
+  const createdRow = page.getByRole("row").filter({ hasText: createdName });
+  await expect(createdRow).toHaveCount(1);
+  await expect(createdRow).toContainText("Direct");
+  await expect(createdRow).toContainText("Principal QA Engineer");
+});
+
 test("speaker editor exposes only managed profiles and preserves a stale writer until recovery", async ({ context, page, request, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";

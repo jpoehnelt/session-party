@@ -41,6 +41,13 @@ const repairMigration = (migrations: readonly MigrationShape[]): MigrationShape 
   return migration;
 };
 
+const speakerPublicationMigration = (migrations: readonly MigrationShape[]): MigrationShape => {
+  const migration = migrations.find(({ name }) =>
+    name.startsWith("0016_backfill_speaker_publications"));
+  if (!migration) throw new Error("Speaker-publication backfill migration is unavailable");
+  return migration;
+};
+
 const safeRows = async (db: D1Database, query: string): Promise<unknown> => {
   try {
     return (await db.prepare(query).all()).results;
@@ -310,7 +317,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(16);
+    expect(migrations).toHaveLength(17);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -325,7 +332,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(16);
+    expect(migrations).toHaveLength(17);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -501,7 +508,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(16);
+    expect(migrations).toHaveLength(17);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -599,7 +606,7 @@ describe("baseline migration parity", () => {
   it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(16);
+    expect(migrations).toHaveLength(17);
     await applyOneByOne(db, migrations.slice(0, 11));
     const now = 1_700_000_000_000;
     await db.batch([
@@ -653,10 +660,59 @@ describe("baseline migration parity", () => {
     await assertDatabaseIntegrity(db);
   });
 
+  it("freezes the latest legacy public speaker gallery without exposing ineligible profiles", async () => {
+    const migrations = testMigrations();
+    const db = (env as TestEnv).MIGRATION_DB;
+    expect(migrations).toHaveLength(17);
+    const backfill = speakerPublicationMigration(migrations);
+    expect(backfill.queries).toHaveLength(1);
+    expect(backfill.queries[0]).toContain("speaker_publication_backfill");
+    await applyOneByOne(db, migrations.filter((migration) => migration !== backfill));
+    const now = 1_700_000_000_000;
+    await db.batch([
+      db.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('speaker-publication-event', 'speaker-publication-event', 'Legacy published event', 'UTC', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO speakers (id, event_id, display_name, title, workflow_status, links, visible, version, created_at, updated_at) VALUES ('speaker-publication-eligible', 'speaker-publication-event', 'Published before migration', 'Keynote', 'Ready', '[]', 1, 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO speakers (id, event_id, display_name, workflow_status, links, visible, version, created_at, updated_at) VALUES ('speaker-publication-ineligible', 'speaker-publication-event', 'Unprovisioned private profile', 'Invited', '[]', 1, 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO managed_speaker_emails (id, event_id, normalized_email, speaker_id, created_at, updated_at) VALUES ('speaker-publication-managed', 'speaker-publication-event', 'published@example.com', 'speaker-publication-eligible', ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO domain_changes (id, event_id, aggregate_type, aggregate_id, aggregate_version, event_type, audiences, payload, request_id, occurred_at) VALUES ('legacy-agenda-publication-1', 'speaker-publication-event', 'agenda-publication', 'speaker-publication-event', 1, 'agenda/published', '[{\"kind\":\"public\"}]', '{\"revision\":1}', 'legacy-agenda-publication-1', ?)").bind(now),
+      db.prepare("INSERT INTO domain_changes (id, event_id, aggregate_type, aggregate_id, aggregate_version, event_type, audiences, payload, request_id, occurred_at) VALUES ('legacy-agenda-publication-2', 'speaker-publication-event', 'agenda-publication', 'speaker-publication-event', 2, 'agenda/published', '[{\"kind\":\"public\"}]', '{\"revision\":2}', 'legacy-agenda-publication-2', ?)").bind(now + 1),
+    ]);
+    expect(await db.prepare("SELECT count(*) AS count FROM domain_changes WHERE aggregate_type = 'agenda-publication'").first()).toEqual({ count: 2 });
+
+    // Execute the data migration directly: applyD1Migrations tracks filenames in
+    // the shared test binding, so a prior case that migrated an empty database can
+    // otherwise make this fixture's selective replay a no-op.
+    await db.batch(backfill.queries.map((query) => db.prepare(query)));
+    expect(await db.prepare(`
+      SELECT
+        aggregate_version,
+        json_extract(payload, '$.event.name') AS event_name,
+        json_array_length(json_extract(payload, '$.speakers')) AS speaker_count,
+        json_extract(payload, '$.speakers[0].displayName') AS speaker_name,
+        json_extract(payload, '$.speakers[0].title') AS speaker_title
+      FROM domain_changes
+      WHERE aggregate_type = 'speaker-publication'
+    `).first()).toEqual({
+      aggregate_version: 2,
+      event_name: "Legacy published event",
+      speaker_count: 1,
+      speaker_name: "Published before migration",
+      speaker_title: "Keynote",
+    });
+
+    await db.prepare("UPDATE speakers SET display_name = 'Unpublished later edit', version = 2, updated_at = ? WHERE id = 'speaker-publication-eligible'").bind(now + 2).run();
+    await db.batch(backfill.queries.map((query) => db.prepare(query)));
+    expect(await db.prepare("SELECT count(*) AS count, json_extract(max(payload), '$.speakers[0].displayName') AS speaker_name FROM domain_changes WHERE aggregate_type = 'speaker-publication'").first()).toEqual({
+      count: 1,
+      speaker_name: "Published before migration",
+    });
+    await assertDatabaseIntegrity(db);
+  });
+
   it("repairs duplicate current asset lineages before enforcing uniqueness", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(16);
+    expect(migrations).toHaveLength(17);
     const lineageMigration = migrations.find(({ name }) => name.startsWith("0012_groovy_epoch"));
     if (!lineageMigration) throw new Error("Asset-lineage migration is unavailable");
     await applyOneByOne(db, migrations.filter((migration) => migration !== lineageMigration));

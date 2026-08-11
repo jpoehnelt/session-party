@@ -72,6 +72,7 @@ import {
   type PortalTask,
   type PortalTaskDefinition,
   type ProvisionSpeakerInput,
+  PublishedSpeakerGallerySnapshot as PublishedSpeakerGallerySnapshotSchema,
   type PublicSpeakerGallery,
   type PublicSpeakersInput,
   type ReadinessSummary,
@@ -264,7 +265,7 @@ const speakerView = (
   pendingSyncFields: PROFILE_SYNC_FIELDS.filter((field) => pending.has(field)),
 });
 
-const eligibleProvisionedSpeakerIds = (
+export const eligiblePublicSpeakerIds = (
   eventIds: readonly string[],
 ): Effect.Effect<ReadonlySet<string>, External, Db> => Effect.gen(function* () {
   if (eventIds.length === 0) return new Set<string>();
@@ -3336,7 +3337,7 @@ export const sendSpeakerMessages = (input: SendSpeakerMessagesInput): Effect.Eff
   ]);
   const event = eventRows[0];
   if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
-  const eligibleSpeakerIds = yield* eligibleProvisionedSpeakerIds([input.eventId]);
+  const eligibleSpeakerIds = yield* eligiblePublicSpeakerIds([input.eventId]);
   const assignmentSet = new Set(assignments.map((assignment) => `${assignment.speakerId}\u0000${assignment.taskId}`));
   const completionSet = new Set(completions.map((completion) => `${completion.speakerId}\u0000${completion.taskId}`));
   const recipients = speakerRows.flatMap(({ speaker, userEmail, userName }) => {
@@ -3429,7 +3430,7 @@ export const enqueueAutomatedDueTaskReminders = (runAt = now()): Effect.Effect<{
       .leftJoin(users, eq(users.id, speakers.userId)).where(inArray(speakers.eventId, eventIds))),
     database(() => db.select().from(taskAssignments).where(inArray(taskAssignments.taskId, taskIds))),
     database(() => db.select({ speakerId: taskCompletions.speakerId, taskId: taskCompletions.taskId }).from(taskCompletions).where(inArray(taskCompletions.taskId, taskIds))),
-    eligibleProvisionedSpeakerIds(eventIds),
+    eligiblePublicSpeakerIds(eventIds),
   ]);
   const eventById = new Map(eventRows.map((event) => [event.id, event]));
   const assignmentSet = new Set(assignments.map((assignment) => `${assignment.speakerId}\u0000${assignment.taskId}`));
@@ -3799,34 +3800,37 @@ export const getPublicSpeakers = (input: PublicSpeakersInput): Effect.Effect<Pub
   const { db } = yield* Db;
   const [event] = yield* database(() => db.select().from(events).where(eq(events.slug, input.eventSlug)).limit(1));
   if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventSlug }));
-  const [rows, provisionedSpeakerIds, linkedSpeakerRows] = yield* Effect.all([
-    database(() => db.select({ speaker: speakers, asset: assets }).from(speakers)
-      .leftJoin(assets, and(eq(assets.eventId, speakers.eventId), eq(assets.id, speakers.headshotAssetId)))
-      .where(and(eq(speakers.eventId, event.id), eq(speakers.visible, true)))
-      .orderBy(asc(speakers.displayName), asc(speakers.id))),
-    eligibleProvisionedSpeakerIds([event.id]),
-    database(() => db.select({ speakerId: submissionSpeakers.speakerId }).from(submissionSpeakers)
-      .where(eq(submissionSpeakers.eventId, event.id))),
-  ]);
-  const linkedSpeakerIds = new Set(linkedSpeakerRows.map((row) => row.speakerId));
+  const [publication] = yield* database(() => db.select({ payload: domainChanges.payload }).from(domainChanges).where(and(
+    eq(domainChanges.eventId, event.id),
+    eq(domainChanges.aggregateType, "speaker-publication"),
+    eq(domainChanges.aggregateId, event.id),
+  )).orderBy(desc(domainChanges.aggregateVersion)).limit(1));
+  if (!publication) return yield* Effect.fail(new NotFound({ entity: "published speaker gallery", id: event.id }));
+  const snapshot = yield* Schema.decodeUnknown(PublishedSpeakerGallerySnapshotSchema)(publication.payload).pipe(
+    Effect.mapError(() => new External({ service: "database", detail: "Published speaker gallery is invalid" })),
+  );
+  const assetIds = snapshot.speakers.flatMap(({ headshotAssetId }) => headshotAssetId === null ? [] : [headshotAssetId]);
+  const assetRows = assetIds.length === 0 ? [] : yield* database(() => db.select().from(assets).where(and(
+    eq(assets.eventId, event.id),
+    inArray(assets.id, assetIds),
+  )));
+  const assetById = new Map(assetRows.map((asset) => [asset.id, asset] as const));
   const { get } = yield* Files;
-  const publicSpeakers = yield* Effect.forEach(rows.filter((row) =>
-    provisionedSpeakerIds.has(row.speaker.id) || !linkedSpeakerIds.has(row.speaker.id)
-  ), (row) => Effect.gen(function* () {
+  const publicSpeakers = yield* Effect.forEach(snapshot.speakers, (speaker) => Effect.gen(function* () {
     let headshotUrl: string | null = null;
-    if (row.asset && ["image/jpeg", "image/png", "image/webp"].includes(row.asset.contentType)) {
-      const object = yield* get(assetKey(event.id, row.asset.id));
+    const asset = speaker.headshotAssetId === null ? undefined : assetById.get(speaker.headshotAssetId);
+    if (asset && ["image/jpeg", "image/png", "image/webp"].includes(asset.contentType)) {
+      const object = yield* get(assetKey(event.id, asset.id));
       if (object) {
         const bytes = new Uint8Array(yield* fileEffect(() => object.arrayBuffer()));
         let binary = "";
         for (let offset = 0; offset < bytes.length; offset += 32_768) {
           binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
         }
-        headshotUrl = `data:${row.asset.contentType};base64,${btoa(binary)}`;
+        headshotUrl = `data:${asset.contentType};base64,${btoa(binary)}`;
       }
     }
-    return { id: row.speaker.id, displayName: row.speaker.displayName, title: row.speaker.title, company: row.speaker.company, bio: row.speaker.bio, headshotUrl, links: (row.speaker.links ?? []).filter((link) => safeHttpUrl(link.url)) };
+    return { id: speaker.id, displayName: speaker.displayName, title: speaker.title, company: speaker.company, bio: speaker.bio, headshotUrl, links: speaker.links.filter((link) => safeHttpUrl(link.url)) };
   }));
-  const unique = new Map(publicSpeakers.map((speaker) => [speaker.id, speaker]));
-  return { event: eventView(event), speakers: [...unique.values()] };
+  return { event: snapshot.event, speakers: publicSpeakers };
 });

@@ -38,6 +38,11 @@ import {
   stableCalendarUid,
   type CalendarEventSnapshot,
 } from "@/features/comms/calendar";
+import { eligiblePublicSpeakerIds } from "@/features/portal/service";
+import {
+  PublishedSpeakerGallerySnapshot as PublishedSpeakerGallerySnapshotSchema,
+  type PublishedSpeakerGallerySnapshot,
+} from "@/features/portal/schema";
 import {
   AgendaDeliveryProjection as AgendaDeliveryProjectionSchema,
   PublishedAgenda as PublishedAgendaSchema,
@@ -79,6 +84,7 @@ const PUBLIC_AUDIENCE = [{ kind: "public" }] as const;
 const TALK_CHANGE_EVENT = "agenda.talk_changed";
 const AGENDA_SNAPSHOT_MAX_ATTEMPTS = 3;
 const PUBLICATION_EVENT = "agenda/published";
+const SPEAKER_PUBLICATION_EVENT = "portal/speakers-published";
 const DELIVERY_PROJECTION_EVENT = "agenda/delivery-published";
 const SETUP_WRITE_AUTHORIZATION = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin"] },
@@ -1715,7 +1721,8 @@ export const publishAgenda = (
         message: "Agenda publication requires the event end time to be after the start time",
       }));
     }
-    const [agendaTalks, trackRows, roomRows, speakerRows, pendingPublicationRows] = yield* Effect.all([
+    const eligibleSpeakerIds = yield* eligiblePublicSpeakerIds([input.eventId]);
+    const [agendaTalks, trackRows, roomRows, speakerRows, pendingPublicationRows, gallerySpeakerRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
       database(() => db.select({ id: tracks.id, name: tracks.name, version: tracks.version, updatedAt: tracks.updatedAt }).from(tracks).where(eq(tracks.eventId, input.eventId))),
       database(() => db.select({ id: rooms.id, name: rooms.name, version: rooms.version, updatedAt: rooms.updatedAt }).from(rooms).where(eq(rooms.eventId, input.eventId))),
@@ -1747,6 +1754,19 @@ export const publishAgenda = (
         eq(airtablePendingEdits.status, "pending"),
         inArray(airtablePendingEdits.fieldKey, ["title", "description"]),
       ))),
+      eligibleSpeakerIds.size === 0 ? Effect.succeed([]) : database(() => db.select({
+        id: speakers.id,
+        displayName: speakers.displayName,
+        title: speakers.title,
+        company: speakers.company,
+        bio: speakers.bio,
+        headshotAssetId: speakers.headshotAssetId,
+        links: speakers.links,
+      }).from(speakers).where(and(
+        eq(speakers.eventId, input.eventId),
+        eq(speakers.visible, true),
+        inArray(speakers.id, [...eligibleSpeakerIds]),
+      )).orderBy(asc(speakers.displayName), asc(speakers.id))),
     ]);
     if (pendingPublicationRows.length > 0) {
       return yield* Effect.fail(new Validation({
@@ -1835,6 +1855,28 @@ export const publishAgenda = (
       calendarUpdatedAt: prepared.now.getTime(),
       talks: publicTalks,
     });
+    const publishedSpeakers: PublishedSpeakerGallerySnapshot = yield* Schema.decodeUnknown(PublishedSpeakerGallerySnapshotSchema)({
+      event: {
+        id: event.id,
+        slug: event.slug,
+        name: event.name,
+        description: event.description,
+        location: event.location,
+        timezone: event.timezone,
+        startsAt: timestamp(event.startsAt),
+        endsAt: timestamp(event.endsAt),
+        bannerAssetId: event.bannerAssetId,
+        accentColor: event.accentColor,
+      },
+      revision,
+      publishedAt: prepared.now.getTime(),
+      speakers: gallerySpeakerRows.map((speaker) => ({
+        ...speaker,
+        links: speaker.links ?? [],
+      })),
+    }).pipe(
+      Effect.mapError(() => new External({ service: "database", detail: "Published speaker gallery is invalid" })),
+    );
     const deliveryProjection = yield* decodeAgendaDeliveryProjection({
       eventId: event.id,
       revision,
@@ -2430,6 +2472,7 @@ export const publishAgenda = (
         }`;
     const actor = actorColumns(principal);
     const changeId = nanoid();
+    const speakerChangeId = nanoid();
     const deliveryChangeId = nanoid();
     const auditId = nanoid();
     const completedIdempotency = idempotencyInsert(
@@ -2522,6 +2565,20 @@ export const publishAgenda = (
         eventType: PUBLICATION_EVENT,
         audiences: PUBLIC_AUDIENCE,
         payload: published,
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
+      db.insert(domainChanges).values({
+        id: speakerChangeId,
+        eventId: input.eventId,
+        aggregateType: "speaker-publication",
+        aggregateId: input.eventId,
+        aggregateVersion: publishedSpeakers.revision,
+        eventType: SPEAKER_PUBLICATION_EVENT,
+        audiences: PUBLIC_AUDIENCE,
+        payload: publishedSpeakers,
         ...actor,
         requestId: prepared.requestId,
         idempotencyRecordId: prepared.id,

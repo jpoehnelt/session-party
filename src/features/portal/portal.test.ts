@@ -9,6 +9,7 @@ import {
   assets,
   auditLog,
   domainChanges,
+  events,
   eventMembers,
   idempotencyRecords,
   integrations,
@@ -23,7 +24,7 @@ import {
   taskAssignments,
   tasks,
 } from "contracts/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -191,6 +192,56 @@ const fixture = async ({
     env.DB.prepare("insert into speaker_provisioning (id, event_id, acceptance_event_id, submission_id, primary_speaker_id, status, available_at, attempt_count, version, created_at, updated_at) values (?, ?, ?, ?, ?, 'pending', ?, 0, 1, ?, ?)").bind(provisioningId, eventId, acceptanceId, submissionId, speakerId, now, now, now),
   ]);
   return { eventId, eventSlug, formId, formVersionId, submissionId, speakerId, acceptanceId, provisioningId };
+};
+
+const publishSpeakerGallery = async (eventId: string, speakerIds: readonly string[], revision = 1) => {
+  const db = drizzle(env.DB);
+  const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
+  if (!event) throw new Error(`Missing event ${eventId}`);
+  const rows = speakerIds.length === 0 ? [] : await db.select().from(speakers).where(and(
+    eq(speakers.eventId, eventId),
+    inArray(speakers.id, speakerIds),
+  ));
+  const occurredAt = new Date();
+  await db.insert(domainChanges).values({
+    id: `speaker-publication-${eventId}-${revision}`,
+    eventId,
+    aggregateType: "speaker-publication",
+    aggregateId: eventId,
+    aggregateVersion: revision,
+    eventType: "portal/speakers-published",
+    audiences: [{ kind: "public" }],
+    payload: {
+      event: {
+        id: event.id,
+        slug: event.slug,
+        name: event.name,
+        description: event.description,
+        location: event.location,
+        timezone: event.timezone,
+        startsAt: event.startsAt?.getTime() ?? null,
+        endsAt: event.endsAt?.getTime() ?? null,
+        bannerAssetId: event.bannerAssetId,
+        accentColor: event.accentColor,
+      },
+      revision,
+      publishedAt: occurredAt.getTime(),
+      speakers: rows.map((speaker) => ({
+        id: speaker.id,
+        displayName: speaker.displayName,
+        title: speaker.title,
+        company: speaker.company,
+        bio: speaker.bio,
+        headshotAssetId: speaker.headshotAssetId,
+        links: speaker.links ?? [],
+      })),
+    },
+    actorUserId: owner.userId,
+    actorApiKeyId: null,
+    requestId: `speaker-publication-${eventId}-${revision}`,
+    idempotencyRecordId: null,
+    occurredAt,
+  });
 };
 
 beforeAll(async () => {
@@ -506,6 +557,7 @@ describe("portal service", () => {
       speaker: { id: setup.speakerId },
     });
     expect((await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }))).speakers).toHaveLength(1);
+    await publishSpeakerGallery(setup.eventId, [setup.speakerId]);
     expect((await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))))).speakers)
       .toHaveLength(1);
   });
@@ -1438,6 +1490,8 @@ describe("portal service", () => {
       title: "Keynote", company: "Session Party", bio: "Invited outside the CFP.",
       workflowStatus: "Ready", visible: true, idempotencyKey: `public-manual-${setup.eventId}`,
     }));
+    await expectFailure(owner, getPublicSpeakers({ eventSlug: setup.eventSlug }), "NotFound");
+    await publishSpeakerGallery(setup.eventId, [setup.speakerId, manual.id]);
     const gallery = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
     expect(gallery.event).toEqual({
       id: setup.eventId,
@@ -1469,6 +1523,9 @@ describe("portal service", () => {
         outboundRevision: 1,
         status: "pending",
       })]);
+    const unchanged = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
+    expect(unchanged).toEqual(gallery);
+    await publishSpeakerGallery(setup.eventId, [manual.id], 2);
     const hidden = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
     expect(hidden.speakers).toEqual([expect.objectContaining({ id: manual.id, displayName: "Managed keynote" })]);
   });

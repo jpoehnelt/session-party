@@ -1783,7 +1783,20 @@ describe("agenda service", () => {
       .where(eq(domainChanges.eventId, seeded.eventId));
     const publicChange = changes.find(({ aggregateType }) => aggregateType === "agenda-publication");
     const deliveryChange = changes.find(({ aggregateType }) => aggregateType === "agenda-delivery");
-    expect(changes).toHaveLength(2);
+    const speakerChange = changes.find(({ aggregateType }) => aggregateType === "speaker-publication");
+    expect(changes).toHaveLength(3);
+    expect(speakerChange).toMatchObject({
+      aggregateId: seeded.eventId,
+      aggregateVersion: published.revision,
+      eventType: "portal/speakers-published",
+      audiences: [{ kind: "public" }],
+      payload: expect.objectContaining({
+        revision: published.revision,
+        event: expect.objectContaining({ id: seeded.eventId }),
+      }),
+      requestId: publicChange?.requestId,
+      idempotencyRecordId: publicChange?.idempotencyRecordId,
+    });
     expect(deliveryChange).toMatchObject({
       aggregateId: seeded.eventId,
       aggregateVersion: published.revision,

@@ -665,7 +665,7 @@ describe("organizer content and workflows", () => {
         directory: managedDirectory,
         onProvision: noop,
         onVisibility: noop,
-        onCreate: noop,
+        onCreate: () => true,
         onUpdate: noop,
         onImportCsv: noop,
         onMessage: noop,
