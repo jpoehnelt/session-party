@@ -154,3 +154,150 @@ test("event API keys expose their secret once, honor scope and event boundaries,
   expect(revokedRead.status()).toBe(401);
   expect(JSON.stringify(await responseBody(revokedRead))).not.toMatch(/stack|cause|hash|secret/i);
 });
+
+test("task and resource commands enforce validation, role boundaries, stale writes, and cleanup", async ({ request }, testInfo) => {
+  desktopOnly(testInfo);
+  const taskPath = `/api/v1/events/${EVENT_ID}/portal/tasks`;
+  const resourcePath = `/api/v1/events/${EVENT_ID}/portal/resources`;
+  const ownerHeaders = headers(OWNER_SESSION);
+  const createdTaskIds = new Set<string>();
+  const createdResourceIds = new Set<string>();
+
+  const formsResponse = await request.get(`/api/v1/events/${EVENT_ID}/forms`, { headers: ownerHeaders });
+  expect(formsResponse.status()).toBe(200);
+  const forms = await responseBody(formsResponse) as readonly { readonly id: string; readonly purpose: string }[];
+  const primaryForm = forms.find(({ purpose }) => purpose === "primary-cfp");
+  expect(primaryForm).toBeDefined();
+
+  const taskBody = (kind: "profile" | "upload" | "form" | "link" | "confirm", order: number) => ({
+    name: `QA disposable ${kind} task`,
+    description: "Created and removed by the controlled Playwright mutation suite.",
+    kind,
+    formId: kind === "form" ? primaryForm!.id : null,
+    dueAt: Date.parse("2026-08-12T18:00:00.000Z"),
+    order,
+    speakerIds: [],
+  });
+
+  try {
+    const forbiddenTask = await request.post(taskPath, {
+      headers: headers(REVIEWER_SESSION),
+      data: taskBody("confirm", 900),
+    });
+    expect(forbiddenTask.status()).toBe(403);
+
+    const invalidFormTask = await request.post(taskPath, {
+      headers: ownerHeaders,
+      data: { ...taskBody("form", 901), formId: null },
+    });
+    expect(invalidFormTask.status()).toBe(400);
+    expect(JSON.stringify(await responseBody(invalidFormTask))).not.toMatch(/stack|cause|sql|database/i);
+
+    const tasks: { readonly id: string; readonly version: number; readonly kind: string }[] = [];
+    for (const [index, kind] of (["profile", "upload", "form", "link", "confirm"] as const).entries()) {
+      const response = await request.post(taskPath, {
+        headers: ownerHeaders,
+        data: taskBody(kind, 910 + index),
+      });
+      expect(response.status(), `create ${kind} task`).toBe(201);
+      const task = await responseBody(response) as { readonly id: string; readonly version: number; readonly kind: string };
+      expect(task.kind).toBe(kind);
+      createdTaskIds.add(task.id);
+      tasks.push(task);
+    }
+
+    const contested = tasks.at(-1)!;
+    const update = (name: string) => request.put(`${taskPath}/${contested.id}`, {
+      headers: ownerHeaders,
+      data: { ...taskBody("confirm", 914), name, expectedVersion: contested.version },
+    });
+    const competingUpdates = await Promise.all([
+      update("QA task writer A"),
+      update("QA task writer B"),
+    ]);
+    expect(competingUpdates.map((response) => response.status()).sort()).toEqual([200, 409]);
+
+    const staleTaskDelete = await request.delete(`${taskPath}/${contested.id}`, {
+      headers: ownerHeaders,
+      data: { expectedVersion: contested.version },
+    });
+    expect(staleTaskDelete.status()).toBe(409);
+
+    const forbiddenResource = await request.post(resourcePath, {
+      headers: headers(REVIEWER_SESSION),
+      data: { slug: "qa-forbidden-resource", title: "Forbidden", body: null, embedUrl: null, audience: "speakers", order: 900 },
+    });
+    expect(forbiddenResource.status()).toBe(403);
+
+    for (const [index, embedUrl] of [
+      "http://www.youtube.com/embed/unsafe",
+      "https://youtube.com.evil.example/embed/unsafe",
+      "javascript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+    ].entries()) {
+      const unsafe = await request.post(resourcePath, {
+        headers: ownerHeaders,
+        data: { slug: `qa-unsafe-resource-${index}`, title: "Unsafe", body: null, embedUrl, audience: "public", order: 910 + index },
+      });
+      expect(unsafe.status(), embedUrl).toBe(400);
+    }
+
+    const resourceCreate = await request.post(resourcePath, {
+      headers: ownerHeaders,
+      data: {
+        slug: "qa-disposable-resource",
+        title: "QA disposable resource — 東京",
+        body: "Controlled lifecycle fixture.",
+        embedUrl: "https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ",
+        audience: "speakers",
+        order: 920,
+      },
+    });
+    expect(resourceCreate.status()).toBe(201);
+    const resource = await responseBody(resourceCreate) as { readonly id: string; readonly version: number };
+    createdResourceIds.add(resource.id);
+
+    const updateResource = (title: string) => request.put(`${resourcePath}/${resource.id}`, {
+      headers: ownerHeaders,
+      data: {
+        expectedVersion: resource.version,
+        slug: "qa-disposable-resource",
+        title,
+        body: "Controlled lifecycle fixture.",
+        embedUrl: "https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ",
+        audience: "public",
+        order: 920,
+      },
+    });
+    const competingResources = await Promise.all([
+      updateResource("QA resource writer A"),
+      updateResource("QA resource writer B"),
+    ]);
+    expect(competingResources.map((response) => response.status()).sort()).toEqual([200, 409]);
+    const staleResourceDelete = await request.delete(`${resourcePath}/${resource.id}`, {
+      headers: ownerHeaders,
+      data: { expectedVersion: resource.version },
+    });
+    expect(staleResourceDelete.status()).toBe(409);
+  } finally {
+    const currentTasks = await request.get(taskPath, { headers: ownerHeaders });
+    if (currentTasks.ok()) {
+      for (const task of await responseBody(currentTasks) as readonly { readonly id: string; readonly version: number }[]) {
+        if (!createdTaskIds.has(task.id)) continue;
+        await request.delete(`${taskPath}/${task.id}`, { headers: ownerHeaders, data: { expectedVersion: task.version } });
+      }
+    }
+    const currentResources = await request.get(resourcePath, { headers: ownerHeaders });
+    if (currentResources.ok()) {
+      for (const resource of await responseBody(currentResources) as readonly { readonly id: string; readonly version: number }[]) {
+        if (!createdResourceIds.has(resource.id)) continue;
+        await request.delete(`${resourcePath}/${resource.id}`, { headers: ownerHeaders, data: { expectedVersion: resource.version } });
+      }
+    }
+  }
+
+  const finalTasks = await request.get(taskPath, { headers: ownerHeaders });
+  expect((await responseBody(finalTasks) as readonly { readonly id: string }[]).some(({ id }) => createdTaskIds.has(id))).toBe(false);
+  const finalResources = await request.get(resourcePath, { headers: ownerHeaders });
+  expect((await responseBody(finalResources) as readonly { readonly id: string }[]).some(({ id }) => createdResourceIds.has(id))).toBe(false);
+});

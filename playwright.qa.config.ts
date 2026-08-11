@@ -16,7 +16,9 @@ export default defineConfig({
   timeout: 120_000,
   expect: { timeout: 10_000 },
   outputDir: "test-results/qa",
-  workers: 2,
+  // Every project shares one disposable D1 sandbox. Serial execution keeps
+  // route inventories from observing another test's in-flight mutation.
+  workers: 1,
   use: {
     baseURL,
     reducedMotion: "reduce",

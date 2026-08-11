@@ -211,7 +211,11 @@ for (const target of ALL_ROUTES) {
 
     const canonical = page.locator('link[rel="canonical"]');
     await expect(canonical, `${target.path} must expose one canonical URL`).toHaveCount(1);
-    expect(new URL(await canonical.getAttribute("href") ?? runtimeBaseURL).pathname).toBe(new URL(page.url()).pathname);
+    const canonicalUrl = await canonical.getAttribute("href") ?? runtimeBaseURL;
+    expect(new URL(canonicalUrl).pathname).toBe(new URL(page.url()).pathname);
+    await expect(page.locator('meta[property="og:title"]')).toHaveAttribute("content", title);
+    await expect(page.locator('meta[property="og:url"]')).toHaveAttribute("content", canonicalUrl);
+    await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute("content", title);
 
     const overflow = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,

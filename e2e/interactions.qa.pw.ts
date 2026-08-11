@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { installDeterministicBrowser } from "./helpers/visual-readiness";
 
 const EVENT = "ai-engineer-sandbox";
@@ -26,6 +27,10 @@ async function openOwnerPage(context: BrowserContext, page: Page, baseURL: strin
 
 function desktopOnly(testInfo: TestInfo): void {
   test.skip(!testInfo.project.name.startsWith("desktop"), "covered once; route matrix provides mobile coverage");
+}
+
+function desktopChromiumOnly(testInfo: TestInfo): void {
+  test.skip(testInfo.project.name !== "desktop-chromium", "clipboard permissions are exercised in desktop Chromium");
 }
 
 test("login validates email and demo personas preserve a safe return path", async ({ page }, testInfo) => {
@@ -198,6 +203,118 @@ test("settings role-change dialog can be cancelled without changing persisted me
   await expect(dialog).toBeHidden();
   await page.reload();
   await expect(page.getByRole("combobox", { name: /Role for admin@sessionparty\.local/ })).toHaveValue(original);
+});
+
+test("browser history, logout, and a second tab converge on signed-out state", async ({ context, page, baseURL }, testInfo) => {
+  desktopOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  await installDeterministicBrowser(page);
+  await page.goto(`/login?returnTo=${encodeURIComponent(`/e/${EVENT}`)}`);
+  await page.getByRole("button", { name: /Continue as Organizer/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/e/${EVENT}$`));
+  await page.getByRole("heading", { level: 1 }).waitFor({ state: "visible" });
+  await page.getByRole("link", { name: "Onboarding" }).click();
+  await expect(page.locator('nav[aria-label="Event navigation"] a[aria-current="page"]')).toHaveText("Onboarding");
+  await page.goBack();
+  await expect(page.locator('nav[aria-label="Event navigation"] a[aria-current="page"]')).toHaveText("Overview");
+  await page.goForward();
+  await expect(page.locator('nav[aria-label="Event navigation"] a[aria-current="page"]')).toHaveText("Onboarding");
+
+  const peer = await context.newPage();
+  await peer.goto(`/e/${EVENT}/forms`);
+  await expect(peer.getByRole("heading", { level: 1, name: "CFP & forms" })).toBeVisible();
+  await page.getByRole("button", { name: "Log out" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  expect((await context.cookies()).some(({ name }) => name === "sp_session")).toBe(false);
+
+  await peer.reload();
+  await expect(peer.getByRole("heading", { level: 1, name: /Sign in|Could not load|Event not found/i })).toBeVisible();
+  await expect(peer.getByRole("button", { name: "New additional form" })).toHaveCount(0);
+});
+
+test("every archive download has the promised filename and parseable projection", async ({ context, page, baseURL }, testInfo) => {
+  desktopOnly(testInfo);
+  await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/exports");
+  const downloads = [
+    ["Download complete archive", `${EVENT}-archive.json`, "speakers"],
+    ["Download speakers.json", `${EVENT}-speakers.json`, "speakers"],
+    ["Download sessions.json", `${EVENT}-sessions.json`, "sessions"],
+    ["Download submissions.json", `${EVENT}-submissions.json`, "submissions"],
+    ["Download decisions.json", `${EVENT}-decisions.json`, "decisions"],
+    ["Download onboarding.json", `${EVENT}-onboarding.json`, "tasks"],
+  ] as const;
+
+  for (const [buttonName, filename, projectionKey] of downloads) {
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("button", { name: buttonName, exact: true }).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(filename);
+    const path = await download.path();
+    expect(path, `${filename} must produce readable bytes`).not.toBeNull();
+    const body = await readFile(path!, "utf8");
+    expect(body.endsWith("\n"), `${filename} should be a newline-terminated JSON file`).toBe(true);
+    const value = JSON.parse(body) as Record<string, unknown>;
+    expect(value.format).toBe("session-party.archive.v1");
+    expect((value.event as { slug?: string }).slug).toBe(EVENT);
+    expect(Array.isArray(value[projectionKey]), `${filename} must contain ${projectionKey}`).toBe(true);
+  }
+});
+
+test("publication clipboard and embed-builder controls round-trip without server mutation", async ({ context, page, baseURL }, testInfo) => {
+  desktopChromiumOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: runtimeBaseURL });
+  await openOwnerPage(context, page, runtimeBaseURL, "/publication");
+
+  await page.getByRole("button", { name: "Copy public link" }).click();
+  await expect(page.getByText("Public link copied", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${runtimeBaseURL}/event/${EVENT}/sessions`);
+
+  const generated = page.getByRole("textbox", { name: "Generated share URL or code" });
+  const initialCode = await generated.inputValue();
+  for (const widget of ["sessions", "speakers", "agenda", "schedule", "gallery"]) {
+    await page.getByRole("combobox", { name: "Widget type" }).selectOption(widget);
+    expect(await generated.inputValue()).toContain(widget === "speakers" || widget === "gallery" ? "/speakers" : "/schedule");
+  }
+  await page.getByRole("combobox", { name: "Widget type" }).selectOption("sessions");
+  for (const format of ["styled-html", "plain-html", "json", "ical"]) {
+    await page.getByRole("combobox", { name: "Output format" }).selectOption(format);
+    expect(await generated.inputValue(), `${format} must produce output`).not.toBe("");
+  }
+  await page.getByRole("combobox", { name: "Output format" }).selectOption("styled-html");
+  for (const aesthetic of ["bold", "minimal", "editorial"]) {
+    await page.getByRole("combobox", { name: "Design aesthetic" }).selectOption(aesthetic);
+    expect(await generated.inputValue()).toContain(`aesthetic=${aesthetic}`);
+  }
+  await page.getByLabel("Brand color").fill("#123456");
+  expect(await generated.inputValue()).toContain("123456");
+  for (const field of ["Title", "Time", "Room", "Track", "Speakers", "Description"]) {
+    const checkbox = page.getByRole("checkbox", { name: field });
+    await checkbox.uncheck();
+    await expect(checkbox).not.toBeChecked();
+    await checkbox.check();
+  }
+  expect(await generated.inputValue()).not.toBe(initialCode);
+
+  await page.getByRole("textbox", { name: "Embed name" }).fill("");
+  await page.getByRole("button", { name: "Save embed definition" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Name this embed before saving." })).toBeVisible();
+  await page.getByRole("textbox", { name: "Embed name" }).fill("QA embed — 東京");
+  await page.getByRole("button", { name: "Save embed definition" }).click();
+  await expect(page.getByRole("heading", { name: "Saved embeds (1)" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("QA embed — 東京", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Disable" }).click();
+  await expect(page.getByText(/sessions · styled-html · Disabled/)).toBeVisible();
+  await page.getByRole("button", { name: "Enable" }).click();
+  await page.getByRole("button", { name: "Get code" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Copied “QA embed — 東京”." })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("<iframe");
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("heading", { name: "Saved embeds (0)" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Saved embeds (0)" })).toBeVisible();
 });
 
 test("public program navigation, session detail, and personal schedule controls work on mobile", async ({ page }, testInfo) => {
