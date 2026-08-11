@@ -29,6 +29,7 @@ import {
   type DeleteTaskInput,
   type DownloadContentInput,
   type ImportSpeakersCsvInput,
+  type ImportReusableProfileInput,
   type LogSpeakerContactInput,
   type PortalEvent,
   type SetTaskCompletionInput,
@@ -39,7 +40,9 @@ import {
   type UploadPortalAssetInput,
   type ProvisionSpeakerInput,
   type RestoreContentVersionInput,
+  type ReviewSpeakerProfileInput,
   type SendSpeakerMessagesInput,
+  type SubmitProfileReviewInput,
   type UpdateManagedSpeakerInput,
   type UploadManagedSpeakerHeadshotInput,
 } from "../schema";
@@ -128,6 +131,30 @@ export async function submitSpeakerTaskForm(input: CreateTaskSubmissionInput) {
 export function updateSpeakerProfile(eventSlug: string, input: UpdateProfileInput) {
   const body = requestBody(input, "eventId");
   return apiFetch<unknown>(`${api}/events/${segment(eventSlug)}/portal/profile`, { method: "PUT", body });
+}
+
+export function importReusableProfile(eventSlug: string, input: ImportReusableProfileInput) {
+  return apiFetch(`${api}/events/${segment(eventSlug)}/portal/profile/import`, {
+    method: "POST",
+    body: requestBody(input, "eventId"),
+    schema: SpeakerProfile,
+  });
+}
+
+export function submitProfileReview(eventSlug: string, input: SubmitProfileReviewInput) {
+  return apiFetch(`${api}/events/${segment(eventSlug)}/portal/profile/review`, {
+    method: "POST",
+    body: requestBody(input, "eventId"),
+    schema: SpeakerProfile,
+  });
+}
+
+export function reviewSpeakerProfile(input: ReviewSpeakerProfileInput) {
+  return apiFetch(`${api}/events/${segment(input.eventId)}/portal/speakers/${segment(input.speakerId)}/profile-review`, {
+    method: "POST",
+    body: requestBody(input, "eventId", "speakerId"),
+    schema: SpeakerProfile,
+  });
 }
 
 export function setSpeakerTaskCompletion(eventSlug: string, input: SetTaskCompletionInput) {

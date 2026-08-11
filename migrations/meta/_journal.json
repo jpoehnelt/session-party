@@ -120,6 +120,13 @@
       "when": 1786461225435,
       "tag": "0016_backfill_speaker_publications",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1786471442902,
+      "tag": "0017_add_reusable_speaker_profile_pages",
+      "breakpoints": true
     }
   ]
 }

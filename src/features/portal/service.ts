@@ -19,6 +19,7 @@ import {
   mailDeliverySnapshots,
   pages,
   speakerProvisioning,
+  speakerProfiles,
   speakerContacts,
   speakers,
   submissionAnswers,
@@ -62,6 +63,7 @@ import {
   type DownloadContentInput,
   type DownloadContentOutput,
   type ImportSpeakersCsvInput,
+  type ImportReusableProfileInput,
   ImportSpeakersCsvOutput as ImportSpeakersCsvOutputSchema,
   type ImportSpeakersCsvOutput,
   type PortalDashboard,
@@ -76,12 +78,14 @@ import {
   type PublicSpeakerGallery,
   type PublicSpeakersInput,
   type ReadinessSummary,
+  type ReviewSpeakerProfileInput,
   type LogSpeakerContactInput,
   type SpeakerContact,
   type SetTaskCompletionInput,
   type SpeakerDirectory,
   type SpeakerDirectoryItem,
   type SpeakerProfile,
+  type SubmitProfileReviewInput,
   type UpdateProfileInput,
   type UpdateManagedSpeakerInput,
   type UpdateResourceInput,
@@ -259,8 +263,15 @@ const speakerView = (
   bio: pending.has("bio") ? pending.get("bio") as string | null : speaker.bio,
   workflowStatus: speaker.workflowStatus,
   headshotAssetId: speaker.headshotAssetId,
+  headshotUrl: speaker.headshotUrl,
   links: speaker.links ?? [],
   visible: speaker.visible,
+  profileSourceId: speaker.profileSourceId,
+  profileSourceVersion: speaker.profileSourceVersion,
+  profileReviewStatus: speaker.profileReviewStatus,
+  profileReviewNote: speaker.profileReviewNote,
+  profileSubmittedAt: millis(speaker.profileSubmittedAt),
+  profileReviewedAt: millis(speaker.profileReviewedAt),
   version: speaker.version,
   pendingSyncFields: PROFILE_SYNC_FIELDS.filter((field) => pending.has(field)),
 });
@@ -1663,6 +1674,9 @@ export const updateSpeakerProfile = (input: UpdateProfileInput): Effect.Effect<S
   const event = yield* resolveEvent(input.eventId);
   const { speaker, actor } = yield* selfSpeaker(event.id);
   const { db } = yield* Db;
+  if (speaker.profileReviewStatus === "in_review" || (speaker.profileReviewStatus === "approved" && speaker.profileSubmittedAt !== null)) {
+    return yield* Effect.fail(new Conflict({ message: "This event profile is locked while it is in review or approved" }));
+  }
   const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
   const replay = yield* findReplay(
     event.id,
@@ -1924,6 +1938,164 @@ export const updateSpeakerProfile = (input: UpdateProfileInput): Effect.Effect<S
     const sync = yield* AirtableSync;
     yield* sync.wakeEvent(event.id);
   }
+  return result;
+});
+
+export const importReusableProfile = (input: ImportReusableProfileInput): Effect.Effect<SpeakerProfile, AppError, Db | CurrentUser> => Effect.gen(function* () {
+  const event = yield* resolveEvent(input.eventId);
+  const { speaker, actor } = yield* selfSpeaker(event.id);
+  const { db } = yield* Db;
+  if (speaker.version !== input.expectedVersion) {
+    return yield* Effect.fail(new Conflict({ message: "Event profile changed; reload before importing" }));
+  }
+  if (speaker.profileReviewStatus === "in_review" || (speaker.profileReviewStatus === "approved" && speaker.profileSubmittedAt !== null)) {
+    return yield* Effect.fail(new Conflict({ message: "This event profile is locked while it is in review or approved" }));
+  }
+  const [[profile], [airtable]] = yield* Effect.all([
+    database(() => db.select().from(speakerProfiles).where(eq(speakerProfiles.userId, actor.userId)).limit(1)),
+    database(() => db.select({ id: integrations.id }).from(integrations).where(and(
+      eq(integrations.eventId, event.id),
+      eq(integrations.kind, "airtable"),
+    )).limit(1)),
+  ], { concurrency: 1 });
+  if (!profile) return yield* Effect.fail(new NotFound({ entity: "reusable speaker profile", id: actor.userId }));
+  if (airtable) {
+    return yield* Effect.fail(new Conflict({ message: "Reusable profile import is unavailable while Airtable owns event profile fields" }));
+  }
+  const updatedAt = now();
+  const version = speaker.version + 1;
+  const values = {
+    displayName: profile.displayName,
+    title: profile.title,
+    company: profile.company,
+    bio: profile.bio,
+    headshotUrl: profile.headshotUrl,
+    links: profile.links ?? [],
+    profileSourceId: profile.id,
+    profileSourceVersion: profile.version,
+    profileReviewStatus: "draft" as const,
+    profileReviewNote: null,
+    profileSubmittedAt: null,
+    profileReviewedAt: null,
+    profileReviewedBy: null,
+    version,
+    updatedAt,
+  };
+  const result = speakerView({ ...speaker, ...values });
+  const guard = and(eq(speakers.eventId, event.id), eq(speakers.id, speaker.id), eq(speakers.version, input.expectedVersion));
+  const requestId = id("portal_request");
+  const change = writeChange(event.id, "speaker", speaker.id, version, "portal.profile.reusable-imported", {
+    speakerId: speaker.id,
+    profileId: profile.id,
+    profileVersion: profile.version,
+  }, actor, updatedAt, requestId);
+  const committed = yield* database(() => db.batch([
+    db.insert(domainChanges).select(db.select(changeSelection(change)).from(speakers).where(guard)),
+    db.insert(auditLog).select(db.select({
+      id: sql<string>`${id("audit")}`.as("id"),
+      eventId: speakers.eventId,
+      requestId: sql<string>`${requestId}`.as("request_id"),
+      actorUserId: sql<string | null>`${actor.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`${actor.actorApiKeyId}`.as("actor_api_key_id"),
+      action: sql<string>`${"portal.profile.reusable-imported"}`.as("action"),
+      resourceType: sql<string>`${"speaker"}`.as("resource_type"),
+      resourceId: speakers.id,
+      before: sql<unknown>`${JSON.stringify(speakerView(speaker))}`.as("before"),
+      after: sql<unknown>`${JSON.stringify(result)}`.as("after"),
+      metadata: sql<unknown>`${JSON.stringify({ profileId: profile.id, profileVersion: profile.version })}`.as("metadata"),
+      occurredAt: sql<Date>`${updatedAt.getTime()}`.as("occurred_at"),
+    }).from(speakers).where(guard)),
+    db.update(speakers).set(values).where(guard).returning(),
+  ]));
+  if ((committed[2] as (typeof speakers.$inferSelect)[]).length === 0) {
+    return yield* Effect.fail(new Conflict({ message: "Event profile changed; reload before importing" }));
+  }
+  return result;
+});
+
+export const submitProfileReview = (input: SubmitProfileReviewInput): Effect.Effect<SpeakerProfile, AppError, Db | CurrentUser> => Effect.gen(function* () {
+  const event = yield* resolveEvent(input.eventId);
+  const { speaker, actor } = yield* selfSpeaker(event.id);
+  const { db } = yield* Db;
+  if (speaker.version !== input.expectedVersion) return yield* Effect.fail(new Conflict({ message: "Event profile changed; reload before submitting" }));
+  if (speaker.profileReviewStatus !== "draft" && speaker.profileReviewStatus !== "changes_requested") {
+    return yield* Effect.fail(new Conflict({ message: "Only a draft or changes-requested profile can be submitted" }));
+  }
+  if (!speaker.bio?.trim()) return yield* Effect.fail(new Validation({ message: "Add a biography before submitting this profile" }));
+  const submittedAt = now();
+  const version = speaker.version + 1;
+  const values = {
+    profileReviewStatus: "in_review" as const,
+    profileSubmittedAt: submittedAt,
+    profileReviewNote: null,
+    profileReviewedAt: null,
+    profileReviewedBy: null,
+    version,
+    updatedAt: submittedAt,
+  };
+  const result = speakerView({ ...speaker, ...values });
+  const guard = and(eq(speakers.eventId, event.id), eq(speakers.id, speaker.id), eq(speakers.version, input.expectedVersion));
+  const requestId = id("portal_request");
+  const change = writeChange(event.id, "speaker", speaker.id, version, "portal.profile.submitted", { speakerId: speaker.id }, actor, submittedAt, requestId);
+  const committed = yield* database(() => db.batch([
+    db.insert(domainChanges).select(db.select(changeSelection(change)).from(speakers).where(guard)),
+    db.insert(auditLog).select(db.select({
+      id: sql<string>`${id("audit")}`.as("id"), eventId: speakers.eventId,
+      requestId: sql<string>`${requestId}`.as("request_id"),
+      actorUserId: sql<string | null>`${actor.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`${actor.actorApiKeyId}`.as("actor_api_key_id"),
+      action: sql<string>`${"portal.profile.submitted"}`.as("action"), resourceType: sql<string>`${"speaker"}`.as("resource_type"),
+      resourceId: speakers.id, before: sql<unknown>`${JSON.stringify(speakerView(speaker))}`.as("before"),
+      after: sql<unknown>`${JSON.stringify(result)}`.as("after"), metadata: sql<unknown>`null`.as("metadata"),
+      occurredAt: sql<Date>`${submittedAt.getTime()}`.as("occurred_at"),
+    }).from(speakers).where(guard)),
+    db.update(speakers).set(values).where(guard).returning(),
+  ]));
+  if ((committed[2] as (typeof speakers.$inferSelect)[]).length === 0) return yield* Effect.fail(new Conflict({ message: "Event profile changed; reload before submitting" }));
+  return result;
+});
+
+export const reviewSpeakerProfile = (input: ReviewSpeakerProfileInput): Effect.Effect<SpeakerProfile, AppError, Authorizer | CurrentUser | Db> => Effect.gen(function* () {
+  const actor = yield* organizerBrowser(input.eventId);
+  if (input.decision === "changes_requested" && !input.note?.trim()) {
+    return yield* Effect.fail(new Validation({ message: "Explain the changes the speaker needs to make" }));
+  }
+  const { db } = yield* Db;
+  const [speaker] = yield* database(() => db.select().from(speakers).where(and(
+    eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+  )).limit(1));
+  if (!speaker) return yield* Effect.fail(new NotFound({ entity: "speaker", id: input.speakerId }));
+  if (speaker.version !== input.expectedVersion) return yield* Effect.fail(new Conflict({ message: "Speaker profile changed; reload before reviewing" }));
+  if (speaker.profileReviewStatus !== "in_review") return yield* Effect.fail(new Conflict({ message: "Only a submitted profile can be reviewed" }));
+  const reviewedAt = now();
+  const version = speaker.version + 1;
+  const values = {
+    profileReviewStatus: input.decision,
+    profileReviewNote: input.note?.trim() || null,
+    profileReviewedAt: reviewedAt,
+    profileReviewedBy: actor.userId,
+    version,
+    updatedAt: reviewedAt,
+  };
+  const result = speakerView({ ...speaker, ...values });
+  const guard = and(eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId), eq(speakers.version, input.expectedVersion));
+  const requestId = id("portal_request");
+  const eventType = input.decision === "approved" ? "portal.profile.approved" : "portal.profile.changes-requested";
+  const change = writeChange(input.eventId, "speaker", speaker.id, version, eventType, { speakerId: speaker.id, note: values.profileReviewNote }, actor, reviewedAt, requestId);
+  const committed = yield* database(() => db.batch([
+    db.insert(domainChanges).select(db.select(changeSelection(change)).from(speakers).where(guard)),
+    db.insert(auditLog).select(db.select({
+      id: sql<string>`${id("audit")}`.as("id"), eventId: speakers.eventId,
+      requestId: sql<string>`${requestId}`.as("request_id"), actorUserId: sql<string>`${actor.userId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"), action: sql<string>`${eventType}`.as("action"),
+      resourceType: sql<string>`${"speaker"}`.as("resource_type"), resourceId: speakers.id,
+      before: sql<unknown>`${JSON.stringify(speakerView(speaker))}`.as("before"), after: sql<unknown>`${JSON.stringify(result)}`.as("after"),
+      metadata: sql<unknown>`${JSON.stringify({ note: values.profileReviewNote })}`.as("metadata"),
+      occurredAt: sql<Date>`${reviewedAt.getTime()}`.as("occurred_at"),
+    }).from(speakers).where(guard)),
+    db.update(speakers).set(values).where(guard).returning(),
+  ]));
+  if ((committed[2] as (typeof speakers.$inferSelect)[]).length === 0) return yield* Effect.fail(new Conflict({ message: "Speaker profile changed; reload before reviewing" }));
   return result;
 });
 
@@ -2819,6 +2991,15 @@ export const provisionSpeaker = (input: ProvisionSpeakerInput): Effect.Effect<Sp
 export const updateSpeakerPublication = (input: UpdateSpeakerPublicationInput): Effect.Effect<SpeakerProfile, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
   const actor = yield* organizer(input.eventId, "speakers:write");
   const { db } = yield* Db;
+  const [current] = yield* database(() => db.select({
+    version: speakers.version,
+    profileReviewStatus: speakers.profileReviewStatus,
+  }).from(speakers).where(and(eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId))).limit(1));
+  if (!current) return yield* Effect.fail(new NotFound({ entity: "speaker", id: input.speakerId }));
+  if (current.version !== input.expectedVersion) return yield* Effect.fail(new Conflict({ message: "Speaker changed; reload before changing publication" }));
+  if (input.visible && current.profileReviewStatus !== "approved") {
+    return yield* Effect.fail(new Validation({ message: "Approve the event profile before making this speaker publicly visible" }));
+  }
   const updatedAt = now();
   const version = input.expectedVersion + 1;
   const guard = and(
@@ -2906,8 +3087,16 @@ export const createManagedSpeaker = (input: CreateManagedSpeakerInput): Effect.E
     bio: input.bio?.trim() || null,
     workflowStatus: input.workflowStatus.trim(),
     headshotAssetId: null,
+    headshotUrl: null,
     links: [],
     visible: input.visible,
+    profileSourceId: null,
+    profileSourceVersion: null,
+    profileReviewStatus: "in_review",
+    profileReviewNote: null,
+    profileSubmittedAt: createdAt,
+    profileReviewedAt: null,
+    profileReviewedBy: null,
     version: 1,
     createdAt,
     updatedAt: createdAt,
@@ -2995,6 +3184,11 @@ export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.E
     bio: input.bio?.trim() || null,
     workflowStatus: input.workflowStatus.trim(),
     visible: input.visible,
+    profileReviewStatus: "in_review" as const,
+    profileReviewNote: null,
+    profileSubmittedAt: updatedAt,
+    profileReviewedAt: null,
+    profileReviewedBy: null,
     version,
     updatedAt,
   };
@@ -3220,12 +3414,16 @@ export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<
       updates.push({ existing: prior, values: {
         displayName, title: nullableAt(titleIndex), company: nullableAt(companyIndex), bio: nullableAt(bioIndex),
         workflowStatus, visible, version: prior.version + 1, updatedAt: createdAt,
+        profileReviewStatus: "in_review" as const, profileReviewNote: null,
+        profileSubmittedAt: createdAt, profileReviewedAt: null, profileReviewedBy: null,
       } });
     } else {
       inserts.push({
         id: id("speaker"), eventId: input.eventId, userId: null, contactEmail, displayName,
         title: nullableAt(titleIndex), company: nullableAt(companyIndex), bio: nullableAt(bioIndex),
-        workflowStatus, headshotAssetId: null, links: [], visible, version: 1, createdAt, updatedAt: createdAt,
+        workflowStatus, headshotAssetId: null, headshotUrl: null, links: [], visible, version: 1, createdAt, updatedAt: createdAt,
+        profileSourceId: null, profileSourceVersion: null, profileReviewStatus: "in_review" as const,
+        profileReviewNote: null, profileSubmittedAt: createdAt, profileReviewedAt: null, profileReviewedBy: null,
       });
     }
   }
@@ -3817,7 +4015,9 @@ export const getPublicSpeakers = (input: PublicSpeakersInput): Effect.Effect<Pub
   const assetById = new Map(assetRows.map((asset) => [asset.id, asset] as const));
   const { get } = yield* Files;
   const publicSpeakers = yield* Effect.forEach(snapshot.speakers, (speaker) => Effect.gen(function* () {
-    let headshotUrl: string | null = null;
+    let headshotUrl: string | null = speaker.headshotUrl && safeHttpUrl(speaker.headshotUrl) && speaker.headshotUrl.startsWith("https://")
+      ? speaker.headshotUrl
+      : null;
     const asset = speaker.headshotAssetId === null ? undefined : assetById.get(speaker.headshotAssetId);
     if (asset && ["image/jpeg", "image/png", "image/webp"].includes(asset.contentType)) {
       const object = yield* get(assetKey(event.id, asset.id));
@@ -3830,7 +4030,7 @@ export const getPublicSpeakers = (input: PublicSpeakersInput): Effect.Effect<Pub
         headshotUrl = `data:${asset.contentType};base64,${btoa(binary)}`;
       }
     }
-    return { id: speaker.id, displayName: speaker.displayName, title: speaker.title, company: speaker.company, bio: speaker.bio, headshotUrl, links: speaker.links.filter((link) => safeHttpUrl(link.url)) };
+    return { id: speaker.id, displayName: speaker.displayName, title: speaker.title, company: speaker.company, bio: speaker.bio, headshotUrl, publicProfileSlug: speaker.publicProfileSlug, links: speaker.links.filter((link) => safeHttpUrl(link.url)) };
   }));
   return { event: snapshot.event, speakers: publicSpeakers };
 });

@@ -35,6 +35,51 @@ export const users = sqliteTable("users", {
   ...timestamps,
 }, (t) => [check("users_version_positive", sql`${t.version} > 0`)]);
 
+/** Speaker-owned identity reused deliberately across event-scoped snapshots. */
+export const speakerProfiles = sqliteTable(
+  "speaker_profiles",
+  {
+    id: id(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    slug: text("slug").notNull(),
+    displayName: text("display_name").notNull(),
+    title: text("title"),
+    company: text("company"),
+    bio: text("bio"),
+    headshotUrl: text("headshot_url"),
+    links: text("links", { mode: "json" }).$type<readonly { label: string; url: string }[]>(),
+    visible: integer("visible", { mode: "boolean" }).notNull().default(false),
+    version: version(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("speaker_profiles_user_unique").on(t.userId),
+    uniqueIndex("speaker_profiles_slug_unique").on(t.slug),
+    index("speaker_profiles_visible").on(t.visible, t.slug),
+    check("speaker_profiles_slug_format", sql`length(${t.slug}) between 3 and 80 and ${t.slug} = lower(${t.slug}) and ${t.slug} not glob '*[^a-z0-9-]*'`),
+    check("speaker_profiles_version_positive", sql`${t.version} > 0`),
+  ],
+);
+
+/** Append-only history for cross-event speaker-owned profile changes. */
+export const speakerProfileChanges = sqliteTable(
+  "speaker_profile_changes",
+  {
+    id: id(),
+    profileId: text("profile_id").notNull().references(() => speakerProfiles.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    profileVersion: integer("profile_version").notNull(),
+    actorUserId: text("actor_user_id").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    before: text("before", { mode: "json" }),
+    after: text("after", { mode: "json" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("speaker_profile_changes_version_unique").on(t.profileId, t.profileVersion),
+    index("speaker_profile_changes_actor").on(t.actorUserId, t.createdAt),
+    check("speaker_profile_changes_version_positive", sql`${t.profileVersion} > 0`),
+  ],
+);
+
 /** The presented bearer value is never persisted; id is a public lookup id. */
 export const authTokens = sqliteTable(
   "auth_tokens",
@@ -365,8 +410,19 @@ export const speakers = sqliteTable(
     bio: text("bio"),
     workflowStatus: text("workflow_status").notNull().default("Invited"),
     headshotAssetId: text("headshot_asset_id"),
+    headshotUrl: text("headshot_url"),
     links: text("links", { mode: "json" }).$type<readonly { label: string; url: string }[]>(),
     visible: integer("visible", { mode: "boolean" }).notNull().default(true),
+    /** Canonical profile version this event snapshot was last copied from. */
+    profileSourceId: text("profile_source_id").references(() => speakerProfiles.id, { onDelete: "set null", onUpdate: "cascade" }),
+    profileSourceVersion: integer("profile_source_version"),
+    profileReviewStatus: text("profile_review_status", {
+      enum: ["draft", "in_review", "changes_requested", "approved"],
+    }).notNull().default("approved"),
+    profileReviewNote: text("profile_review_note"),
+    profileSubmittedAt: integer("profile_submitted_at", { mode: "timestamp_ms" }),
+    profileReviewedAt: integer("profile_reviewed_at", { mode: "timestamp_ms" }),
+    profileReviewedBy: text("profile_reviewed_by").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
     version: version(),
     ...timestamps,
   },
@@ -375,9 +431,12 @@ export const speakers = sqliteTable(
     uniqueIndex("speakers_event_user_unique").on(t.eventId, t.userId),
     index("speakers_event_visible").on(t.eventId, t.visible),
     index("speakers_user").on(t.userId),
+    index("speakers_profile_source").on(t.profileSourceId),
+    index("speakers_profile_review").on(t.eventId, t.profileReviewStatus, t.visible),
     foreignKey({ columns: [t.eventId, t.headshotAssetId], foreignColumns: [assets.eventId, assets.id], name: "speakers_headshot_fk" })
       .onDelete("restrict").onUpdate("cascade"),
     check("speakers_version_positive", sql`${t.version} > 0`),
+    check("speakers_profile_source_version_positive", sql`${t.profileSourceVersion} is null or ${t.profileSourceVersion} > 0`),
   ],
 );
 

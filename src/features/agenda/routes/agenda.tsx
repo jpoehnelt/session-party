@@ -28,6 +28,7 @@ import {
 import { AgendaBoard, type AgendaMoveTarget } from "../components/AgendaBoard";
 import { ConflictIndicator } from "../components/ConflictIndicator";
 import { LiveShowControl } from "../components/LiveShowControl";
+import { SpeakerLinks } from "../components/SpeakerLinks";
 import {
   AgendaMutationResult,
   AgendaSnapshot,
@@ -923,6 +924,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       {showOpen ? (
         <LiveShowControl
           agenda={agenda}
+          eventSlug={event.slug}
           state={showState}
           cues={showCues}
           disabled={intent.connection !== "connected"}
@@ -965,6 +967,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       >
         <AgendaBoard
           agenda={agenda}
+          eventSlug={event.slug}
           view={view}
           intent={intent}
           selectedTalkId={selectedTalkId}
@@ -1114,7 +1117,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           <form id="agenda-move-form" className="space-y-5" onSubmit={(event) => void saveSchedule(event)}>
             <div className="border-2 border-line-strong bg-production-sky p-4 shadow-[4px_4px_0_#171714]">
               <p className="text-[10px] font-black uppercase tracking-[0.14em] text-ink/65">On stage</p>
-              <p className="mt-1 text-lg font-black tracking-[-0.025em] text-ink">{selectedTalk.speakerNames.join(", ")}</p>
+              <SpeakerLinks className="mt-1 block text-lg font-black tracking-[-0.025em] text-ink" eventSlug={event.slug} speakerIds={selectedTalk.speakerIds} speakerNames={selectedTalk.speakerNames} />
               <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-secondary">Cue version {selectedTalk.version}</p>
             </div>
             <ConflictIndicator conflicts={selectedConflicts} blocking={false} />

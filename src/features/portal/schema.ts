@@ -121,8 +121,15 @@ export const SpeakerProfile = Schema.Struct({
   bio: NullableText,
   workflowStatus: NonEmptyText,
   headshotAssetId: Schema.NullOr(EntityId),
+  headshotUrl: Schema.optionalWith(NullableText, { default: () => null }),
   links: SpeakerLinks,
   visible: Schema.Boolean,
+  profileSourceId: Schema.NullOr(EntityId),
+  profileSourceVersion: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
+  profileReviewStatus: Schema.Literal("draft", "in_review", "changes_requested", "approved"),
+  profileReviewNote: NullableText,
+  profileSubmittedAt: Schema.NullOr(Timestamp),
+  profileReviewedAt: Schema.NullOr(Timestamp),
   version: Schema.Int.pipe(Schema.positive()),
   pendingSyncFields: Schema.Array(PortalProfileSyncField),
 });
@@ -235,6 +242,27 @@ export const UpdateProfileInput = Schema.Struct({
   links: SpeakerLinks,
 });
 export type UpdateProfileInput = typeof UpdateProfileInput.Type;
+
+export const ImportReusableProfileInput = Schema.Struct({
+  eventId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+});
+export type ImportReusableProfileInput = typeof ImportReusableProfileInput.Type;
+
+export const SubmitProfileReviewInput = Schema.Struct({
+  eventId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+});
+export type SubmitProfileReviewInput = typeof SubmitProfileReviewInput.Type;
+
+export const ReviewSpeakerProfileInput = Schema.Struct({
+  eventId: EntityId,
+  speakerId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  decision: Schema.Literal("approved", "changes_requested"),
+  note: NullableText,
+});
+export type ReviewSpeakerProfileInput = typeof ReviewSpeakerProfileInput.Type;
 
 export const SetTaskCompletionInput = Schema.Struct({
   eventId: EntityId,
@@ -547,6 +575,7 @@ export const PublicSpeaker = Schema.Struct({
   company: NullableText,
   bio: NullableText,
   headshotUrl: NullableText,
+  publicProfileSlug: Schema.optional(NullableText),
   links: SpeakerLinks,
 });
 export type PublicSpeaker = typeof PublicSpeaker.Type;
@@ -564,6 +593,8 @@ export const PublishedSpeakerSnapshot = Schema.Struct({
   company: NullableText,
   bio: NullableText,
   headshotAssetId: Schema.NullOr(EntityId),
+  headshotUrl: Schema.optionalWith(NullableText, { default: () => null }),
+  publicProfileSlug: Schema.optional(NullableText),
   links: SpeakerLinks,
 });
 export type PublishedSpeakerSnapshot = typeof PublishedSpeakerSnapshot.Type;

@@ -100,10 +100,17 @@ const profile = {
   company: "Signal House",
   bio: "River builds resilient live event systems.",
   headshotAssetId: null,
+  headshotUrl: null,
   links: [{ label: "Website", url: "https://example.com/river" }],
   visible: true,
   contactEmail: "river@example.com",
   workflowStatus: "Invited",
+  profileSourceId: null,
+  profileSourceVersion: null,
+  profileReviewStatus: "approved",
+  profileReviewNote: null,
+  profileSubmittedAt: null,
+  profileReviewedAt: null,
   version: 5,
   pendingSyncFields: [],
 } as const;
@@ -625,6 +632,7 @@ describe("organizer content and workflows", () => {
     expect(speakersMarkup).toContain("Outstanding task 1");
     expect(speakersMarkup).toContain("Provision");
     expect(speakersMarkup).toContain("Search speakers");
+    expect(speakersMarkup).toContain(`/e/${event.slug}/speakers/${profile.id}`);
     expect(speakersMarkup).toContain(`/e/${event.slug}/review?selectedSubmissionId=${snapshot.submission!.id}`);
 
     const dashboardMarkup = renderToStaticMarkup(createElement(OrganizerDashboardContent, { dashboard }));
@@ -635,6 +643,7 @@ describe("organizer content and workflows", () => {
     expect(dashboardMarkup).toContain("Complete the speaker profile");
     expect(dashboardMarkup).toContain("Last contact");
     expect(dashboardMarkup).toContain("Log contact");
+    expect(dashboardMarkup).toContain(`/e/${event.slug}/speakers/${profile.id}`);
   });
 
   it("renders direct speaker creation, CSV import, workflow editing, messaging, and headshot controls", () => {

@@ -257,6 +257,10 @@ export const PublicAgendaTalk = Schema.Struct({
   startsAt: UnixTimestampMs,
   durationMin: Schema.Int.pipe(Schema.positive()),
   speakerNames: Schema.Array(Schema.String),
+  speakerProfiles: Schema.optional(Schema.Array(Schema.Struct({
+    name: Schema.String,
+    slug: Schema.String,
+  }))),
 });
 export type PublicAgendaTalk = typeof PublicAgendaTalk.Type;
 

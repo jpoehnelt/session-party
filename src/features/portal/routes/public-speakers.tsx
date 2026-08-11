@@ -104,7 +104,11 @@ export function PublicSpeakerEmbedContent({
                       <Avatar name={speaker.displayName} src={speaker.headshotUrl ?? undefined} size="lg" />
                     </div>
                     <div className="min-w-0 pt-1">
-                      <h2 className={`text-xl leading-tight text-ink ${design.aesthetic === "editorial" ? "font-serif font-medium tracking-[-0.02em]" : "font-black tracking-[-0.04em]"}`}>{speaker.displayName}</h2>
+                      <h2 className={`text-xl leading-tight text-ink ${design.aesthetic === "editorial" ? "font-serif font-medium tracking-[-0.02em]" : "font-black tracking-[-0.04em]"}`}>
+                        {speaker.publicProfileSlug ? (
+                          <a className="underline decoration-2 underline-offset-4 hover:text-accent-deep" href={`/speakers/${encodeURIComponent(speaker.publicProfileSlug)}`}>{speaker.displayName}</a>
+                        ) : speaker.displayName}
+                      </h2>
                       {(speaker.title || speaker.company) && (
                         <p className="mt-1 text-xs font-black uppercase tracking-[0.08em] text-ink-secondary">
                           {[speaker.title, speaker.company].filter(Boolean).join(" at ")}
