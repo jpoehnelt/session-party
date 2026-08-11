@@ -11,6 +11,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   EmptyState,
   Input,
   Modal,
@@ -24,6 +25,7 @@ import {
   normalizeEmbedAccent,
   type EmbedAesthetic,
 } from "../embed-design";
+import { SCHEDULE_EMBED_FIELDS } from "../embed-content";
 import {
   publishedScheduleIcsPath,
   publishedScheduleJsonPath,
@@ -346,6 +348,9 @@ function SpeakerDetail({
   readonly agenda: PublishedAgenda;
 }) {
   const sessions = talksForSpeaker(agenda, speaker);
+  const biography = speaker.bio ?? "This speaker has not published a biography yet.";
+  const [bioExpanded, setBioExpanded] = useState(false);
+  const expandableBiography = biography.length > 180;
   return (
     <div className="space-y-5">
       <div className="flex items-start gap-4 border-2 border-line-strong bg-production-sky/35 p-4 shadow-[3px_3px_0_#171714]">
@@ -359,9 +364,23 @@ function SpeakerDetail({
       </div>
       <div>
         <h3 className="text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep">Biography</h3>
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-ink-secondary">
-          {speaker.bio ?? "This speaker has not published a biography yet."}
+        <p className={bioExpanded || !expandableBiography
+          ? "mt-2 whitespace-pre-wrap text-sm leading-6 text-ink-secondary"
+          : "mt-2 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-ink-secondary"}>
+          {biography}
         </p>
+        {expandableBiography ? (
+          <Button
+            className="mt-2"
+            size="sm"
+            variant="ghost"
+            type="button"
+            aria-expanded={bioExpanded}
+            onClick={() => setBioExpanded((current) => !current)}
+          >
+            {bioExpanded ? "Show less biography" : "Show more biography"}
+          </Button>
+        ) : null}
       </div>
       <div>
         <h3 className="text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep">Sessions</h3>
@@ -646,11 +665,56 @@ function ScheduleSurface({
   );
 }
 
-function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
+export interface SavedEmbedDefinition {
+  readonly id: string;
+  readonly name: string;
+  readonly widget: Exclude<PublicProgramSurface, "widgets">;
+  readonly format: "styled-html" | "plain-html" | "json" | "ical";
+  readonly aesthetic: EmbedAesthetic;
+  readonly accent: string;
+  readonly track: string;
+  readonly fields: readonly string[];
+  readonly code: string;
+  readonly enabled: boolean;
+}
+
+export const embedDefinitionStorageKey = (eventSlug: string) =>
+  `session-party:${eventSlug}:saved-embeds`;
+
+export function parseSavedEmbedDefinitions(raw: string | null): readonly SavedEmbedDefinition[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!Array.isArray(value)) return [];
+    return value.filter((candidate): candidate is SavedEmbedDefinition => {
+      if (!candidate || typeof candidate !== "object") return false;
+      const item = candidate as Partial<SavedEmbedDefinition>;
+      return typeof item.id === "string"
+        && typeof item.name === "string"
+        && typeof item.widget === "string"
+        && typeof item.format === "string"
+        && typeof item.aesthetic === "string"
+        && typeof item.accent === "string"
+        && typeof item.track === "string"
+        && Array.isArray(item.fields)
+        && item.fields.every((field) => typeof field === "string")
+        && typeof item.code === "string"
+        && typeof item.enabled === "boolean";
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) {
   const [widget, setWidget] = useState<Exclude<PublicProgramSurface, "widgets">>("sessions");
-  const [format, setFormat] = useState("styled-html");
+  const [format, setFormat] = useState<SavedEmbedDefinition["format"]>("styled-html");
   const [aesthetic, setAesthetic] = useState<EmbedAesthetic>(DEFAULT_EMBED_DESIGN.aesthetic);
   const [accent, setAccent] = useState(DEFAULT_EMBED_DESIGN.accent);
+  const [name, setName] = useState("Main program embed");
+  const [track, setTrack] = useState("");
+  const [fields, setFields] = useState<ReadonlySet<string>>(new Set(SCHEDULE_EMBED_FIELDS));
+  const [savedEmbeds, setSavedEmbeds] = useState<readonly SavedEmbedDefinition[]>([]);
   const [copyStatus, setCopyStatus] = useState("");
   const origin = typeof window === "undefined" ? "https://sessionparty.com" : window.location.origin;
   const publicUrl = `${origin}/event/${agenda.eventSlug}/${widget}`;
@@ -658,12 +722,73 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
     ? `${origin}/embed/${agenda.eventSlug}/speakers`
     : `${origin}/embed/${agenda.eventSlug}/schedule`;
   const safeAccent = normalizeEmbedAccent(accent);
-  const embedUrl = `${embedBaseUrl}?${embedDesignSearch({ aesthetic, accent: safeAccent })}`;
+  const isSpeakerWidget = widget === "speakers" || widget === "gallery";
+  const selectWidget = (nextWidget: Exclude<PublicProgramSurface, "widgets">) => {
+    setWidget(nextWidget);
+    if ((nextWidget === "speakers" || nextWidget === "gallery") && format === "ical") setFormat("json");
+  };
+  const supportsTrack = !isSpeakerWidget && format !== "plain-html";
+  const supportsFields = !isSpeakerWidget && format === "styled-html";
+  const effectiveTrack = supportsTrack ? track : "";
+  const effectiveFields = supportsFields ? [...fields].sort() : [];
+  const contentSearch = new URLSearchParams({
+    ...Object.fromEntries(new URLSearchParams(embedDesignSearch({ aesthetic, accent: safeAccent }))),
+    ...(effectiveTrack ? { track: effectiveTrack } : {}),
+    ...(supportsFields ? { fields: effectiveFields.join(",") } : {}),
+  }).toString();
+  const embedUrl = `${embedBaseUrl}?${contentSearch}`;
+  const filteredTalks = effectiveTrack ? agenda.talks.filter((talk) => talk.track === effectiveTrack) : agenda.talks;
+  const jsonBase = isSpeakerWidget
+    ? `${origin}/api/v1/public/events/${agenda.eventSlug}/speakers`
+    : `${origin}${publishedScheduleJsonPath(agenda.eventSlug)}`;
+  const jsonUrl = effectiveTrack ? `${jsonBase}?track=${encodeURIComponent(effectiveTrack)}` : jsonBase;
   const generated = format === "json"
-    ? `${origin}/api/v1/public/events/${agenda.eventSlug}/${widget === "speakers" || widget === "gallery" ? "speakers" : "agenda/published"}`
+    ? jsonUrl
+    : format === "ical"
+      ? calendarDataUrl(agenda, filteredTalks)
     : format === "plain-html"
       ? `<a href="${publicUrl}">${agenda.eventName} ${widget}</a>`
       : `<iframe title="${agenda.eventName} ${widget}" src="${embedUrl}" style="width:100%;min-height:720px;border:0;border-top:4px solid ${safeAccent}"></iframe>`;
+
+  const storageKey = embedDefinitionStorageKey(agenda.eventSlug);
+  useEffect(() => {
+    setSavedEmbeds(parseSavedEmbedDefinitions(window.localStorage.getItem(storageKey)));
+  }, [storageKey]);
+
+  const persist = (definitions: readonly SavedEmbedDefinition[]) => {
+    setSavedEmbeds(definitions);
+    window.localStorage.setItem(storageKey, JSON.stringify(definitions));
+  };
+
+  const saveEmbed = () => {
+    const normalizedName = name.trim();
+    if (!normalizedName) {
+      setCopyStatus("Name this embed before saving.");
+      return;
+    }
+    const definition: SavedEmbedDefinition = {
+      id: crypto.randomUUID(),
+      name: normalizedName,
+      widget,
+      format,
+      aesthetic,
+      accent: safeAccent,
+      track: effectiveTrack,
+      fields: effectiveFields,
+      code: generated,
+      enabled: true,
+    };
+    persist([definition, ...savedEmbeds]);
+    setCopyStatus(`Saved “${normalizedName}”.`);
+  };
+
+  const toggleSaved = (id: string) => persist(savedEmbeds.map((definition) =>
+    definition.id === id ? { ...definition, enabled: !definition.enabled } : definition));
+
+  const removeSaved = (id: string) => persist(savedEmbeds.filter((definition) => definition.id !== id));
+
+  const tracks = [...new Set(agenda.talks.flatMap((talk) => talk.track ? [talk.track] : []))].sort();
+  const fieldOptions = SCHEDULE_EMBED_FIELDS;
 
   return (
     <section className="space-y-6" aria-labelledby="public-widgets-title">
@@ -675,17 +800,19 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
       />
       <Card className="rounded-none [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h2]:text-ink" title="Widget builder / output patch bay" titleLevel={2}>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Select label="Widget type" value={widget} onChange={(event) => setWidget(event.currentTarget.value as Exclude<PublicProgramSurface, "widgets">)}>
+          <Input label="Embed name" value={name} onChange={(event) => setName(event.currentTarget.value)} />
+          <Select label="Widget type" value={widget} onChange={(event) => selectWidget(event.currentTarget.value as Exclude<PublicProgramSurface, "widgets">)}>
             <option value="sessions">Sessions list</option>
             <option value="speakers">Speakers list</option>
             <option value="agenda">Agenda</option>
             <option value="schedule">Schedule itinerary</option>
             <option value="gallery">Speaker gallery</option>
           </Select>
-          <Select label="Output format" value={format} onChange={(event) => setFormat(event.currentTarget.value)}>
+          <Select label="Output format" value={format} onChange={(event) => setFormat(event.currentTarget.value as SavedEmbedDefinition["format"])}>
             <option value="styled-html">Styled HTML</option>
             <option value="plain-html">Plain HTML</option>
             <option value="json">JSON</option>
+            <option value="ical" disabled={isSpeakerWidget}>iCalendar</option>
           </Select>
           <Select label="Design aesthetic" value={aesthetic} onChange={(event) => setAesthetic(event.currentTarget.value as EmbedAesthetic)}>
             <option value="bold">Bold &amp; energetic</option>
@@ -693,7 +820,29 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
             <option value="editorial">Editorial</option>
           </Select>
           <Input label="Brand color" type="color" value={accent} onChange={(event) => setAccent(event.currentTarget.value)} />
+          {supportsTrack && <Select label="Track filter" value={track} onChange={(event) => setTrack(event.currentTarget.value)}>
+            <option value="">All tracks</option>
+            {tracks.map((value) => <option key={value} value={value}>{value}</option>)}
+          </Select>}
         </div>
+        {supportsFields && <fieldset className="mt-5 border-2 border-line-strong bg-surface-muted p-4">
+          <legend className="px-2 text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep">Included fields</legend>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {fieldOptions.map((field) => (
+              <Checkbox
+                key={field}
+                label={field[0]!.toUpperCase() + field.slice(1)}
+                checked={fields.has(field)}
+                onChange={() => setFields((current) => {
+                  const next = new Set(current);
+                  if (next.has(field)) next.delete(field);
+                  else next.add(field);
+                  return next;
+                })}
+              />
+            ))}
+          </div>
+        </fieldset>}
         <div className="mt-6 space-y-3 border-t-2 border-line-strong pt-5">
           <label className="text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep" htmlFor="generated-widget-code">Generated share URL or code</label>
           <textarea
@@ -709,10 +858,37 @@ function WidgetsSurface({ agenda }: { readonly agenda: PublishedAgenda }) {
             >
               Copy generated code
             </Button>
+            <Button type="button" variant="secondary" onClick={saveEmbed}>Save embed definition</Button>
             <a className="inline-flex border-2 border-line-strong bg-production-lime px-3 py-2 text-[10px] font-black uppercase tracking-[0.1em] text-ink shadow-[3px_3px_0_#171714] transition-transform hover:-translate-y-0.5" href={embedUrl}>Preview live embed →</a>
             <span className="text-xs font-bold text-ink-secondary" role="status" aria-live="polite">{copyStatus}</span>
           </div>
         </div>
+      </Card>
+      <Card className="rounded-none" title={`Saved embeds (${savedEmbeds.length})`} titleLevel={2}>
+        {savedEmbeds.length === 0 ? (
+          <EmptyState title="No saved embeds" description="Configure and save an embed to retrieve its exact code later." />
+        ) : (
+          <ul className="space-y-4">
+            {savedEmbeds.map((definition) => (
+              <li key={definition.id} className="border-2 border-line-strong bg-surface-muted p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-black text-ink">{definition.name}</p>
+                    <p className="text-xs text-ink-secondary">{definition.widget} · {definition.format} · {definition.enabled ? "Enabled" : "Disabled"}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" variant="secondary" onClick={() => toggleSaved(definition.id)}>
+                      {definition.enabled ? "Disable" : "Enable"}
+                    </Button>
+                    <Button type="button" size="sm" variant="danger" onClick={() => removeSaved(definition.id)}>Delete</Button>
+                  </div>
+                </div>
+                <textarea className="mt-3 min-h-24 w-full border-2 border-line-strong bg-ink p-3 font-mono text-xs text-production-lime" readOnly aria-label={`${definition.name} code`} value={definition.code} />
+                <Button className="mt-2" type="button" size="sm" onClick={() => void copyText(definition.code).then(() => setCopyStatus(`Copied “${definition.name}”.`))}>Get code</Button>
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
     </section>
   );
@@ -782,7 +958,7 @@ export function PublicProgram({
         {surface === "agenda" ? <AgendaSurface agenda={agenda} onSelect={setSelectedTalk} /> : null}
         {surface === "schedule" ? <ScheduleSurface agenda={agenda} gallery={gallery} /> : null}
         {surface === "gallery" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="gallery" onSelect={setSelectedSpeaker} /> : null}
-        {surface === "widgets" ? <WidgetsSurface agenda={agenda} /> : null}
+        {surface === "widgets" ? <WidgetBuilder agenda={agenda} /> : null}
       </div>
       <footer className="mt-4 border-t-2 border-line-strong bg-ink text-on-accent">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">

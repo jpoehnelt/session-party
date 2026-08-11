@@ -212,6 +212,24 @@ export const MoveTalkInput = Schema.Struct({
 });
 export type MoveTalkInput = typeof MoveTalkInput.Type;
 
+export const AutoPlaceTalkInput = Schema.Struct({
+  eventId: EntityId,
+  talkId: EntityId,
+  expectedVersion: ExpectedVersion,
+  idempotencyKey: IdempotencyKey,
+});
+export type AutoPlaceTalkInput = typeof AutoPlaceTalkInput.Type;
+
+export const UpdateTalkContentInput = Schema.Struct({
+  eventId: EntityId,
+  talkId: EntityId,
+  title: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(300)),
+  description: Schema.Union(Schema.String.pipe(Schema.maxLength(20_000)), Schema.Null),
+  expectedVersion: ExpectedVersion,
+  idempotencyKey: IdempotencyKey,
+});
+export type UpdateTalkContentInput = typeof UpdateTalkContentInput.Type;
+
 export const CancelTalkInput = Schema.Struct({
   eventId: EntityId,
   talkId: EntityId,

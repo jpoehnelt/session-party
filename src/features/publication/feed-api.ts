@@ -6,6 +6,13 @@ import { getPublishedAgendaOperation } from "@/features/agenda/operations";
 import { PublishedAgenda, type PublishedAgenda as PublishedAgendaType } from "@/features/agenda/schema";
 import { runRestOperation } from "@/server/adapt";
 import { renderPublishedCalendar } from "./feeds";
+import {
+  embedContentFromSearch,
+  filterPublishedAgenda,
+  projectPublishedAgenda,
+  SCHEDULE_EMBED_FIELDS,
+  type ScheduleEmbedField,
+} from "./embed-content";
 
 type FeedContext = Context<{ Bindings: Env }>;
 
@@ -38,6 +45,8 @@ const feedHeaders = (
   agenda: PublishedAgendaType,
   kind: "calendar" | "json",
   talkId?: string,
+  track?: string | null,
+  fields: readonly ScheduleEmbedField[] = SCHEDULE_EMBED_FIELDS,
 ): Headers => {
   const suffix = talkId ? `session-${talkId}` : "schedule";
   const extension = kind === "calendar" ? "ics" : "json";
@@ -48,7 +57,7 @@ const feedHeaders = (
     "Content-Type": kind === "calendar"
       ? "text/calendar; charset=utf-8"
       : "application/json; charset=utf-8",
-    ETag: `"${agenda.eventId}:r${agenda.revision}:${suffix}:${extension}"`,
+    ETag: `"${agenda.eventId}:r${agenda.revision}:${suffix}:${extension}${track ? `:track:${encodeURIComponent(track)}` : ""}:fields:${[...fields].sort().join(".")}"`,
     "Last-Modified": new Date(agenda.publishedAt).toUTCString(),
     "X-Content-Type-Options": "nosniff",
     "X-Session-Party-Revision": String(agenda.revision),
@@ -66,17 +75,21 @@ const notModified = (c: FeedContext, headers: Headers): Response | null => {
 app.get("/events/:eventSlug/schedule.json", async (c) => {
   const loaded = await loadPublishedAgenda(c);
   if ("response" in loaded) return loaded.response;
-  const headers = feedHeaders(loaded.agenda, "json");
+  const selection = embedContentFromSearch(new URL(c.req.url).searchParams);
+  const agenda = filterPublishedAgenda(loaded.agenda, selection.track);
+  const headers = feedHeaders(agenda, "json", undefined, selection.track, selection.fields);
   return notModified(c, headers)
-    ?? new Response(JSON.stringify(loaded.agenda), { status: 200, headers });
+    ?? new Response(JSON.stringify(projectPublishedAgenda(agenda, selection.fields)), { status: 200, headers });
 });
 
 app.get("/events/:eventSlug/schedule.ics", async (c) => {
   const loaded = await loadPublishedAgenda(c);
   if ("response" in loaded) return loaded.response;
-  const headers = feedHeaders(loaded.agenda, "calendar");
+  const selection = embedContentFromSearch(new URL(c.req.url).searchParams);
+  const agenda = filterPublishedAgenda(loaded.agenda, selection.track);
+  const headers = feedHeaders(agenda, "calendar", undefined, selection.track, selection.fields);
   return notModified(c, headers)
-    ?? new Response(renderPublishedCalendar(loaded.agenda), { status: 200, headers });
+    ?? new Response(renderPublishedCalendar(agenda, agenda.talks, selection.fields), { status: 200, headers });
 });
 
 app.get("/events/:eventSlug/sessions/:sessionFile", async (c) => {

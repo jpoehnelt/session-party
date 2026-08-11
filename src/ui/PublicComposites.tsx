@@ -90,6 +90,7 @@ export interface ScheduleListProps {
   talks: readonly ScheduleListItem[];
   empty?: string;
   className?: string;
+  includedFields?: readonly ("title" | "time" | "room" | "track" | "speakers" | "description")[];
 }
 
 const formatTime = (value: string, timezone: string) =>
@@ -105,26 +106,31 @@ export function ScheduleList({
   talks,
   empty = "No sessions published",
   className,
+  includedFields = ["title", "time", "room", "track", "speakers", "description"],
 }: ScheduleListProps) {
   if (talks.length === 0) {
     return <EmptyState title={empty} description="Published sessions will appear here." />;
   }
   const ordered = [...talks].sort((left, right) => left.startsAt.localeCompare(right.startsAt));
+  const visible = new Set(includedFields);
   return (
     <ol className={cx("divide-y-2 divide-line-strong rounded-card border-2 border-line-strong bg-surface shadow-card", className)}>
       {ordered.map((talk) => (
-        <li key={talk.id} className="grid gap-0 sm:grid-cols-[10rem_minmax(0,1fr)]">
-          <div className="border-b-2 border-line-strong bg-ink px-4 py-4 text-on-accent sm:border-b-0 sm:border-r-2">
+        <li key={talk.id} className={`grid gap-0 ${visible.has("time") ? "sm:grid-cols-[10rem_minmax(0,1fr)]" : "grid-cols-1"}`}>
+          {visible.has("time") && <div className="border-b-2 border-line-strong bg-ink px-4 py-4 text-on-accent sm:border-b-0 sm:border-r-2">
             <time dateTime={talk.startsAt} className="text-sm font-black uppercase text-production-lime">{formatTime(talk.startsAt, timezone)}</time>
             <p className="mt-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/55">{talk.durationMin} min · {timezone}</p>
-          </div>
+          </div>}
           <div className="min-w-0 px-4 py-4">
-            <h3 className="text-lg font-black tracking-[-0.025em] text-ink">{talk.title}</h3>
-            <p className="mt-1 text-sm text-ink-secondary">{talk.speakerNames.join(", ")}</p>
-            {(talk.room || talk.track) && (
-              <p className="mt-1 text-xs text-ink-faint">{[talk.room, talk.track].filter(Boolean).join(" · ")}</p>
+            {visible.has("title") && <h3 className="text-lg font-black tracking-[-0.025em] text-ink">{talk.title}</h3>}
+            {visible.has("speakers") && <p className="mt-1 text-sm text-ink-secondary">{talk.speakerNames.join(", ")}</p>}
+            {((visible.has("room") && talk.room) || (visible.has("track") && talk.track)) && (
+              <p className="mt-1 text-xs text-ink-faint">{[
+                visible.has("room") ? talk.room : null,
+                visible.has("track") ? talk.track : null,
+              ].filter(Boolean).join(" · ")}</p>
             )}
-            {talk.description && <p className="mt-2 text-sm leading-relaxed text-ink-secondary">{talk.description}</p>}
+            {visible.has("description") && talk.description && <p className="mt-2 text-sm leading-relaxed text-ink-secondary">{talk.description}</p>}
           </div>
         </li>
       ))}

@@ -11,6 +11,7 @@ import {
   embedTypographyClass,
   type EmbedDesign,
 } from "../embed-design";
+import { embedContentFromSearch, filterPublishedAgenda, type ScheduleEmbedField } from "../embed-content";
 
 export const path = "/embed/:eventSlug/schedule";
 export const layout = "bare";
@@ -34,6 +35,7 @@ export interface ScheduleEmbedContentProps {
   readonly error: ScheduleLoadError | null;
   readonly onRetry: () => void;
   readonly design?: EmbedDesign;
+  readonly includedFields?: readonly ScheduleEmbedField[];
 }
 
 function ScheduleMasthead({ label, design }: { readonly label: string; readonly design: EmbedDesign }) {
@@ -109,6 +111,7 @@ function ScheduleEmbedBody({
   error,
   onRetry,
   design,
+  includedFields,
 }: ScheduleEmbedContentProps & { readonly design: EmbedDesign }) {
   if (agenda === undefined) {
     return (
@@ -202,7 +205,7 @@ function ScheduleEmbedBody({
             {agenda.talks.length} {agenda.talks.length === 1 ? "session" : "sessions"}
           </p>
         </div>
-        <PublishedSchedule agenda={agenda} aesthetic={design.aesthetic} />
+        <PublishedSchedule agenda={agenda} aesthetic={design.aesthetic} includedFields={includedFields} />
       </section>
 
       <footer className={`mt-12 flex flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-5 ${
@@ -240,6 +243,7 @@ export default function ScheduleEmbedPage() {
   const { eventSlug = "" } = useParams();
   const [searchParams] = useSearchParams();
   const design = embedDesignFromSearch(searchParams);
+  const content = embedContentFromSearch(searchParams);
   const [agenda, setAgenda] = useState<PublishedAgenda | null | undefined>(undefined);
   const [error, setError] = useState<ScheduleLoadError | null>(null);
   const [request, setRequest] = useState(0);
@@ -268,10 +272,11 @@ export default function ScheduleEmbedPage() {
     >
       <div className="mx-auto w-full max-w-6xl">
         <ScheduleEmbedContent
-          agenda={agenda}
+          agenda={agenda ? filterPublishedAgenda(agenda, content.track) : agenda}
           error={error}
           onRetry={() => setRequest((current) => current + 1)}
           design={design}
+          includedFields={content.fields}
         />
       </div>
     </main>

@@ -28,6 +28,8 @@ export interface AirtableProjectionInput {
   readonly origin: string;
   readonly idempotencyKey: string;
   readonly now: Date;
+  readonly pendingEditId?: string;
+  readonly revisionOffset?: number;
 }
 
 export interface PreparedAirtableProjection {
@@ -72,7 +74,7 @@ export const prepareAirtableProjection = async (
   const outboundRevision = Math.max(
     link?.outboundRevision ?? 0,
     latest?.outboundRevision ?? 0,
-  ) + 1;
+  ) + 1 + (input.revisionOffset ?? 0);
   const owner = input.entityType === "speaker"
     ? { speakerId: input.entityId, submissionId: null, talkId: null }
     : input.entityType === "submission"
@@ -84,7 +86,9 @@ export const prepareAirtableProjection = async (
     id: sql<string>`${outboxId}`.as("id"),
     eventId: sql<string>`${input.eventId}`.as("event_id"),
     integrationId: sql<string>`${integration.id}`.as("integration_id"),
-    pendingEditId: sql<string | null>`null`.as("pending_edit_id"),
+    pendingEditId: input.pendingEditId
+      ? sql<string | null>`${input.pendingEditId}`.as("pending_edit_id")
+      : sql<string | null>`null`.as("pending_edit_id"),
     entityType: sql<AirtableEntityType>`${input.entityType}`.as("entity_type"),
     entityId: sql<string>`${input.entityId}`.as("entity_id"),
     speakerId: owner.speakerId === null
@@ -156,6 +160,8 @@ export interface AirtableTalkProjectionInput {
   readonly origin: string;
   readonly idempotencyKey: string;
   readonly now: Date;
+  readonly pendingEditId?: string;
+  readonly revisionOffset?: number;
 }
 
 export const prepareAirtableTalkProjection = async (
@@ -199,7 +205,9 @@ export const prepareAirtableTalkProjection = async (
       : Promise.resolve([]),
   ]);
   const speakerRecordById = new Map(speakerLinks.map((link) => [link.entityId, link.recordId]));
-  const d1Projection = {
+  const airtableProjection = {
+    title: input.talk.title,
+    description: input.talk.description,
     track: track?.name ?? null,
     room: room?.name ?? null,
     startsAt: input.talk.startsAt === null ? null : new Date(input.talk.startsAt).toISOString(),
@@ -211,9 +219,10 @@ export const prepareAirtableTalkProjection = async (
     }),
     submissionLink: submissionLink ? [submissionLink.recordId] : [],
   };
+  const { title: _airtableTitle, description: _airtableDescription, ...d1Projection } = airtableProjection;
   const changedFields = Object.fromEntries(
-    input.changedKeys.flatMap((key) => Object.hasOwn(d1Projection, key)
-      ? [[key, d1Projection[key as keyof typeof d1Projection]]]
+    input.changedKeys.flatMap((key) => Object.hasOwn(airtableProjection, key)
+      ? [[key, airtableProjection[key as keyof typeof airtableProjection]]]
       : []),
   );
   return prepareAirtableProjection(db, {
@@ -222,12 +231,14 @@ export const prepareAirtableTalkProjection = async (
     entityId: input.talk.id,
     entityVersion: input.talk.version,
     changedFields: input.bootstrap
-      ? { title: input.talk.title, description: input.talk.description, ...d1Projection }
+      ? airtableProjection
       : changedFields,
     d1Projection,
     origin: input.origin,
     idempotencyKey: input.idempotencyKey,
     now: input.now,
+    pendingEditId: input.pendingEditId,
+    revisionOffset: input.revisionOffset,
   });
 };
 

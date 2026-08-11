@@ -2,11 +2,14 @@ import { Conflict, External, NotFound, Validation, type AppError } from "contrac
 import { eventAuthorization, type Principal as CurrentUserValue } from "contracts/principal";
 import {
   acceptanceEvents,
+  airtablePendingEdits,
+  airtableRecordLinks,
   auditLog,
   domainChanges,
   events,
   formVersionFields,
   idempotencyRecords,
+  integrations,
   mailCalendarEvents,
   mailDeliveries,
   mailDeliverySnapshots,
@@ -46,6 +49,7 @@ import type {
   AgendaSnapshot,
   AgendaTalk,
   AgendaWarnings,
+  AutoPlaceTalkInput,
   BacklogProposal,
   CancelTalkInput,
   CreateRoomInput,
@@ -63,6 +67,7 @@ import type {
   ScheduleTalkInput,
   Track,
   TrackMutationResult,
+  UpdateTalkContentInput,
   UpdateRoomInput,
   UpdateTrackInput,
 } from "./schema";
@@ -97,7 +102,7 @@ type IdempotencyContext = {
 
 export interface AgendaMutationReservation {
   readonly eventId: string;
-  readonly operationId: "agenda.createTalk" | "agenda.moveTalk" | "agenda.scheduleTalk";
+  readonly operationId: "agenda.autoPlaceTalk" | "agenda.createTalk" | "agenda.moveTalk" | "agenda.scheduleTalk";
   readonly workspaceVersion: number;
 }
 
@@ -240,8 +245,8 @@ const loadTalkRows = (eventId: string): Effect.Effect<readonly AgendaTalk[], App
     );
     if (talkRows.length === 0) return [];
 
-    const speakerRows = yield* database(() =>
-      db
+    const [speakerRows, pendingRows] = yield* Effect.all([
+      database(() => db
         .select({ talkId: talkSpeakers.talkId, speakerId: speakers.id, speakerName: speakers.displayName })
         .from(talkSpeakers)
         .innerJoin(
@@ -249,8 +254,18 @@ const loadTalkRows = (eventId: string): Effect.Effect<readonly AgendaTalk[], App
           and(eq(speakers.eventId, talkSpeakers.eventId), eq(speakers.id, talkSpeakers.speakerId)),
         )
         .where(and(eq(talkSpeakers.eventId, eventId), inArray(talkSpeakers.talkId, talkRows.map(({ id }) => id))))
-        .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id)),
-    );
+        .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id))),
+      database(() => db.select({
+        talkId: airtablePendingEdits.talkId,
+        fieldKey: airtablePendingEdits.fieldKey,
+        intendedValue: airtablePendingEdits.intendedValue,
+      }).from(airtablePendingEdits).where(and(
+        eq(airtablePendingEdits.eventId, eventId),
+        eq(airtablePendingEdits.entityType, "talk"),
+        eq(airtablePendingEdits.status, "pending"),
+        inArray(airtablePendingEdits.entityId, talkRows.map(({ id }) => id)),
+      ))),
+    ]);
 
     const speakersByTalk = new Map<string, { ids: string[]; names: string[] }>();
     for (const row of speakerRows) {
@@ -259,15 +274,23 @@ const loadTalkRows = (eventId: string): Effect.Effect<readonly AgendaTalk[], App
       entry.names.push(row.speakerName);
       speakersByTalk.set(row.talkId, entry);
     }
+    const pendingByTalk = new Map<string, Map<string, unknown>>();
+    for (const row of pendingRows) {
+      if (!row.talkId) continue;
+      const fields = pendingByTalk.get(row.talkId) ?? new Map<string, unknown>();
+      fields.set(row.fieldKey, row.intendedValue);
+      pendingByTalk.set(row.talkId, fields);
+    }
 
     return talkRows.map((talk) => {
       const talkSpeakerRows = speakersByTalk.get(talk.id) ?? { ids: [], names: [] };
+      const pending = pendingByTalk.get(talk.id);
       return {
         id: talk.id,
         eventId: talk.eventId,
         submissionId: talk.submissionId,
-        title: talk.title,
-        description: talk.description,
+        title: typeof pending?.get("title") === "string" ? pending.get("title") as string : talk.title,
+        description: pending?.has("description") ? pending.get("description") as string | null : talk.description,
         trackId: talk.trackId,
         roomId: talk.roomId,
         startsAt: timestamp(talk.startsAt),
@@ -1239,15 +1262,17 @@ export const createTalk = (
   }));
 
 const repositionTalk = (
-  operationId: "agenda.scheduleTalk" | "agenda.moveTalk",
-  action: "scheduled" | "moved",
+  operationId: "agenda.autoPlaceTalk" | "agenda.scheduleTalk" | "agenda.moveTalk",
+  action: "auto_placed" | "scheduled" | "moved",
   input: ScheduleTalkInput | MoveTalkInput,
   interlock?: AgendaMutationInterlock,
+  idempotencyInput: AutoPlaceTalkInput | ScheduleTalkInput | MoveTalkInput = input,
+  preparedContext?: IdempotencyContext,
 ): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
   mutationContention(Effect.gen(function* () {
     const { db } = yield* Db;
     const principal = yield* CurrentUser;
-    const prepared = yield* prepareIdempotency(operationId, input);
+    const prepared = preparedContext ?? (yield* prepareIdempotency(operationId, idempotencyInput));
     if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
     const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
     yield* waitAfterWorkspaceSample(interlock, {
@@ -1256,7 +1281,9 @@ const repositionTalk = (
       workspaceVersion,
     });
     yield* ensureScheduleReferences(input.eventId, input.roomId, input.trackId);
-    const before = yield* loadTalk(input.eventId, input.talkId);
+    const existing = yield* loadTalkRows(input.eventId);
+    const before = existing.find(({ id }) => id === input.talkId);
+    if (!before) return yield* Effect.fail(new NotFound({ entity: "talk", id: input.talkId }));
     if (before.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: `Talk version is ${before.version}; expected ${input.expectedVersion}` }));
     }
@@ -1273,7 +1300,6 @@ const repositionTalk = (
       status,
       version: before.version + 1,
     };
-    const existing = yield* loadTalkRows(input.eventId);
     const conflicts = yield* loadConflicts(input.eventId, [...existing.filter(({ id }) => id !== candidate.id), candidate]);
 
     const changeId = nanoid();
@@ -1352,6 +1378,208 @@ export const scheduleTalk = (input: ScheduleTalkInput, interlock?: AgendaMutatio
 
 export const moveTalk = (input: MoveTalkInput, interlock?: AgendaMutationInterlock) =>
   repositionTalk("agenda.moveTalk", "moved", input, interlock);
+
+export const autoPlaceTalk = (
+  input: AutoPlaceTalkInput,
+): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
+  Effect.gen(function* () {
+    const prepared = yield* prepareIdempotency("agenda.autoPlaceTalk", input);
+    if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
+    const { db } = yield* Db;
+    const [event, roomRows, existing] = yield* Effect.all([
+      getEvent(input.eventId),
+      database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name), asc(rooms.id))),
+      loadTalkRows(input.eventId),
+    ]);
+    const before = existing.find(({ id }) => id === input.talkId);
+    if (!before) return yield* Effect.fail(new NotFound({ entity: "talk", id: input.talkId }));
+    if (before.status === "cancelled") {
+      return yield* Effect.fail(new Conflict({ message: "Cancelled talks cannot be auto-placed" }));
+    }
+    const eventStartsAt = timestamp(event.startsAt);
+    const eventEndsAt = timestamp(event.endsAt);
+    if (eventStartsAt === null || eventEndsAt === null) {
+      return yield* Effect.fail(new Validation({ message: "Set event start and end dates before auto-placement" }));
+    }
+    if (roomRows.length === 0) {
+      return yield* Effect.fail(new Validation({ message: "Create at least one room before auto-placement" }));
+    }
+    const scheduled = existing.filter(({ id, status, startsAt }) =>
+      id !== before.id && status !== "cancelled" && startsAt !== null);
+    const stepMs = 15 * 60_000;
+    let placement: { readonly roomId: string; readonly startsAt: number } | null = null;
+    for (
+      let startsAt = eventStartsAt;
+      startsAt + before.durationMin * 60_000 <= eventEndsAt && placement === null;
+      startsAt += stepMs
+    ) {
+      for (const room of roomRows) {
+        const candidate: AgendaTalk = {
+          ...before,
+          roomId: room.id,
+          startsAt,
+          status: "confirmed",
+        };
+        if (detectAgendaConflicts(candidate, scheduled).length === 0) {
+          placement = { roomId: room.id, startsAt };
+          break;
+        }
+      }
+    }
+    if (placement === null) {
+      return yield* Effect.fail(new Conflict({ message: "No conflict-free room and time remain inside the event window" }));
+    }
+    return yield* repositionTalk("agenda.autoPlaceTalk", "auto_placed", {
+      ...input,
+      trackId: before.trackId,
+      roomId: placement.roomId,
+      startsAt: placement.startsAt,
+      durationMin: before.durationMin,
+    }, undefined, input, prepared);
+  });
+
+export const updateTalkContent = (
+  input: UpdateTalkContentInput,
+): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
+  mutationContention(Effect.gen(function* () {
+    const { db } = yield* Db;
+    const principal = yield* CurrentUser;
+    const prepared = yield* prepareIdempotency("agenda.updateTalkContent", input);
+    if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
+    const existing = yield* loadTalkRows(input.eventId);
+    const before = existing.find(({ id }) => id === input.talkId);
+    if (!before) return yield* Effect.fail(new NotFound({ entity: "talk", id: input.talkId }));
+    if (before.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: `Talk version is ${before.version}; expected ${input.expectedVersion}` }));
+    }
+    if (before.status === "cancelled") {
+      return yield* Effect.fail(new Conflict({ message: "Cancelled talks cannot be edited" }));
+    }
+    const title = input.title.trim().replace(/\s+/g, " ");
+    if (title.length === 0) return yield* Effect.fail(new Validation({ message: "Talk title must contain visible characters" }));
+    const description = input.description?.trim() || null;
+    const [airtableIntegration] = yield* database(() => db.select({ id: integrations.id }).from(integrations).where(and(
+      eq(integrations.eventId, input.eventId), eq(integrations.kind, "airtable"),
+    )).limit(1));
+    const changedKeys = ([
+      ...(title !== before.title ? ["title" as const] : []),
+      ...(description !== before.description ? ["description" as const] : []),
+    ]);
+    if (airtableIntegration) {
+      const existingPending = yield* database(() => db.select({ fieldKey: airtablePendingEdits.fieldKey }).from(airtablePendingEdits).where(and(
+        eq(airtablePendingEdits.eventId, input.eventId),
+        eq(airtablePendingEdits.integrationId, airtableIntegration.id),
+        eq(airtablePendingEdits.entityType, "talk"),
+        eq(airtablePendingEdits.entityId, input.talkId),
+        eq(airtablePendingEdits.status, "pending"),
+        inArray(airtablePendingEdits.fieldKey, ["title", "description"]),
+      )));
+      if (existingPending.length > 0) {
+        return yield* Effect.fail(new Conflict({ message: "Talk content changes are already pending Airtable confirmation" }));
+      }
+    }
+    const candidate: AgendaTalk = { ...before, title, description, version: before.version + 1 };
+    const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
+    const changeId = nanoid();
+    const auditId = nanoid();
+    const conflicts = yield* loadConflicts(input.eventId, [
+      ...existing.filter(({ id }) => id !== candidate.id),
+      candidate,
+    ]);
+    const result: AgendaMutationResult = {
+      talk: candidate,
+      conflicts: conflicts.filter(({ talkIds }) => talkIds.includes(candidate.id)),
+      changeId,
+      auditId,
+      replayed: false,
+    };
+    const actor = actorColumns(principal);
+    const [recordLink] = airtableIntegration ? yield* database(() => db.select({
+      inboundRevision: airtableRecordLinks.inboundRevision,
+      inboundHash: airtableRecordLinks.inboundHash,
+    }).from(airtableRecordLinks).where(and(
+      eq(airtableRecordLinks.integrationId, airtableIntegration.id),
+      eq(airtableRecordLinks.entityType, "talk"),
+      eq(airtableRecordLinks.entityId, input.talkId),
+    )).limit(1)) : [undefined];
+    const pendingEdits = airtableIntegration ? changedKeys.map((fieldKey) => ({
+      id: nanoid(),
+      eventId: input.eventId,
+      integrationId: airtableIntegration.id,
+      entityType: "talk" as const,
+      entityId: input.talkId,
+      speakerId: null,
+      submissionId: null,
+      talkId: input.talkId,
+      fieldKey,
+      intendedValue: fieldKey === "title" ? title : description,
+      baseInboundRevision: recordLink?.inboundRevision ?? null,
+      baseInboundHash: recordLink?.inboundHash ?? null,
+      status: "pending" as const,
+      version: 1,
+      createdAt: prepared.now,
+      updatedAt: prepared.now,
+    })) : [];
+    const airtableProjections = yield* Effect.forEach(pendingEdits, (edit, index) => database(() => prepareAirtableTalkProjection(db, {
+      eventId: input.eventId,
+      talk: candidate,
+      changedKeys: [edit.fieldKey],
+      origin: "agenda.updateTalkContent",
+      idempotencyKey: `agenda.updateTalkContent:${prepared.id}:${edit.fieldKey}`,
+      now: prepared.now,
+      pendingEditId: edit.id,
+      revisionOffset: index,
+    })));
+    yield* database(() => db.batch([
+      db.update(talks).set({
+        ...(airtableIntegration ? {} : { title, description }),
+        version: candidate.version,
+        updatedAt: prepared.now,
+      }).where(and(
+        eq(talks.eventId, input.eventId),
+        eq(talks.id, input.talkId),
+        eq(talks.version, input.expectedVersion),
+      )),
+      ...pendingEdits.map((edit) => db.insert(airtablePendingEdits).values(edit)),
+      db.insert(idempotencyRecords).values(idempotencyInsert(
+        prepared,
+        input.eventId,
+        "agenda.updateTalkContent",
+        result as unknown as JsonValue,
+        true,
+      )),
+      db.insert(domainChanges).values({
+        id: changeId,
+        eventId: input.eventId,
+        aggregateType: "agenda-workspace",
+        aggregateId: input.eventId,
+        aggregateVersion: workspaceVersion,
+        eventType: TALK_CHANGE_EVENT,
+        audiences: PRIVATE_AUDIENCE,
+        payload: { action: "content_updated", talk: candidate },
+        ...actor,
+        requestId: prepared.requestId,
+        idempotencyRecordId: prepared.id,
+        occurredAt: prepared.now,
+      }),
+      db.insert(auditLog).values({
+        id: auditId,
+        eventId: input.eventId,
+        requestId: prepared.requestId,
+        ...actor,
+        action: "agenda.talk_content_updated",
+        resourceType: "talk",
+        resourceId: input.talkId,
+        before,
+        after: candidate,
+        metadata: { idempotencyKeyHash: prepared.keyHash },
+        occurredAt: prepared.now,
+      }),
+      ...airtableProjections.flatMap((projection) => projection ? [projection.statement] : []),
+    ] as never));
+    yield* broadcastMutation(result, principal.name, prepared.requestId);
+    return result;
+  }));
 
 export const cancelTalk = (
   input: CancelTalkInput,
@@ -1467,7 +1695,7 @@ export const publishAgenda = (
         message: "Agenda publication requires the event end time to be after the start time",
       }));
     }
-    const [agendaTalks, trackRows, roomRows, speakerRows] = yield* Effect.all([
+    const [agendaTalks, trackRows, roomRows, speakerRows, pendingPublicationRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
       database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(eq(tracks.eventId, input.eventId))),
       database(() => db.select({ id: rooms.id, name: rooms.name }).from(rooms).where(eq(rooms.eventId, input.eventId))),
@@ -1492,7 +1720,18 @@ export const publishAgenda = (
           .where(and(eq(talkSpeakers.eventId, input.eventId), eq(talks.status, "confirmed")))
           .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id)),
       ),
+      database(() => db.select({ id: airtablePendingEdits.id }).from(airtablePendingEdits).where(and(
+        eq(airtablePendingEdits.eventId, input.eventId),
+        eq(airtablePendingEdits.entityType, "talk"),
+        eq(airtablePendingEdits.status, "pending"),
+        inArray(airtablePendingEdits.fieldKey, ["title", "description"]),
+      ))),
     ]);
+    if (pendingPublicationRows.length > 0) {
+      return yield* Effect.fail(new Validation({
+        message: "Resolve pending Airtable talk title and description edits before publishing",
+      }));
+    }
     const conflicts = yield* loadConflicts(input.eventId, agendaTalks);
     const incompleteTalks = agendaTalks.filter(({ status, roomId, startsAt }) =>
       status !== "cancelled" && (status !== "confirmed" || roomId === null || startsAt === null)
@@ -2184,6 +2423,14 @@ export const publishAgenda = (
             from ${events}
             where ${events.id} = ${input.eventId}
           ) = ${input.expectedEventVersion}
+          and not exists (
+            select 1
+            from ${airtablePendingEdits}
+            where ${airtablePendingEdits.eventId} = ${input.eventId}
+              and ${airtablePendingEdits.entityType} = 'talk'
+              and ${airtablePendingEdits.status} = 'pending'
+              and ${airtablePendingEdits.fieldKey} in ('title', 'description')
+          )
           and ${dispatchInterlock}
           and not exists (
             with expected_speakers as (

@@ -6,12 +6,14 @@ import type {
   PublicAgendaTalk,
 } from "@/features/agenda/schema";
 import type { EmbedAesthetic } from "../embed-design";
+import { SCHEDULE_EMBED_FIELDS, type ScheduleEmbedField } from "../embed-content";
 
 export interface PublishedScheduleProps {
   readonly agenda: PublishedAgenda;
   readonly compact?: boolean;
   readonly initialView?: AgendaView;
   readonly aesthetic?: EmbedAesthetic;
+  readonly includedFields?: readonly ScheduleEmbedField[];
 }
 
 interface ScheduleGroup {
@@ -122,15 +124,20 @@ export function PublishedSchedule({
   compact = false,
   initialView = "day",
   aesthetic = "bold",
+  includedFields = SCHEDULE_EMBED_FIELDS,
 }: PublishedScheduleProps) {
-  const supportsTrack = agenda.talks.some((talk) => Boolean(talk.track?.trim()));
-  const supportsRoom = agenda.talks.some((talk) => Boolean(talk.room?.trim()));
-  const tabs = ([
-    { id: "list", label: VIEW_LABELS.list },
-    { id: "day", label: VIEW_LABELS.day },
-    { id: "week", label: VIEW_LABELS.week },
+  const visible = new Set(includedFields);
+  const includesTime = visible.has("time");
+  const supportsTrack = includesTime && visible.has("track") && agenda.talks.some((talk) => Boolean(talk.track?.trim()));
+  const supportsRoom = includesTime && visible.has("room") && agenda.talks.some((talk) => Boolean(talk.room?.trim()));
+  const tabs = (includesTime ? [
+    { id: "list" as const, label: VIEW_LABELS.list },
+    { id: "day" as const, label: VIEW_LABELS.day },
+    { id: "week" as const, label: VIEW_LABELS.week },
     ...(supportsTrack ? [{ id: "track" as const, label: VIEW_LABELS.track }] : []),
     ...(supportsRoom ? [{ id: "room" as const, label: VIEW_LABELS.room }] : []),
+  ] : [
+    { id: "list" as const, label: VIEW_LABELS.list },
   ]) satisfies { id: AgendaView; label: string }[];
   const [selectedView, setSelectedView] = useState<AgendaView>(initialView);
   const view = tabs.some(({ id }) => id === selectedView) ? selectedView : "list";
@@ -149,7 +156,7 @@ export function PublishedSchedule({
 
   return (
     <div className={compact ? "space-y-5" : "space-y-8"}>
-      <section
+      {includesTime && <section
         aria-label="Schedule display controls"
         className={`grid bg-surface lg:grid-cols-[minmax(0,1fr)_auto] ${
           aesthetic === "bold"
@@ -179,7 +186,7 @@ export function PublishedSchedule({
           <p className="text-sm font-black">{agenda.timezone}</p>
           <p className={`text-[10px] font-bold uppercase tracking-[0.12em] ${aesthetic === "bold" ? "text-white/55" : "text-ink-secondary"}`}>{sessionLabel} on air</p>
         </div>
-      </section>
+      </section>}
       <div
         role="region"
         aria-label={`${VIEW_LABELS[view]} schedule view`}
@@ -219,6 +226,7 @@ export function PublishedSchedule({
                   ? "rounded-xl shadow-none [&>li]:border-line [&>li:nth-child(even)>div:last-child]:bg-surface-muted"
                   : "rounded-none shadow-none [&>li]:border-line-strong [&>li:nth-child(even)>div:last-child]:bg-surface-muted/50"}
               timezone={agenda.timezone}
+              includedFields={includedFields}
               talks={group.talks.map((talk) => ({
                 id: talk.id,
                 title: talk.title,

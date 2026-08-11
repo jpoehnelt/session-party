@@ -78,4 +78,19 @@ describe("published schedule rendering", () => {
     expect(markup).toContain("Schedule coming soon");
     expect(markup).toContain("no sessions have been added");
   });
+
+  it("uses an ungrouped schedule when time is excluded", () => {
+    const markup = renderToStaticMarkup(createElement(PublishedSchedule, {
+      agenda,
+      initialView: "day",
+      includedFields: ["title", "track", "room"],
+    }));
+    expect(markup).toContain("Immutable systems");
+    expect(markup).not.toContain("Audience clock");
+    expect(markup).not.toContain("America/Los_Angeles");
+    expect(markup).not.toContain(">Day<");
+    expect(markup).not.toContain(">Week<");
+    expect(markup).not.toContain("schedule-group-");
+    expect(markup).toContain('aria-label="All sessions"');
+  });
 });

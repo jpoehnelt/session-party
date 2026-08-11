@@ -4,6 +4,7 @@ import type { ServerMessage } from "contracts/protocol";
 import {
   acceptanceEvents,
   airtableOutbox,
+  airtablePendingEdits,
   auditLog,
   domainChanges,
   events,
@@ -48,6 +49,7 @@ import {
 } from "./operations";
 import type { AgendaMutationResult } from "./schema";
 import {
+  autoPlaceTalk,
   cancelTalk,
   createRoom,
   createTalk,
@@ -59,6 +61,7 @@ import {
   publishAgenda,
   scheduleTalk,
   updateRoom,
+  updateTalkContent,
   updateTrack,
   type AgendaMutationInterlock,
   type AgendaSnapshotInterlock,
@@ -827,6 +830,157 @@ describe("agenda service", () => {
       outboundRevision: 4,
       status: "pending",
     });
+  });
+
+  it("auto-places an unplaced talk into the first conflict-free event slot", async () => {
+    const seeded = await seedAgenda("auto-place", { scheduled: true });
+    const created = await runAs(seeded.user, createTalk({
+      eventId: seeded.eventId,
+      submissionId: seeded.submissionB,
+      trackId: seeded.trackId,
+      roomId: null,
+      startsAt: null,
+      durationMin: 30,
+      idempotencyKey: "auto-place-create-0001",
+    }));
+    const input = {
+      eventId: seeded.eventId,
+      talkId: created.talk.id,
+      expectedVersion: created.talk.version,
+      idempotencyKey: "auto-place-talk-0001",
+    } as const;
+    const placed = await runAs(seeded.user, autoPlaceTalk(input));
+    await runAs(seeded.user, cancelTalk({
+      eventId: seeded.eventId,
+      talkId: created.talk.id,
+      expectedVersion: placed.talk.version,
+      idempotencyKey: "auto-place-cancel-0001",
+    }));
+    const replayed = await runAs(seeded.user, autoPlaceTalk(input));
+
+    expect(placed.talk).toMatchObject({
+      roomId: seeded.roomB,
+      startsAt: FIXED_DAY_START,
+      status: "confirmed",
+      version: 2,
+    });
+    expect(placed.conflicts).toEqual([]);
+    expect(replayed).toMatchObject({ replayed: true, changeId: placed.changeId });
+  });
+
+  it("edits the organizer session title and abstract with versioned evidence", async () => {
+    const seeded = await seedAgenda("content-edit", { scheduled: true });
+    const input = {
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: "Effects at global scale",
+      description: "A revised abstract owned by the organizer.",
+      expectedVersion: 2,
+      idempotencyKey: "content-edit-talk-0001",
+    } as const;
+    const updated = await runAs(seeded.user, updateTalkContent(input));
+    const replayed = await runAs(seeded.user, updateTalkContent(input));
+
+    expect(updated.talk).toMatchObject({
+      title: "Effects at global scale",
+      description: "A revised abstract owned by the organizer.",
+      version: 3,
+    });
+    expect(replayed).toMatchObject({ replayed: true, changeId: updated.changeId });
+    const [stored, change, audit] = await Promise.all([
+      seeded.db.select().from(talks).where(eq(talks.id, seeded.talkA)).get(),
+      seeded.db.select().from(domainChanges).where(eq(domainChanges.id, updated.changeId)).get(),
+      seeded.db.select().from(auditLog).where(eq(auditLog.id, updated.auditId)).get(),
+    ]);
+    expect(stored).toMatchObject({ title: "Effects at global scale", version: 3 });
+    expect(change?.payload).toMatchObject({ action: "content_updated" });
+    expect(audit?.action).toBe("agenda.talk_content_updated");
+  });
+
+  it("keeps Airtable-authoritative talk content as a pending overlay", async () => {
+    const seeded = await seedAgenda("content-edit-airtable", { scheduled: true });
+    const [before] = await seeded.db.select().from(talks).where(eq(talks.id, seeded.talkA));
+    const integrationId = `airtable-${seeded.eventId}`;
+    const integrationNow = new Date(FIXED_NOW);
+    await seeded.db.insert(integrations).values({
+      id: integrationId,
+      eventId: seeded.eventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: integrationNow,
+      updatedAt: integrationNow,
+    });
+    const input = {
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: "Pending Airtable title",
+      description: "Pending Airtable description",
+      expectedVersion: before!.version,
+      idempotencyKey: "content-edit-airtable-0001",
+    } as const;
+    const updated = await runAs(seeded.user, updateTalkContent(input));
+    const replayed = await runAs(seeded.user, updateTalkContent(input));
+    const [stored, pending, outbox, agenda] = await Promise.all([
+      seeded.db.select().from(talks).where(eq(talks.id, seeded.talkA)).get(),
+      seeded.db.select().from(airtablePendingEdits).where(eq(airtablePendingEdits.entityId, seeded.talkA)),
+      seeded.db.select().from(airtableOutbox).where(eq(airtableOutbox.entityId, seeded.talkA)),
+      runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "list" })),
+    ]);
+    expect(updated.talk).toMatchObject({ title: input.title, description: input.description, version: before!.version + 1 });
+    expect(replayed).toMatchObject({ replayed: true, changeId: updated.changeId });
+    expect(stored).toMatchObject({ title: before!.title, description: before!.description, version: before!.version + 1 });
+    expect(pending.map((row) => row.fieldKey).sort()).toEqual(["description", "title"]);
+    expect(outbox.map((row) => row.changedFields)).toEqual(expect.arrayContaining([
+      { title: input.title }, { description: input.description },
+    ]));
+    expect(new Set(outbox.map((row) => row.outboundHash)).size).toBe(1);
+    expect(agenda.talks.find((talk) => talk.id === seeded.talkA)).toMatchObject({
+      title: input.title,
+      description: input.description,
+    });
+    const conflicted = await runEither(seeded.user, updateTalkContent({
+      ...input,
+      expectedVersion: updated.talk.version,
+      idempotencyKey: "content-edit-airtable-0002",
+    }));
+    expect(conflicted).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+  });
+
+  it("blocks publication while Airtable-authoritative talk content is pending", async () => {
+    const seeded = await seedAgenda("pending-content-publication", { scheduled: true });
+    const [before] = await seeded.db.select().from(talks).where(eq(talks.id, seeded.talkA));
+    const integrationId = `airtable-${seeded.eventId}`;
+    const integrationNow = new Date(FIXED_NOW);
+    await seeded.db.insert(integrations).values({
+      id: integrationId,
+      eventId: seeded.eventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: integrationNow,
+      updatedAt: integrationNow,
+    });
+    await runAs(seeded.user, updateTalkContent({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: "Unconfirmed Airtable title",
+      description: before!.description,
+      expectedVersion: before!.version,
+      idempotencyKey: "pending-content-publication-edit-0001",
+    }));
+
+    const publication = await runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 1,
+      expectedEventVersion: 1,
+      idempotencyKey: "pending-content-publication-0001",
+    }));
+    expect(publication).toMatchObject({ _tag: "Left", left: { _tag: "Validation" } });
+    expect(await seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId), eq(domainChanges.eventType, "agenda/published"),
+    ))).toHaveLength(0);
   });
 
   it("saves room and speaker overlaps as named non-blocking agenda warnings", async () => {
@@ -1763,6 +1917,54 @@ describe("agenda service", () => {
     expect(publicationChanges[0]?.payload).toEqual(firstPublication);
     await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(2);
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(2);
+  });
+
+  it("rejects an Airtable pending edit introduced after publication sampling", async () => {
+    const seeded = await seedAgenda("publication-pending-race", { scheduled: true });
+    const integrationId = `airtable-${seeded.eventId}`;
+    const now = new Date(FIXED_NOW);
+    await seeded.db.insert(integrations).values({
+      id: integrationId,
+      eventId: seeded.eventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    const barrier = publicationBarrier();
+    const publication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publication-pending-race-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+    try {
+      await seeded.db.insert(airtablePendingEdits).values({
+        id: "publication-pending-race-edit",
+        eventId: seeded.eventId,
+        integrationId,
+        entityType: "talk",
+        entityId: seeded.talkA,
+        speakerId: null,
+        submissionId: null,
+        talkId: seeded.talkA,
+        fieldKey: "title",
+        intendedValue: "Losing pending title",
+        status: "pending",
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } finally {
+      barrier.release();
+    }
+    expect(await publication).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+    expect(await seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId), eq(domainChanges.eventType, "agenda/published"),
+    ))).toHaveLength(0);
   });
 
   it("rejects publication when event metadata changes after the agenda read", async () => {

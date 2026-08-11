@@ -309,6 +309,23 @@ describe("publication boundary", () => {
     expect(jsonResponse.headers.get("x-session-party-revision")).toBe("1");
     expect(await jsonResponse.json()).toEqual(published);
 
+    const filteredJsonResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.json?track=Systems`,
+    );
+    expect(await filteredJsonResponse.json()).toEqual(published);
+    const emptyJsonResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.json?track=Other`,
+    );
+    expect(await emptyJsonResponse.json()).toEqual({ ...published, talks: [] });
+    const titleOnlyJsonResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.json?fields=title`,
+    );
+    expect(await titleOnlyJsonResponse.json()).toEqual({
+      ...published,
+      talks: published.talks.map((talk) => ({ id: talk.id, title: talk.title })),
+    });
+    expect(titleOnlyJsonResponse.headers.get("etag")).not.toBe(jsonResponse.headers.get("etag"));
+
     const calendarResponse = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/schedule.ics`,
     );
@@ -323,6 +340,18 @@ describe("publication boundary", () => {
     expect(calendar).toContain("SUMMARY:Effects at scale");
     expect(calendar).not.toContain("Private cancelled talk");
     expect(calendar).not.toContain("Private Speaker");
+
+    const titleOnlyCalendarResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.ics?fields=title`,
+    );
+    const titleOnlyCalendar = await titleOnlyCalendarResponse.text();
+    expect(titleOnlyCalendar).toContain("SUMMARY:Effects at scale");
+    expect(titleOnlyCalendar).not.toContain("DTSTART:");
+    expect(titleOnlyCalendar).not.toContain("DTEND:");
+    expect(titleOnlyCalendar).not.toContain("DESCRIPTION:");
+    expect(titleOnlyCalendar).not.toContain("LOCATION:");
+    expect(titleOnlyCalendar).not.toContain("CATEGORIES:");
+    expect(titleOnlyCalendarResponse.headers.get("etag")).not.toBe(etag);
 
     const notModified = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/schedule.ics`,

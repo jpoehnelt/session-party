@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PublishedAgenda } from "@/features/agenda/schema";
 import { getPublicSchedule, PublicationApiError } from "../api";
+import { embedContentFromSearch, filterPublishedAgenda } from "../embed-content";
 import {
   default as ScheduleEmbedPage,
   layout,
@@ -100,6 +101,26 @@ describe("public schedule route", () => {
     expect(markup).toContain('data-embed-aesthetic="editorial"');
     expect(markup).toContain("--color-accent:#0A6B58");
     expect(markup).toContain("font-serif");
+  });
+
+  it("enforces track and included-field parameters in the rendered embed", () => {
+    const second = {
+      ...agenda.talks[0]!,
+      id: "talk-product",
+      title: "Product systems",
+      description: "This description must stay filtered.",
+      track: "Product",
+      room: "Cove",
+      speakerNames: ["Lin Chen"],
+    };
+    const selection = embedContentFromSearch("?track=Systems&fields=title,time,unknown");
+    const filtered = filterPublishedAgenda({ ...agenda, talks: [...agenda.talks, second] }, selection.track);
+    const markup = render({ agenda: filtered, error: null, onRetry: noop, includedFields: selection.fields });
+
+    expect(markup).toContain("Effects at scale");
+    expect(markup).not.toContain("Product systems");
+    expect(markup).not.toContain("Ship reliable systems");
+    expect(markup).not.toContain("Ada Rivera");
   });
 
   it("wires aesthetic query parameters from the public route into the embed", () => {

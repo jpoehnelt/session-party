@@ -1,5 +1,6 @@
 import type { PublicAgendaTalk, PublishedAgenda } from "@/features/agenda/schema";
 import { stableCalendarUid } from "@/features/comms/calendar";
+import { SCHEDULE_EMBED_FIELDS, type ScheduleEmbedField } from "./embed-content";
 
 const calendarTimestamp = (timestamp: number): string =>
   new Date(timestamp).toISOString().replaceAll("-", "").replaceAll(":", "").replace(/\.\d{3}Z$/, "Z");
@@ -31,11 +32,12 @@ const foldCalendarLine = (line: string): string => {
   return folded + physicalLine;
 };
 
-const descriptionFor = (talk: PublicAgendaTalk): string | null => {
-  const speakers = talk.speakerNames.length > 0
+const descriptionFor = (talk: PublicAgendaTalk, visible: ReadonlySet<ScheduleEmbedField>): string | null => {
+  const speakers = visible.has("speakers") && talk.speakerNames.length > 0
     ? `Speakers: ${talk.speakerNames.join(", ")}`
     : null;
-  return [talk.description, speakers].filter((value): value is string => Boolean(value)).join("\n\n") || null;
+  return [visible.has("description") ? talk.description : null, speakers]
+    .filter((value): value is string => Boolean(value)).join("\n\n") || null;
 };
 
 const locationFor = (agenda: PublishedAgenda, talk: PublicAgendaTalk): string | null => {
@@ -45,21 +47,27 @@ const locationFor = (agenda: PublishedAgenda, talk: PublicAgendaTalk): string | 
   return talk.room ?? agenda.location;
 };
 
-const renderPublishedEvent = (agenda: PublishedAgenda, talk: PublicAgendaTalk): readonly string[] => {
-  const description = descriptionFor(talk);
-  const location = locationFor(agenda, talk);
+const renderPublishedEvent = (
+  agenda: PublishedAgenda,
+  talk: PublicAgendaTalk,
+  visible: ReadonlySet<ScheduleEmbedField>,
+): readonly string[] => {
+  const description = descriptionFor(talk, visible);
+  const location = visible.has("room") ? locationFor(agenda, talk) : null;
   return [
     "BEGIN:VEVENT",
     `UID:${escapeCalendarText(stableCalendarUid(agenda.eventId, talk.id))}`,
     `DTSTAMP:${calendarTimestamp(agenda.publishedAt)}`,
     `LAST-MODIFIED:${calendarTimestamp(agenda.publishedAt)}`,
     `SEQUENCE:${agenda.revision}`,
-    `DTSTART:${calendarTimestamp(talk.startsAt)}`,
-    `DTEND:${calendarTimestamp(talk.startsAt + talk.durationMin * 60_000)}`,
-    `SUMMARY:${escapeCalendarText(talk.title)}`,
+    ...(visible.has("time") ? [
+      `DTSTART:${calendarTimestamp(talk.startsAt)}`,
+      `DTEND:${calendarTimestamp(talk.startsAt + talk.durationMin * 60_000)}`,
+    ] : []),
+    ...(visible.has("title") ? [`SUMMARY:${escapeCalendarText(talk.title)}`] : []),
     ...(description ? [`DESCRIPTION:${escapeCalendarText(description)}`] : []),
     ...(location ? [`LOCATION:${escapeCalendarText(location)}`] : []),
-    ...(talk.track ? [`CATEGORIES:${escapeCalendarText(talk.track)}`] : []),
+    ...(visible.has("track") && talk.track ? [`CATEGORIES:${escapeCalendarText(talk.track)}`] : []),
     "STATUS:CONFIRMED",
     "END:VEVENT",
   ];
@@ -68,7 +76,9 @@ const renderPublishedEvent = (agenda: PublishedAgenda, talk: PublicAgendaTalk): 
 export const renderPublishedCalendar = (
   agenda: PublishedAgenda,
   talks: readonly PublicAgendaTalk[] = agenda.talks,
+  fields: readonly ScheduleEmbedField[] = SCHEDULE_EMBED_FIELDS,
 ): string => {
+  const visible = new Set(fields);
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -78,7 +88,7 @@ export const renderPublishedCalendar = (
     `X-WR-TIMEZONE:${escapeCalendarText(agenda.timezone)}`,
     "REFRESH-INTERVAL;VALUE=DURATION:PT15M",
     "X-PUBLISHED-TTL:PT15M",
-    ...talks.flatMap((talk) => renderPublishedEvent(agenda, talk)),
+    ...talks.flatMap((talk) => renderPublishedEvent(agenda, talk, visible)),
     "END:VCALENDAR",
     "",
   ];
