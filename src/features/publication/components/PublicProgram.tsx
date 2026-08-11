@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import type { PublicAgendaTalk, PublishedAgenda } from "@/features/agenda/schema";
 import type {
   PublicSpeaker,
@@ -66,6 +66,29 @@ export function publicDetailFromSplat(value: string | undefined): PublicProgramD
   if (surface === "sessions") return { sessionId: id };
   if (surface === "speakers" || surface === "gallery") return { speakerId: id };
   return {};
+}
+
+function detailPathWithReturn(
+  path: string,
+  surface: PublicProgramSurface,
+  context: Readonly<Record<string, string>> = {},
+): string {
+  const search = new URLSearchParams({ from: surface, ...context });
+  return `${path}?${search.toString()}`;
+}
+
+function publicSurfacePath(
+  eventSlug: string,
+  surface: PublicProgramSurface,
+  context: Readonly<Record<string, string>> = {},
+): string {
+  const search = new URLSearchParams(context).toString();
+  const path = `/event/${encodeURIComponent(eventSlug)}/${surface}`;
+  return search ? `${path}?${search}` : path;
+}
+
+function returnSurface(value: string | null, fallback: PublicProgramSurface): PublicProgramSurface {
+  return SURFACES.some(({ id }) => id === value) ? value as PublicProgramSurface : fallback;
 }
 
 export function sessionMatches(
@@ -312,7 +335,10 @@ function SessionsSurface({
                     <p className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-secondary">
                       {formatDateTime(talk.startsAt, agenda.timezone)}
                     </p>
-                    <Link className="mt-2 block text-left" to={publicSessionPath(agenda.eventSlug, talk.id)}>
+                    <Link
+                      className="mt-2 block text-left"
+                      to={detailPathWithReturn(publicSessionPath(agenda.eventSlug, talk.id), "sessions")}
+                    >
                       <h2 className="text-xl font-black leading-tight tracking-[-0.03em] text-ink underline-offset-4 hover:underline">{talk.title}</h2>
                     </Link>
                   </div>
@@ -421,17 +447,22 @@ function SpeakersSurface({
   agenda,
   gallery,
   mode,
+  initialQuery,
 }: {
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
   readonly mode: "list" | "gallery";
+  readonly initialQuery: string;
 }) {
-  const [query, setQuery] = useState("");
+  const navigate = useNavigate();
+  const [query, setQuery] = useState(initialQuery);
   const filtered = sortPublicSpeakers(gallery.speakers).filter((speaker) =>
     normalize([speaker.displayName, speaker.title ?? "", speaker.company ?? ""].join(" "))
       .includes(normalize(query))
   );
   const heading = mode === "gallery" ? "Speaker gallery" : "Speakers";
+  const sourceSurface: PublicProgramSurface = mode === "gallery" ? "gallery" : "speakers";
+  const returnContext: Readonly<Record<string, string>> = query ? { q: query } : {};
 
   return (
     <section className="space-y-6" aria-labelledby="public-speakers-title">
@@ -465,8 +496,15 @@ function SpeakersSurface({
             bio: speaker.bio ?? undefined,
             headshotUrl: speaker.headshotUrl ?? undefined,
             links: speaker.links,
-            profileUrl: publicEventSpeakerPath(agenda.eventSlug, speaker),
+            profileUrl: detailPathWithReturn(
+              publicEventSpeakerPath(agenda.eventSlug, speaker),
+              sourceSurface,
+              returnContext,
+            ),
           }))}
+          onSelect={(speaker) => {
+            if (speaker.profileUrl) void navigate(speaker.profileUrl);
+          }}
         />
       ) : (
         <ul className="divide-y-2 divide-line-strong border-2 border-line-strong bg-surface shadow-[6px_6px_0_#171714]">
@@ -477,7 +515,12 @@ function SpeakersSurface({
                 <div className={`flex min-h-24 w-full flex-wrap items-center gap-4 px-4 py-4 text-left transition-colors ${index % 2 === 0 ? "bg-surface hover:bg-production-sky/35" : "bg-production-lime/20 hover:bg-production-lime/45"}`}>
                   <Avatar name={speaker.displayName} src={speaker.headshotUrl ?? undefined} size="md" />
                   <span className="min-w-48 flex-1">
-                    <Link className="block text-lg font-black tracking-[-0.025em] text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" to={publicEventSpeakerPath(agenda.eventSlug, speaker)}>{speaker.displayName}</Link>
+                    <Link
+                      className="block text-lg font-black tracking-[-0.025em] text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep"
+                      to={detailPathWithReturn(publicEventSpeakerPath(agenda.eventSlug, speaker), sourceSurface, returnContext)}
+                    >
+                      {speaker.displayName}
+                    </Link>
                     <span className="block text-sm text-ink-secondary">
                       {[speaker.title, speaker.company].filter(Boolean).join(" at ") || "Profile details coming soon"}
                     </span>
@@ -485,7 +528,11 @@ function SpeakersSurface({
                   <Badge tone={sessions.length > 0 ? "accent" : "neutral"}>{sessions.length} {sessions.length === 1 ? "session" : "sessions"}</Badge>
                   <Link
                     className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-control border-2 border-line-strong bg-surface px-3 text-[13px] font-black uppercase tracking-[0.075em] text-ink shadow-button transition-transform hover:-translate-y-0.5 hover:bg-production-sky focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-3"
-                    to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers/${encodeURIComponent(speaker.id)}`}
+                    to={detailPathWithReturn(
+                      `/event/${encodeURIComponent(agenda.eventSlug)}/speakers/${encodeURIComponent(speaker.id)}`,
+                      sourceSurface,
+                      returnContext,
+                    )}
                   >
                     <span className="sr-only">{speaker.displayName} </span>Event details
                   </Link>
@@ -520,12 +567,14 @@ function DayTabs({
 function AgendaSurface({
   agenda,
   gallery,
+  initialDay,
 }: {
   readonly agenda: PublishedAgenda;
   readonly gallery: PublicSpeakerGallery;
+  readonly initialDay: string;
 }) {
   const days = [...new Set(agenda.talks.map((talk) => localDayKey(talk.startsAt, agenda.timezone)))];
-  const [selectedDay, setSelectedDay] = useState(days[0] ?? "");
+  const [selectedDay, setSelectedDay] = useState(initialDay || days[0] || "");
   const day = days.includes(selectedDay) ? selectedDay : days[0] ?? "";
   const talks = agenda.talks.filter((talk) => localDayKey(talk.startsAt, agenda.timezone) === day);
   const times = [...new Set(talks.map((talk) => talk.startsAt))].sort((a, b) => a - b);
@@ -548,7 +597,14 @@ function AgendaSurface({
               {talks.filter((talk) => talk.startsAt === time).map((talk, index) => (
                 <div key={talk.id} className="text-left">
                   <Card className={`h-full rounded-none transition-transform hover:-translate-y-1 [&>div]:border-t-8 ${index % 2 === 0 ? "[&>div]:border-production-sky" : "[&>div]:border-production-coral"}`}>
-                    <Link className="block text-left" to={publicSessionPath(agenda.eventSlug, talk.id)}>
+                    <Link
+                      className="block text-left"
+                      to={detailPathWithReturn(
+                        publicSessionPath(agenda.eventSlug, talk.id),
+                        "agenda",
+                        { day },
+                      )}
+                    >
                       <span className="text-lg font-black leading-tight tracking-[-0.025em] text-ink underline-offset-2 hover:underline">{talk.title}</span>
                     </Link>
                     <SpeakerLines className="mt-2 text-sm text-ink-secondary" talk={talk} speakers={speakers} eventSlug={agenda.eventSlug} />
@@ -693,6 +749,7 @@ export function PublicProgram({
   readonly surface: PublicProgramSurface;
   readonly detail?: PublicProgramDetail;
 }) {
+  const [searchParams] = useSearchParams();
   const speakers = useMemo(() => speakerByName(gallery), [gallery]);
   const selectedTalk = detail.sessionId
     ? agenda.talks.find(({ id }) => id === detail.sessionId)
@@ -700,6 +757,18 @@ export function PublicProgram({
   const selectedSpeaker = detail.speakerId
     ? gallery.speakers.find(({ id }) => id === detail.speakerId)
     : undefined;
+  const fallbackReturnSurface: PublicProgramSurface = detail.speakerId ? "speakers" : "sessions";
+  const detailReturnSurface = returnSurface(searchParams.get("from"), fallbackReturnSurface);
+  const returnDay = searchParams.get("day");
+  const returnQuery = searchParams.get("q");
+  const detailReturnContext: Readonly<Record<string, string>> = detailReturnSurface === "agenda" && returnDay
+    ? { day: returnDay }
+    : (detailReturnSurface === "speakers" || detailReturnSurface === "gallery") && returnQuery
+      ? { q: returnQuery }
+      : {};
+  const detailReturnPath = publicSurfacePath(agenda.eventSlug, detailReturnSurface, detailReturnContext);
+  const detailReturnLabel = SURFACES.find(({ id }) => id === detailReturnSurface)?.label.toLocaleLowerCase()
+    ?? fallbackReturnSurface;
   const publishedAt = new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
@@ -750,7 +819,7 @@ export function PublicProgram({
         {detail.sessionId ? (
           selectedTalk ? (
             <section className="space-y-6" aria-labelledby="public-session-detail-title">
-              <Link className="font-black text-accent-deep underline decoration-2 underline-offset-4" to={`/event/${encodeURIComponent(agenda.eventSlug)}/sessions`}>Back to sessions</Link>
+              <Link className="font-black text-accent-deep underline decoration-2 underline-offset-4" to={detailReturnPath}>Back to {detailReturnLabel}</Link>
               <SurfaceIntro eyebrow="Session detail" title={selectedTalk.title} titleId="public-session-detail-title" description="Published timing, room, description, and speakers for this session." />
               <SessionDetail talk={selectedTalk} agenda={agenda} speakers={speakers} />
             </section>
@@ -758,17 +827,17 @@ export function PublicProgram({
         ) : detail.speakerId ? (
           selectedSpeaker ? (
             <section className="space-y-6" aria-labelledby="public-speaker-detail-title">
-              <Link className="font-black text-accent-deep underline decoration-2 underline-offset-4" to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers`}>Back to speakers</Link>
+              <Link className="font-black text-accent-deep underline decoration-2 underline-offset-4" to={detailReturnPath}>Back to {detailReturnLabel}</Link>
               <SurfaceIntro eyebrow="Speaker detail" title={selectedSpeaker.displayName} titleId="public-speaker-detail-title" description="Published event profile and sessions for this speaker." />
               <SpeakerDetail speaker={selectedSpeaker} agenda={agenda} />
             </section>
           ) : <EmptyState title="Speaker not found" description="This speaker is not part of the published program." action={<Link className="font-black underline" to={`/event/${encodeURIComponent(agenda.eventSlug)}/speakers`}>Back to speakers</Link>} />
         ) : null}
         {!detail.sessionId && !detail.speakerId && surface === "sessions" ? <SessionsSurface agenda={agenda} gallery={gallery} /> : null}
-        {!detail.sessionId && !detail.speakerId && surface === "speakers" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="list" /> : null}
-        {!detail.sessionId && !detail.speakerId && surface === "agenda" ? <AgendaSurface agenda={agenda} gallery={gallery} /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "speakers" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="list" initialQuery={searchParams.get("q") ?? ""} /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "agenda" ? <AgendaSurface agenda={agenda} gallery={gallery} initialDay={searchParams.get("day") ?? ""} /> : null}
         {surface === "schedule" ? <ScheduleSurface agenda={agenda} gallery={gallery} /> : null}
-        {!detail.sessionId && !detail.speakerId && surface === "gallery" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="gallery" /> : null}
+        {!detail.sessionId && !detail.speakerId && surface === "gallery" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="gallery" initialQuery={searchParams.get("q") ?? ""} /> : null}
       </div>
       <footer className="mt-4 border-t-2 border-line-strong bg-ink text-on-accent">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">

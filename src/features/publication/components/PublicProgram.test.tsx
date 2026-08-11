@@ -123,7 +123,7 @@ describe("public program", () => {
     expect(markup).toContain("Format · 30 minutes");
     expect(markup).toContain("Show more");
     expect(markup).toContain("2 sessions");
-    expect(markup).toContain('href="/event/devflow-conf-2027/sessions/talk-ci"');
+    expect(markup).toContain('href="/event/devflow-conf-2027/sessions/talk-ci?from=sessions"');
     expect(markup).toContain('href="/event/devflow-conf-2027/speakers/speaker-marcus"');
   });
 
@@ -197,7 +197,7 @@ describe("public program", () => {
 
   it("links public speaker references to the reusable profile across every public program surface", () => {
     for (const surface of ["sessions", "agenda", "schedule", "speakers", "gallery"] as const) {
-      expect(render(surface)).toContain('href="/speakers/priya-raman"');
+      expect(render(surface)).toContain('href="/speakers/priya-raman');
     }
   });
 });
