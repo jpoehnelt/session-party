@@ -115,6 +115,7 @@ function Topbar({
   const location = useLocation();
   const navigate = useNavigate();
   const [session, setSession] = useState<SessionState>({ status: "loading" });
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   useEffect(() => {
     let isCurrent = true;
@@ -137,13 +138,16 @@ function Topbar({
   }, []);
 
   async function logout() {
+    if (isLoggingOut) return;
+
+    setIsLoggingOut(true);
     synchronizeAuthenticatedPrincipal(null);
     try {
       await apiFetch("/api/v1/auth/logout", { method: "POST" });
     } finally {
       invalidateAuthGeneration();
       setSession({ status: "signed-out" });
-      navigate("/login");
+      navigate("/login", { replace: true });
     }
   }
 
@@ -169,8 +173,13 @@ function Topbar({
             : "Not signed in"}
       </span>
       {session.status === "signed-in" ? (
-        <Button className="min-h-11" type="button" onClick={() => void logout()}>
-          Log out
+        <Button
+          className="min-h-11"
+          type="button"
+          loading={isLoggingOut}
+          onClick={() => void logout()}
+        >
+          {isLoggingOut ? "Logging out…" : "Log out"}
         </Button>
       ) : session.status === "signed-out" ? (
         <Button
