@@ -278,7 +278,25 @@ export function ApiAccessPanel({ eventId, initialApiKeys }: ApiAccessPanelProps)
                 { key: "scopes", header: "Scopes", render: (key: EventApiKeyRecord) => <span className="text-xs">{key.scopes.join(", ")}</span> },
                 { key: "status", header: "Status", render: (key: EventApiKeyRecord) => <Badge>{key.revokedAt ? "Revoked" : key.expiresAt.getTime() <= Date.now() ? "Expired" : "Active"}</Badge> },
                 { key: "expires", header: "Expires", render: (key: EventApiKeyRecord) => key.expiresAt.toLocaleDateString() },
-                { key: "actions", header: "Manage", render: (key: EventApiKeyRecord) => key.revokedAt ? null : <Button type="button" size="sm" variant="ghost" loading={revokingId === key.id} onClick={() => void handleRevoke(key)}>Revoke</Button> },
+                { key: "actions", header: "Manage", render: (key: EventApiKeyRecord) => key.revokedAt ? null : (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button type="button" size="sm" variant="ghost" loading={revokingId === key.id}>Revoke</Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Revoke {key.name}?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This immediately rejects every request using this key. The secret cannot be recovered; create a new key to restore access.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Keep key</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => void handleRevoke(key)}>Revoke key</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                ) },
               ]}
               rows={[...apiKeys]}
               rowKey={(key) => key.id}
