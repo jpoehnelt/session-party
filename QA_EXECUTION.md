@@ -18,8 +18,9 @@ Specification: `QA_PLAN.md`
 - Public-projection privacy assertions, immutable publication-revision reconciliation, and hostile login return-target containment.
 - Controlled form mutations cover role denial, concurrent idempotent create replay, mismatched replay, competing optimistic writers, stale overwrite denial, and replay-safe deletion. Controlled API-key mutations cover one-time secret disclosure, scope and cross-event isolation, metadata redaction, and immediate revocation.
 - An explicit 320/375/768/1024/1440/2560 px matrix checks representative public, organizer, table-heavy, agenda, and settings routes for reflow, true clipping, shell mode, and H1 integrity; forced-colors mode covers public sessions, forms, and agenda.
+- Failure injection verifies a recoverable organizer event-load state; local performance observers gate representative public and organizer routes at LCP ≤2.5 s and CLS ≤0.1. Deploy-ready static assets include baseline nosniff, referrer, and browser-permission headers.
 
-Latest local result: **219 passed, 65 intentionally skipped, 0 failed** across 284 project cases. The skips avoid duplicating browser-independent API/security/mutation/viewport checks and mobile-only interactions in desktop engines; route, control, runtime-error, interaction, and accessibility coverage runs in Chromium, Firefox, and WebKit, with the full route surface also covered on mobile Chromium.
+Latest local result: **221 passed, 75 intentionally skipped, 0 failed** across 296 project cases. The skips avoid duplicating browser-independent API/security/mutation/viewport/resilience checks, omit the deploy-only header assertion under Vite dev, and avoid mobile-only interactions in desktop engines; route, control, runtime-error, interaction, and accessibility coverage runs in Chromium, Firefox, and WebKit, with the full route surface also covered on mobile Chromium.
 
 Baseline regression suites also passed before the QA fixes:
 
@@ -44,6 +45,7 @@ Baseline regression suites also passed before the QA fixes:
 | Signed-out semantics | Twelve private organizer routes rendered access failures without a top-level heading. | Promote route-level failure titles to H1 and scan every signed-out state with axe. |
 | WebKit focus | Pointer-activated controls are not focused by Safari/WebKit, so a controlled dialog could lose its opener on close. | Support an explicit opener reference and restore the form-dialog trigger after every close transition. |
 | WebKit embeds | WebKit rejected `allow-presentation` as an iframe sandbox token and emitted a runtime console error. | Remove the unnecessary token while preserving allowlisted script/same-origin and fullscreen behavior. |
+| Layout stability | The async top bar inserted its first action after session resolution, shifting the entire readiness dashboard to CLS 0.114. | Reserve the action footprint during session loading; the route now passes the 0.1 local CLS budget. |
 
 ## Deployed read-only reconciliation
 
@@ -63,6 +65,6 @@ The production run is read-only. Publishing, imports, member/role changes, key c
 - Real provider email, file-storage, Airtable, Accelevents, retry/dead-letter, and audit evidence.
 - Concurrent stale-version, offline/reconnect, Party gap recovery, idempotency-race, and session-expiry cases.
 - Screen-reader manual passes, true browser 200% zoom, manual visual review, mobile Safari/device coverage, and moderated IA first-click studies.
-- Load, Core Web Vitals, slow-network, failure-injection, security-header, CSP, and upload/embed adversarial testing.
+- Production p75 Core Web Vitals/load, broader slow-network/failure injection, deployed-header confirmation, CSP, and upload/embed adversarial testing.
 
 Those items remain blockers for claiming the entire `QA_PLAN.md` release gate; they are not silently treated as passes.

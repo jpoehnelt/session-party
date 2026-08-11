@@ -180,7 +180,11 @@ function Topbar({
         >
           Sign in
         </Button>
-      ) : null}
+      ) : (
+        <Button aria-hidden="true" className="invisible min-h-11" disabled tabIndex={-1} type="button">
+          Log out
+        </Button>
+      )}
     </div>
   );
 }

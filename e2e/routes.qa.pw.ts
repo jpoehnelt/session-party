@@ -171,6 +171,11 @@ for (const target of ALL_ROUTES) {
     const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
     await authenticate(context, target.persona, runtimeBaseURL);
     await installDeterministicBrowser(page);
+    await page.route(/^https:\/\/(?:www\.)?youtube(?:-nocookie)?\.com\//, (route) => route.fulfill({
+      body: "<!doctype html><title>Deterministic embedded video</title>",
+      contentType: "text/html",
+      status: 200,
+    }));
 
     const runtimeErrors: string[] = [];
     page.on("pageerror", (error) => runtimeErrors.push(`pageerror: ${error.message}`));
