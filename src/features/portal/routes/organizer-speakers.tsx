@@ -386,7 +386,7 @@ export function OrganizerSpeakersContent({
               <div className="flex min-w-48 items-center gap-3">
                 <Avatar name={item.speaker.displayName} size="md" />
                 <div className="min-w-0">
-                  <a className="truncate font-semibold text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={`/e/${encodeURIComponent(directory.event.slug)}/speakers/${encodeURIComponent(item.speaker.id)}`}>{item.speaker.displayName}</a>
+                  <a className="inline-flex min-h-6 items-center truncate font-semibold text-ink underline decoration-2 underline-offset-3 hover:text-accent-deep" href={`/e/${encodeURIComponent(directory.event.slug)}/speakers/${encodeURIComponent(item.speaker.id)}`}>{item.speaker.displayName}</a>
                   <p className="truncate text-xs text-ink-faint">
                     {[item.speaker.title, item.speaker.company].filter(Boolean).join(" · ") || "Profile pending"}
                   </p>
