@@ -1804,25 +1804,139 @@ test("publication clipboard and persisted embed controls complete a versioned li
   }
 });
 
-test("public program navigation, session detail, and personal schedule controls work on mobile", async ({ page }, testInfo) => {
-  test.skip(!testInfo.project.name.startsWith("mobile"), "mobile public-program interaction");
+test("public program filters, deep links, history, and personal schedule controls preserve context", async ({ page }) => {
+  const scheduleStorageKey = `session-party:${EVENT}:personal-schedule`;
   await page.goto(`/event/${EVENT}/sessions`);
   await page.getByRole("heading", { level: 1 }).waitFor({ state: "visible" });
   const nav = page.getByRole("navigation", { name: "Public event navigation" });
   for (const name of ["Sessions", "Speakers", "Agenda", "Schedule itinerary", "Speaker gallery"]) {
     await expect(nav.getByRole("link", { name })).toBeVisible();
   }
+
+  const sessionSearch = page.getByRole("searchbox", { name: "Search sessions or speakers" });
+  await sessionSearch.fill("QA no matching public session");
+  await expect(page.getByRole("heading", { name: "No matching sessions" })).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("QA no matching public session");
+  await sessionSearch.fill("");
+  await expect.poll(() => new URL(page.url()).searchParams.has("q")).toBe(false);
+
+  for (const name of ["Track", "Room"] as const) {
+    const select = page.getByRole("combobox", { name });
+    const value = await select.locator('option:not([value=""])').first().getAttribute("value");
+    expect(value, `${name} must expose a published filter fixture`).toBeTruthy();
+    await select.selectOption(value!);
+    await expect.poll(() => new URL(page.url()).searchParams.get(name.toLowerCase())).toBe(value);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("combobox", { name })).toHaveValue(value!);
+    await page.getByRole("combobox", { name }).selectOption("");
+    await expect.poll(() => new URL(page.url()).searchParams.has(name.toLowerCase())).toBe(false);
+  }
+
+  const sessionExpansion = page.getByRole("button", { name: "Show more", exact: true }).first();
+  if (await sessionExpansion.count()) {
+    await sessionExpansion.click();
+    await expect(page.getByRole("button", { name: "Show less", exact: true }).first()).toHaveAttribute("aria-expanded", "true");
+    await page.getByRole("button", { name: "Show less", exact: true }).first().press("Enter");
+    await expect(page.getByRole("button", { name: "Show more", exact: true }).first()).toHaveAttribute("aria-expanded", "false");
+  }
+
   const sessionLink = page.locator('main a[href*="/sessions/"]').first();
+  await expect(sessionLink).toBeVisible();
+  const sessionTitle = (await sessionLink.textContent())?.trim();
+  expect(sessionTitle).toBeTruthy();
+  await sessionSearch.fill(sessionTitle!);
   const sessionHref = await sessionLink.getAttribute("href");
-  expect(sessionHref).toMatch(new RegExp(`^/event/${EVENT}/sessions/[^/]+$`));
+  expect(sessionHref).toMatch(new RegExp(`^/event/${EVENT}/sessions/[^/]+\\?from=sessions`));
   await sessionLink.click();
-  await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/sessions/[^/]+$`));
+  await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/sessions/[^/]+`));
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await page.goBack({ waitUntil: "domcontentloaded" });
-  await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/sessions$`));
+  await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/sessions\\?`));
+  await expect(page.getByRole("searchbox", { name: "Search sessions or speakers" })).toHaveValue(sessionTitle!);
+  await page.locator('main a[href*="/sessions/"]').first().click();
+  await page.getByRole("link", { name: "Back to sessions" }).click();
+  await expect(page.getByRole("searchbox", { name: "Search sessions or speakers" })).toHaveValue(sessionTitle!);
+  await page.getByRole("searchbox", { name: "Search sessions or speakers" }).fill("");
+
+  await nav.getByRole("link", { name: "Speakers", exact: true }).click();
+  const speakerSearch = page.getByRole("searchbox", { name: "Search speakers" });
+  await speakerSearch.fill("QA no matching public speaker");
+  await expect(page.getByRole("heading", { name: "No matching speakers" })).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("QA no matching public speaker");
+  await speakerSearch.fill("");
+  await expect.poll(() => new URL(page.url()).searchParams.has("q")).toBe(false);
+  const speakerLink = page.locator('main a[href*="/speakers/"]').first();
+  const speakerName = (await speakerLink.textContent())?.trim();
+  expect(speakerName).toBeTruthy();
+  await speakerSearch.fill(speakerName!);
+  await page.locator('main a[href*="/speakers/"]').first().click();
+  await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/speakers/[^/]+`));
+  const biographyExpansion = page.getByRole("button", { name: "Show more biography" });
+  if (await biographyExpansion.count()) {
+    await biographyExpansion.click();
+    await expect(page.getByRole("button", { name: "Show less biography" })).toHaveAttribute("aria-expanded", "true");
+    await page.getByRole("button", { name: "Show less biography" }).press("Space");
+    await expect(page.getByRole("button", { name: "Show more biography" })).toHaveAttribute("aria-expanded", "false");
+  }
+  await page.getByRole("link", { name: "Back to speakers" }).click();
+  await expect(page.getByRole("searchbox", { name: "Search speakers" })).toHaveValue(speakerName!);
+
+  await nav.getByRole("link", { name: "Speaker gallery" }).click();
+  const galleryCard = page.locator("main ul button").first();
+  await expect(galleryCard).toBeVisible();
+  await galleryCard.focus();
+  await galleryCard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/speakers/[^/]+`));
+  await page.getByRole("link", { name: "Back to speaker gallery" }).click();
+
+  await nav.getByRole("link", { name: "Agenda" }).click();
+  const dayTabs = page.getByRole("tab");
+  if (await dayTabs.count() > 1) {
+    const secondDay = dayTabs.nth(1);
+    await secondDay.focus();
+    await secondDay.press("Enter");
+    await expect(secondDay).toHaveAttribute("aria-selected", "true");
+    expect(new URL(page.url()).searchParams.get("day")).toBeTruthy();
+  }
+  const agendaDay = new URL(page.url()).searchParams.get("day");
+  await page.locator('main a[href*="/sessions/"]').first().click();
+  await page.getByRole("link", { name: "Back to agenda" }).click();
+  if (agendaDay) expect(new URL(page.url()).searchParams.get("day")).toBe(agendaDay);
+
+  await page.evaluate((key) => localStorage.removeItem(key), scheduleStorageKey);
   await nav.getByRole("link", { name: "Schedule itinerary" }).click();
   await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/schedule$`));
-  await expect(page.getByRole("button", { name: /^My schedule \(\d+\)$/i })).toBeVisible();
+  const mySchedule = page.getByRole("button", { name: "My schedule (0)" });
+  await mySchedule.focus();
+  await mySchedule.press("Enter");
+  await expect(page.getByRole("heading", { name: "Your schedule is empty" })).toBeVisible();
+  await page.getByRole("button", { name: "Full schedule" }).click();
+  const scheduleItem = page.locator("main ol > li").first();
+  const add = scheduleItem.getByRole("button", { name: "Add to my schedule" });
+  await add.focus();
+  await add.press("Space");
+  await expect(scheduleItem.getByRole("button", { name: "Remove" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "My schedule (1)" })).toBeVisible();
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("button", { name: "Remove" }).first()).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "My schedule (1)" }).click();
+  const calendar = page.getByRole("link", { name: "Add to calendar (.ics)" });
+  const calendarHref = await calendar.getAttribute("href");
+  expect(calendarHref).toMatch(/^data:text\/calendar/);
+  expect(decodeURIComponent(calendarHref!.split(",")[1] ?? "")).toContain("BEGIN:VCALENDAR");
+  const downloadPromise = page.waitForEvent("download");
+  await calendar.click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe(`${EVENT}-my-schedule.ics`);
+  const downloadedPath = await download.path();
+  expect(downloadedPath).not.toBeNull();
+  expect(await readFile(downloadedPath!, "utf8")).toContain("BEGIN:VCALENDAR");
+  const remove = page.getByRole("button", { name: "Remove" }).first();
+  await remove.focus();
+  await remove.press("Enter");
+  await expect(page.getByRole("heading", { name: "Your schedule is empty" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "My schedule (0)" })).toBeVisible();
+  await page.evaluate((key) => localStorage.removeItem(key), scheduleStorageKey);
 });
 
 test("public CFP supports conditional fields, co-speaker controls, validation, and local draft recovery", async ({ context, page, request }) => {
