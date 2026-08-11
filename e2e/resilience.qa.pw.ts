@@ -43,6 +43,69 @@ test("an organizer event-load failure renders a usable retry state and recovers"
   await expect(page.getByRole("button", { name: "New additional form" })).toBeEnabled();
 });
 
+test("agenda mutations fail closed while offline and recover from canonical state after reconnect", async ({ context, page }, testInfo) => {
+  chromiumOnly(testInfo);
+  await context.addCookies([{
+    name: "sp_session",
+    value: "demo-owner-session",
+    domain: "127.0.0.1",
+    path: "/",
+    httpOnly: true,
+    sameSite: "Lax",
+  }]);
+  await installDeterministicBrowser(page);
+  await page.goto(`/e/${EVENT}/agenda`);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("AI Engineer Sandbox");
+  await expect(page.getByRole("button", { name: "Publish run sheet" })).toBeEnabled();
+  await page.getByRole("button", { name: "Tracks & rooms" }).click();
+  await expect(page.getByRole("dialog", { name: "Tracks and rooms" })).toBeVisible();
+
+  await context.setOffline(true);
+  await expect(page.getByRole("status").filter({ hasText: "Offline" })).toContainText("Changes are unavailable while offline.");
+  await expect(page.getByRole("button", { name: "Create track" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Create room" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Tracks and rooms" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Publish run sheet" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Tracks & rooms" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Create talk" }).first()).toBeDisabled();
+
+  await context.setOffline(false);
+  await expect(page.getByRole("status").filter({ hasText: "Live" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Publish run sheet" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Tracks & rooms" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Create talk" }).first()).toBeEnabled();
+});
+
+test("session expiry during form creation fails closed without creating a draft", async ({ context, page, request }, testInfo) => {
+  chromiumOnly(testInfo);
+  const ownerHeaders = { Cookie: "sp_session=demo-owner-session" };
+  const before = await request.get(`/api/v1/events/demo-event/forms`, { headers: ownerHeaders });
+  expect(before.status()).toBe(200);
+  const beforeForms = (await before.json()) as readonly { readonly id: string }[];
+
+  await context.addCookies([{
+    name: "sp_session",
+    value: "demo-owner-session",
+    domain: "127.0.0.1",
+    path: "/",
+    httpOnly: true,
+    sameSite: "Lax",
+  }]);
+  await installDeterministicBrowser(page);
+  await page.goto(`/e/${EVENT}/forms`);
+  await page.getByRole("button", { name: "New additional form" }).click();
+  await page.getByRole("textbox", { name: "Form name" }).fill("Must not survive expired session");
+  await context.clearCookies({ name: "sp_session" });
+  await page.getByRole("button", { name: "Create draft" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in to view this event" })).toBeVisible();
+
+  const after = await request.get(`/api/v1/events/demo-event/forms`, { headers: ownerHeaders });
+  expect(after.status()).toBe(200);
+  const afterForms = (await after.json()) as readonly { readonly id: string }[];
+  expect(afterForms.map(({ id }) => id)).toEqual(beforeForms.map(({ id }) => id));
+});
+
 test("representative public and organizer routes stay within local LCP and CLS smoke budgets", async ({ context, page }, testInfo) => {
   chromiumOnly(testInfo);
   await context.addCookies([{

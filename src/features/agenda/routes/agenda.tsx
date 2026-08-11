@@ -804,6 +804,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     ({ startsAt, status }) => startsAt !== null && status !== "cancelled",
   ).length;
   const confirmedTalkCount = agenda.talks.filter(({ status }) => status === "confirmed").length;
+  const mutationsDisabled = busy || refresh.status !== "idle" || intent.connection === "offline";
 
   return (
     <>
@@ -835,13 +836,13 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
             </Button>
             <Button
               variant="secondary"
-              disabled={busy || refresh.status !== "idle"}
+              disabled={mutationsDisabled}
               onClick={() => setSetupOpen(true)}
             >
               Tracks & rooms
             </Button>
             <Button
-              disabled={busy || refresh.status !== "idle"}
+              disabled={mutationsDisabled}
               loading={busy && intent.acknowledgement === "pending"}
               onClick={() => void publish()}
             >
@@ -926,7 +927,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           selectedTalkId={selectedTalkId}
           collaborators={collaborators}
           presence={presence}
-          disabled={busy || refresh.status !== "idle" || intent.connection === "offline"}
+          disabled={mutationsDisabled}
           onCreateTalk={(proposal) => void createTalk(proposal)}
           onSelectTalk={selectTalk}
           onMoveTalk={(talk, target) => void moveTalk(talk, target)}
@@ -991,7 +992,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               </div>
               <div className="flex items-center justify-end gap-2">
                 {trackDraft.id && <Button type="button" variant="secondary" disabled={busy} onClick={() => setTrackDraft(emptyTrackDraft())}>Cancel edit</Button>}
-                <Button type="submit" loading={busy}>{trackDraft.id ? "Update track" : "Create track"}</Button>
+                <Button type="submit" loading={busy} disabled={mutationsDisabled}>{trackDraft.id ? "Update track" : "Create track"}</Button>
               </div>
             </form>
           </section>
@@ -1045,7 +1046,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               </div>
               <div className="flex items-center justify-end gap-2">
                 {roomDraft.id && <Button type="button" variant="secondary" disabled={busy} onClick={() => setRoomDraft(emptyRoomDraft())}>Cancel edit</Button>}
-                <Button type="submit" loading={busy}>{roomDraft.id ? "Update room" : "Create room"}</Button>
+                <Button type="submit" loading={busy} disabled={mutationsDisabled}>{roomDraft.id ? "Update room" : "Create room"}</Button>
               </div>
             </form>
           </section>
@@ -1063,8 +1064,8 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         footer={
           selectedTalk ? (
             <div className="flex w-full items-center justify-between gap-3">
-              <Button variant="danger" disabled={busy || refresh.status !== "idle"} onClick={() => void cancelTalk()}>Cancel talk</Button>
-              <Button form="agenda-move-form" type="submit" loading={busy} disabled={refresh.status !== "idle"}>Save schedule</Button>
+              <Button variant="danger" disabled={mutationsDisabled} onClick={() => void cancelTalk()}>Cancel talk</Button>
+              <Button form="agenda-move-form" type="submit" loading={busy} disabled={mutationsDisabled}>Save schedule</Button>
             </div>
           ) : null
         }
@@ -1096,7 +1097,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                 value={form.description}
                 onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
               />
-              <Button type="button" variant="secondary" disabled={busy} onClick={() => void saveTalkContent()}>
+              <Button type="button" variant="secondary" disabled={mutationsDisabled} onClick={() => void saveTalkContent()}>
                 Save session content
               </Button>
             </section>
@@ -1105,7 +1106,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                 <p className="font-black text-ink">Assisted placement</p>
                 <p className="text-xs text-ink-secondary">Find the first room and time without room or speaker overlap.</p>
               </div>
-              <Button type="button" variant="secondary" disabled={busy} onClick={() => void autoPlaceSelectedTalk()}>
+              <Button type="button" variant="secondary" disabled={mutationsDisabled} onClick={() => void autoPlaceSelectedTalk()}>
                 Auto-place talk
               </Button>
             </div>

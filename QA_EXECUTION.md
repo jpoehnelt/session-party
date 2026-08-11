@@ -20,8 +20,9 @@ Specification: `QA_PLAN.md`
 - Controlled form mutations cover role denial, concurrent idempotent create replay, mismatched replay, competing optimistic writers, stale overwrite denial, and replay-safe deletion. Controlled API-key mutations cover one-time secret disclosure, scope and cross-event isolation, metadata redaction, and immediate revocation. Controlled task/resource lifecycles cover every task kind, role denial, unsafe embed schemes and lookalike hosts, competing writers, stale deletes, and verified cleanup.
 - An explicit 320/375/768/1024/1440/2560 px matrix checks representative public, organizer, table-heavy, agenda, and settings routes for reflow, true clipping, shell mode, and H1 integrity; forced-colors mode covers public sessions, forms, and agenda.
 - Failure injection verifies a recoverable organizer event-load state; local performance observers gate representative public and organizer routes at LCP ≤2.5 s and CLS ≤0.1. Deploy-ready static assets include baseline nosniff, referrer, and browser-permission headers.
+- Agenda disconnect/reconnect coverage proves offline status annunciation, mutation lockout, canonical refresh recovery, and restored controls. Form creation also fails closed when the browser session expires between editing and submission, with no draft persisted.
 
-Latest local result: **232 passed, 88 intentionally skipped, 0 failed** across 320 project cases. The skips avoid duplicating browser-independent API/security/mutation/viewport/resilience/keyboard checks, omit the deploy-only header assertion under Vite dev, and avoid mobile-only or Chromium-permission-specific interactions in other engines; route, control, runtime-error, interaction, and accessibility coverage runs in Chromium, Firefox, and WebKit, with the full route surface also covered on mobile Chromium. The shared D1 sandbox runs serially so route inventories cannot observe another test's in-flight disposable mutation.
+Latest local result: **234 passed, 94 intentionally skipped, 0 failed** across 328 project cases. The skips avoid duplicating browser-independent API/security/mutation/viewport/resilience/keyboard checks, omit the deploy-only header assertion under Vite dev, and avoid mobile-only or Chromium-permission-specific interactions in other engines; route, control, runtime-error, interaction, and accessibility coverage runs in Chromium, Firefox, and WebKit, with the full route surface also covered on mobile Chromium. The shared D1 sandbox runs serially so route inventories cannot observe another test's in-flight disposable mutation.
 
 Baseline regression suites also passed before the QA fixes:
 
@@ -65,7 +66,7 @@ The production run is read-only. Publishing, imports, member/role changes, key c
 - Pointer activation and state-transition reconciliation is still incomplete for controls outside the explicit scenarios; sequential keyboard reachability and discovery/accessibility evidence are complete for stable route surfaces, and unmatched dynamic/error-state controls are not silently treated as covered.
 - Mutation-level role and concurrency checks outside forms, API keys, tasks, resources, and reviewer recusal.
 - Real provider email, file-storage, Airtable, Accelevents, retry/dead-letter, and audit evidence.
-- Concurrent stale-version, offline/reconnect, Party gap recovery, idempotency-race, and session-expiry cases.
+- Concurrent stale-version, Party gap recovery, and idempotency-race cases; offline/reconnect and session-expiry coverage currently exercises agenda and form creation respectively.
 - Screen-reader manual passes, true browser 200% zoom, manual visual review, mobile Safari/device coverage, and moderated IA first-click studies.
 - Production p75 Core Web Vitals/load, broader slow-network/failure injection, deployed-header confirmation, CSP, and upload/embed adversarial testing.
 
