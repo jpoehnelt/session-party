@@ -134,6 +134,24 @@ export const SpeakersMinimal: Story = { render: () => <SpeakerStory design={desi
 export const SpeakersEditorial: Story = { render: () => <SpeakerStory design={designs.editorial} /> };
 
 export const WidgetBuilderConfiguration: Story = {
+  beforeEach: () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (_input, init) => {
+      if (init?.method !== "POST") {
+        return Response.json([]);
+      }
+      const input = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return Response.json({
+        ...input,
+        id: "embed_story",
+        eventSlug: agenda.eventSlug,
+        version: 1,
+        createdAt: START,
+        updatedAt: START,
+      });
+    };
+    return () => { globalThis.fetch = previousFetch; };
+  },
   render: () => (
     <MemoryRouter>
       <div className="min-h-dvh bg-canvas p-6">
@@ -149,6 +167,11 @@ export const WidgetBuilderConfiguration: Story = {
     await waitFor(() => {
       expect(canvas.getByLabelText("Preset")).toHaveValue("speakerList");
       expect(canvas.getByText("Feeds & integrations")).toBeVisible();
+    });
+    await userEvent.click(canvas.getByRole("button", { name: "Create embed" }));
+    await waitFor(() => {
+      expect(canvas.getByLabelText<HTMLTextAreaElement>("Main schedule embed code").value).toContain("/embed/devflow-conf-2027/embed_story");
+      expect(canvas.getByText("Created “Main schedule”. Its embed URL is stable.")).toBeVisible();
     });
   },
 };
