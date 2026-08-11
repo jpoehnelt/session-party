@@ -64,7 +64,11 @@ const embedHosts: Record<string, true> = {
   "youtube-nocookie.com": true,
   "youtube.com": true,
 };
-export const PORTAL_UPLOAD_MAX_BYTES = 10 * 1_024 * 1_024;
+export const PORTAL_UPLOAD_MAX_BYTES = {
+  headshot: 10 * 1_024 * 1_024,
+  slides: 100 * 1_024 * 1_024,
+  document: 25 * 1_024 * 1_024,
+} as const;
 
 
 export function allowlistedEmbedUrl(value: string | null): string | null {
@@ -77,9 +81,10 @@ export function allowlistedEmbedUrl(value: string | null): string | null {
   }
 }
 
-export async function fileAsBase64(file: File): Promise<string> {
-  if (file.size > PORTAL_UPLOAD_MAX_BYTES) {
-    throw new Error("File exceeds 10 MiB with the current upload transport");
+export async function fileAsBase64(file: File, purpose: UploadPortalAssetInput["purpose"]): Promise<string> {
+  const maxBytes = PORTAL_UPLOAD_MAX_BYTES[purpose];
+  if (file.size > maxBytes) {
+    throw new Error(`File exceeds ${maxBytes / 1_024 / 1_024} MiB for ${purpose}`);
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const chunks: string[] = [];
@@ -646,7 +651,7 @@ function UploadWorkspace({
         <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#ff714f]">Asset drop / Final files</p>
         <h2 id="uploads-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Production files</h2>
         <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">
-          Upload the final files the event team should use. Up to 10 MiB with the current upload transport.
+          Upload final production files: headshots up to 10 MiB, slides up to 100 MiB, and documents up to 25 MiB.
         </p>
       </div>
       <Select label="File purpose" value={purpose} disabled={loading} onChange={(event) => setPurpose(event.currentTarget.value as UploadPortalAssetInput["purpose"])}>
@@ -667,7 +672,7 @@ function UploadWorkspace({
         onFiles={(files) => {
           const file = files[0];
           if (!file) return;
-          void fileAsBase64(file).then(
+          void fileAsBase64(file, purpose).then(
             (contentBase64) =>
               onUpload({
                 eventId,

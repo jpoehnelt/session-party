@@ -1,7 +1,9 @@
 import { Conflict, External, Forbidden, NotFound, Validation, type AppError } from "contracts/errors";
 import { eventAuthorization, type ApiScope } from "contracts/principal";
+import { clientRoutes } from "contracts/routes";
 import {
   acceptanceEvents,
+  assetComments,
   airtableOutbox,
   airtablePendingEdits,
   airtableRecordLinks,
@@ -12,6 +14,9 @@ import {
   formVersionFields,
   idempotencyRecords,
   integrations,
+  managedSpeakerEmails,
+  mailDeliveries,
+  mailDeliverySnapshots,
   pages,
   speakerProvisioning,
   speakerContacts,
@@ -19,14 +24,18 @@ import {
   submissionAnswers,
   submissionSpeakers,
   submissions,
+  talkSpeakers,
+  talks,
+  taskAssignments,
   taskCompletions,
   tasks,
+  users,
 } from "contracts/schema";
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import type { BatchItem } from "drizzle-orm/batch";
 import { nanoid } from "nanoid";
-import { AirtableSync, Authorizer, CurrentUser, Db, Files, Rooms } from "@/server/services";
+import { AirtableSync, Authorizer, CurrentUser, Db, Files, MailQueue, Rooms } from "@/server/services";
 import { prepareAirtableProjection } from "@/server/sync/airtable-outbox";
 import {
   PortalTask as PortalTaskSchema,
@@ -34,6 +43,7 @@ import {
   SpeakerProfile as SpeakerProfileSchema,
   UploadPortalAssetOutput as UploadPortalAssetOutputSchema,
   type CreateResourceInput,
+  type CreateManagedSpeakerInput,
   type CreateTaskInput,
   ClaimSpeakerOutput as ClaimSpeakerOutputSchema,
   type ClaimSpeakerInput,
@@ -42,6 +52,18 @@ import {
   type DeleteResourceInput,
   type DeleteTaskInput,
   type PortalAsset,
+  ContentAsset as ContentAssetSchema,
+  type ContentAsset,
+  type ContentLibrary,
+  ContentComment as ContentCommentSchema,
+  type ContentComment,
+  type AddContentCommentInput,
+  type RestoreContentVersionInput,
+  type DownloadContentInput,
+  type DownloadContentOutput,
+  type ImportSpeakersCsvInput,
+  ImportSpeakersCsvOutput as ImportSpeakersCsvOutputSchema,
+  type ImportSpeakersCsvOutput,
   type PortalDashboard,
   type PortalEvent,
   type PortalProfileSyncField,
@@ -60,11 +82,16 @@ import {
   type SpeakerDirectoryItem,
   type SpeakerProfile,
   type UpdateProfileInput,
+  type UpdateManagedSpeakerInput,
   type UpdateResourceInput,
   type UpdateSpeakerPublicationInput,
   type UpdateTaskInput,
   type UploadPortalAssetInput,
   type UploadPortalAssetOutput,
+  type UploadManagedSpeakerHeadshotInput,
+  type SendSpeakerMessagesInput,
+  SendSpeakerMessagesOutput as SendSpeakerMessagesOutputSchema,
+  type SendSpeakerMessagesOutput,
 } from "./schema";
 
 const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
@@ -90,8 +117,27 @@ const now = () => new Date();
 const millis = (value: Date | null) => value?.getTime() ?? null;
 const assetKey = (eventId: string, assetId: string) => `portal/${eventId}/${assetId}`;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1_000;
-export const PORTAL_UPLOAD_MAX_BYTES = 10 * 1_024 * 1_024;
+export const PORTAL_UPLOAD_MAX_BYTES = {
+  headshot: 10 * 1_024 * 1_024,
+  slides: 100 * 1_024 * 1_024,
+  document: 25 * 1_024 * 1_024,
+} as const;
 const PROFILE_SYNC_FIELDS = ["displayName", "title", "company", "bio"] as const satisfies readonly PortalProfileSyncField[];
+
+const escapeHtml = (value: string): string => value
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
+
+const encodeBase64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
+  }
+  return btoa(binary);
+};
 
 const sha256 = (value: string): Effect.Effect<string, External> =>
   Effect.tryPromise({
@@ -203,12 +249,14 @@ const speakerView = (
 ): SpeakerProfile => ({
   id: speaker.id,
   eventId: speaker.eventId,
+  contactEmail: speaker.contactEmail,
   displayName: typeof pending.get("displayName") === "string"
     ? pending.get("displayName") as string
     : speaker.displayName,
   title: pending.has("title") ? pending.get("title") as string | null : speaker.title,
   company: pending.has("company") ? pending.get("company") as string | null : speaker.company,
   bio: pending.has("bio") ? pending.get("bio") as string | null : speaker.bio,
+  workflowStatus: speaker.workflowStatus,
   headshotAssetId: speaker.headshotAssetId,
   links: speaker.links ?? [],
   visible: speaker.visible,
@@ -216,7 +264,50 @@ const speakerView = (
   pendingSyncFields: PROFILE_SYNC_FIELDS.filter((field) => pending.has(field)),
 });
 
-const taskDefinitionView = (task: typeof tasks.$inferSelect): PortalTaskDefinition => ({
+const eligibleProvisionedSpeakerIds = (
+  eventIds: readonly string[],
+): Effect.Effect<ReadonlySet<string>, External, Db> => Effect.gen(function* () {
+  if (eventIds.length === 0) return new Set<string>();
+  const { db } = yield* Db;
+  const [acceptances, provisioning, managed] = yield* Effect.all([
+    database(() => db.select({
+      id: acceptanceEvents.id,
+      eventId: acceptanceEvents.eventId,
+      submissionId: acceptanceEvents.submissionId,
+      type: acceptanceEvents.type,
+      primarySpeakerId: acceptanceEvents.primarySpeakerId,
+    }).from(acceptanceEvents).where(inArray(acceptanceEvents.eventId, eventIds))
+      .orderBy(desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id))),
+    database(() => db.select({
+      acceptanceEventId: speakerProvisioning.acceptanceEventId,
+      status: speakerProvisioning.status,
+    }).from(speakerProvisioning).where(inArray(speakerProvisioning.eventId, eventIds))),
+    database(() => db.select({ speakerId: managedSpeakerEmails.speakerId })
+      .from(managedSpeakerEmails)
+      .where(inArray(managedSpeakerEmails.eventId, eventIds))),
+  ]);
+  const latestBySubmission = new Map<string, (typeof acceptances)[number]>();
+  for (const acceptance of acceptances) {
+    const key = `${acceptance.eventId}\u0000${acceptance.submissionId}`;
+    if (!latestBySubmission.has(key)) latestBySubmission.set(key, acceptance);
+  }
+  const provisioned = new Set(provisioning
+    .filter((row) => row.status === "provisioned")
+    .map((row) => row.acceptanceEventId));
+  return new Set([
+    ...managed.map((row) => row.speakerId),
+    ...[...latestBySubmission.values()].flatMap((acceptance) =>
+    acceptance.type === "accepted" && acceptance.primarySpeakerId && provisioned.has(acceptance.id)
+      ? [acceptance.primarySpeakerId]
+      : []
+    ),
+  ]);
+});
+
+const taskDefinitionView = (
+  task: typeof tasks.$inferSelect,
+  speakerIds: readonly string[] = [],
+): PortalTaskDefinition => ({
   id: task.id,
   eventId: task.eventId,
   name: task.name,
@@ -225,6 +316,8 @@ const taskDefinitionView = (task: typeof tasks.$inferSelect): PortalTaskDefiniti
   formId: task.formId,
   dueAt: millis(task.dueAt),
   order: task.order,
+  targetMode: task.targetMode,
+  speakerIds,
   version: task.version,
 });
 
@@ -246,7 +339,7 @@ const assetView = (asset: typeof assets.$inferSelect, purpose: PortalAsset["purp
   filename: asset.filename,
   contentType: asset.contentType,
   size: asset.size,
-  purpose,
+  purpose: asset.purpose ?? purpose,
   version: asset.version,
 });
 
@@ -396,7 +489,10 @@ const selfSpeaker = (eventId: string) => Effect.gen(function* () {
     eq(speakers.userId, actor.userId),
   )).limit(1));
   if (!speaker) return yield* Effect.fail(new Forbidden({ reason: "This browser session is not linked to a speaker for this event" }));
-  const acceptance = yield* loadCurrentProvisioning(eventId, speaker.id);
+  const [managedIdentity] = yield* database(() => db.select({ id: managedSpeakerEmails.id }).from(managedSpeakerEmails).where(and(
+    eq(managedSpeakerEmails.eventId, eventId), eq(managedSpeakerEmails.speakerId, speaker.id),
+  )).limit(1));
+  const acceptance = managedIdentity ? null : yield* loadCurrentProvisioning(eventId, speaker.id);
   return { actor, speaker, acceptance };
 });
 
@@ -462,8 +558,12 @@ const readiness = (
 
 const currentTasks = (eventId: string, speakerId: string) => Effect.gen(function* () {
   const { db } = yield* Db;
-  const [definitions, completions, speaker, pendingBio] = yield* Effect.all([
+  const [allDefinitions, assignments, completions, speaker, pendingBio] = yield* Effect.all([
     database(() => db.select().from(tasks).where(eq(tasks.eventId, eventId)).orderBy(asc(tasks.order), asc(tasks.id))),
+    database(() => db.select().from(taskAssignments).where(and(
+      eq(taskAssignments.eventId, eventId),
+      eq(taskAssignments.speakerId, speakerId),
+    ))),
     database(() => db.select().from(taskCompletions).where(and(
       eq(taskCompletions.eventId, eventId),
       eq(taskCompletions.speakerId, speakerId),
@@ -490,6 +590,8 @@ const currentTasks = (eventId: string, speakerId: string) => Effect.gen(function
       new External({ service: "database", detail: "Speaker disappeared while loading tasks" }),
     );
   }
+  const assignedTaskIds = new Set(assignments.map((assignment) => assignment.taskId));
+  const definitions = allDefinitions.filter((task) => task.targetMode === "all" || assignedTaskIds.has(task.id));
   const formIds = definitions.flatMap((task) => task.formId ? [task.formId] : []);
   const submittedFormIds = formIds.length === 0
     ? []
@@ -661,21 +763,21 @@ const uploadPolicy = (
         "application/pdf": ["pdf"],
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ["docx"],
       };
-  const maxSize = PORTAL_UPLOAD_MAX_BYTES;
+  const maxSize = PORTAL_UPLOAD_MAX_BYTES[purpose];
   if (!allowed[contentType as keyof typeof allowed]?.includes(extension) || size === 0 || size > maxSize) {
     return new Validation({ message: `Invalid ${purpose} file type, extension, or size` });
   }
   return null;
 };
 
-const decodeBase64 = (value: string): Effect.Effect<Uint8Array, Validation> => Effect.try({
+const decodeBase64 = (value: string, purpose: UploadPortalAssetInput["purpose"]): Effect.Effect<Uint8Array, Validation> => Effect.try({
   try: () => {
     if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
       throw new Error("invalid base64");
     }
     const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
     const decodedSize = value.length / 4 * 3 - padding;
-    if (decodedSize === 0 || decodedSize > PORTAL_UPLOAD_MAX_BYTES) {
+    if (decodedSize === 0 || decodedSize > PORTAL_UPLOAD_MAX_BYTES[purpose]) {
       throw new Error("decoded asset exceeds transport limit");
     }
     const decoded = atob(value);
@@ -688,24 +790,65 @@ const decodeBase64 = (value: string): Effect.Effect<Uint8Array, Validation> => E
   catch: (error) =>
     new Validation({
       message: error instanceof Error && error.message === "decoded asset exceeds transport limit"
-        ? "Asset must be between 1 byte and 10 MiB with the current upload transport"
+        ? `Asset must be between 1 byte and ${PORTAL_UPLOAD_MAX_BYTES[purpose] / 1_024 / 1_024} MiB for ${purpose}`
         : "Asset content is not valid base64",
     }),
+});
+
+const parseCsv = (source: string): Effect.Effect<readonly (readonly string[])[], Validation> => Effect.try({
+  try: () => {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let field = "";
+    let quoted = false;
+    for (let index = 0; index < source.length; index += 1) {
+      const character = source[index]!;
+      if (quoted) {
+        if (character === '"' && source[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else if (character === '"') {
+          quoted = false;
+        } else {
+          field += character;
+        }
+      } else if (character === '"') {
+        quoted = true;
+      } else if (character === ",") {
+        row.push(field.trim());
+        field = "";
+      } else if (character === "\n") {
+        row.push(field.trim());
+        rows.push(row);
+        row = [];
+        field = "";
+      } else if (character !== "\r") {
+        field += character;
+      }
+    }
+    if (quoted) throw new Error("CSV contains an unterminated quoted field");
+    row.push(field.trim());
+    if (row.some((value) => value.length > 0)) rows.push(row);
+    return rows;
+  },
+  catch: (error) => new Validation({ message: error instanceof Error ? error.message : "CSV could not be parsed" }),
 });
 
 export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect.Effect<SpeakerDirectory, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
   yield* organizer(input.eventId, "speakers:read");
   const { db } = yield* Db;
   const event = yield* requireEvent(input.eventId);
-  const rows = yield* database(() => db
+  const [speakerRows, acceptedRows, acceptanceHistory] = yield* Effect.all([
+    database(() => db.select().from(speakers).where(eq(speakers.eventId, input.eventId)).orderBy(asc(speakers.displayName), asc(speakers.id))),
+    database(() => db
     .select({ acceptance: acceptanceEvents, provisioning: speakerProvisioning, speaker: speakers, submission: submissions })
     .from(acceptanceEvents)
     .innerJoin(speakerProvisioning, and(eq(speakerProvisioning.eventId, acceptanceEvents.eventId), eq(speakerProvisioning.acceptanceEventId, acceptanceEvents.id)))
     .innerJoin(speakers, and(eq(speakers.eventId, acceptanceEvents.eventId), eq(speakers.id, acceptanceEvents.primarySpeakerId)))
     .leftJoin(submissions, and(eq(submissions.eventId, acceptanceEvents.eventId), eq(submissions.id, acceptanceEvents.submissionId)))
     .where(and(eq(acceptanceEvents.eventId, input.eventId), eq(acceptanceEvents.type, "accepted")))
-    .orderBy(asc(speakers.displayName), desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id)));
-  const acceptanceHistory = yield* database(() => db
+    .orderBy(asc(speakers.displayName), desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id))),
+    database(() => db
     .select({
       id: acceptanceEvents.id,
       submissionId: acceptanceEvents.submissionId,
@@ -713,30 +856,50 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
     })
     .from(acceptanceEvents)
     .where(eq(acceptanceEvents.eventId, input.eventId))
-    .orderBy(desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id)));
+    .orderBy(desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id))),
+  ]);
   const latestBySubmission = new Map<string, (typeof acceptanceHistory)[number]>();
   for (const acceptance of acceptanceHistory) {
     if (!latestBySubmission.has(acceptance.submissionId)) {
       latestBySubmission.set(acceptance.submissionId, acceptance);
     }
   }
-  const currentBySpeaker = new Map<string, (typeof rows)[number]>();
-  for (const row of rows) {
+  const currentBySpeaker = new Map<string, (typeof acceptedRows)[number]>();
+  for (const row of acceptedRows) {
     const latest = latestBySubmission.get(row.acceptance.submissionId);
     if (latest?.type === "accepted" && latest.id === row.acceptance.id && !currentBySpeaker.has(row.speaker.id)) {
       currentBySpeaker.set(row.speaker.id, row);
     }
   }
-  const currentRows = [...currentBySpeaker.values()];
-  const speakerIds = [...new Set(currentRows.map((row) => row.speaker.id))];
-  const [definitions, completions, contacts] = yield* Effect.all([
+  const speakerIds = speakerRows.map((speaker) => speaker.id);
+  const [definitions, assignments, completions, contacts, sessionRows] = yield* Effect.all([
     database(() => db.select().from(tasks).where(eq(tasks.eventId, input.eventId)).orderBy(asc(tasks.order), asc(tasks.id))),
+    database(() => db.select().from(taskAssignments).where(eq(taskAssignments.eventId, input.eventId))),
     speakerIds.length === 0 ? Effect.succeed([] as readonly (typeof taskCompletions.$inferSelect)[]) : database(() => db.select().from(taskCompletions).where(and(eq(taskCompletions.eventId, input.eventId), inArray(taskCompletions.speakerId, speakerIds)))),
     speakerIds.length === 0 ? Effect.succeed([] as readonly (typeof speakerContacts.$inferSelect)[]) : database(() => db
       .select()
       .from(speakerContacts)
       .where(and(eq(speakerContacts.eventId, input.eventId), inArray(speakerContacts.speakerId, speakerIds)))
       .orderBy(desc(speakerContacts.contactedAt), desc(speakerContacts.id))),
+    speakerIds.length === 0 ? Effect.succeed([] as readonly {
+      readonly speakerId: string;
+      readonly id: string;
+      readonly title: string;
+      readonly startsAt: Date | null;
+      readonly durationMin: number;
+      readonly status: "draft" | "confirmed" | "cancelled";
+    }[]) : database(() => db.select({
+      speakerId: talkSpeakers.speakerId,
+      id: talks.id,
+      title: talks.title,
+      startsAt: talks.startsAt,
+      durationMin: talks.durationMin,
+      status: talks.status,
+    }).from(talkSpeakers).innerJoin(talks, and(
+      eq(talks.eventId, talkSpeakers.eventId),
+      eq(talks.id, talkSpeakers.talkId),
+    )).where(and(eq(talkSpeakers.eventId, input.eventId), inArray(talkSpeakers.speakerId, speakerIds)))
+      .orderBy(asc(talks.startsAt), asc(talks.title))),
   ]);
   const bySpeaker = new Map<string, (typeof taskCompletions.$inferSelect)[]>();
   for (const completion of completions) bySpeaker.set(completion.speakerId, [...(bySpeaker.get(completion.speakerId) ?? []), completion]);
@@ -744,19 +907,36 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
   for (const contact of contacts) {
     if (!latestContactBySpeaker.has(contact.speakerId)) latestContactBySpeaker.set(contact.speakerId, contact);
   }
-  const directoryItems = currentRows.map((row): SpeakerDirectoryItem => {
-    const latestContact = latestContactBySpeaker.has(row.speaker.id)
-      ? contactView(latestContactBySpeaker.get(row.speaker.id)!)
+  const assignedTaskIdsBySpeaker = new Map<string, Set<string>>();
+  for (const assignment of assignments) {
+    const taskIds = assignedTaskIdsBySpeaker.get(assignment.speakerId) ?? new Set<string>();
+    taskIds.add(assignment.taskId);
+    assignedTaskIdsBySpeaker.set(assignment.speakerId, taskIds);
+  }
+  const directoryItems = speakerRows.map((speaker): SpeakerDirectoryItem => {
+    const accepted = currentBySpeaker.get(speaker.id);
+    const latestContact = latestContactBySpeaker.has(speaker.id)
+      ? contactView(latestContactBySpeaker.get(speaker.id)!)
       : null;
+    const assignedTaskIds = assignedTaskIdsBySpeaker.get(speaker.id) ?? new Set<string>();
+    const speakerDefinitions = definitions.filter((task) => task.targetMode === "all" || assignedTaskIds.has(task.id));
     return {
-      speaker: speakerView(row.speaker),
-      submission: row.submission ? { id: row.submission.id, title: row.submission.title, category: row.submission.category, version: row.submission.version } : null,
-      acceptanceEventId: row.acceptance.id,
-      provisioningId: row.provisioning.id,
-      provisioningVersion: row.provisioning.version,
-      provisioningStatus: row.provisioning.status,
-      provisionedAt: millis(row.provisioning.provisionedAt),
-      readiness: withContactEscalation(readiness(definitions, bySpeaker.get(row.speaker.id) ?? []), latestContact),
+      speaker: speakerView(speaker),
+      submission: accepted?.submission ? { id: accepted.submission.id, title: accepted.submission.title, category: accepted.submission.category, version: accepted.submission.version } : null,
+      source: accepted ? "accepted" : "manual",
+      acceptanceEventId: accepted?.acceptance.id ?? null,
+      provisioningId: accepted?.provisioning.id ?? null,
+      provisioningVersion: accepted?.provisioning.version ?? 0,
+      provisioningStatus: accepted?.provisioning.status ?? "manual",
+      provisionedAt: accepted ? millis(accepted.provisioning.provisionedAt) : null,
+      sessions: sessionRows.filter((session) => session.speakerId === speaker.id).map((session) => ({
+        id: session.id,
+        title: session.title,
+        startsAt: millis(session.startsAt),
+        durationMin: session.durationMin,
+        status: session.status,
+      })),
+      readiness: withContactEscalation(readiness(speakerDefinitions, bySpeaker.get(speaker.id) ?? []), latestContact),
       latestContact,
     };
   });
@@ -971,9 +1151,85 @@ export const claimSpeaker = (
     typeof answer.value === "string" && normalizedEmail(answer.value) === email
   );
   if (matches.length === 0) {
-    return yield* Effect.fail(
-      new Forbidden({ reason: "No current accepted primary speaker matches this account email" }),
+    const [managed] = yield* database(() => db.select({ speaker: speakers }).from(managedSpeakerEmails)
+      .innerJoin(speakers, and(
+        eq(speakers.eventId, managedSpeakerEmails.eventId),
+        eq(speakers.id, managedSpeakerEmails.speakerId),
+      ))
+      .where(and(
+        eq(managedSpeakerEmails.eventId, event.id),
+        eq(managedSpeakerEmails.normalizedEmail, email),
+      ))
+      .limit(1));
+    if (!managed) {
+      return yield* Effect.fail(
+        new Forbidden({ reason: "No current accepted or directly managed speaker matches this account email" }),
+      );
+    }
+    if (managed.speaker.userId !== null && managed.speaker.userId !== actor.userId) {
+      return yield* Effect.fail(new Conflict({ message: "This managed speaker is already linked to another account" }));
+    }
+    const managedResult = (speakerVersion: number): ClaimSpeakerOutput => ({
+      eventId: event.id,
+      speakerId: managed.speaker.id,
+      acceptanceEventId: null,
+      provisioningId: null,
+      speakerVersion,
+      provisioningVersion: 0,
+      provisioningStatus: "provisioned",
+    });
+    if (managed.speaker.userId === actor.userId) return managedResult(managed.speaker.version);
+
+    const claimedAt = now();
+    const nextVersion = managed.speaker.version + 1;
+    const result = managedResult(nextVersion);
+    const idempotency = idempotencyInsert(
+      event.id, "portal.claimSpeaker", actor.userId, keyHash, requestHash, claimedAt,
     );
+    const requestId = id("portal_request");
+    const change = writeChange(
+      event.id, "speaker", managed.speaker.id, nextVersion, "portal.speaker.claimed",
+      { speakerId: managed.speaker.id, userId: actor.userId, source: "manual" },
+      actor, claimedAt, requestId, idempotency.id,
+    );
+    const committed = yield* database(() => db.batch([
+      db.insert(idempotencyRecords).values(idempotency),
+      db.update(speakers).set({
+        userId: actor.userId, version: nextVersion, updatedAt: claimedAt,
+      }).where(and(
+        eq(speakers.eventId, event.id),
+        eq(speakers.id, managed.speaker.id),
+        eq(speakers.version, managed.speaker.version),
+        isNull(speakers.userId),
+        sql`exists (
+          select 1 from managed_speaker_emails as managed_claim
+          where managed_claim.event_id = ${event.id}
+            and managed_claim.speaker_id = ${managed.speaker.id}
+            and managed_claim.normalized_email = ${email}
+        )`,
+      )).returning({ id: speakers.id }),
+      db.insert(domainChanges).values(change),
+      db.insert(auditLog).values({
+        id: id("audit"), eventId: event.id, requestId,
+        actorUserId: actor.actorUserId, actorApiKeyId: null,
+        action: "portal.speaker.claimed", resourceType: "speaker", resourceId: managed.speaker.id,
+        before: { userId: null, speakerVersion: managed.speaker.version, source: "manual" },
+        after: { userId: actor.userId, speakerVersion: nextVersion, source: "manual" },
+        metadata: null, occurredAt: claimedAt,
+      }),
+      db.update(idempotencyRecords).set({
+        status: "completed", responseStatus: 200, responseBody: result,
+        completedAt: claimedAt,
+      }).where(eq(idempotencyRecords.id, idempotency.id)),
+    ])).pipe(Effect.either);
+    if (committed._tag === "Right" && (committed.right[1] as { id: string }[])[0]) return result;
+    const [currentManaged] = yield* database(() => db.select({ userId: speakers.userId, version: speakers.version })
+      .from(speakers).where(and(
+        eq(speakers.eventId, event.id), eq(speakers.id, managed.speaker.id),
+      )).limit(1));
+    if (currentManaged?.userId === actor.userId) return managedResult(currentManaged.version);
+    if (committed._tag === "Left") return yield* Effect.fail(committed.left);
+    return yield* Effect.fail(new Conflict({ message: "The managed speaker claim changed; retry from the latest event state" }));
   }
   if (matches.length > 1) {
     return yield* Effect.fail(
@@ -1316,12 +1572,14 @@ export const claimSpeaker = (
 
 export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.Effect<PortalSnapshot, AppError, Db | CurrentUser | Files> => Effect.gen(function* () {
   const event = yield* resolveEvent(input.eventId);
-  const { speaker, acceptance, actor } = yield* selfSpeaker(event.id);
+  const { speaker, acceptance } = yield* selfSpeaker(event.id);
   const { db } = yield* Db;
   const progress = yield* currentTasks(event.id, speaker.id);
   const [resources, uploaded, pendingRows] = yield* Effect.all([
     database(() => db.select().from(pages).where(and(eq(pages.eventId, event.id), inArray(pages.audience, ["speakers", "public"]))).orderBy(asc(pages.order), asc(pages.id))),
-    database(() => db.select().from(assets).where(and(eq(assets.eventId, event.id), eq(assets.uploaderUserId, actor.userId))).orderBy(desc(assets.createdAt))),
+    database(() => db.select().from(assets).where(and(
+      eq(assets.eventId, event.id), eq(assets.speakerId, speaker.id), eq(assets.current, true),
+    )).orderBy(desc(assets.createdAt))),
     database(() => db
       .select({
         fieldKey: airtablePendingEdits.fieldKey,
@@ -1356,7 +1614,9 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
   return {
     event: eventView(event),
     speaker: speakerView(speaker, pending),
-    submission: { id: acceptance.submission.id, title: acceptance.submission.title, category: acceptance.submission.category, version: acceptance.submission.version },
+    submission: acceptance
+      ? { id: acceptance.submission.id, title: acceptance.submission.title, category: acceptance.submission.category, version: acceptance.submission.version }
+      : null,
     provisioningStatus: "provisioned",
     tasks: progress.taskViews,
     resources: resources.map(resourceView),
@@ -1801,7 +2061,7 @@ export const setTaskCompletion = (input: SetTaskCompletionInput): Effect.Effect<
 export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<UploadPortalAssetOutput, AppError, Db | CurrentUser | Files | Rooms> => Effect.gen(function* () {
   const event = yield* resolveEvent(input.eventId);
   const { speaker, actor } = yield* selfSpeaker(event.id);
-  const data = yield* decodeBase64(input.contentBase64);
+  const data = yield* decodeBase64(input.contentBase64, input.purpose);
   const policyError = uploadPolicy(
     input.purpose,
     input.contentType,
@@ -1825,6 +2085,16 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
       return yield* Effect.fail(
         new Validation({ message: "Asset uploads can complete only upload tasks" }),
       );
+    }
+    if (found.targetMode === "selected") {
+      const [assignment] = yield* database(() => db.select({ id: taskAssignments.id }).from(taskAssignments).where(and(
+        eq(taskAssignments.eventId, event.id),
+        eq(taskAssignments.taskId, found.id),
+        eq(taskAssignments.speakerId, speaker.id),
+      )).limit(1));
+      if (!assignment) {
+        return yield* Effect.fail(new Forbidden({ reason: "This upload task is not assigned to the current speaker" }));
+      }
     }
     task = found;
   }
@@ -1930,19 +2200,24 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
   const nextSpeakerVersion = input.purpose === "headshot"
     ? speaker.version + 1
     : speaker.version;
+  const [oldAsset] = yield* database(() => db.select({ id: assets.id, version: assets.version }).from(assets).where(and(
+    eq(assets.eventId, event.id), eq(assets.speakerId, speaker.id),
+    eq(assets.purpose, input.purpose), eq(assets.current, true),
+  )).orderBy(desc(assets.version), desc(assets.createdAt)).limit(1));
+  const oldAssetId = oldAsset?.id ?? null;
   const assetRecord = {
     id: assetId,
     eventId: event.id,
     uploaderUserId: actor.userId,
     speakerId: speaker.id,
     purpose: input.purpose,
-    supersedesAssetId: null,
+    supersedesAssetId: oldAssetId,
     restoredFromAssetId: null,
     current: true,
     filename,
     contentType: input.contentType,
     size: data.byteLength,
-    version: 1,
+    version: (oldAsset?.version ?? 0) + 1,
     createdAt: uploadedAt,
     updatedAt: uploadedAt,
   };
@@ -1988,10 +2263,25 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
   };
 
   const requestId = id("portal_request");
-  const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
+  const statements = [
+    ...(oldAssetId ? [db.update(assets).set({ current: false, updatedAt: uploadedAt }).where(and(
+      eq(assets.eventId, event.id), eq(assets.id, oldAssetId), eq(assets.current, true),
+    ))] : []),
     db.insert(assets).values(assetRecord),
-  ];
+  ] as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]];
   if (input.purpose === "headshot") {
+    const headshotChange = writeChange(
+      event.id,
+      "speaker",
+      speaker.id,
+      nextSpeakerVersion,
+      "portal.headshot.replaced",
+      { speakerId: speaker.id, assetId },
+      actor,
+      uploadedAt,
+      requestId,
+      idempotency.id,
+    );
     statements.push(
       db.update(speakers)
         .set({
@@ -2004,6 +2294,12 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
           eq(speakers.id, speaker.id),
           eq(speakers.version, input.expectedVersion),
         )),
+      db.insert(domainChanges).values(headshotChange),
+      db.insert(domainChanges).select(db.select(changeSelection(headshotChange)).from(speakers).where(and(
+        eq(speakers.eventId, event.id),
+        eq(speakers.id, speaker.id),
+        or(ne(speakers.version, nextSpeakerVersion), ne(speakers.headshotAssetId, assetId)),
+      ))),
       db.insert(domainChanges).values(writeChange(
         event.id,
         "speaker",
@@ -2011,18 +2307,6 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
         nextSpeakerVersion,
         "speaker.versionClaim",
         { version: nextSpeakerVersion },
-        actor,
-        uploadedAt,
-        requestId,
-        idempotency.id,
-      )),
-      db.insert(domainChanges).values(writeChange(
-        event.id,
-        "speaker",
-        speaker.id,
-        nextSpeakerVersion,
-        "portal.headshot.replaced",
-        { speakerId: speaker.id, assetId },
         actor,
         uploadedAt,
         requestId,
@@ -2121,53 +2405,6 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
       )),
   );
 
-  const completionData = existingCompletion?.data;
-  const oldTaskAssetId = typeof completionData === "object" &&
-      completionData !== null &&
-      !Array.isArray(completionData) &&
-      typeof Reflect.get(completionData, "assetId") === "string"
-    ? Reflect.get(completionData, "assetId") as string
-    : null;
-  const oldAssetId = input.purpose === "headshot"
-    ? speaker.headshotAssetId
-    : oldTaskAssetId;
-  if (oldAssetId && oldAssetId !== assetId) {
-    const [[currentSpeaker], completionReferences] = yield* Effect.all([
-      database(() => db
-        .select({ headshotAssetId: speakers.headshotAssetId })
-        .from(speakers)
-        .where(and(eq(speakers.eventId, event.id), eq(speakers.id, speaker.id)))
-        .limit(1)),
-      database(() => db
-        .select({ data: taskCompletions.data })
-        .from(taskCompletions)
-        .where(and(
-          eq(taskCompletions.eventId, event.id),
-          eq(taskCompletions.speakerId, speaker.id),
-        ))),
-    ], { concurrency: 1 });
-    const referencedByCompletion = completionReferences.some(({ data: value }) =>
-      typeof value === "object" &&
-      value !== null &&
-      !Array.isArray(value) &&
-      Reflect.get(value, "assetId") === oldAssetId);
-    if (currentSpeaker?.headshotAssetId !== oldAssetId && !referencedByCompletion) {
-      yield* deleteFile(assetKey(event.id, oldAssetId)).pipe(
-        Effect.tap(() =>
-          database(() =>
-            db.delete(assets).where(and(
-              eq(assets.eventId, event.id),
-              eq(assets.id, oldAssetId),
-            )),
-          )),
-        Effect.catchAll((error) =>
-          Effect.logWarning("Replaced portal asset cleanup failed", {
-            assetId: oldAssetId,
-            error,
-          })),
-      );
-    }
-  }
   if (taskResult) {
     const { broadcast } = yield* Rooms;
     yield* broadcast(event.id, {
@@ -2185,8 +2422,14 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
 export const listPortalTasks = (input: { readonly eventId: string }): Effect.Effect<readonly PortalTaskDefinition[], AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
   yield* organizer(input.eventId, "speakers:read");
   const { db } = yield* Db;
-  const rows = yield* database(() => db.select().from(tasks).where(eq(tasks.eventId, input.eventId)).orderBy(asc(tasks.order), asc(tasks.id)));
-  return rows.map(taskDefinitionView);
+  const [rows, assignments] = yield* Effect.all([
+    database(() => db.select().from(tasks).where(eq(tasks.eventId, input.eventId)).orderBy(asc(tasks.order), asc(tasks.id))),
+    database(() => db.select().from(taskAssignments).where(eq(taskAssignments.eventId, input.eventId))),
+  ]);
+  return rows.map((task) => taskDefinitionView(
+    task,
+    assignments.filter((assignment) => assignment.taskId === task.id).map((assignment) => assignment.speakerId),
+  ));
 });
 
 export const listPortalResources = (input: { readonly eventId: string }): Effect.Effect<readonly PortalResource[], AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
@@ -2201,10 +2444,26 @@ export const createPortalTask = (input: CreateTaskInput): Effect.Effect<PortalTa
   if ((input.kind === "form") !== (input.formId !== null)) return yield* Effect.fail(new Validation({ message: "Form tasks require a formId and other task types must not include one" }));
   yield* requireEvent(input.eventId);
   const { db } = yield* Db;
+  const requestedSpeakerIds = input.speakerIds ?? [];
+  const speakerIds = [...new Set(requestedSpeakerIds)];
+  if (speakerIds.length !== requestedSpeakerIds.length) return yield* Effect.fail(new Validation({ message: "Task speaker selection contains duplicates" }));
+  if (speakerIds.length > 0) {
+    const selected = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId),
+      inArray(speakers.id, speakerIds),
+    )));
+    if (selected.length !== speakerIds.length) return yield* Effect.fail(new Validation({ message: "Every task assignee must be an event speaker" }));
+  }
   const createdAt = now();
-  const task = { id: id("task"), eventId: input.eventId, name: input.name, description: input.description, kind: input.kind, formId: input.formId, dueAt: input.dueAt === null ? null : new Date(input.dueAt), order: input.order, targetMode: "all" as const, version: 1, createdAt, updatedAt: createdAt } as const;
-  yield* database(() => db.batch([db.insert(tasks).values(task), db.insert(domainChanges).values(writeChange(input.eventId, "task", task.id, 1, "portal.task.created", { taskId: task.id }, actor, createdAt))]));
-  return taskDefinitionView(task);
+  const task = { id: id("task"), eventId: input.eventId, name: input.name, description: input.description, kind: input.kind, formId: input.formId, dueAt: input.dueAt === null ? null : new Date(input.dueAt), order: input.order, targetMode: speakerIds.length === 0 ? "all" as const : "selected" as const, version: 1, createdAt, updatedAt: createdAt };
+  yield* database(() => db.batch([
+    db.insert(tasks).values(task),
+    ...(speakerIds.length > 0 ? [db.insert(taskAssignments).values(speakerIds.map((speakerId) => ({
+      id: id("task_assignment"), eventId: input.eventId, taskId: task.id, speakerId, createdAt,
+    })))] : []),
+    db.insert(domainChanges).values(writeChange(input.eventId, "task", task.id, 1, "portal.task.created", { taskId: task.id, speakerIds }, actor, createdAt)),
+  ]));
+  return taskDefinitionView(task, speakerIds);
 });
 
 export const updatePortalTask = (input: UpdateTaskInput): Effect.Effect<PortalTaskDefinition, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
@@ -2215,6 +2474,19 @@ export const updatePortalTask = (input: UpdateTaskInput): Effect.Effect<PortalTa
     );
   }
   const { db } = yield* Db;
+  const requestedSpeakerIds = input.speakerIds ?? [];
+  const speakerIds = [...new Set(requestedSpeakerIds)];
+  if (speakerIds.length !== requestedSpeakerIds.length) return yield* Effect.fail(new Validation({ message: "Task speaker selection contains duplicates" }));
+  const [existing] = yield* database(() => db.select({ version: tasks.version }).from(tasks).where(and(
+    eq(tasks.eventId, input.eventId), eq(tasks.id, input.taskId),
+  )).limit(1));
+  if (!existing || existing.version !== input.expectedVersion) return yield* Effect.fail(new Conflict({ message: "Task changed; reload before saving" }));
+  if (speakerIds.length > 0) {
+    const selected = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), inArray(speakers.id, speakerIds),
+    )));
+    if (selected.length !== speakerIds.length) return yield* Effect.fail(new Validation({ message: "Every task assignee must be an event speaker" }));
+  }
   const updatedAt = now();
   const version = input.expectedVersion + 1;
   const guard = and(
@@ -2232,6 +2504,10 @@ export const updatePortalTask = (input: UpdateTaskInput): Effect.Effect<PortalTa
     actor,
     updatedAt,
   );
+  const assignmentCommitMarker = and(
+    eq(domainChanges.eventId, input.eventId),
+    eq(domainChanges.id, change.id),
+  );
   const [, updatedRows] = yield* database(() => db.batch([
     db.insert(domainChanges).select(
       db.select(changeSelection(change)).from(tasks).where(guard),
@@ -2244,17 +2520,32 @@ export const updatePortalTask = (input: UpdateTaskInput): Effect.Effect<PortalTa
         formId: input.formId,
         dueAt: input.dueAt === null ? null : new Date(input.dueAt),
         order: input.order,
+        targetMode: speakerIds.length === 0 ? "all" : "selected",
         version,
         updatedAt,
       })
       .where(guard)
       .returning(),
+    db.delete(taskAssignments).where(and(
+      eq(taskAssignments.eventId, input.eventId),
+      eq(taskAssignments.taskId, input.taskId),
+      sql`exists (select 1 from domain_changes where event_id = ${input.eventId} and id = ${change.id})`,
+    )),
+    ...speakerIds.map((speakerId) => db.insert(taskAssignments).select(
+      db.select({
+        id: sql<string>`${id("task_assignment")}`.as("id"),
+        eventId: domainChanges.eventId,
+        taskId: sql<string>`${input.taskId}`.as("task_id"),
+        speakerId: sql<string>`${speakerId}`.as("speaker_id"),
+        createdAt: sql<Date>`${updatedAt.getTime()}`.as("created_at"),
+      }).from(domainChanges).where(assignmentCommitMarker),
+    )),
   ]));
   const updated = updatedRows[0];
   if (!updated) {
     return yield* Effect.fail(new Conflict({ message: "Task changed; reload before saving" }));
   }
-  return taskDefinitionView(updated);
+  return taskDefinitionView(updated, speakerIds);
 });
 
 export const deletePortalTask = (input: DeleteTaskInput): Effect.Effect<DeletePortalEntityOutput, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
@@ -2483,32 +2774,12 @@ export const provisionSpeaker = (input: ProvisionSpeakerInput): Effect.Effect<Sp
       new Conflict({ message: "Provisioning changed; reload before transitioning" }),
     );
   }
-  const [progress, latestContact] = yield* Effect.all([
-    currentTasks(input.eventId, row.speaker.id),
-    database(() => db
-      .select()
-      .from(speakerContacts)
-      .where(and(eq(speakerContacts.eventId, input.eventId), eq(speakerContacts.speakerId, row.speaker.id)))
-      .orderBy(desc(speakerContacts.contactedAt), desc(speakerContacts.id))
-      .limit(1)
-      .then((rows) => rows[0] ?? null)),
-  ], { concurrency: 1 });
-  return {
-    speaker: speakerView(row.speaker),
-    submission: row.submission ? {
-      id: row.submission.id,
-      title: row.submission.title,
-      category: row.submission.category,
-      version: row.submission.version,
-    } : null,
-    acceptanceEventId: row.acceptance.id,
-    provisioningId: row.provisioning.id,
-    provisioningVersion: version,
-    provisioningStatus: "provisioned",
-    provisionedAt: provisionedAt.getTime(),
-    readiness: progress.readiness,
-    latestContact: latestContact ? contactView(latestContact) : null,
-  };
+  const directory = yield* getSpeakerDirectory({ eventId: input.eventId });
+  const provisioned = directory.speakers.find((item) => item.speaker.id === row.speaker.id);
+  if (!provisioned) {
+    return yield* Effect.fail(new NotFound({ entity: "speaker", id: row.speaker.id }));
+  }
+  return provisioned;
 });
 
 export const updateSpeakerPublication = (input: UpdateSpeakerPublicationInput): Effect.Effect<SpeakerProfile, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
@@ -2575,23 +2846,939 @@ export const updateSpeakerPublication = (input: UpdateSpeakerPublicationInput): 
   return speakerView(updated);
 });
 
+export const createManagedSpeaker = (input: CreateManagedSpeakerInput): Effect.Effect<SpeakerProfile, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
+  const actor = yield* organizer(input.eventId, "speakers:write");
+  yield* requireEvent(input.eventId);
+  const { db } = yield* Db;
+  const principalId = actor.actorApiKeyId ?? actor.userId;
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const replay = yield* findReplay(input.eventId, "portal.createManagedSpeaker", principalId, keyHash, requestHash);
+  if (replay !== null) return yield* decodeReplay(SpeakerProfileSchema, replay);
+  const contactEmail = input.contactEmail.trim().toLowerCase();
+  const [duplicate] = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
+    eq(speakers.eventId, input.eventId),
+    sql`lower(${speakers.contactEmail}) = ${contactEmail}`,
+  )).limit(1));
+  if (duplicate) return yield* Effect.fail(new Conflict({ message: "A speaker with this contact email already exists" }));
+  const createdAt = now();
+  const record: typeof speakers.$inferInsert = {
+    id: id("speaker"),
+    eventId: input.eventId,
+    userId: null,
+    contactEmail,
+    displayName: input.displayName.trim(),
+    title: input.title?.trim() || null,
+    company: input.company?.trim() || null,
+    bio: input.bio?.trim() || null,
+    workflowStatus: input.workflowStatus.trim(),
+    headshotAssetId: null,
+    links: [],
+    visible: input.visible,
+    version: 1,
+    createdAt,
+    updatedAt: createdAt,
+  };
+  const result = speakerView(record as typeof speakers.$inferSelect);
+  const idempotency = idempotencyInsert(input.eventId, "portal.createManagedSpeaker", principalId, keyHash, requestHash, createdAt);
+  const requestId = id("portal_request");
+  const committed = yield* database(() => db.batch([
+    db.insert(idempotencyRecords).values(idempotency),
+    db.insert(speakers).values(record),
+    db.insert(managedSpeakerEmails).values({
+      id: id("managed_email"), eventId: input.eventId, normalizedEmail: contactEmail,
+      speakerId: record.id, createdAt, updatedAt: createdAt,
+    }),
+    db.insert(domainChanges).values(writeChange(
+      input.eventId, "speaker", record.id, 1, "portal.speaker.managed.created",
+      { speakerId: record.id, source: "manual" }, actor, createdAt, requestId, idempotency.id,
+    )),
+    db.insert(auditLog).values({
+      id: id("audit"), eventId: input.eventId, requestId,
+      actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.speaker.managed.created", resourceType: "speaker", resourceId: record.id,
+      before: null, after: result, metadata: { source: "manual" }, occurredAt: createdAt,
+    }),
+    db.update(idempotencyRecords).set({
+      status: "completed", responseStatus: 201, responseBody: result, completedAt: createdAt,
+    }).where(eq(idempotencyRecords.id, idempotency.id)),
+  ])).pipe(Effect.either);
+  if (committed._tag === "Left") {
+    const racedReplay = yield* findReplay(input.eventId, "portal.createManagedSpeaker", principalId, keyHash, requestHash);
+    if (racedReplay !== null) return yield* decodeReplay(SpeakerProfileSchema, racedReplay);
+    const [racedDuplicate] = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), sql`lower(${speakers.contactEmail}) = ${contactEmail}`,
+    )).limit(1));
+    if (racedDuplicate) return yield* Effect.fail(new Conflict({ message: "A speaker with this contact email already exists" }));
+    return yield* Effect.fail(committed.left);
+  }
+  return result;
+});
+
+export const updateManagedSpeaker = (input: UpdateManagedSpeakerInput): Effect.Effect<SpeakerProfile, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
+  const actor = yield* organizer(input.eventId, "speakers:write");
+  const { db } = yield* Db;
+  const [existingRows, managedRows, airtableRows] = yield* Effect.all([
+    database(() => db.select().from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+    )).limit(1)),
+    database(() => db.select({ id: managedSpeakerEmails.id }).from(managedSpeakerEmails).where(and(
+      eq(managedSpeakerEmails.eventId, input.eventId), eq(managedSpeakerEmails.speakerId, input.speakerId),
+    )).limit(1)),
+    database(() => db.select({ id: airtableRecordLinks.id }).from(airtableRecordLinks).where(and(
+      eq(airtableRecordLinks.eventId, input.eventId),
+      eq(airtableRecordLinks.entityType, "speaker"),
+      eq(airtableRecordLinks.entityId, input.speakerId),
+    )).limit(1)),
+  ]);
+  const existing = existingRows[0];
+  if (!existing) return yield* Effect.fail(new NotFound({ entity: "speaker", id: input.speakerId }));
+  if (!managedRows[0] || airtableRows[0]) {
+    return yield* Effect.fail(new Conflict({
+      message: "Only directly managed, non-Airtable speaker profiles can be edited here",
+    }));
+  }
+  if (existing.version !== input.expectedVersion) return yield* Effect.fail(new Conflict({ message: "Speaker changed; reload before saving" }));
+  const contactEmail = input.contactEmail.trim().toLowerCase();
+  const duplicate = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
+    eq(speakers.eventId, input.eventId),
+    sql`lower(${speakers.contactEmail}) = ${contactEmail}`,
+  )).limit(2).then((rows) => rows.find((row) => row.id !== input.speakerId)));
+  if (duplicate) return yield* Effect.fail(new Conflict({ message: "A speaker with this contact email already exists" }));
+  const [claimedEmail] = yield* database(() => db.select({ speakerId: managedSpeakerEmails.speakerId }).from(managedSpeakerEmails).where(and(
+    eq(managedSpeakerEmails.eventId, input.eventId), eq(managedSpeakerEmails.normalizedEmail, contactEmail),
+  )).limit(1));
+  if (claimedEmail && claimedEmail.speakerId !== input.speakerId) {
+    return yield* Effect.fail(new Conflict({ message: "A speaker with this contact email already exists" }));
+  }
+  const updatedAt = now();
+  const version = input.expectedVersion + 1;
+  const guard = and(eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId), eq(speakers.version, input.expectedVersion));
+  const values = {
+    contactEmail,
+    displayName: input.displayName.trim(),
+    title: input.title?.trim() || null,
+    company: input.company?.trim() || null,
+    bio: input.bio?.trim() || null,
+    workflowStatus: input.workflowStatus.trim(),
+    visible: input.visible,
+    version,
+    updatedAt,
+  };
+  const requestId = id("portal_request");
+  const change = writeChange(
+    input.eventId, "speaker", input.speakerId, version, "portal.speaker.managed.updated",
+    { speakerId: input.speakerId, workflowStatus: values.workflowStatus }, actor, updatedAt, requestId,
+  );
+  const audit = {
+    id: id("audit"), eventId: input.eventId, requestId,
+    actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
+    action: "portal.speaker.managed.updated", resourceType: "speaker", resourceId: input.speakerId,
+    before: speakerView(existing), after: speakerView({ ...existing, ...values }), metadata: null, occurredAt: updatedAt,
+  };
+  const committed = yield* database(() => db.batch([
+    db.insert(domainChanges).values(change),
+    db.update(speakers).set(values).where(guard).returning(),
+    db.delete(managedSpeakerEmails).where(and(
+      eq(managedSpeakerEmails.eventId, input.eventId), eq(managedSpeakerEmails.speakerId, input.speakerId),
+    )),
+    db.insert(managedSpeakerEmails).values({
+      id: id("managed_email"), eventId: input.eventId, normalizedEmail: contactEmail,
+      speakerId: input.speakerId, createdAt: updatedAt, updatedAt,
+    }),
+    db.insert(domainChanges).select(db.select(changeSelection(change)).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+      or(
+        ne(speakers.version, version),
+        ne(speakers.contactEmail, contactEmail),
+        ne(speakers.displayName, values.displayName),
+        sql`${speakers.title} is not ${values.title}`,
+        sql`${speakers.company} is not ${values.company}`,
+        sql`${speakers.bio} is not ${values.bio}`,
+        ne(speakers.workflowStatus, values.workflowStatus),
+        ne(speakers.visible, values.visible),
+        ne(speakers.updatedAt, updatedAt),
+      ),
+    ))),
+    db.insert(auditLog).select(db.select({
+      id: sql<string>`${audit.id}`.as("id"),
+      eventId: speakers.eventId,
+      requestId: sql<string>`${audit.requestId}`.as("request_id"),
+      actorUserId: sql<string | null>`${audit.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`${audit.actorApiKeyId}`.as("actor_api_key_id"),
+      action: sql<string>`${audit.action}`.as("action"),
+      resourceType: sql<string>`${audit.resourceType}`.as("resource_type"),
+      resourceId: speakers.id,
+      before: sql<unknown>`${JSON.stringify(audit.before)}`.as("before"),
+      after: sql<unknown>`${JSON.stringify(audit.after)}`.as("after"),
+      metadata: sql<null>`null`.as("metadata"),
+      occurredAt: sql<Date>`${updatedAt.getTime()}`.as("occurred_at"),
+    }).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+      eq(speakers.version, version), eq(speakers.updatedAt, updatedAt),
+    ))),
+  ])).pipe(Effect.either);
+  if (committed._tag === "Left") {
+    const [emailOwner, currentRows] = yield* Effect.all([
+      database(() => db.select({ id: speakers.id }).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), sql`lower(${speakers.contactEmail}) = ${contactEmail}`,
+      )).limit(1).then((rows) => rows[0])),
+      database(() => db.select({ version: speakers.version }).from(speakers).where(and(
+        eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+      )).limit(1)),
+    ]);
+    if (emailOwner && emailOwner.id !== input.speakerId) {
+      return yield* Effect.fail(new Conflict({ message: "A speaker with this contact email already exists" }));
+    }
+    if (currentRows[0]?.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Speaker changed; reload before saving" }));
+    }
+    return yield* Effect.fail(committed.left);
+  }
+  const updatedRows = committed.right[1] as (typeof speakers.$inferSelect)[];
+  const updated = updatedRows[0];
+  if (!updated) return yield* Effect.fail(new Conflict({ message: "Speaker changed; reload before saving" }));
+  return speakerView(updated);
+});
+
+export const uploadManagedSpeakerHeadshot = (input: UploadManagedSpeakerHeadshotInput): Effect.Effect<ContentAsset, AppError, Db | CurrentUser | Authorizer | Files> => Effect.gen(function* () {
+  const actor = yield* organizer(input.eventId, "content:write");
+  const data = yield* decodeBase64(input.contentBase64, "headshot");
+  const policyError = uploadPolicy("headshot", input.contentType, input.filename, data.byteLength);
+  if (policyError) return yield* Effect.fail(policyError);
+  const { db } = yield* Db;
+  const contentHash = yield* sha256(input.contentBase64);
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, { ...input, contentBase64: contentHash });
+  const principalId = actor.actorApiKeyId ?? actor.userId;
+  const replay = yield* findReplay(input.eventId, "portal.uploadManagedSpeakerHeadshot", principalId, keyHash, requestHash);
+  if (replay !== null) return yield* decodeReplay(ContentAssetSchema, replay);
+  const [speaker] = yield* database(() => db.select().from(speakers).where(and(
+    eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+  )).limit(1));
+  if (!speaker) return yield* Effect.fail(new NotFound({ entity: "speaker", id: input.speakerId }));
+  if (speaker.version !== input.expectedVersion) return yield* Effect.fail(new Conflict({ message: "Speaker changed; reload before uploading the headshot" }));
+  const [oldAsset] = yield* database(() => db.select().from(assets).where(and(
+    eq(assets.eventId, input.eventId), eq(assets.speakerId, speaker.id),
+    eq(assets.purpose, "headshot"), eq(assets.current, true),
+  )).orderBy(desc(assets.version), desc(assets.createdAt)).limit(1));
+  const uploadedAt = now();
+  const assetId = id("portal_asset");
+  const nextAssetVersion = (oldAsset?.version ?? 0) + 1;
+  const key = assetKey(input.eventId, assetId);
+  const { put, delete: deleteFile } = yield* Files;
+  yield* put(key, data, {
+    httpMetadata: { contentType: input.contentType, contentDisposition: "inline" },
+    customMetadata: { portalPurpose: "headshot", speakerId: speaker.id, organizerManaged: "true" },
+  });
+  const record = idempotencyInsert(input.eventId, "portal.uploadManagedSpeakerHeadshot", principalId, keyHash, requestHash, uploadedAt);
+  const assetRecord: typeof assets.$inferInsert = {
+    id: assetId, eventId: input.eventId, uploaderUserId: actor.userId, speakerId: speaker.id,
+    purpose: "headshot", supersedesAssetId: oldAsset?.id ?? null, restoredFromAssetId: null, current: true,
+    filename: input.filename.trim(), contentType: input.contentType, size: data.byteLength,
+    version: nextAssetVersion, createdAt: uploadedAt, updatedAt: uploadedAt,
+  };
+  const sessionTitles = (yield* loadSpeakerSessionTitles(input.eventId, [speaker.id])).get(speaker.id) ?? [];
+  const result: ContentAsset = {
+    ...assetView(assetRecord as typeof assets.$inferSelect, "headshot"),
+    speakerId: speaker.id, speakerName: speaker.displayName, current: true,
+    speakerVersion: speaker.version + 1,
+    sessionTitles, versionCount: nextAssetVersion,
+    supersedesAssetId: oldAsset?.id ?? null, restoredFromAssetId: null,
+    uploadedAt: uploadedAt.getTime(), comments: [],
+  };
+  const requestId = id("portal_request");
+  const change = writeChange(
+    input.eventId, "speaker", speaker.id, speaker.version + 1, "portal.speaker.headshot.managed.updated",
+    { speakerId: speaker.id, assetId }, actor, uploadedAt, requestId, record.id,
+  );
+  const statements = [
+    db.insert(idempotencyRecords).values(record),
+    ...(oldAsset ? [db.update(assets).set({ current: false, updatedAt: uploadedAt }).where(and(
+      eq(assets.eventId, input.eventId), eq(assets.id, oldAsset.id), eq(assets.current, true),
+    ))] : []),
+    db.insert(assets).values(assetRecord),
+  ] as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]];
+  statements.push(
+    db.update(speakers).set({ headshotAssetId: assetId, version: speaker.version + 1, updatedAt: uploadedAt }).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, speaker.id), eq(speakers.version, input.expectedVersion),
+    )),
+    db.insert(domainChanges).values(change),
+    db.insert(domainChanges).select(db.select(changeSelection(change)).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, speaker.id),
+      or(ne(speakers.version, speaker.version + 1), ne(speakers.headshotAssetId, assetId)),
+    ))),
+    db.insert(auditLog).values({
+      id: id("audit"), eventId: input.eventId, requestId,
+      actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.speaker.headshot.managed.updated", resourceType: "speaker", resourceId: speaker.id,
+      before: { headshotAssetId: speaker.headshotAssetId }, after: result, metadata: null, occurredAt: uploadedAt,
+    }),
+    db.update(idempotencyRecords).set({ status: "completed", responseStatus: 201, responseBody: result, completedAt: uploadedAt }).where(eq(idempotencyRecords.id, record.id)),
+  );
+  const committed = yield* database(() => db.batch(statements)).pipe(Effect.either);
+  if (committed._tag === "Left") {
+    yield* deleteFile(key).pipe(Effect.catchAll(() => Effect.void));
+    const [racedSpeaker] = yield* database(() => db.select({ version: speakers.version, headshotAssetId: speakers.headshotAssetId }).from(speakers).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, input.speakerId),
+    )).limit(1));
+    if (!racedSpeaker || racedSpeaker.version !== input.expectedVersion || racedSpeaker.headshotAssetId !== speaker.headshotAssetId) {
+      return yield* Effect.fail(new Conflict({ message: "Speaker changed; reload before uploading the headshot" }));
+    }
+    return yield* Effect.fail(committed.left);
+  }
+  return result;
+});
+
+export const importSpeakersCsv = (input: ImportSpeakersCsvInput): Effect.Effect<ImportSpeakersCsvOutput, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
+  const actor = yield* organizer(input.eventId, "speakers:write");
+  yield* requireEvent(input.eventId);
+  const { db } = yield* Db;
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const principalId = actor.actorApiKeyId ?? actor.userId;
+  const replay = yield* findReplay(input.eventId, "portal.importSpeakersCsv", principalId, keyHash, requestHash);
+  if (replay !== null) return { ...(yield* decodeReplay(ImportSpeakersCsvOutputSchema, replay)), idempotent: true };
+  const rows = yield* parseCsv(input.csv);
+  if (rows.length < 2) return yield* Effect.fail(new Validation({ message: "CSV must include a header and at least one speaker row" }));
+  const headers = rows[0]!.map((header) => header.trim().toLowerCase().replaceAll(/[^a-z0-9]+/g, ""));
+  const indexOf = (...names: readonly string[]) => headers.findIndex((header) => names.includes(header));
+  const nameIndex = indexOf("displayname", "name", "speakername");
+  const emailIndex = indexOf("contactemail", "email", "speakeremail");
+  if (nameIndex < 0 || emailIndex < 0) return yield* Effect.fail(new Validation({ message: "CSV requires displayName (or name) and contactEmail (or email) columns" }));
+  const titleIndex = indexOf("title", "jobtitle");
+  const companyIndex = indexOf("company", "organization");
+  const bioIndex = indexOf("bio", "biography");
+  const statusIndex = indexOf("workflowstatus", "status");
+  const visibleIndex = indexOf("visible", "published");
+  const [existing, managedClaims, airtableLinks] = yield* Effect.all([
+    database(() => db.select().from(speakers).where(eq(speakers.eventId, input.eventId))),
+    database(() => db.select({ speakerId: managedSpeakerEmails.speakerId }).from(managedSpeakerEmails)
+      .where(eq(managedSpeakerEmails.eventId, input.eventId))),
+    database(() => db.select({ entityId: airtableRecordLinks.entityId }).from(airtableRecordLinks).where(and(
+      eq(airtableRecordLinks.eventId, input.eventId), eq(airtableRecordLinks.entityType, "speaker"),
+    ))),
+  ]);
+  const directlyManaged = new Set(managedClaims.map((claim) => claim.speakerId));
+  const airtableOwned = new Set(airtableLinks.map((link) => link.entityId));
+  const byEmail = new Map(existing.flatMap((speaker) => speaker.contactEmail ? [[speaker.contactEmail.toLowerCase(), speaker] as const] : []));
+  const seen = new Set<string>();
+  const createdAt = now();
+  const inserts: (typeof speakers.$inferInsert)[] = [];
+  const updates: { readonly existing: typeof speakers.$inferSelect; readonly values: Partial<typeof speakers.$inferInsert> }[] = [];
+  let skippedCount = 0;
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  for (const row of rows.slice(1)) {
+    const displayName = (row[nameIndex] ?? "").trim();
+    const contactEmail = (row[emailIndex] ?? "").trim().toLowerCase();
+    if (!displayName || !emailPattern.test(contactEmail) || seen.has(contactEmail)) {
+      skippedCount += 1;
+      continue;
+    }
+    seen.add(contactEmail);
+    const nullableAt = (index: number) => index < 0 ? null : (row[index] ?? "").trim() || null;
+    const workflowStatus = statusIndex < 0 ? "Invited" : (row[statusIndex] ?? "").trim() || "Invited";
+    const visibleValue = visibleIndex < 0 ? "true" : (row[visibleIndex] ?? "true").trim().toLowerCase();
+    const visible = !["false", "0", "no", "hidden"].includes(visibleValue);
+    const prior = byEmail.get(contactEmail);
+    if (prior) {
+      if (!directlyManaged.has(prior.id) || airtableOwned.has(prior.id)) {
+        skippedCount += 1;
+        continue;
+      }
+      updates.push({ existing: prior, values: {
+        displayName, title: nullableAt(titleIndex), company: nullableAt(companyIndex), bio: nullableAt(bioIndex),
+        workflowStatus, visible, version: prior.version + 1, updatedAt: createdAt,
+      } });
+    } else {
+      inserts.push({
+        id: id("speaker"), eventId: input.eventId, userId: null, contactEmail, displayName,
+        title: nullableAt(titleIndex), company: nullableAt(companyIndex), bio: nullableAt(bioIndex),
+        workflowStatus, headshotAssetId: null, links: [], visible, version: 1, createdAt, updatedAt: createdAt,
+      });
+    }
+  }
+  const affected = [
+    ...inserts.map((speaker) => speakerView(speaker as typeof speakers.$inferSelect)),
+    ...updates.map(({ existing: prior, values }) => speakerView({ ...prior, ...values } as typeof speakers.$inferSelect)),
+  ];
+  const output: ImportSpeakersCsvOutput = {
+    createdCount: inserts.length, updatedCount: updates.length, skippedCount, speakers: affected, idempotent: false,
+  };
+  const record = idempotencyInsert(input.eventId, "portal.importSpeakersCsv", principalId, keyHash, requestHash, createdAt);
+  const requestId = id("portal_request");
+  const changes = new Map(affected.map((profile) => [profile.id, writeChange(
+    input.eventId, "speaker", profile.id, profile.version, "portal.speaker.csv.imported",
+    { speakerId: profile.id }, actor, createdAt, requestId, record.id,
+  )]));
+  const reservation = yield* database(() => db.insert(idempotencyRecords).values(record)).pipe(Effect.either);
+  if (reservation._tag === "Left") {
+    const racedReplay = yield* findReplay(input.eventId, "portal.importSpeakersCsv", principalId, keyHash, requestHash);
+    if (racedReplay !== null) return { ...(yield* decodeReplay(ImportSpeakersCsvOutputSchema, racedReplay)), idempotent: true };
+    return yield* Effect.fail(reservation.left);
+  }
+  const statements: BatchItem<"sqlite">[] = [];
+  if (inserts.length > 0) {
+    statements.push(db.insert(speakers).values(inserts));
+    statements.push(db.insert(managedSpeakerEmails).values(inserts.map((speaker) => ({
+      id: id("managed_email"), eventId: input.eventId,
+      normalizedEmail: speaker.contactEmail!, speakerId: speaker.id,
+      createdAt, updatedAt: createdAt,
+    }))));
+    for (const inserted of inserts) statements.push(db.insert(domainChanges).values(changes.get(inserted.id)!));
+  }
+  for (const update of updates) {
+    const change = changes.get(update.existing.id)!;
+    const nextVersion = update.existing.version + 1;
+    statements.push(db.update(speakers).set(update.values).where(and(
+      eq(speakers.eventId, input.eventId), eq(speakers.id, update.existing.id), eq(speakers.version, update.existing.version),
+    )), db.delete(managedSpeakerEmails).where(and(
+      eq(managedSpeakerEmails.eventId, input.eventId), eq(managedSpeakerEmails.speakerId, update.existing.id),
+    )), db.insert(managedSpeakerEmails).values({
+      id: id("managed_email"), eventId: input.eventId,
+      normalizedEmail: update.existing.contactEmail!.toLowerCase(), speakerId: update.existing.id,
+      createdAt, updatedAt: createdAt,
+    }), db.insert(domainChanges).values(change), db.insert(domainChanges).select(
+      db.select(changeSelection(change)).from(speakers).where(and(
+        eq(speakers.eventId, input.eventId), eq(speakers.id, update.existing.id), or(
+          ne(speakers.version, nextVersion),
+          ne(speakers.displayName, update.values.displayName!),
+          sql`${speakers.title} is not ${update.values.title ?? null}`,
+          sql`${speakers.company} is not ${update.values.company ?? null}`,
+          sql`${speakers.bio} is not ${update.values.bio ?? null}`,
+          ne(speakers.workflowStatus, update.values.workflowStatus!),
+          ne(speakers.visible, update.values.visible!),
+          ne(speakers.updatedAt, createdAt),
+        ),
+      )),
+    ));
+  }
+  statements.push(
+    db.insert(auditLog).values({
+      id: id("audit"), eventId: input.eventId, requestId,
+      actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.speakers.csv.imported", resourceType: "event", resourceId: input.eventId,
+      before: null, after: output, metadata: null, occurredAt: createdAt,
+    }),
+    db.update(idempotencyRecords).set({ status: "completed", responseStatus: 200, responseBody: output, completedAt: createdAt }).where(eq(idempotencyRecords.id, record.id)),
+  );
+  const committed = yield* database(() => db.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]])).pipe(Effect.either);
+  if (committed._tag === "Left") {
+    const racedReplay = yield* findReplay(input.eventId, "portal.importSpeakersCsv", principalId, keyHash, requestHash);
+    if (racedReplay !== null) return { ...(yield* decodeReplay(ImportSpeakersCsvOutputSchema, racedReplay)), idempotent: true };
+    const currentRows = yield* database(() => db.select({ id: speakers.id, contactEmail: speakers.contactEmail, version: speakers.version })
+      .from(speakers).where(eq(speakers.eventId, input.eventId)));
+    const currentById = new Map(currentRows.map((row) => [row.id, row]));
+    const currentEmails = new Map(currentRows.flatMap((row) => row.contactEmail ? [[row.contactEmail.toLowerCase(), row.id] as const] : []));
+    const staleUpdate = updates.some((update) => currentById.get(update.existing.id)?.version !== update.existing.version);
+    const racedInsert = inserts.some((inserted) => currentEmails.has(inserted.contactEmail!.toLowerCase()));
+    if (staleUpdate || racedInsert) {
+      return yield* Effect.fail(new Conflict({ message: "Speaker records changed during import; reload and retry" }));
+    }
+    return yield* Effect.fail(committed.left);
+  }
+  return output;
+});
+
+export const sendSpeakerMessages = (input: SendSpeakerMessagesInput): Effect.Effect<SendSpeakerMessagesOutput, AppError, Db | CurrentUser | Authorizer | MailQueue> => Effect.gen(function* () {
+  const actor = yield* organizer(input.eventId, "speakers:write");
+  const { db } = yield* Db;
+  const queue = yield* MailQueue;
+  const requestedIds = [...new Set(input.speakerIds)];
+  if (requestedIds.length !== input.speakerIds.length) return yield* Effect.fail(new Validation({ message: "Message recipients cannot contain duplicates" }));
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const principalId = actor.actorApiKeyId ?? actor.userId;
+  const replay = yield* findReplay(input.eventId, "portal.sendSpeakerMessages", principalId, keyHash, requestHash);
+  if (replay !== null) {
+    yield* queue.wake().pipe(Effect.catchAll(() => Effect.void));
+    return { ...(yield* decodeReplay(SendSpeakerMessagesOutputSchema, replay)), idempotent: true };
+  }
+  const [eventRows, speakerRows, definitions, assignments, completions] = yield* Effect.all([
+    database(() => db.select({ name: events.name, slug: events.slug }).from(events).where(eq(events.id, input.eventId)).limit(1)),
+    database(() => db.select({ speaker: speakers, userEmail: users.email, userName: users.name }).from(speakers)
+      .leftJoin(users, eq(users.id, speakers.userId))
+      .where(and(eq(speakers.eventId, input.eventId), inArray(speakers.id, requestedIds)))),
+    database(() => db.select().from(tasks).where(eq(tasks.eventId, input.eventId))),
+    database(() => db.select().from(taskAssignments).where(and(eq(taskAssignments.eventId, input.eventId), inArray(taskAssignments.speakerId, requestedIds)))),
+    database(() => db.select({ speakerId: taskCompletions.speakerId, taskId: taskCompletions.taskId }).from(taskCompletions).where(and(
+      eq(taskCompletions.eventId, input.eventId), inArray(taskCompletions.speakerId, requestedIds),
+    ))),
+  ]);
+  const event = eventRows[0];
+  if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
+  const eligibleSpeakerIds = yield* eligibleProvisionedSpeakerIds([input.eventId]);
+  const assignmentSet = new Set(assignments.map((assignment) => `${assignment.speakerId}\u0000${assignment.taskId}`));
+  const completionSet = new Set(completions.map((completion) => `${completion.speakerId}\u0000${completion.taskId}`));
+  const recipients = speakerRows.flatMap(({ speaker, userEmail, userName }) => {
+    if (!eligibleSpeakerIds.has(speaker.id)) return [];
+    const outstanding = definitions.filter((task) =>
+      (task.targetMode === "all" || assignmentSet.has(`${speaker.id}\u0000${task.id}`)) &&
+      !completionSet.has(`${speaker.id}\u0000${task.id}`)
+    );
+    const email = speaker.contactEmail ?? userEmail;
+    if (!email || (input.kind === "reminder" && outstanding.length === 0)) return [];
+    const next = [...outstanding].sort((left, right) => (left.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (right.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) || left.order - right.order)[0];
+    return [{ speaker, email, recipientName: userName ?? speaker.displayName, outstanding, next }];
+  });
+  const createdAt = now();
+  const portalUrl = `${queue.appOrigin}${clientRoutes.portal(encodeURIComponent(event.slug))}`;
+  const deliveries = recipients.map((recipient, index) => {
+    const snapshotId = id("mail_snapshot");
+    const invite = input.kind === "invite";
+    const subject = invite
+      ? `Your ${event.name} speaker portal`
+      : `${recipient.outstanding.length} ${event.name} speaker task${recipient.outstanding.length === 1 ? "" : "s"} outstanding`;
+    const detail = recipient.next
+      ? ` Your next task is “${recipient.next.name}”${recipient.next.dueAt ? `, due ${recipient.next.dueAt.toISOString().slice(0, 10)}` : ""}.`
+      : "";
+    const text = invite
+      ? `Hi ${recipient.recipientName},\n\nUse your speaker portal to manage your ${event.name} profile, tasks, and files:\n${portalUrl}`
+      : `Hi ${recipient.recipientName},\n\nYou have ${recipient.outstanding.length} outstanding speaker task${recipient.outstanding.length === 1 ? "" : "s"} for ${event.name}.${detail}\n\nOpen your speaker portal: ${portalUrl}`;
+    const html = invite
+      ? `<p>Hi ${escapeHtml(recipient.recipientName)},</p><p>Use your speaker portal to manage your ${escapeHtml(event.name)} profile, tasks, and files.</p><p><a href="${escapeHtml(portalUrl)}">Open your speaker portal</a></p>`
+      : `<p>Hi ${escapeHtml(recipient.recipientName)},</p><p>You have <strong>${recipient.outstanding.length}</strong> outstanding speaker task${recipient.outstanding.length === 1 ? "" : "s"} for ${escapeHtml(event.name)}.${escapeHtml(detail)}</p><p><a href="${escapeHtml(portalUrl)}">Open your speaker portal</a></p>`;
+    return {
+      snapshot: {
+        id: snapshotId, eventId: input.eventId, templateId: null, recipientUserId: recipient.speaker.userId,
+        recipientEmail: recipient.email, recipientName: recipient.recipientName, fromEmail: queue.fromEmail,
+        replyToEmail: null, subject, renderedHtml: html, renderedText: text,
+        icsFilename: null, icsContent: null, createdAt,
+      },
+      delivery: {
+        id: id("mail_delivery"), snapshotId, idempotencyKey: `portal-${input.kind}:${keyHash}:${index}`,
+        status: "pending" as const, scheduledFor: createdAt, availableAt: createdAt,
+        attemptCount: 0, maxAttempts: 8, createdAt,
+      },
+    };
+  });
+  const output: SendSpeakerMessagesOutput = {
+    queuedCount: deliveries.length,
+    skippedCount: requestedIds.length - deliveries.length,
+    idempotent: false,
+  };
+  const record = idempotencyInsert(input.eventId, "portal.sendSpeakerMessages", principalId, keyHash, requestHash, createdAt);
+  const requestId = id("portal_request");
+  const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [db.insert(idempotencyRecords).values(record)];
+  if (deliveries.length > 0) {
+    statements.push(
+      db.insert(mailDeliverySnapshots).values(deliveries.map((delivery) => delivery.snapshot)),
+      db.insert(mailDeliveries).values(deliveries.map((delivery) => delivery.delivery)),
+    );
+  }
+  statements.push(
+    db.insert(domainChanges).values(writeChange(
+      input.eventId, "speakerMessageBatch", record.id, 1, "portal.speaker.messages.enqueued",
+      { kind: input.kind, ...output }, actor, createdAt, requestId, record.id,
+    )),
+    db.insert(auditLog).values({
+      id: id("audit"), eventId: input.eventId, requestId,
+      actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.speaker.messages.enqueued", resourceType: "event", resourceId: input.eventId,
+      before: null, after: output, metadata: { kind: input.kind, speakerIds: requestedIds }, occurredAt: createdAt,
+    }),
+    db.update(idempotencyRecords).set({ status: "completed", responseStatus: 202, responseBody: output, completedAt: createdAt }).where(eq(idempotencyRecords.id, record.id)),
+  );
+  yield* database(() => db.batch(statements));
+  yield* queue.wake().pipe(Effect.catchAll(() => Effect.void));
+  return output;
+});
+
+/** Daily cron producer for incomplete speaker tasks due within 48 hours or overdue. */
+export const enqueueAutomatedDueTaskReminders = (runAt = now()): Effect.Effect<{ readonly queuedCount: number; readonly runDate: string }, AppError, Db | MailQueue> => Effect.gen(function* () {
+  const { db } = yield* Db;
+  const queue = yield* MailQueue;
+  const runDate = runAt.toISOString().slice(0, 10);
+  const horizon = new Date(runAt.getTime() + 48 * 60 * 60 * 1_000);
+  const dueTasks = yield* database(() => db.select().from(tasks).where(and(isNotNull(tasks.dueAt), lte(tasks.dueAt, horizon))).orderBy(asc(tasks.eventId), asc(tasks.dueAt), asc(tasks.order)));
+  if (dueTasks.length === 0) return { queuedCount: 0, runDate };
+  const eventIds = [...new Set(dueTasks.map((task) => task.eventId))];
+  const taskIds = dueTasks.map((task) => task.id);
+  const [eventRows, speakerRows, assignments, completions, eligibleSpeakerIds] = yield* Effect.all([
+    database(() => db.select({ id: events.id, name: events.name, slug: events.slug }).from(events).where(inArray(events.id, eventIds))),
+    database(() => db.select({ speaker: speakers, userEmail: users.email, userName: users.name }).from(speakers)
+      .leftJoin(users, eq(users.id, speakers.userId)).where(inArray(speakers.eventId, eventIds))),
+    database(() => db.select().from(taskAssignments).where(inArray(taskAssignments.taskId, taskIds))),
+    database(() => db.select({ speakerId: taskCompletions.speakerId, taskId: taskCompletions.taskId }).from(taskCompletions).where(inArray(taskCompletions.taskId, taskIds))),
+    eligibleProvisionedSpeakerIds(eventIds),
+  ]);
+  const eventById = new Map(eventRows.map((event) => [event.id, event]));
+  const assignmentSet = new Set(assignments.map((assignment) => `${assignment.speakerId}\u0000${assignment.taskId}`));
+  const completionSet = new Set(completions.map((completion) => `${completion.speakerId}\u0000${completion.taskId}`));
+  const candidates = speakerRows.flatMap(({ speaker, userEmail, userName }) => {
+    if (!eligibleSpeakerIds.has(speaker.id)) return [];
+    const event = eventById.get(speaker.eventId);
+    const email = speaker.contactEmail ?? userEmail;
+    if (!event || !email) return [];
+    const outstanding = dueTasks.filter((task) => task.eventId === speaker.eventId
+      && (task.targetMode === "all" || assignmentSet.has(`${speaker.id}\u0000${task.id}`))
+      && !completionSet.has(`${speaker.id}\u0000${task.id}`));
+    if (outstanding.length === 0) return [];
+    return [{ event, speaker, email, recipientName: userName ?? speaker.displayName, outstanding }];
+  });
+  const keys = candidates.map(({ event, speaker }) => `portal-due:${runDate}:${event.id}:${speaker.id}`);
+  const existing = keys.length === 0 ? [] : yield* database(() => db.select({ key: mailDeliveries.idempotencyKey }).from(mailDeliveries).where(inArray(mailDeliveries.idempotencyKey, keys)));
+  const existingKeys = new Set(existing.map((row) => row.key));
+  const rows = candidates.flatMap((candidate) => {
+    const deliveryKey = `portal-due:${runDate}:${candidate.event.id}:${candidate.speaker.id}`;
+    if (existingKeys.has(deliveryKey)) return [];
+    const snapshotId = id("mail_snapshot");
+    const next = candidate.outstanding[0]!;
+    const portalUrl = `${queue.appOrigin}${clientRoutes.portal(encodeURIComponent(candidate.event.slug))}`;
+    const subject = `${candidate.outstanding.length} ${candidate.event.name} task${candidate.outstanding.length === 1 ? "" : "s"} due`;
+    const dueText = next.dueAt && next.dueAt <= runAt ? "is overdue" : `is due ${next.dueAt?.toISOString().slice(0, 10) ?? "soon"}`;
+    const text = `Hi ${candidate.recipientName},\n\nYour next speaker task, “${next.name}”, ${dueText}. You have ${candidate.outstanding.length} due or overdue task${candidate.outstanding.length === 1 ? "" : "s"}.\n\nOpen your speaker portal: ${portalUrl}`;
+    const html = `<p>Hi ${escapeHtml(candidate.recipientName)},</p><p>Your next speaker task, <strong>${escapeHtml(next.name)}</strong>, ${escapeHtml(dueText)}. You have ${candidate.outstanding.length} due or overdue task${candidate.outstanding.length === 1 ? "" : "s"}.</p><p><a href="${escapeHtml(portalUrl)}">Open your speaker portal</a></p>`;
+    return [{
+      snapshot: {
+        id: snapshotId, eventId: candidate.event.id, templateId: null, recipientUserId: candidate.speaker.userId,
+        recipientEmail: candidate.email, recipientName: candidate.recipientName, fromEmail: queue.fromEmail,
+        replyToEmail: null, subject, renderedHtml: html, renderedText: text,
+        icsFilename: null, icsContent: null, createdAt: runAt,
+      },
+      delivery: {
+        id: id("mail_delivery"), snapshotId, idempotencyKey: deliveryKey, status: "pending" as const,
+        scheduledFor: runAt, availableAt: runAt, attemptCount: 0, maxAttempts: 8, createdAt: runAt,
+      },
+    }];
+  });
+  if (rows.length > 0) {
+    yield* database(() => db.batch([
+      db.insert(mailDeliverySnapshots).values(rows.map((row) => row.snapshot)),
+      db.insert(mailDeliveries).values(rows.map((row) => row.delivery)),
+    ]));
+    yield* queue.wake().pipe(Effect.catchAll(() => Effect.void));
+  }
+  return { queuedCount: rows.length, runDate };
+});
+
+const loadSpeakerSessionTitles = (
+  eventId: string,
+  speakerIds: readonly string[],
+): Effect.Effect<ReadonlyMap<string, readonly string[]>, AppError, Db> => Effect.gen(function* () {
+  if (speakerIds.length === 0) return new Map();
+  const { db } = yield* Db;
+  const rows = yield* database(() => db.select({ speakerId: talkSpeakers.speakerId, title: talks.title })
+    .from(talkSpeakers)
+    .innerJoin(talks, and(eq(talks.eventId, talkSpeakers.eventId), eq(talks.id, talkSpeakers.talkId)))
+    .where(and(
+      eq(talkSpeakers.eventId, eventId),
+      inArray(talkSpeakers.speakerId, [...speakerIds]),
+      ne(talks.status, "cancelled"),
+    ))
+    .orderBy(asc(talks.startsAt), asc(talks.title), asc(talks.id)));
+  const titles = new Map<string, string[]>();
+  for (const row of rows) {
+    const current = titles.get(row.speakerId) ?? [];
+    if (!current.includes(row.title)) current.push(row.title);
+    titles.set(row.speakerId, current);
+  }
+  return titles;
+});
+
+const loadContentAssets = (eventId: string, onlyAssetId?: string): Effect.Effect<readonly ContentAsset[], AppError, Db> => Effect.gen(function* () {
+  const { db } = yield* Db;
+  const assetRows = yield* database(() => db.select({ asset: assets, speaker: speakers }).from(assets)
+    .innerJoin(speakers, and(eq(speakers.eventId, assets.eventId), eq(speakers.id, assets.speakerId)))
+    .where(and(
+      eq(assets.eventId, eventId),
+      isNotNull(assets.speakerId),
+      ...(onlyAssetId ? [eq(assets.id, onlyAssetId)] : []),
+    ))
+    .orderBy(desc(assets.current), asc(speakers.displayName), asc(assets.purpose), desc(assets.version), desc(assets.createdAt)));
+  const speakerIds = [...new Set(assetRows.map((row) => row.speaker.id))];
+  const sessionTitles = yield* loadSpeakerSessionTitles(eventId, speakerIds);
+  const versionCounts = new Map<string, number>();
+  for (const { asset, speaker } of assetRows) {
+    const lineage = `${speaker.id}\u0000${asset.purpose ?? "document"}`;
+    versionCounts.set(lineage, (versionCounts.get(lineage) ?? 0) + 1);
+  }
+  const assetIds = assetRows.map((row) => row.asset.id);
+  const commentRows = assetIds.length === 0 ? [] : yield* database(() => db.select({ comment: assetComments, authorName: users.name }).from(assetComments)
+    .innerJoin(users, eq(users.id, assetComments.actorUserId))
+    .where(and(eq(assetComments.eventId, eventId), inArray(assetComments.assetId, assetIds)))
+    .orderBy(asc(assetComments.createdAt), asc(assetComments.id)));
+  return assetRows.map(({ asset, speaker }) => ({
+    ...assetView(asset, asset.purpose ?? "document"),
+    speakerId: speaker.id,
+    speakerName: speaker.displayName,
+    speakerVersion: speaker.version,
+    sessionTitles: sessionTitles.get(speaker.id) ?? [],
+    versionCount: versionCounts.get(`${speaker.id}\u0000${asset.purpose ?? "document"}`) ?? 1,
+    current: asset.current,
+    supersedesAssetId: asset.supersedesAssetId,
+    restoredFromAssetId: asset.restoredFromAssetId,
+    uploadedAt: asset.createdAt.getTime(),
+    comments: commentRows.filter((row) => row.comment.assetId === asset.id).map((row) => ({
+      id: row.comment.id,
+      authorName: row.authorName ?? "Organizer",
+      body: row.comment.body,
+      createdAt: row.comment.createdAt.getTime(),
+    })),
+  }));
+});
+
+const authorizeAssetActor = (eventId: string, assetId: string, scope: "content:read" | "content:write") => Effect.gen(function* () {
+  const { db } = yield* Db;
+  const [row] = yield* database(() => db.select({ asset: assets, speaker: speakers }).from(assets)
+    .innerJoin(speakers, and(eq(speakers.eventId, assets.eventId), eq(speakers.id, assets.speakerId)))
+    .where(and(eq(assets.eventId, eventId), eq(assets.id, assetId)))
+    .limit(1));
+  if (!row) return yield* Effect.fail(new NotFound({ entity: "content asset", id: assetId }));
+  const principal = yield* CurrentUser;
+  if (principal.kind === "browser-session" && row.speaker.userId === principal.userId) {
+    return { actor: { userId: principal.userId, actorUserId: principal.userId, actorApiKeyId: null } satisfies PrincipalActor, row };
+  }
+  return { actor: yield* organizer(eventId, scope), row };
+});
+
+export const getContentLibrary = (input: { readonly eventId: string }): Effect.Effect<ContentLibrary, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
+  yield* organizer(input.eventId, "content:read");
+  const event = yield* requireEvent(input.eventId);
+  return { event: eventView(event), assets: yield* loadContentAssets(input.eventId) };
+});
+
+export const addContentComment = (input: AddContentCommentInput): Effect.Effect<ContentComment, AppError, Db | CurrentUser | Authorizer> => Effect.gen(function* () {
+  const { actor } = yield* authorizeAssetActor(input.eventId, input.assetId, "content:write");
+  const { db } = yield* Db;
+  const body = input.body.trim();
+  if (!body) return yield* Effect.fail(new Validation({ message: "Comment body cannot be blank" }));
+  const normalizedInput = { ...input, body };
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, normalizedInput);
+  const principalId = actor.actorApiKeyId ?? actor.userId;
+  const replay = yield* findReplay(input.eventId, "portal.addContentComment", principalId, keyHash, requestHash);
+  if (replay !== null) return yield* decodeReplay(ContentCommentSchema, replay);
+  const [author] = yield* database(() => db.select({ name: users.name }).from(users).where(eq(users.id, actor.userId)).limit(1));
+  const createdAt = now();
+  const comment: ContentComment = {
+    id: id("asset_comment"),
+    authorName: author?.name ?? "Organizer",
+    body,
+    createdAt: createdAt.getTime(),
+  };
+  const record = idempotencyInsert(input.eventId, "portal.addContentComment", principalId, keyHash, requestHash, createdAt);
+  const requestId = id("portal_request");
+  yield* database(() => db.batch([
+    db.insert(idempotencyRecords).values(record),
+    db.insert(assetComments).values({
+      id: comment.id, eventId: input.eventId, assetId: input.assetId,
+      actorUserId: actor.userId, body: comment.body, createdAt,
+    }),
+    db.insert(domainChanges).values(writeChange(
+      input.eventId, "assetComment", comment.id, 1, "portal.asset.comment.added",
+      { assetId: input.assetId }, actor, createdAt, requestId, record.id,
+    )),
+    db.insert(auditLog).values({
+      id: id("audit"), eventId: input.eventId, requestId,
+      actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.asset.comment.added", resourceType: "asset", resourceId: input.assetId,
+      before: null, after: comment, metadata: null, occurredAt: createdAt,
+    }),
+    db.update(idempotencyRecords).set({ status: "completed", responseStatus: 201, responseBody: comment, completedAt: createdAt }).where(eq(idempotencyRecords.id, record.id)),
+  ]));
+  return comment;
+});
+
+export interface RestoreContentVersionTestHooks {
+  readonly beforeCommit?: () => Promise<void>;
+}
+
+export const restoreContentVersion = (
+  input: RestoreContentVersionInput,
+  testHooks?: RestoreContentVersionTestHooks,
+): Effect.Effect<ContentAsset, AppError, Db | CurrentUser | Authorizer | Files> => Effect.gen(function* () {
+  const actor = yield* organizer(input.eventId, "content:write");
+  const { db } = yield* Db;
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const principalId = actor.actorApiKeyId ?? actor.userId;
+  const replay = yield* findReplay(input.eventId, "portal.restoreContentVersion", principalId, keyHash, requestHash);
+  if (replay !== null) return yield* decodeReplay(ContentAssetSchema, replay);
+  const [source] = yield* database(() => db.select({ asset: assets, speaker: speakers }).from(assets)
+    .innerJoin(speakers, and(eq(speakers.eventId, assets.eventId), eq(speakers.id, assets.speakerId)))
+    .where(and(eq(assets.eventId, input.eventId), eq(assets.id, input.assetId)))
+    .limit(1));
+  if (!source || source.asset.purpose === null || source.asset.speakerId === null) {
+    return yield* Effect.fail(new NotFound({ entity: "portal content version", id: input.assetId }));
+  }
+  const sourceSpeakerId = source.asset.speakerId;
+  const sourcePurpose = source.asset.purpose;
+  const [current] = yield* database(() => db.select().from(assets).where(and(
+    eq(assets.eventId, input.eventId), eq(assets.speakerId, sourceSpeakerId),
+    eq(assets.purpose, sourcePurpose), eq(assets.current, true),
+  )).orderBy(desc(assets.version), desc(assets.createdAt)).limit(1));
+  if (!current) return yield* Effect.fail(new Conflict({ message: "This content lineage has no current version" }));
+  if (
+    current.id !== input.expectedCurrentAssetId ||
+    current.version !== input.expectedCurrentVersion ||
+    source.speaker.version !== input.expectedSpeakerVersion
+  ) {
+    return yield* Effect.fail(new Conflict({ message: "Content changed; reload before restoring this version" }));
+  }
+  const { get, put, delete: deleteFile } = yield* Files;
+  const sourceObject = yield* get(assetKey(input.eventId, source.asset.id));
+  if (!sourceObject) return yield* Effect.fail(new NotFound({ entity: "content object", id: source.asset.id }));
+  const bytes = new Uint8Array(yield* fileEffect(() => sourceObject.arrayBuffer()));
+  const restoredAt = now();
+  const restoredId = id("portal_asset");
+  const restoredVersion = current.version + 1;
+  const key = assetKey(input.eventId, restoredId);
+  const dispositionFilename = source.asset.filename.replace(/["\\\r\n]/g, "_");
+  yield* put(key, bytes, {
+    httpMetadata: {
+      contentType: source.asset.contentType,
+      contentDisposition: source.asset.purpose === "headshot" ? "inline" : `attachment; filename="${dispositionFilename}"`,
+    },
+    customMetadata: { portalPurpose: source.asset.purpose, speakerId: source.asset.speakerId, restoredFrom: source.asset.id },
+  });
+  const record = idempotencyInsert(input.eventId, "portal.restoreContentVersion", principalId, keyHash, requestHash, restoredAt);
+  const restoredRecord: typeof assets.$inferInsert = {
+    id: restoredId, eventId: input.eventId, uploaderUserId: actor.userId,
+    speakerId: sourceSpeakerId, purpose: sourcePurpose,
+    supersedesAssetId: current.id, restoredFromAssetId: source.asset.id, current: true,
+    filename: source.asset.filename, contentType: source.asset.contentType, size: source.asset.size,
+    version: restoredVersion, createdAt: restoredAt, updatedAt: restoredAt,
+  };
+  const sessionTitles = (yield* loadSpeakerSessionTitles(input.eventId, [sourceSpeakerId])).get(sourceSpeakerId) ?? [];
+  const result: ContentAsset = {
+    ...assetView(restoredRecord as typeof assets.$inferSelect, sourcePurpose),
+    speakerId: source.speaker.id, speakerName: source.speaker.displayName, current: true,
+    speakerVersion: sourcePurpose === "headshot" ? source.speaker.version + 1 : source.speaker.version,
+    sessionTitles, versionCount: restoredVersion,
+    supersedesAssetId: current.id, restoredFromAssetId: source.asset.id,
+    uploadedAt: restoredAt.getTime(), comments: [],
+  };
+  const completionRows = yield* database(() => db.select().from(taskCompletions).where(and(
+    eq(taskCompletions.eventId, input.eventId), eq(taskCompletions.speakerId, sourceSpeakerId),
+  )));
+  const linkedCompletions = completionRows.filter((completion) =>
+    typeof completion.data === "object" && completion.data !== null && !Array.isArray(completion.data) && Reflect.get(completion.data, "assetId") === current.id
+  );
+  const requestId = id("portal_request");
+  const restoreChange = writeChange(
+    input.eventId, "asset", restoredId, 1, "portal.asset.version.restored",
+    { speakerId: source.speaker.id, restoredFromAssetId: source.asset.id, supersedesAssetId: current.id },
+    actor, restoredAt, requestId, record.id,
+  );
+  const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
+    db.insert(idempotencyRecords).values(record),
+    db.update(assets).set({ current: false, updatedAt: restoredAt }).where(and(
+      eq(assets.eventId, input.eventId), eq(assets.id, input.expectedCurrentAssetId),
+      eq(assets.version, input.expectedCurrentVersion), eq(assets.current, true),
+    )),
+    db.insert(assets).values(restoredRecord),
+  ];
+  if (sourcePurpose === "headshot") {
+    const change = writeChange(
+      input.eventId, "speaker", source.speaker.id, source.speaker.version + 1,
+      "portal.speaker.headshot.restored", { speakerId: source.speaker.id, assetId: restoredId },
+      actor, restoredAt, requestId, record.id,
+    );
+    statements.push(
+      db.update(speakers).set({
+        headshotAssetId: restoredId, version: source.speaker.version + 1, updatedAt: restoredAt,
+      }).where(and(
+        eq(speakers.eventId, input.eventId), eq(speakers.id, source.speaker.id),
+        eq(speakers.version, input.expectedSpeakerVersion),
+      )),
+      db.insert(domainChanges).values(change),
+      db.insert(domainChanges).select(db.select(changeSelection(change)).from(speakers).where(and(
+        eq(speakers.eventId, input.eventId), eq(speakers.id, source.speaker.id),
+        or(ne(speakers.version, source.speaker.version + 1), ne(speakers.headshotAssetId, restoredId)),
+      ))),
+    );
+  }
+  for (const completion of linkedCompletions) {
+    statements.push(db.update(taskCompletions).set({
+      data: { ...(completion.data as Record<string, unknown>), assetId: restoredId },
+      version: completion.version + 1, updatedAt: restoredAt,
+    }).where(and(eq(taskCompletions.eventId, input.eventId), eq(taskCompletions.id, completion.id), eq(taskCompletions.version, completion.version))),
+    db.insert(domainChanges).select(db.select(changeSelection(restoreChange)).from(events).where(and(
+      eq(events.id, input.eventId),
+      sql`not exists (
+        select 1 from task_completions as restored_completion
+        where restored_completion.event_id = ${input.eventId}
+          and restored_completion.id = ${completion.id}
+          and restored_completion.version = ${completion.version + 1}
+          and json_extract(restored_completion.data, '$.assetId') = ${restoredId}
+      )`,
+    ))));
+  }
+  statements.push(
+    db.insert(domainChanges).values(restoreChange),
+    db.insert(auditLog).values({
+      id: id("audit"), eventId: input.eventId, requestId,
+      actorUserId: actor.actorUserId, actorApiKeyId: actor.actorApiKeyId,
+      action: "portal.asset.version.restored", resourceType: "asset", resourceId: restoredId,
+      before: { assetId: current.id, version: current.version }, after: result,
+      metadata: { restoredFromAssetId: source.asset.id }, occurredAt: restoredAt,
+    }),
+    db.update(idempotencyRecords).set({ status: "completed", responseStatus: 201, responseBody: result, completedAt: restoredAt }).where(eq(idempotencyRecords.id, record.id)),
+  );
+  if (testHooks?.beforeCommit) yield* Effect.promise(testHooks.beforeCommit);
+  const committed = yield* database(() => db.batch(statements)).pipe(Effect.either);
+  if (committed._tag === "Left") {
+    yield* deleteFile(key).pipe(Effect.catchAll(() => Effect.void));
+    const [currentRows, currentCompletionRows, currentSpeakerRows] = yield* Effect.all([
+      database(() => db.select({ id: assets.id, version: assets.version }).from(assets).where(and(
+        eq(assets.eventId, input.eventId), eq(assets.speakerId, sourceSpeakerId),
+        eq(assets.purpose, sourcePurpose), eq(assets.current, true),
+      )).limit(1)),
+      linkedCompletions.length === 0
+        ? Effect.succeed([] as readonly (typeof taskCompletions.$inferSelect)[])
+        : database(() => db.select().from(taskCompletions).where(and(
+          eq(taskCompletions.eventId, input.eventId),
+          inArray(taskCompletions.id, linkedCompletions.map((completion) => completion.id)),
+        ))),
+      database(() => db.select({ version: speakers.version }).from(speakers).where(and(
+        eq(speakers.eventId, input.eventId), eq(speakers.id, sourceSpeakerId),
+      )).limit(1)),
+    ]);
+    const racedCurrent = currentRows[0];
+    if (!racedCurrent || racedCurrent.id !== input.expectedCurrentAssetId || racedCurrent.version !== input.expectedCurrentVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Content changed; reload before restoring this version" }));
+    }
+    const currentCompletionById = new Map(currentCompletionRows.map((completion) => [completion.id, completion]));
+    const completionChanged = linkedCompletions.some((completion) => {
+      const latest = currentCompletionById.get(completion.id);
+      return !latest || latest.version !== completion.version
+        || typeof latest.data !== "object" || latest.data === null || Array.isArray(latest.data)
+        || Reflect.get(latest.data, "assetId") !== current.id;
+    });
+    if (completionChanged) {
+      return yield* Effect.fail(new Conflict({ message: "A linked task completion changed; reload before restoring this version" }));
+    }
+    if (sourcePurpose === "headshot" && currentSpeakerRows[0]?.version !== input.expectedSpeakerVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Speaker profile changed; reload before restoring this headshot" }));
+    }
+    return yield* Effect.fail(committed.left);
+  }
+  return result;
+});
+
+export const downloadContent = (input: DownloadContentInput): Effect.Effect<DownloadContentOutput, AppError, Db | CurrentUser | Authorizer | Files> => Effect.gen(function* () {
+  yield* authorizeAssetActor(input.eventId, input.assetId, "content:read");
+  const [asset] = yield* loadContentAssets(input.eventId, input.assetId);
+  if (!asset) return yield* Effect.fail(new NotFound({ entity: "content asset", id: input.assetId }));
+  const { get } = yield* Files;
+  const object = yield* get(assetKey(input.eventId, input.assetId));
+  if (!object) return yield* Effect.fail(new NotFound({ entity: "content object", id: input.assetId }));
+  const bytes = new Uint8Array(yield* fileEffect(() => object.arrayBuffer()));
+  return { asset, contentBase64: encodeBase64(bytes) };
+});
+
 export const getPublicSpeakers = (input: PublicSpeakersInput): Effect.Effect<PublicSpeakerGallery, AppError, Db | Files> => Effect.gen(function* () {
   const { db } = yield* Db;
   const [event] = yield* database(() => db.select().from(events).where(eq(events.slug, input.eventSlug)).limit(1));
   if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventSlug }));
-  const [rows, acceptanceRows] = yield* Effect.all([
-    database(() => db.select({ speaker: speakers, asset: assets, acceptance: acceptanceEvents }).from(speakers).innerJoin(acceptanceEvents, and(eq(acceptanceEvents.eventId, speakers.eventId), eq(acceptanceEvents.primarySpeakerId, speakers.id), eq(acceptanceEvents.type, "accepted"))).innerJoin(speakerProvisioning, and(eq(speakerProvisioning.eventId, acceptanceEvents.eventId), eq(speakerProvisioning.acceptanceEventId, acceptanceEvents.id), eq(speakerProvisioning.status, "provisioned"))).leftJoin(assets, and(eq(assets.eventId, speakers.eventId), eq(assets.id, speakers.headshotAssetId))).where(and(eq(speakers.eventId, event.id), eq(speakers.visible, true))).orderBy(asc(speakers.displayName), asc(speakers.id))),
-    database(() => db.select({ id: acceptanceEvents.id, submissionId: acceptanceEvents.submissionId, type: acceptanceEvents.type }).from(acceptanceEvents).where(eq(acceptanceEvents.eventId, event.id)).orderBy(desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id))),
+  const [rows, provisionedSpeakerIds, linkedSpeakerRows] = yield* Effect.all([
+    database(() => db.select({ speaker: speakers, asset: assets }).from(speakers)
+      .leftJoin(assets, and(eq(assets.eventId, speakers.eventId), eq(assets.id, speakers.headshotAssetId)))
+      .where(and(eq(speakers.eventId, event.id), eq(speakers.visible, true)))
+      .orderBy(asc(speakers.displayName), asc(speakers.id))),
+    eligibleProvisionedSpeakerIds([event.id]),
+    database(() => db.select({ speakerId: submissionSpeakers.speakerId }).from(submissionSpeakers)
+      .where(eq(submissionSpeakers.eventId, event.id))),
   ]);
-  const latestBySubmission = new Map<string, (typeof acceptanceRows)[number]>();
-  for (const acceptance of acceptanceRows) {
-    if (!latestBySubmission.has(acceptance.submissionId)) {
-      latestBySubmission.set(acceptance.submissionId, acceptance);
-    }
-  }
+  const linkedSpeakerIds = new Set(linkedSpeakerRows.map((row) => row.speakerId));
   const { get } = yield* Files;
   const publicSpeakers = yield* Effect.forEach(rows.filter((row) =>
-    latestBySubmission.get(row.acceptance.submissionId)?.id === row.acceptance.id
+    provisionedSpeakerIds.has(row.speaker.id) || !linkedSpeakerIds.has(row.speaker.id)
   ), (row) => Effect.gen(function* () {
     let headshotUrl: string | null = null;
     if (row.asset && ["image/jpeg", "image/png", "image/webp"].includes(row.asset.contentType)) {

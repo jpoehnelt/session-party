@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ClaimSpeakerOutput,
+  ContentLibrary,
   PortalDashboard,
   PortalEvent,
   PortalResource,
@@ -39,6 +40,7 @@ import { path as dashboardPath, OrganizerDashboardContent } from "./organizer-da
 import { path as resourcesPath, OrganizerResourcesContent } from "./organizer-resources";
 import { filterSpeakerDirectory, path as speakersPath, OrganizerSpeakersContent } from "./organizer-speakers";
 import { path as tasksPath, OrganizerTasksContent } from "./organizer-tasks";
+import { buildStoredZip, path as contentPath, OrganizerContentLibrary } from "./organizer-content";
 import { layout as embedLayout, path as embedPath, PublicSpeakerEmbedContent } from "./public-speakers";
 import {
   allowlistedEmbedUrl,
@@ -74,6 +76,8 @@ const task: PortalTaskDefinition = {
   dueAt: 1_785_000_000_000,
   order: 1,
   version: 3,
+  targetMode: "all",
+  speakerIds: [],
 };
 
 const resource: PortalResource = {
@@ -98,6 +102,8 @@ const profile = {
   headshotAssetId: null,
   links: [{ label: "Website", url: "https://example.com/river" }],
   visible: true,
+  contactEmail: "river@example.com",
+  workflowStatus: "Invited",
   version: 5,
   pendingSyncFields: [],
 } as const;
@@ -190,13 +196,56 @@ const directory: SpeakerDirectory = {
   speakers: [{
     speaker: profile,
     submission: snapshot.submission,
+    source: "accepted",
     acceptanceEventId: "acceptance-1",
     provisioningId: "provisioning-1",
     provisioningStatus: "pending",
     provisioningVersion: 2,
     provisionedAt: null,
+    sessions: [],
     readiness: snapshot.readiness,
     latestContact: null,
+  }],
+};
+
+const contentLibrary: ContentLibrary = {
+  event,
+  assets: [{
+    id: "asset-current",
+    eventId: event.id,
+    filename: "slides.pdf",
+    contentType: "application/pdf",
+    size: 4096,
+    purpose: "slides",
+    version: 2,
+    speakerId: profile.id,
+    speakerName: profile.displayName,
+    speakerVersion: profile.version,
+    sessionTitles: ["The calm show call"],
+    versionCount: 2,
+    current: true,
+    supersedesAssetId: "asset-history",
+    restoredFromAssetId: null,
+    uploadedAt: 1_785_000_000_000,
+    comments: [{ id: "comment-1", authorName: "Organizer", body: "Please add sources.", createdAt: 1_785_000_001_000 }],
+  }, {
+    id: "asset-history",
+    eventId: event.id,
+    filename: "slides-draft.pdf",
+    contentType: "application/pdf",
+    size: 2048,
+    purpose: "slides",
+    version: 1,
+    speakerId: profile.id,
+    speakerName: profile.displayName,
+    speakerVersion: profile.version,
+    sessionTitles: ["The calm show call"],
+    versionCount: 2,
+    current: false,
+    supersedesAssetId: null,
+    restoredFromAssetId: null,
+    uploadedAt: 1_784_000_000_000,
+    comments: [],
   }],
 };
 
@@ -238,6 +287,7 @@ describe("portal route registration", () => {
     expect(dashboardPath).toBe("/e/:eventSlug/dashboard");
     expect(tasksPath).toBe("/e/:eventSlug/tasks");
     expect(resourcesPath).toBe("/e/:eventSlug/resources");
+    expect(contentPath).toBe("/e/:eventSlug/content");
     expect(embedPath).toBe("/embed/:eventSlug/speakers");
     expect(embedLayout).toBe("bare");
   });
@@ -414,7 +464,7 @@ describe("speaker portal content", () => {
     expect(markup).toContain("Speaker production guide");
     expect(markup).toContain("sandbox=");
     expect(markup).toContain("Save profile");
-    expect(markup).toContain("Up to 10 MiB with the current upload transport");
+    expect(markup).toContain("headshots up to 10 MiB, slides up to 100 MiB, and documents up to 25 MiB");
   });
 
   it("offers incomplete linked forms without bypassing their completion prerequisite", () => {
@@ -539,16 +589,21 @@ describe("speaker portal content", () => {
       contentBase64: "QQ==",
     });
   });
-  it("rejects files over 10 MiB before reading or encoding them", async () => {
+  it("applies purpose-specific upload limits before reading or encoding files", async () => {
     const arrayBuffer = vi.fn();
     const file = {
-      size: PORTAL_UPLOAD_MAX_BYTES + 1,
+      size: PORTAL_UPLOAD_MAX_BYTES.headshot + 1,
       arrayBuffer,
     } as unknown as File;
-    await expect(fileAsBase64(file)).rejects.toThrow(
-      "File exceeds 10 MiB with the current upload transport",
+    await expect(fileAsBase64(file, "headshot")).rejects.toThrow(
+      "File exceeds 10 MiB for headshot",
     );
     expect(arrayBuffer).not.toHaveBeenCalled();
+    const slide = {
+      size: PORTAL_UPLOAD_MAX_BYTES.headshot + 1,
+      arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([65]).buffer),
+    } as unknown as File;
+    await expect(fileAsBase64(slide, "slides")).resolves.toBe("QQ==");
   });
 
 });
@@ -582,6 +637,28 @@ describe("organizer content and workflows", () => {
     expect(dashboardMarkup).toContain("Log contact");
   });
 
+  it("renders direct speaker creation, CSV import, workflow editing, messaging, and headshot controls", () => {
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null,
+      createElement(OrganizerSpeakersContent, {
+        directory,
+        onProvision: noop,
+        onVisibility: noop,
+        onCreate: noop,
+        onUpdate: noop,
+        onImportCsv: noop,
+        onMessage: noop,
+        onUploadHeadshot: noop,
+      }),
+    ));
+    expect(markup).toContain("Add speaker directly");
+    expect(markup).toContain("CSV import");
+    expect(markup).toContain("Workflow status");
+    expect(markup).toContain("Send invites");
+    expect(markup).toContain("Remind outstanding");
+    expect(markup).toContain("Replace headshot");
+    expect(markup).toContain("Edit profile");
+  });
+
   it("filters a large speaker directory by search text and operational state", () => {
     const readySpeaker = {
       ...directory.speakers[0]!,
@@ -596,6 +673,8 @@ describe("organizer content and workflows", () => {
     expect(filterSpeakerDirectory(speakers, "", "ready")).toEqual([readySpeaker]);
     expect(filterSpeakerDirectory(speakers, "", "unprovisioned")).toEqual([directory.speakers[0]]);
     expect(filterSpeakerDirectory(speakers, "", "hidden")).toEqual([readySpeaker]);
+    expect(filterSpeakerDirectory(speakers, "", "all", "Invited")).toHaveLength(2);
+    expect(filterSpeakerDirectory(speakers, "", "all", "Ready")).toHaveLength(0);
   });
 
   it("caps the rendered speaker table at 25 rows and exposes pagination", () => {
@@ -626,7 +705,7 @@ describe("organizer content and workflows", () => {
     await provisionSpeaker(event.id, {
       eventId: event.id,
       speakerId: profile.id,
-      provisioningId: directory.speakers[0]!.provisioningId,
+      provisioningId: directory.speakers[0]!.provisioningId!,
       expectedVersion: directory.speakers[0]!.provisioningVersion,
     });
     await updateSpeakerPublication(event.id, {
@@ -676,10 +755,36 @@ describe("organizer content and workflows", () => {
     expect(resourceMarkup).toContain("Speaker production guide");
   });
 
+  it("renders a filterable content library with metadata, comments, history restore, and ZIP download", () => {
+    const markup = renderToStaticMarkup(createElement(OrganizerContentLibrary, {
+      library: contentLibrary,
+      onComment: noop,
+      onRestore: noop,
+      onDownload: noop,
+      onDownloadZip: noop,
+    }));
+    expect(markup).toContain("Speaker content");
+    expect(markup).toContain("River Okafor");
+    expect(markup).toContain("slides.pdf");
+    expect(markup).toContain("application/pdf");
+    expect(markup).toContain("Please add sources.");
+    expect(markup).toContain("Download selected ZIP");
+    expect(markup).toContain("All history");
+
+    const archive = buildStoredZip([
+      { name: "one.txt", bytes: new TextEncoder().encode("one") },
+      { name: "two.txt", bytes: new TextEncoder().encode("two") },
+    ]);
+    expect([...archive.slice(0, 4)]).toEqual([0x50, 0x4b, 0x03, 0x04]);
+    expect([...archive.slice(-22, -18)]).toEqual([0x50, 0x4b, 0x05, 0x06]);
+    expect(new TextDecoder().decode(archive)).toContain("one.txt");
+    expect(new TextDecoder().decode(archive)).toContain("two.txt");
+  });
+
   it("uses versioned organizer task and resource request bodies", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ok({}));
     vi.stubGlobal("fetch", fetchMock);
-    const taskCreate = { eventId: event.id, name: task.name, description: task.description, kind: task.kind, formId: task.formId, dueAt: task.dueAt, order: task.order };
+    const taskCreate = { eventId: event.id, name: task.name, description: task.description, kind: task.kind, formId: task.formId, dueAt: task.dueAt, order: task.order, speakerIds: [] };
     await createTask(event.id, taskCreate);
     await updateTask(event.id, { ...taskCreate, taskId: task.id, expectedVersion: task.version });
     await deleteTask(event.id, { eventId: event.id, taskId: task.id, expectedVersion: task.version });

@@ -7,17 +7,28 @@ import {
 } from "@/features/submit/schema";
 import {
   ClaimSpeakerOutput,
+  ContentAsset,
+  ContentComment,
+  ContentLibrary,
   PortalDashboard,
   PortalSnapshot,
   PortalTaskDefinitions,
   PublicSpeakerGallery,
   SpeakerDirectory,
   PortalResources,
+  DownloadContentOutput,
+  ImportSpeakersCsvOutput,
+  SendSpeakerMessagesOutput,
+  SpeakerProfile,
+  type AddContentCommentInput,
+  type CreateManagedSpeakerInput,
   type CreateResourceInput,
   type CreateTaskInput,
   type ClaimSpeakerInput,
   type DeleteResourceInput,
   type DeleteTaskInput,
+  type DownloadContentInput,
+  type ImportSpeakersCsvInput,
   type LogSpeakerContactInput,
   type PortalEvent,
   type SetTaskCompletionInput,
@@ -27,6 +38,10 @@ import {
   type UpdateTaskInput,
   type UploadPortalAssetInput,
   type ProvisionSpeakerInput,
+  type RestoreContentVersionInput,
+  type SendSpeakerMessagesInput,
+  type UpdateManagedSpeakerInput,
+  type UploadManagedSpeakerHeadshotInput,
 } from "../schema";
 
 const api = "/api/v1";
@@ -75,6 +90,9 @@ export const getTaskDefinitions = (eventSlug: string) =>
 
 export const getPortalResources = (eventSlug: string) =>
   loadOrganizerRoute(eventSlug, "/resources", PortalResources);
+
+export const getContentLibrary = (eventSlug: string) =>
+  loadOrganizerRoute(eventSlug, "/content", ContentLibrary);
 
 export const getPublicSpeakerGallery = (eventSlug: string) =>
   apiFetch(`${api}/public/events/${segment(eventSlug)}/speakers`, { schema: PublicSpeakerGallery });
@@ -128,6 +146,45 @@ export function uploadSpeakerAsset(eventSlug: string, input: UploadPortalAssetIn
 export function createTask(eventId: string, input: CreateTaskInput) {
   const body = requestBody(input, "eventId");
   return apiFetch<unknown>(`${api}/events/${segment(eventId)}/portal/tasks`, { method: "POST", body });
+}
+
+export function createManagedSpeaker(eventId: string, input: CreateManagedSpeakerInput) {
+  const body = requestBody(input, "eventId");
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/speakers`, { method: "POST", body, schema: SpeakerProfile });
+}
+
+export function updateManagedSpeaker(eventId: string, input: UpdateManagedSpeakerInput) {
+  const body = requestBody(input, "eventId", "speakerId");
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/speakers/${segment(input.speakerId)}`, { method: "PUT", body, schema: SpeakerProfile });
+}
+
+export function importSpeakersCsv(eventId: string, input: ImportSpeakersCsvInput) {
+  const body = requestBody(input, "eventId");
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/speakers/import`, { method: "POST", body, schema: ImportSpeakersCsvOutput });
+}
+
+export function sendSpeakerMessages(eventId: string, input: SendSpeakerMessagesInput) {
+  const body = requestBody(input, "eventId");
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/speakers/messages`, { method: "POST", body, schema: SendSpeakerMessagesOutput });
+}
+
+export function addContentComment(eventId: string, input: AddContentCommentInput) {
+  const body = requestBody(input, "eventId", "assetId");
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/content/${segment(input.assetId)}/comments`, { method: "POST", body, schema: ContentComment });
+}
+
+export function restoreContentVersion(eventId: string, input: RestoreContentVersionInput) {
+  const body = requestBody(input, "eventId", "assetId");
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/content/${segment(input.assetId)}/restore`, { method: "POST", body, schema: ContentAsset });
+}
+
+export function downloadContent(eventId: string, input: DownloadContentInput) {
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/content/${segment(input.assetId)}/download`, { schema: DownloadContentOutput });
+}
+
+export function uploadManagedSpeakerHeadshot(eventId: string, input: UploadManagedSpeakerHeadshotInput) {
+  const body = requestBody(input, "eventId", "speakerId");
+  return apiFetch(`${api}/events/${segment(eventId)}/portal/speakers/${segment(input.speakerId)}/headshot`, { method: "POST", body, schema: ContentAsset });
 }
 
 export function updateTask(eventId: string, input: UpdateTaskInput) {

@@ -310,7 +310,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -325,7 +325,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -486,7 +486,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -584,7 +584,7 @@ describe("baseline migration parity", () => {
   it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     await applyOneByOne(db, migrations.slice(0, 10));
     const now = 1_700_000_000_000;
     await db.batch([
@@ -625,6 +625,38 @@ describe("baseline migration parity", () => {
     await db.prepare("UPDATE review_assignments SET status = 'recused', recusal_reason = 'Conflict', recused_at = ?, version = 2, updated_at = ? WHERE id = 'recusal-assignment-old'").bind(now + 1, now + 1).run();
     await db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-new', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 2, now + 2).run();
     await expect(db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-duplicate', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 3, now + 3).run()).rejects.toThrow(/review_assignments/);
+    await assertDatabaseIntegrity(db);
+  });
+
+  it("repairs duplicate current asset lineages before enforcing uniqueness", async () => {
+    const migrations = testMigrations();
+    const db = (env as TestEnv).MIGRATION_DB;
+    expect(migrations).toHaveLength(13);
+    const lineageMigration = migrations.find(({ name }) => name.startsWith("0012_groovy_epoch"));
+    if (!lineageMigration) throw new Error("Asset-lineage migration is unavailable");
+    await applyOneByOne(db, migrations.filter((migration) => migration !== lineageMigration));
+    await db.prepare("DROP INDEX IF EXISTS assets_current_lineage_unique").run();
+    const now = 1_700_000_000_000;
+    await db.batch([
+      db.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('lineage-user', 'lineage@example.com', 'Lineage User', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('lineage-event', 'lineage-event', 'Lineage Event', 'UTC', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO speakers (id, event_id, display_name, workflow_status, links, visible, version, created_at, updated_at) VALUES ('lineage-speaker', 'lineage-event', 'Lineage Speaker', 'Ready', '[]', 1, 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO assets (id, event_id, uploader_user_id, speaker_id, purpose, filename, content_type, size, supersedes_asset_id, restored_from_asset_id, current, version, created_at, updated_at) VALUES ('lineage-old', 'lineage-event', 'lineage-user', 'lineage-speaker', 'slides', 'old.pdf', 'application/pdf', 10, NULL, NULL, 1, 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO assets (id, event_id, uploader_user_id, speaker_id, purpose, filename, content_type, size, supersedes_asset_id, restored_from_asset_id, current, version, created_at, updated_at) VALUES ('lineage-new', 'lineage-event', 'lineage-user', 'lineage-speaker', 'slides', 'new.pdf', 'application/pdf', 20, 'lineage-old', NULL, 1, 2, ?, ?)").bind(now + 1, now + 1),
+    ]);
+
+    const repairQuery = lineageMigration.queries.find((query) => query.includes("UPDATE `assets`") && query.includes("`preferred`"));
+    const indexQuery = lineageMigration.queries.find((query) => query.includes("CREATE UNIQUE INDEX `assets_current_lineage_unique`"));
+    if (!repairQuery || !indexQuery) throw new Error("Asset-lineage repair statements are unavailable");
+    await db.batch([db.prepare(repairQuery), db.prepare(indexQuery)]);
+    expect((await db.prepare(
+      "SELECT id, current FROM assets WHERE event_id = 'lineage-event' ORDER BY id",
+    ).all()).results).toEqual([
+      { id: "lineage-new", current: 1 },
+      { id: "lineage-old", current: 0 },
+    ]);
+    await expect(db.prepare("UPDATE assets SET current = 1 WHERE id = 'lineage-old'").run())
+      .rejects.toThrow(/assets_current_lineage_unique|UNIQUE constraint failed/);
     await assertDatabaseIntegrity(db);
   });
 });

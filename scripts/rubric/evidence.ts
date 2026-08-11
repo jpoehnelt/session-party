@@ -195,8 +195,8 @@ export const evidencePlan = {
   "CNT-04": [gap("Replacing a task-linked asset removes the old object instead of retaining browsable versions.")],
   "CNT-05": [gap("Uploaded files have no cross-role comment thread.")],
   "CNT-06": [
-    test(portalRoute, "rejects files over 10 MiB before reading or encoding them"),
-    test(portalService, "enforces the decoded 10 MiB transport limit for every asset kind"),
+    test(portalRoute, "applies purpose-specific upload limits before reading or encoding files"),
+    test(portalService, "accepts a decoded 10 MiB upload for every asset kind"),
   ],
   "CNT-07": [
     test(portalService, "builds an owner-only speaker chase from missing, overdue, and confirm tasks"),

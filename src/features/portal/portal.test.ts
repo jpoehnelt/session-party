@@ -5,18 +5,22 @@ import type { ServerMessage } from "contracts/protocol";
 import {
   airtableOutbox,
   airtablePendingEdits,
+  assetComments,
   assets,
   auditLog,
   domainChanges,
   eventMembers,
   idempotencyRecords,
   integrations,
+  mailDeliveries,
+  mailDeliverySnapshots,
   pages,
   speakers,
   speakerContacts,
   submissionSpeakers,
   submissions,
   taskCompletions,
+  taskAssignments,
   tasks,
 } from "contracts/schema";
 import { and, eq } from "drizzle-orm";
@@ -31,21 +35,33 @@ import {
   CurrentUser as CurrentUserTag,
   type Db,
   type Files,
+  type MailQueue,
   Rooms,
 } from "@/server/services";
 import { operations } from "./operations";
 import {
   claimSpeaker,
+  addContentComment,
+  createManagedSpeaker,
   createPortalResource,
   createPortalTask,
   deletePortalResource,
   deletePortalTask,
   getPortalDashboard,
   getPortalSnapshot,
+  getContentLibrary,
   getSpeakerDirectory,
   logSpeakerContact,
+  importSpeakersCsv,
+  listPortalTasks,
   getPublicSpeakers,
   updateSpeakerProfile,
+  updateManagedSpeaker,
+  uploadManagedSpeakerHeadshot,
+  restoreContentVersion,
+  downloadContent,
+  sendSpeakerMessages,
+  enqueueAutomatedDueTaskReminders,
   provisionSpeaker,
   setTaskCompletion,
   updatePortalResource,
@@ -56,7 +72,7 @@ import {
 import { listEventAccess } from "@/features/events/service";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
-type PortalRequirements = AirtableSync | Authorizer | CurrentUser | Db | Files | Rooms;
+type PortalRequirements = AirtableSync | Authorizer | CurrentUser | Db | Files | MailQueue | Rooms;
 
 const expiresAt = Date.UTC(2100, 0, 1);
 const principal = (userId: string): BrowserSessionPrincipal => ({
@@ -269,6 +285,44 @@ describe("portal service", () => {
       provisioningStatus: "provisioned",
       speaker: { id: setup.speakerId },
     });
+  });
+
+  it("claims a directly managed speaker by normalized email without acceptance provisioning", async () => {
+    const setup = await fixture();
+    const managed = await runAs(owner, createManagedSpeaker({
+      eventId: setup.eventId,
+      displayName: "Direct portal speaker",
+      contactEmail: otherUser.email.toUpperCase(),
+      title: "Director",
+      company: "Direct Co",
+      bio: "Invited outside the CFP.",
+      workflowStatus: "Invited",
+      visible: true,
+      idempotencyKey: `managed-claim-create-${setup.eventId}`,
+    }));
+    const input = {
+      eventId: setup.eventSlug,
+      idempotencyKey: `managed-claim-${setup.eventId}`,
+    } as const;
+
+    const claimed = await runAs(otherUser, claimSpeaker(input));
+    expect(claimed).toEqual({
+      eventId: setup.eventId,
+      speakerId: managed.id,
+      acceptanceEventId: null,
+      provisioningId: null,
+      speakerVersion: 2,
+      provisioningVersion: 0,
+      provisioningStatus: "provisioned",
+    });
+    await expect(runAs(otherUser, claimSpeaker(input))).resolves.toEqual(claimed);
+    await expect(runAs(otherUser, getPortalSnapshot({ eventId: setup.eventSlug }))).resolves.toMatchObject({
+      speaker: { id: managed.id },
+      submission: null,
+      provisioningStatus: "provisioned",
+    });
+    expect((await runAs(otherUser, listEventAccess())).find(({ event }) => event.id === setup.eventId))
+      .toMatchObject({ memberRole: null, speakerPortal: true });
   });
 
   it("preserves organizer membership while linking and provisioning the same user as a speaker", async () => {
@@ -637,8 +691,8 @@ describe("portal service", () => {
     const snapshot = await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }));
     expect(snapshot.speaker.headshotAssetId).toBe(replacement.asset.id);
     expect(snapshot.assets.filter(({ purpose }) => purpose === "headshot")).toHaveLength(1);
-    expect(await env.FILES.get(`portal/${setup.eventId}/${result.asset.id}`)).toBeNull();
-    expect(await drizzle(env.DB).select().from(assets).where(eq(assets.id, result.asset.id))).toHaveLength(0);
+    expect(await env.FILES.get(`portal/${setup.eventId}/${result.asset.id}`)).not.toBeNull();
+    expect(await drizzle(env.DB).select().from(assets).where(eq(assets.id, result.asset.id))).toMatchObject([{ current: false }]);
     const [completion] = await drizzle(env.DB)
       .select()
       .from(taskCompletions)
@@ -650,7 +704,7 @@ describe("portal service", () => {
     expect(await drizzle(env.DB).select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, setup.eventId))).toHaveLength(2);
   });
 
-  it("enforces the decoded 10 MiB transport limit for every asset kind", async () => {
+  it("accepts a decoded 10 MiB upload for every asset kind", async () => {
     const setup = await fixture();
     const uploadTasks = await Promise.all([
       runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Headshot", description: null, kind: "upload", formId: null, dueAt: null, order: 1 })),
@@ -707,7 +761,7 @@ describe("portal service", () => {
     }
   });
 
-  it("rejects 10 MiB plus one before Files.put without durable side effects", async () => {
+  it("rejects a headshot over 10 MiB before Files.put without durable side effects", async () => {
     const setup = await fixture();
     const task = await runAs(owner, createPortalTask({
       eventId: setup.eventId,
@@ -728,8 +782,6 @@ describe("portal service", () => {
     const contentBase64 = base64Payload(10 * 1_024 * 1_024 + 1);
     const cases = [
       { purpose: "headshot" as const, filename: "speaker.jpg", contentType: "image/jpeg", expectedVersion: 1 },
-      { purpose: "slides" as const, filename: "session.pdf", contentType: "application/pdf", expectedVersion: 0 },
-      { purpose: "document" as const, filename: "brief.doc", contentType: "application/msword", expectedVersion: 0 },
     ];
     try {
       for (const [index, upload] of cases.entries()) {
@@ -919,6 +971,339 @@ describe("portal service", () => {
     expect(await drizzle(env.DB).select().from(pages).where(eq(pages.id, resource.id))).toHaveLength(0);
   });
 
+  it("adds, edits, filters, and imports managed speaker workflow records", async () => {
+    const setup = await fixture();
+    const createInput = {
+      eventId: setup.eventId,
+      displayName: "Manual Speaker",
+      contactEmail: "manual@example.com",
+      title: "Director",
+      company: "Example Co",
+      bio: "Original biography",
+      workflowStatus: "Invited",
+      visible: false,
+      idempotencyKey: `manual-create-${setup.eventId}`,
+    } as const;
+    const created = await runAs(owner, createManagedSpeaker(createInput));
+    await expect(runAs(owner, createManagedSpeaker(createInput))).resolves.toEqual(created);
+    expect(created).toMatchObject({ contactEmail: "manual@example.com", workflowStatus: "Invited", visible: false, version: 1 });
+    const racedCreates = await Promise.all([
+      runEither(owner, createManagedSpeaker({ ...createInput, contactEmail: "RACE@example.com", idempotencyKey: `race-a-${setup.eventId}` })),
+      runEither(owner, createManagedSpeaker({ ...createInput, contactEmail: "race@example.com", idempotencyKey: `race-b-${setup.eventId}` })),
+    ]);
+    expect(racedCreates.filter((result) => result._tag === "Right")).toHaveLength(1);
+    expect(racedCreates.filter((result) => result._tag === "Left" && result.left._tag === "Conflict")).toHaveLength(1);
+    const updated = await runAs(owner, updateManagedSpeaker({
+      eventId: setup.eventId,
+      speakerId: created.id,
+      expectedVersion: created.version,
+      displayName: "Manual Speaker Updated",
+      contactEmail: "manual@example.com",
+      title: "Executive Director",
+      company: "Example Co",
+      bio: "Organizer-edited biography",
+      workflowStatus: "Ready",
+      visible: true,
+    }));
+    expect(updated).toMatchObject({ displayName: "Manual Speaker Updated", bio: "Organizer-edited biography", workflowStatus: "Ready", version: 2 });
+    await expectFailure(owner, updateManagedSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      expectedVersion: 1,
+      displayName: "Accepted speaker overwrite",
+      contactEmail: speakerUser.email,
+      title: null,
+      company: null,
+      bio: "This must remain authoritative.",
+      workflowStatus: "Ready",
+      visible: true,
+    }), "Conflict");
+    const db = drizzle(env.DB);
+    await db.update(speakers).set({ contactEmail: "accepted-authoritative@example.com" })
+      .where(and(eq(speakers.eventId, setup.eventId), eq(speakers.id, setup.speakerId)));
+
+    const csv = [
+      "name,email,title,company,bio,status,visible",
+      "Manual Speaker CSV,manual@example.com,VP,Example Co,Imported biography,Confirmed,true",
+      "Second Speaker,second@example.com,Engineer,Second Co,Second biography,Invited,false",
+      "Accepted Override,accepted-authoritative@example.com,Director,Wrong Co,Wrong biography,Ready,true",
+      "Missing Email,,Engineer,Nope,,Invited,true",
+    ].join("\n");
+    const input = { eventId: setup.eventId, csv, idempotencyKey: `speaker-csv-${setup.eventId}` } as const;
+    const imported = await runAs(owner, importSpeakersCsv(input));
+    expect(imported).toMatchObject({ createdCount: 1, updatedCount: 1, skippedCount: 2, idempotent: false });
+    await expect(runAs(owner, importSpeakersCsv(input))).resolves.toMatchObject({ idempotent: true });
+    const directory = await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }));
+    expect(directory.speakers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "manual", speaker: expect.objectContaining({ contactEmail: "manual@example.com", workflowStatus: "Confirmed" }) }),
+      expect.objectContaining({ source: "manual", speaker: expect.objectContaining({ contactEmail: "second@example.com", workflowStatus: "Invited" }) }),
+    ]));
+  });
+
+  it("commits evidence only for the winning managed-speaker mutation", async () => {
+    const setup = await fixture();
+    const managed = await runAs(owner, createManagedSpeaker({
+      eventId: setup.eventId, displayName: "Race speaker", contactEmail: "managed-race@example.com",
+      title: null, company: null, bio: null, workflowStatus: "Invited", visible: false,
+      idempotencyKey: `managed-race-create-${setup.eventId}`,
+    }));
+    const update = (displayName: string) => updateManagedSpeaker({
+      eventId: setup.eventId,
+      speakerId: managed.id,
+      expectedVersion: managed.version,
+      displayName,
+      contactEmail: "managed-race@example.com",
+      title: null,
+      company: null,
+      bio: displayName,
+      workflowStatus: "Ready",
+      visible: true,
+    });
+    const updateRace = await Promise.all([
+      runEither(owner, update("Race winner A")),
+      runEither(owner, update("Race winner B")),
+    ]);
+    expect(updateRace.filter((result) => result._tag === "Right")).toHaveLength(1);
+    expect(updateRace.filter((result) => result._tag === "Left" && result.left._tag === "Conflict")).toHaveLength(1);
+    const db = drizzle(env.DB);
+    expect(await db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, setup.eventId),
+      eq(auditLog.action, "portal.speaker.managed.updated"),
+      eq(auditLog.resourceId, managed.id),
+    ))).toHaveLength(1);
+
+    const [current] = await db.select().from(speakers).where(eq(speakers.id, managed.id));
+    if (!current) throw new Error("Expected managed speaker after update race");
+    const importKeyA = `managed-import-race-a-${setup.eventId}`;
+    const importKeyB = `managed-import-race-b-${setup.eventId}`;
+    const csv = (name: string) => [
+      "name,email,title,company,bio,status,visible",
+      `${name},managed-race@example.com,,,${name},Ready,true`,
+    ].join("\n");
+    const importRace = await Promise.all([
+      runEither(owner, importSpeakersCsv({ eventId: setup.eventId, csv: csv("Import A"), idempotencyKey: importKeyA })),
+      runEither(owner, importSpeakersCsv({ eventId: setup.eventId, csv: csv("Import B"), idempotencyKey: importKeyB })),
+    ]);
+    expect(importRace.filter((result) => result._tag === "Right")).toHaveLength(1);
+    expect(importRace.filter((result) => result._tag === "Left" && result.left._tag === "Conflict")).toHaveLength(1);
+    const losingIndex = importRace.findIndex((result) => result._tag === "Left");
+    const losingInput = losingIndex === 0
+      ? { eventId: setup.eventId, csv: csv("Import A"), idempotencyKey: importKeyA }
+      : { eventId: setup.eventId, csv: csv("Import B"), idempotencyKey: importKeyB };
+    await expectFailure(owner, importSpeakersCsv(losingInput), "Conflict");
+    const importRecords = await db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, setup.eventId),
+      eq(idempotencyRecords.operationId, "portal.importSpeakersCsv"),
+    ));
+    expect(importRecords).toHaveLength(2);
+    expect(importRecords.filter((record) => record.status === "completed")).toHaveLength(1);
+    expect(importRecords.filter((record) => record.status === "in_progress" && record.responseBody === null)).toHaveLength(1);
+  });
+
+  it("assigns one due task to multiple selected speakers without exposing it to others", async () => {
+    const setup = await fixture();
+    const selected = await runAs(owner, createManagedSpeaker({
+      eventId: setup.eventId, displayName: "Selected speaker", contactEmail: "selected@example.com",
+      title: null, company: null, bio: null, workflowStatus: "Invited", visible: false,
+      idempotencyKey: `selected-create-${setup.eventId}`,
+    }));
+    const excluded = await runAs(owner, createManagedSpeaker({
+      eventId: setup.eventId, displayName: "Excluded speaker", contactEmail: "excluded@example.com",
+      title: null, company: null, bio: null, workflowStatus: "Invited", visible: false,
+      idempotencyKey: `excluded-create-${setup.eventId}`,
+    }));
+    const task = await runAs(owner, createPortalTask({
+      eventId: setup.eventId, name: "Selected deliverable", description: null, kind: "upload", formId: null,
+      dueAt: Date.now() + 86_400_000, order: 1, speakerIds: [setup.speakerId, selected.id],
+    }));
+    expect(task).toMatchObject({ targetMode: "selected", speakerIds: [setup.speakerId, selected.id] });
+    const listed = await runAs(owner, listPortalTasks({ eventId: setup.eventId }));
+    expect(listed).toContainEqual(expect.objectContaining({ id: task.id, speakerIds: [setup.speakerId, selected.id] }));
+    const directory = await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }));
+    const readiness = new Map(directory.speakers.map((item) => [item.speaker.id, item.readiness]));
+    expect(readiness.get(setup.speakerId)?.tasksTotal).toBe(1);
+    expect(readiness.get(selected.id)?.tasksTotal).toBe(1);
+    expect(readiness.get(excluded.id)?.tasksTotal).toBe(0);
+    expect(await drizzle(env.DB).select().from(taskAssignments).where(eq(taskAssignments.taskId, task.id))).toHaveLength(2);
+
+    const selectedOnly = await runAs(owner, createPortalTask({
+      eventId: setup.eventId, name: "Private deliverable", description: null, kind: "upload", formId: null,
+      dueAt: null, order: 2, speakerIds: [selected.id],
+    }));
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId, speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId, expectedVersion: 1,
+    }));
+    await expectFailure(speakerUser, uploadPortalAsset({
+      eventId: setup.eventId, taskId: selectedOnly.id, purpose: "slides", filename: "private.pdf",
+      contentType: "application/pdf", contentBase64: "QQ==", expectedVersion: 0,
+      idempotencyKey: `private-upload-${setup.eventId}`,
+    }), "Forbidden");
+    expect(await drizzle(env.DB).select().from(assets).where(eq(assets.eventId, setup.eventId))).toHaveLength(0);
+  });
+
+  it("queues messages for accepted and directly managed portal speakers", async () => {
+    const setup = await fixture();
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId, speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId, expectedVersion: 1,
+    }));
+    const manual = await runAs(owner, createManagedSpeaker({
+      eventId: setup.eventId, displayName: "Reminder speaker", contactEmail: "reminder@example.com",
+      title: null, company: null, bio: null, workflowStatus: "Invited", visible: false,
+      idempotencyKey: `reminder-create-${setup.eventId}`,
+    }));
+    const runAt = new Date(Date.now() + 1_000);
+    await runAs(owner, createPortalTask({
+      eventId: setup.eventId, name: "Slides", description: null, kind: "upload", formId: null,
+      dueAt: runAt.getTime() - 60_000, order: 1, speakerIds: [setup.speakerId, manual.id],
+    }));
+    const inviteInput = {
+      eventId: setup.eventId, speakerIds: [setup.speakerId, manual.id], kind: "invite", idempotencyKey: `invite-${setup.eventId}`,
+    } as const;
+    await expect(runAs(owner, sendSpeakerMessages(inviteInput))).resolves.toMatchObject({ queuedCount: 2, skippedCount: 0, idempotent: false });
+    await expect(runAs(owner, sendSpeakerMessages(inviteInput))).resolves.toMatchObject({ queuedCount: 2, skippedCount: 0, idempotent: true });
+    await expect(runAs(owner, sendSpeakerMessages({
+      ...inviteInput, kind: "reminder", idempotencyKey: `manual-reminder-${setup.eventId}`,
+    }))).resolves.toMatchObject({ queuedCount: 2, skippedCount: 0 });
+    const automated = await Effect.runPromise(enqueueAutomatedDueTaskReminders(runAt).pipe(Effect.provide(AppLayer(env))));
+    expect(automated.runDate).toBe(runAt.toISOString().slice(0, 10));
+    expect(automated.queuedCount).toBeGreaterThanOrEqual(1);
+    await expect(Effect.runPromise(enqueueAutomatedDueTaskReminders(runAt).pipe(Effect.provide(AppLayer(env)))))
+      .resolves.toEqual({ queuedCount: 0, runDate: runAt.toISOString().slice(0, 10) });
+    const db = drizzle(env.DB);
+    expect((await db.select().from(mailDeliveries)).filter((delivery) => delivery.idempotencyKey.includes(`:${setup.eventId}:`))).toHaveLength(2);
+    expect(await db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.eventId, setup.eventId))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ recipientEmail: speakerUser.email }),
+    ]));
+    const snapshots = await db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.eventId, setup.eventId));
+    expect(snapshots.every((snapshot) => snapshot.renderedText?.includes(`/e/${setup.eventSlug}/portal`) === true)).toBe(true);
+    expect(snapshots.every((snapshot) => snapshot.renderedText?.includes(`/e/${setup.eventSlug}/speaker`) !== true)).toBe(true);
+  });
+
+  it("retains content history, supports cross-role comments, downloads, restores, and organizer profile edits", async () => {
+    const setup = await fixture();
+    const scheduledAt = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("insert into talks (id, event_id, submission_id, title, starts_at, duration_min, status, version, created_at, updated_at) values (?, ?, ?, 'Accepted talk', ?, 45, 'confirmed', 1, ?, ?)")
+        .bind(`portal-talk-${setup.eventId}`, setup.eventId, setup.submissionId, scheduledAt, scheduledAt, scheduledAt),
+      env.DB.prepare("insert into talk_speakers (id, event_id, talk_id, speaker_id, created_at) values (?, ?, ?, ?, ?)")
+        .bind(`portal-talk-speaker-${setup.eventId}`, setup.eventId, `portal-talk-${setup.eventId}`, setup.speakerId, scheduledAt),
+    ]);
+    await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
+    const task = await runAs(owner, createPortalTask({
+      eventId: setup.eventId, name: "Headshot", description: null, kind: "upload", formId: null, dueAt: null, order: 1,
+    }));
+    const first = await runAs(speakerUser, uploadPortalAsset({
+      eventId: setup.eventId, taskId: task.id, purpose: "headshot", filename: "first.png", contentType: "image/png",
+      contentBase64: "iVBORw0KGgo=", expectedVersion: 1, idempotencyKey: `history-first-${setup.eventId}`,
+    }));
+    const second = await runAs(speakerUser, uploadPortalAsset({
+      eventId: setup.eventId, taskId: task.id, purpose: "headshot", filename: "second.png", contentType: "image/png",
+      contentBase64: "iVBORw0KGgo=", expectedVersion: first.speaker.version, idempotencyKey: `history-second-${setup.eventId}`,
+    }));
+    await runAs(owner, addContentComment({
+      eventId: setup.eventId, assetId: second.asset.id, body: "Organizer review", idempotencyKey: `comment-owner-${setup.eventId}`,
+    }));
+    await runAs(speakerUser, addContentComment({
+      eventId: setup.eventId, assetId: second.asset.id, body: "Speaker response", idempotencyKey: `comment-speaker-${setup.eventId}`,
+    }));
+    await expectFailure(owner, addContentComment({
+      eventId: setup.eventId, assetId: second.asset.id, body: "   ", idempotencyKey: `comment-blank-${setup.eventId}`,
+    }), "Validation");
+    const beforeRestore = await runAs(owner, getContentLibrary({ eventId: setup.eventId }));
+    expect(beforeRestore.assets).toHaveLength(2);
+    expect(beforeRestore.assets.find((asset) => asset.id === second.asset.id)).toMatchObject({
+      current: true, version: 2, versionCount: 2, sessionTitles: ["Accepted talk"], comments: [
+      expect.objectContaining({ body: "Organizer review" }), expect.objectContaining({ body: "Speaker response" }),
+      ],
+    });
+    await expect(runAs(owner, downloadContent({ eventId: setup.eventId, assetId: first.asset.id }))).resolves.toMatchObject({
+      asset: { id: first.asset.id, current: false }, contentBase64: "iVBORw0KGgo=",
+    });
+    const restoreInput = {
+      eventId: setup.eventId,
+      assetId: first.asset.id,
+      expectedCurrentAssetId: second.asset.id,
+      expectedCurrentVersion: second.asset.version,
+      expectedSpeakerVersion: second.speaker.version,
+    } as const;
+    const restoreRace = await Promise.all([
+      runEither(owner, restoreContentVersion({ ...restoreInput, idempotencyKey: `restore-a-${setup.eventId}` })),
+      runEither(owner, restoreContentVersion({ ...restoreInput, idempotencyKey: `restore-b-${setup.eventId}` })),
+    ]);
+    expect(restoreRace.filter((result) => result._tag === "Right")).toHaveLength(1);
+    expect(restoreRace.filter((result) => result._tag === "Left" && result.left._tag === "Conflict")).toHaveLength(1);
+    const restoredResult = restoreRace.find((result) => result._tag === "Right");
+    if (!restoredResult || restoredResult._tag !== "Right") throw new Error("Expected one restore winner");
+    const restored = restoredResult.right;
+    expect(restored).toMatchObject({ current: true, version: 3, restoredFromAssetId: first.asset.id, supersedesAssetId: second.asset.id });
+    const currentProfile = (await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }))).speakers.find((item) => item.speaker.id === setup.speakerId)!.speaker;
+    const managedHeadshot = await runAs(owner, uploadManagedSpeakerHeadshot({
+      eventId: setup.eventId, speakerId: setup.speakerId, expectedVersion: currentProfile.version,
+      filename: "organizer.webp", contentType: "image/webp", contentBase64: "UklGRg==",
+      idempotencyKey: `managed-headshot-${setup.eventId}`,
+    }));
+    expect(managedHeadshot).toMatchObject({ current: true, purpose: "headshot", version: 4, supersedesAssetId: restored.id });
+    const library = await runAs(owner, getContentLibrary({ eventId: setup.eventId }));
+    expect(library.assets).toHaveLength(4);
+    expect(library.assets.filter((asset) => asset.current)).toEqual([expect.objectContaining({
+      id: managedHeadshot.id, versionCount: 4, sessionTitles: ["Accepted talk"],
+    })]);
+    expect(await env.FILES.get(`portal/${setup.eventId}/${first.asset.id}`)).not.toBeNull();
+    expect(await drizzle(env.DB).select().from(assetComments).where(eq(assetComments.assetId, second.asset.id))).toHaveLength(2);
+  });
+
+  it("rejects restore when a linked task completion changes before commit", async () => {
+    const setup = await fixture();
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId, speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId, expectedVersion: 1,
+    }));
+    const task = await runAs(owner, createPortalTask({
+      eventId: setup.eventId, name: "Slides", description: null, kind: "upload", formId: null,
+      dueAt: null, order: 1,
+    }));
+    const first = await runAs(speakerUser, uploadPortalAsset({
+      eventId: setup.eventId, taskId: task.id, purpose: "slides", filename: "first.pdf",
+      contentType: "application/pdf", contentBase64: "QQ==", expectedVersion: 0,
+      idempotencyKey: `restore-completion-first-${setup.eventId}`,
+    }));
+    const second = await runAs(speakerUser, uploadPortalAsset({
+      eventId: setup.eventId, taskId: task.id, purpose: "slides", filename: "second.pdf",
+      contentType: "application/pdf", contentBase64: "Qg==", expectedVersion: first.asset.version,
+      idempotencyKey: `restore-completion-second-${setup.eventId}`,
+    }));
+    const db = drizzle(env.DB);
+    const [completion] = await db.select().from(taskCompletions).where(and(
+      eq(taskCompletions.eventId, setup.eventId), eq(taskCompletions.taskId, task.id),
+    ));
+    if (!completion) throw new Error("Expected upload task completion");
+
+    await expectFailure(owner, restoreContentVersion({
+      eventId: setup.eventId,
+      assetId: first.asset.id,
+      expectedCurrentAssetId: second.asset.id,
+      expectedCurrentVersion: second.asset.version,
+      expectedSpeakerVersion: second.speaker.version,
+      idempotencyKey: `restore-completion-race-${setup.eventId}`,
+    }, {
+      beforeCommit: async () => {
+        await db.update(taskCompletions).set({
+          data: { assetId: first.asset.id, concurrent: true },
+          version: completion.version + 1,
+          updatedAt: new Date(),
+        }).where(and(eq(taskCompletions.eventId, setup.eventId), eq(taskCompletions.id, completion.id)));
+      },
+    }), "Conflict");
+    expect(await db.select().from(assets).where(and(
+      eq(assets.eventId, setup.eventId), eq(assets.current, true), eq(assets.speakerId, setup.speakerId),
+    ))).toEqual([expect.objectContaining({ id: second.asset.id })]);
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, setup.eventId), eq(domainChanges.eventType, "portal.asset.version.restored"),
+    ))).toHaveLength(0);
+  });
+
   it("publishes only visible accepted provisioned public speaker fields", async () => {
     const setup = await fixture();
     const db = drizzle(env.DB);
@@ -934,6 +1319,11 @@ describe("portal service", () => {
       updatedAt: integrationNow,
     });
     await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
+    const manual = await runAs(owner, createManagedSpeaker({
+      eventId: setup.eventId, displayName: "Managed keynote", contactEmail: "keynote@example.com",
+      title: "Keynote", company: "Session Party", bio: "Invited outside the CFP.",
+      workflowStatus: "Ready", visible: true, idempotencyKey: `public-manual-${setup.eventId}`,
+    }));
     const gallery = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
     expect(gallery.event).toEqual({
       id: setup.eventId,
@@ -947,7 +1337,7 @@ describe("portal service", () => {
       bannerAssetId: null,
       accentColor: null,
     });
-    expect(gallery.speakers).toEqual([{
+    expect(gallery.speakers).toEqual(expect.arrayContaining([{
       id: setup.speakerId,
       displayName: "Exact speaker",
       title: null,
@@ -955,7 +1345,7 @@ describe("portal service", () => {
       bio: null,
       headshotUrl: null,
       links: [],
-    }]);
+    }, expect.objectContaining({ id: manual.id, displayName: "Managed keynote" })]));
     await runAs(owner, updateSpeakerPublication({ eventId: setup.eventId, speakerId: setup.speakerId, expectedVersion: 1, visible: false }));
     await expect(db.select().from(airtableOutbox).where(eq(airtableOutbox.integrationId, integrationId)))
       .resolves.toEqual([expect.objectContaining({
@@ -966,6 +1356,6 @@ describe("portal service", () => {
         status: "pending",
       })]);
     const hidden = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
-    expect(hidden.speakers).toEqual([]);
+    expect(hidden.speakers).toEqual([expect.objectContaining({ id: manual.id, displayName: "Managed keynote" })]);
   });
 });
