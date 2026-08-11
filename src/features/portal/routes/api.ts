@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { ApiError, apiFetch, decodeApiPayload } from "@/client/api";
+import { FormList } from "@/features/forms/schema";
 import {
   CreatePublicSubmissionOutput,
   PublicSubmissionForm,
@@ -90,6 +91,11 @@ export const getPortalDashboard = (eventSlug: string) =>
 
 export const getTaskDefinitions = (eventSlug: string) =>
   loadOrganizerRoute(eventSlug, "/tasks", PortalTaskDefinitions);
+
+export async function getOrganizerFormSummaries(eventSlug: string) {
+  const eventId = await resolveOrganizerEventId(eventSlug);
+  return apiFetch(`${api}/events/${segment(eventId)}/forms`, { schema: FormList });
+}
 
 export const getPortalResources = (eventSlug: string) =>
   loadOrganizerRoute(eventSlug, "/resources", PortalResources);

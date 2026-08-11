@@ -31,6 +31,7 @@ import {
 } from "@/ui";
 import { FormBuilder } from "../components/FormBuilder";
 import { FormPreview } from "../components/FormPreview";
+import { formSelectionSearch, selectedFormIdFromSearch } from "../links";
 import {
   FormDetail,
   DeleteFormOutput,
@@ -368,8 +369,17 @@ type MutationState = Readonly<{
 }>;
 
 type PendingFormDestination =
-  | Readonly<{ kind: "selection"; formId: string }>
+  | Readonly<{
+    kind: "selection";
+    formId: string | null;
+    navigation?: "push" | "replace" | "none";
+    restoreOnCancel?: boolean;
+  }>
   | Readonly<{ kind: "create" }>;
+
+export interface FormSelectionChangeOptions {
+  readonly replace?: boolean;
+}
 
 function LoadingRegion({ label }: { readonly label: string }) {
   return (
@@ -406,6 +416,15 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
   const [event, setEvent] = useState<EventIdentity | null | undefined>(initialEvent);
   const [eventError, setEventError] = useState<string | null>(initialEventError);
   const [eventRequest, setEventRequest] = useState(0);
+  const routeSelectedId = selectedFormIdFromSearch(location.search);
+
+  const handleSelectedFormChange = useCallback((formId: string | null, options?: FormSelectionChangeOptions) => {
+    navigate({
+      pathname: location.pathname,
+      search: formSelectionSearch(location.search, formId),
+      hash: location.hash,
+    }, { replace: options?.replace ?? false });
+  }, [location.hash, location.pathname, location.search, navigate]);
 
   const handleUnauthenticated = useCallback(() => {
     setEventError("unauthenticated");
@@ -484,7 +503,15 @@ export default function FormsPage({ initialEvent, initialEventError = null }: Fo
     );
   }
 
-  return <FormsWorkspace key={event.id} event={event} onUnauthenticated={handleUnauthenticated} />;
+  return (
+    <FormsWorkspace
+      key={event.id}
+      event={event}
+      routeSelectedId={routeSelectedId}
+      onSelectedFormChange={handleSelectedFormChange}
+      onUnauthenticated={handleUnauthenticated}
+    />
+  );
 }
 
 export interface FormsWorkspaceProps {
@@ -493,6 +520,9 @@ export interface FormsWorkspaceProps {
   readonly initialSummaries?: readonly FormSummary[] | null;
   readonly initialSelectedId?: string | null;
   readonly initialSelectedForm?: FormDetail | null;
+  readonly routeSelectedId?: string | null;
+  readonly onSelectedFormChange?: (formId: string | null, options?: FormSelectionChangeOptions) => void;
+  readonly enableRealtime?: boolean;
   /** Lets the route promote a nested API 401 to its sign-in state. */
   readonly onUnauthenticated?: () => void;
 }
@@ -518,12 +548,16 @@ export function FormsWorkspace({
   initialSummaries,
   initialSelectedId = null,
   initialSelectedForm,
+  routeSelectedId,
+  onSelectedFormChange,
+  enableRealtime = true,
   onUnauthenticated,
 }: FormsWorkspaceProps) {
+  const initialSelection = routeSelectedId === undefined ? initialSelectedId : routeSelectedId;
   const [summaries, setSummaries] = useState<readonly FormSummary[] | null | undefined>(initialSummaries);
   const [listError, setListError] = useState<string | null>(null);
   const [listRequest, setListRequest] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelection);
   const [selectedForm, setSelectedForm] = useState<FormDetail | null | undefined>(initialSelectedForm);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [mutation, setMutation] = useState<MutationState>({ action: null, tone: "neutral", message: null });
@@ -535,11 +569,15 @@ export function FormsWorkspace({
   const [realtimeReady, setRealtimeReady] = useState(false);
   const createAdditionalTriggerRef = useRef<HTMLButtonElement>(null);
   const createAdditionalWasOpenRef = useRef(false);
-  const selectedIdRef = useRef<string | null>(initialSelectedId);
+  const selectedIdRef = useRef<string | null>(initialSelection);
+  const routeSelectedIdRef = useRef(routeSelectedId);
+  const selectionChangeRef = useRef(onSelectedFormChange);
   const persistedFormsRef = useRef(new Map<string, FormDetail>(
     initialSelectedForm ? [[initialSelectedForm.id, initialSelectedForm]] : [],
   ));
   selectedIdRef.current = selectedId;
+  routeSelectedIdRef.current = routeSelectedId;
+  selectionChangeRef.current = onSelectedFormChange;
 
   useEffect(() => {
     setRealtimeReady(true);
@@ -552,11 +590,14 @@ export function FormsWorkspace({
     createAdditionalWasOpenRef.current = createAdditionalOpen;
   }, [createAdditionalOpen]);
 
-  const applyFormSelection = useCallback((formId: string | null) => {
+  const applyFormSelection = useCallback((formId: string | null, navigation: "push" | "replace" | "none" = "push") => {
     selectedIdRef.current = formId;
     setSelectedId(formId);
     setSelectedForm(formId ? undefined : null);
     setDetailError(null);
+    if (navigation !== "none") {
+      selectionChangeRef.current?.(formId, { replace: navigation === "replace" });
+    }
   }, []);
 
   const discardCurrentDraft = useCallback(() => {
@@ -573,7 +614,7 @@ export function FormsWorkspace({
       setCreateAdditionalOpen(true);
       return;
     }
-    applyFormSelection(destination.formId);
+    applyFormSelection(destination.formId, destination.navigation ?? "push");
   }, [applyFormSelection, discardCurrentDraft]);
 
   const requestFormDestination = useCallback((destination: PendingFormDestination) => {
@@ -592,6 +633,7 @@ export function FormsWorkspace({
       selectedIdRef.current = form.id;
       setSelectedId(form.id);
       setSelectedForm(form);
+      if (forceSelection) selectionChangeRef.current?.(form.id);
     }
     setSummaries((current) => {
       const summary = toSummary(form);
@@ -640,7 +682,7 @@ export function FormsWorkspace({
       const remaining = (summaries ?? []).filter((form) => form.id !== draft.id);
       setSummaries(remaining);
       persistedFormsRef.current.delete(draft.id);
-      applyFormSelection(remaining[0]?.id ?? null);
+      applyFormSelection(remaining[0]?.id ?? null, "replace");
       setMutation({ action: null, tone: "success", message: "Unpublished draft deleted." });
       toast("Draft deleted.", { tone: "success" });
     } catch (error) {
@@ -704,11 +746,12 @@ export function FormsWorkspace({
       .then((loaded) => {
         if (!active) return;
         setSummaries(loaded);
-        setSelectedId((current) => {
-          const next = current && loaded.some((form) => form.id === current) ? current : (loaded[0]?.id ?? null);
-          selectedIdRef.current = next;
-          return next;
-        });
+        const current = selectedIdRef.current;
+        const next = current && loaded.some((form) => form.id === current) ? current : (loaded[0]?.id ?? null);
+        if (next !== current) applyFormSelection(next, "replace");
+        else if (routeSelectedIdRef.current !== undefined && routeSelectedIdRef.current !== next) {
+          selectionChangeRef.current?.(next, { replace: true });
+        }
       })
       .catch((error) => {
         if (!active) return;
@@ -724,7 +767,24 @@ export function FormsWorkspace({
     return () => {
       active = false;
     };
-  }, [event.id, listRequest, onUnauthenticated]);
+  }, [applyFormSelection, event.id, listRequest, onUnauthenticated]);
+
+  useEffect(() => {
+    if (routeSelectedId === undefined || !summaries) return;
+    const target = routeSelectedId && summaries.some((form) => form.id === routeSelectedId)
+      ? routeSelectedId
+      : (summaries[0]?.id ?? null);
+    if (target === selectedIdRef.current) {
+      if (target !== routeSelectedId) selectionChangeRef.current?.(target, { replace: true });
+      return;
+    }
+    requestFormDestination({
+      kind: "selection",
+      formId: target,
+      navigation: target === routeSelectedId ? "none" : "replace",
+      restoreOnCancel: true,
+    });
+  }, [requestFormDestination, routeSelectedId, summaries]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -748,6 +808,11 @@ export function FormsWorkspace({
           onUnauthenticated();
           return;
         }
+        if (error instanceof ApiError && error.status === 404) {
+          setListRequest((request) => request + 1);
+          toast("That form is no longer available. The form list has been refreshed.", { tone: "warning" });
+          return;
+        }
         const message = error instanceof Error ? error.message : "Could not load form";
         setSelectedForm(null);
         setDetailError(message);
@@ -759,6 +824,14 @@ export function FormsWorkspace({
   }, [event.id, onUnauthenticated, selectedId]);
 
   const visibleSelectedForm = selectedFormForRender(selectedId, selectedForm);
+
+  const cancelPendingFormDestination = () => {
+    const destination = pendingFormDestination;
+    setPendingFormDestination(null);
+    if (destination?.kind === "selection" && destination.restoreOnCancel) {
+      selectionChangeRef.current?.(selectedIdRef.current, { replace: true });
+    }
+  };
 
   if (summaries === undefined) {
     return <LoadingRegion label="Loading forms" />;
@@ -903,7 +976,7 @@ export function FormsWorkspace({
           </aside>
 
           <section className="min-w-0" aria-label="Form editor">
-            {realtimeReady && selectedId && <RealtimeFormPresence eventId={event.id} formId={selectedId} />}
+            {enableRealtime && realtimeReady && selectedId && <RealtimeFormPresence eventId={event.id} formId={selectedId} />}
             {visibleSelectedForm === undefined ? (
               <Skeleton className="h-[36rem] rounded-none border-2 border-[#171714] motion-reduce:animate-none" />
             ) : visibleSelectedForm === null ? (
@@ -991,7 +1064,7 @@ export function FormsWorkspace({
           />
         </form>
       </Modal>
-      <AlertDialog open={pendingFormDestination !== null} onOpenChange={(open) => { if (!open) setPendingFormDestination(null); }}>
+      <AlertDialog open={pendingFormDestination !== null} onOpenChange={(open) => { if (!open) cancelPendingFormDestination(); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Discard unsaved form changes?</AlertDialogTitle>
