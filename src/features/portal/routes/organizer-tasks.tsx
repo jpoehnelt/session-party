@@ -255,7 +255,7 @@ function TaskFields({
               />
               {eventSlug && (
                 <a
-                  className="shrink-0 text-xs font-black uppercase tracking-wide text-accent underline underline-offset-2"
+                  className="inline-flex min-h-6 shrink-0 items-center text-xs font-black uppercase tracking-wide text-accent-deep underline underline-offset-2"
                   href={`/e/${encodeURIComponent(eventSlug)}/speakers/${encodeURIComponent(item.speaker.id)}`}
                 >
                   Profile

@@ -129,7 +129,7 @@ export function OrganizerDashboardContent({
               header: "Speaker",
               render: (item) => (
                 <div>
-                  <a className="font-semibold text-ink underline decoration-2 underline-offset-3" href={`/e/${encodeURIComponent(dashboard.event.slug)}/speakers/${encodeURIComponent(item.speaker.id)}`}>{item.speaker.displayName}</a>
+                  <a className="inline-flex min-h-6 items-center font-semibold text-ink underline decoration-2 underline-offset-3" href={`/e/${encodeURIComponent(dashboard.event.slug)}/speakers/${encodeURIComponent(item.speaker.id)}`}>{item.speaker.displayName}</a>
                   {item.submission ? <a className="block text-xs text-ink-faint underline decoration-1 underline-offset-2 hover:text-accent-deep" href={`/e/${encodeURIComponent(dashboard.event.slug)}/review?selectedSubmissionId=${encodeURIComponent(item.submission.id)}`}>{item.submission.title}</a> : <p className="text-xs text-ink-faint">No accepted session linked</p>}
                 </div>
               ),

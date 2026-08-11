@@ -1268,8 +1268,11 @@ test("agenda talk editor protects drafts, validates mutations, preserves the pub
 
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("h1").waitFor({ state: "visible" });
-    await editButton(updatedTitle).click();
     editor = page.getByRole("dialog", { name: updatedTitle });
+    if (!await editor.isVisible()) {
+      await editButton(updatedTitle).click();
+    }
+    await expect(editor).toBeVisible();
     await expect(editor.getByLabel("Session title")).toHaveValue(updatedTitle);
     await expect(editor.getByLabel("Session abstract")).toHaveValue(updatedDescription);
     await expect(editor.getByLabel("Track")).toHaveValue(alternateTrack!.id);
@@ -1809,12 +1812,14 @@ test("public program navigation, session detail, and personal schedule controls 
   for (const name of ["Sessions", "Speakers", "Agenda", "Schedule itinerary", "Speaker gallery"]) {
     await expect(nav.getByRole("link", { name })).toBeVisible();
   }
-  const sessionButton = page.locator('main button[type="button"]').first();
-  await sessionButton.click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "Close" }).click();
-  await expect(dialog).toBeHidden();
+  const sessionLink = page.locator('main a[href*="/sessions/"]').first();
+  const sessionHref = await sessionLink.getAttribute("href");
+  expect(sessionHref).toMatch(new RegExp(`^/event/${EVENT}/sessions/[^/]+$`));
+  await sessionLink.click();
+  await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/sessions/[^/]+$`));
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await page.goBack({ waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/sessions$`));
   await nav.getByRole("link", { name: "Schedule itinerary" }).click();
   await expect(page).toHaveURL(new RegExp(`/event/${EVENT}/schedule$`));
   await expect(page.getByRole("button", { name: /^My schedule \(\d+\)$/i })).toBeVisible();
