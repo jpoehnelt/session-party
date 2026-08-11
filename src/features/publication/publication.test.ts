@@ -309,6 +309,15 @@ describe("publication boundary", () => {
     expect(jsonResponse.headers.get("x-session-party-revision")).toBe("1");
     expect(await jsonResponse.json()).toEqual(published);
 
+    const filteredJsonResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.json?track=Systems`,
+    );
+    expect(await filteredJsonResponse.json()).toEqual(published);
+    const emptyJsonResponse = await SELF.fetch(
+      `https://example.test/events/${seeded.eventSlug}/schedule.json?track=Other`,
+    );
+    expect(await emptyJsonResponse.json()).toEqual({ ...published, talks: [] });
+
     const calendarResponse = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/schedule.ics`,
     );

@@ -2,11 +2,14 @@ import { Conflict, External, NotFound, Validation, type AppError } from "contrac
 import { eventAuthorization, type Principal as CurrentUserValue } from "contracts/principal";
 import {
   acceptanceEvents,
+  airtablePendingEdits,
+  airtableRecordLinks,
   auditLog,
   domainChanges,
   events,
   formVersionFields,
   idempotencyRecords,
+  integrations,
   mailCalendarEvents,
   mailDeliveries,
   mailDeliverySnapshots,
@@ -242,8 +245,8 @@ const loadTalkRows = (eventId: string): Effect.Effect<readonly AgendaTalk[], App
     );
     if (talkRows.length === 0) return [];
 
-    const speakerRows = yield* database(() =>
-      db
+    const [speakerRows, pendingRows] = yield* Effect.all([
+      database(() => db
         .select({ talkId: talkSpeakers.talkId, speakerId: speakers.id, speakerName: speakers.displayName })
         .from(talkSpeakers)
         .innerJoin(
@@ -251,8 +254,18 @@ const loadTalkRows = (eventId: string): Effect.Effect<readonly AgendaTalk[], App
           and(eq(speakers.eventId, talkSpeakers.eventId), eq(speakers.id, talkSpeakers.speakerId)),
         )
         .where(and(eq(talkSpeakers.eventId, eventId), inArray(talkSpeakers.talkId, talkRows.map(({ id }) => id))))
-        .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id)),
-    );
+        .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id))),
+      database(() => db.select({
+        talkId: airtablePendingEdits.talkId,
+        fieldKey: airtablePendingEdits.fieldKey,
+        intendedValue: airtablePendingEdits.intendedValue,
+      }).from(airtablePendingEdits).where(and(
+        eq(airtablePendingEdits.eventId, eventId),
+        eq(airtablePendingEdits.entityType, "talk"),
+        eq(airtablePendingEdits.status, "pending"),
+        inArray(airtablePendingEdits.entityId, talkRows.map(({ id }) => id)),
+      ))),
+    ]);
 
     const speakersByTalk = new Map<string, { ids: string[]; names: string[] }>();
     for (const row of speakerRows) {
@@ -261,15 +274,23 @@ const loadTalkRows = (eventId: string): Effect.Effect<readonly AgendaTalk[], App
       entry.names.push(row.speakerName);
       speakersByTalk.set(row.talkId, entry);
     }
+    const pendingByTalk = new Map<string, Map<string, unknown>>();
+    for (const row of pendingRows) {
+      if (!row.talkId) continue;
+      const fields = pendingByTalk.get(row.talkId) ?? new Map<string, unknown>();
+      fields.set(row.fieldKey, row.intendedValue);
+      pendingByTalk.set(row.talkId, fields);
+    }
 
     return talkRows.map((talk) => {
       const talkSpeakerRows = speakersByTalk.get(talk.id) ?? { ids: [], names: [] };
+      const pending = pendingByTalk.get(talk.id);
       return {
         id: talk.id,
         eventId: talk.eventId,
         submissionId: talk.submissionId,
-        title: talk.title,
-        description: talk.description,
+        title: typeof pending?.get("title") === "string" ? pending.get("title") as string : talk.title,
+        description: pending?.has("description") ? pending.get("description") as string | null : talk.description,
         trackId: talk.trackId,
         roomId: talk.roomId,
         startsAt: timestamp(talk.startsAt),
@@ -1360,6 +1381,8 @@ export const autoPlaceTalk = (
   input: AutoPlaceTalkInput,
 ): Effect.Effect<AgendaMutationResult, AppError, Db | CurrentUser | Rooms> =>
   Effect.gen(function* () {
+    const prepared = yield* prepareIdempotency("agenda.autoPlaceTalk", input);
+    if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
     const { db } = yield* Db;
     const [event, before, roomRows, existing] = yield* Effect.all([
       getEvent(input.eventId),
@@ -1430,6 +1453,26 @@ export const updateTalkContent = (
     const title = input.title.trim().replace(/\s+/g, " ");
     if (title.length === 0) return yield* Effect.fail(new Validation({ message: "Talk title must contain visible characters" }));
     const description = input.description?.trim() || null;
+    const [airtableIntegration] = yield* database(() => db.select({ id: integrations.id }).from(integrations).where(and(
+      eq(integrations.eventId, input.eventId), eq(integrations.kind, "airtable"),
+    )).limit(1));
+    const changedKeys = ([
+      ...(title !== before.title ? ["title" as const] : []),
+      ...(description !== before.description ? ["description" as const] : []),
+    ]);
+    if (airtableIntegration) {
+      const existingPending = yield* database(() => db.select({ fieldKey: airtablePendingEdits.fieldKey }).from(airtablePendingEdits).where(and(
+        eq(airtablePendingEdits.eventId, input.eventId),
+        eq(airtablePendingEdits.integrationId, airtableIntegration.id),
+        eq(airtablePendingEdits.entityType, "talk"),
+        eq(airtablePendingEdits.entityId, input.talkId),
+        eq(airtablePendingEdits.status, "pending"),
+        inArray(airtablePendingEdits.fieldKey, ["title", "description"]),
+      )));
+      if (existingPending.length > 0) {
+        return yield* Effect.fail(new Conflict({ message: "Talk content changes are already pending Airtable confirmation" }));
+      }
+    }
     const candidate: AgendaTalk = { ...before, title, description, version: before.version + 1 };
     const workspaceVersion = yield* nextWorkspaceVersion(input.eventId);
     const changeId = nanoid();
@@ -1446,18 +1489,45 @@ export const updateTalkContent = (
       replayed: false,
     };
     const actor = actorColumns(principal);
-    const airtableProjection = yield* database(() => prepareAirtableTalkProjection(db, {
+    const [recordLink] = airtableIntegration ? yield* database(() => db.select({
+      inboundRevision: airtableRecordLinks.inboundRevision,
+      inboundHash: airtableRecordLinks.inboundHash,
+    }).from(airtableRecordLinks).where(and(
+      eq(airtableRecordLinks.integrationId, airtableIntegration.id),
+      eq(airtableRecordLinks.entityType, "talk"),
+      eq(airtableRecordLinks.entityId, input.talkId),
+    )).limit(1)) : [undefined];
+    const pendingEdits = airtableIntegration ? changedKeys.map((fieldKey) => ({
+      id: nanoid(),
+      eventId: input.eventId,
+      integrationId: airtableIntegration.id,
+      entityType: "talk" as const,
+      entityId: input.talkId,
+      speakerId: null,
+      submissionId: null,
+      talkId: input.talkId,
+      fieldKey,
+      intendedValue: fieldKey === "title" ? title : description,
+      baseInboundRevision: recordLink?.inboundRevision ?? null,
+      baseInboundHash: recordLink?.inboundHash ?? null,
+      status: "pending" as const,
+      version: 1,
+      createdAt: prepared.now,
+      updatedAt: prepared.now,
+    })) : [];
+    const airtableProjections = yield* Effect.forEach(pendingEdits, (edit, index) => database(() => prepareAirtableTalkProjection(db, {
       eventId: input.eventId,
       talk: candidate,
-      changedKeys: ["title", "description"],
+      changedKeys: [edit.fieldKey],
       origin: "agenda.updateTalkContent",
-      idempotencyKey: `agenda.updateTalkContent:${prepared.id}`,
+      idempotencyKey: `agenda.updateTalkContent:${prepared.id}:${edit.fieldKey}`,
       now: prepared.now,
-    }));
+      pendingEditId: edit.id,
+      revisionOffset: index,
+    })));
     yield* database(() => db.batch([
       db.update(talks).set({
-        title,
-        description,
+        ...(airtableIntegration ? {} : { title, description }),
         version: candidate.version,
         updatedAt: prepared.now,
       }).where(and(
@@ -1465,6 +1535,7 @@ export const updateTalkContent = (
         eq(talks.id, input.talkId),
         eq(talks.version, input.expectedVersion),
       )),
+      ...pendingEdits.map((edit) => db.insert(airtablePendingEdits).values(edit)),
       db.insert(idempotencyRecords).values(idempotencyInsert(
         prepared,
         input.eventId,
@@ -1499,7 +1570,7 @@ export const updateTalkContent = (
         metadata: { idempotencyKeyHash: prepared.keyHash },
         occurredAt: prepared.now,
       }),
-      ...(airtableProjection ? [airtableProjection.statement] : []),
+      ...airtableProjections.flatMap((projection) => projection ? [projection.statement] : []),
     ] as never));
     yield* broadcastMutation(result, principal.name, prepared.requestId);
     return result;

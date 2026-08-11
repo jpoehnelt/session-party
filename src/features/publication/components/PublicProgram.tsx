@@ -25,6 +25,7 @@ import {
   normalizeEmbedAccent,
   type EmbedAesthetic,
 } from "../embed-design";
+import { SCHEDULE_EMBED_FIELDS } from "../embed-content";
 import {
   publishedScheduleIcsPath,
   publishedScheduleJsonPath,
@@ -712,7 +713,7 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
   const [accent, setAccent] = useState(DEFAULT_EMBED_DESIGN.accent);
   const [name, setName] = useState("Main program embed");
   const [track, setTrack] = useState("");
-  const [fields, setFields] = useState<ReadonlySet<string>>(new Set(["title", "time", "room", "track", "speakers", "description"]));
+  const [fields, setFields] = useState<ReadonlySet<string>>(new Set(SCHEDULE_EMBED_FIELDS));
   const [savedEmbeds, setSavedEmbeds] = useState<readonly SavedEmbedDefinition[]>([]);
   const [copyStatus, setCopyStatus] = useState("");
   const origin = typeof window === "undefined" ? "https://sessionparty.com" : window.location.origin;
@@ -721,15 +722,24 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
     ? `${origin}/embed/${agenda.eventSlug}/speakers`
     : `${origin}/embed/${agenda.eventSlug}/schedule`;
   const safeAccent = normalizeEmbedAccent(accent);
+  const isSpeakerWidget = widget === "speakers" || widget === "gallery";
+  const supportsTrack = !isSpeakerWidget && format !== "plain-html";
+  const supportsFields = !isSpeakerWidget && format === "styled-html";
+  const effectiveTrack = supportsTrack ? track : "";
+  const effectiveFields = supportsFields ? [...fields].sort() : [];
   const contentSearch = new URLSearchParams({
     ...Object.fromEntries(new URLSearchParams(embedDesignSearch({ aesthetic, accent: safeAccent }))),
-    ...(track ? { track } : {}),
-    fields: [...fields].sort().join(","),
+    ...(effectiveTrack ? { track: effectiveTrack } : {}),
+    ...(supportsFields ? { fields: effectiveFields.join(",") } : {}),
   }).toString();
   const embedUrl = `${embedBaseUrl}?${contentSearch}`;
-  const filteredTalks = track ? agenda.talks.filter((talk) => talk.track === track) : agenda.talks;
+  const filteredTalks = effectiveTrack ? agenda.talks.filter((talk) => talk.track === effectiveTrack) : agenda.talks;
+  const jsonBase = isSpeakerWidget
+    ? `${origin}/api/v1/public/events/${agenda.eventSlug}/speakers`
+    : `${origin}${publishedScheduleJsonPath(agenda.eventSlug)}`;
+  const jsonUrl = effectiveTrack ? `${jsonBase}?track=${encodeURIComponent(effectiveTrack)}` : jsonBase;
   const generated = format === "json"
-    ? `${origin}/api/v1/public/events/${agenda.eventSlug}/${widget === "speakers" || widget === "gallery" ? "speakers" : "agenda/published"}`
+    ? jsonUrl
     : format === "ical"
       ? calendarDataUrl(agenda, filteredTalks)
     : format === "plain-html"
@@ -759,8 +769,8 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
       format,
       aesthetic,
       accent: safeAccent,
-      track,
-      fields: [...fields].sort(),
+      track: effectiveTrack,
+      fields: effectiveFields,
       code: generated,
       enabled: true,
     };
@@ -806,12 +816,12 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
             <option value="editorial">Editorial</option>
           </Select>
           <Input label="Brand color" type="color" value={accent} onChange={(event) => setAccent(event.currentTarget.value)} />
-          <Select label="Track filter" value={track} onChange={(event) => setTrack(event.currentTarget.value)}>
+          {supportsTrack && <Select label="Track filter" value={track} onChange={(event) => setTrack(event.currentTarget.value)}>
             <option value="">All tracks</option>
             {tracks.map((value) => <option key={value} value={value}>{value}</option>)}
-          </Select>
+          </Select>}
         </div>
-        <fieldset className="mt-5 border-2 border-line-strong bg-surface-muted p-4">
+        {supportsFields && <fieldset className="mt-5 border-2 border-line-strong bg-surface-muted p-4">
           <legend className="px-2 text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep">Included fields</legend>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {fieldOptions.map((field) => (
@@ -828,7 +838,7 @@ export function WidgetBuilder({ agenda }: { readonly agenda: PublishedAgenda }) 
               />
             ))}
           </div>
-        </fieldset>
+        </fieldset>}
         <div className="mt-6 space-y-3 border-t-2 border-line-strong pt-5">
           <label className="text-[10px] font-black uppercase tracking-[0.14em] text-accent-deep" htmlFor="generated-widget-code">Generated share URL or code</label>
           <textarea

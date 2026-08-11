@@ -6,12 +6,14 @@ import type {
   PublicAgendaTalk,
 } from "@/features/agenda/schema";
 import type { EmbedAesthetic } from "../embed-design";
+import { SCHEDULE_EMBED_FIELDS, type ScheduleEmbedField } from "../embed-content";
 
 export interface PublishedScheduleProps {
   readonly agenda: PublishedAgenda;
   readonly compact?: boolean;
   readonly initialView?: AgendaView;
   readonly aesthetic?: EmbedAesthetic;
+  readonly includedFields?: readonly ScheduleEmbedField[];
 }
 
 interface ScheduleGroup {
@@ -122,9 +124,11 @@ export function PublishedSchedule({
   compact = false,
   initialView = "day",
   aesthetic = "bold",
+  includedFields = SCHEDULE_EMBED_FIELDS,
 }: PublishedScheduleProps) {
-  const supportsTrack = agenda.talks.some((talk) => Boolean(talk.track?.trim()));
-  const supportsRoom = agenda.talks.some((talk) => Boolean(talk.room?.trim()));
+  const visible = new Set(includedFields);
+  const supportsTrack = visible.has("track") && agenda.talks.some((talk) => Boolean(talk.track?.trim()));
+  const supportsRoom = visible.has("room") && agenda.talks.some((talk) => Boolean(talk.room?.trim()));
   const tabs = ([
     { id: "list", label: VIEW_LABELS.list },
     { id: "day", label: VIEW_LABELS.day },
@@ -219,6 +223,7 @@ export function PublishedSchedule({
                   ? "rounded-xl shadow-none [&>li]:border-line [&>li:nth-child(even)>div:last-child]:bg-surface-muted"
                   : "rounded-none shadow-none [&>li]:border-line-strong [&>li:nth-child(even)>div:last-child]:bg-surface-muted/50"}
               timezone={agenda.timezone}
+              includedFields={includedFields}
               talks={group.talks.map((talk) => ({
                 id: talk.id,
                 title: talk.title,

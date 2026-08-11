@@ -4,6 +4,7 @@ import type { ServerMessage } from "contracts/protocol";
 import {
   acceptanceEvents,
   airtableOutbox,
+  airtablePendingEdits,
   auditLog,
   domainChanges,
   events,
@@ -849,6 +850,12 @@ describe("agenda service", () => {
       idempotencyKey: "auto-place-talk-0001",
     } as const;
     const placed = await runAs(seeded.user, autoPlaceTalk(input));
+    await runAs(seeded.user, cancelTalk({
+      eventId: seeded.eventId,
+      talkId: created.talk.id,
+      expectedVersion: placed.talk.version,
+      idempotencyKey: "auto-place-cancel-0001",
+    }));
     const replayed = await runAs(seeded.user, autoPlaceTalk(input));
 
     expect(placed.talk).toMatchObject({
@@ -888,6 +895,56 @@ describe("agenda service", () => {
     expect(stored).toMatchObject({ title: "Effects at global scale", version: 3 });
     expect(change?.payload).toMatchObject({ action: "content_updated" });
     expect(audit?.action).toBe("agenda.talk_content_updated");
+  });
+
+  it("keeps Airtable-authoritative talk content as a pending overlay", async () => {
+    const seeded = await seedAgenda("content-edit-airtable", { scheduled: true });
+    const [before] = await seeded.db.select().from(talks).where(eq(talks.id, seeded.talkA));
+    const integrationId = `airtable-${seeded.eventId}`;
+    const integrationNow = new Date(FIXED_NOW);
+    await seeded.db.insert(integrations).values({
+      id: integrationId,
+      eventId: seeded.eventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: integrationNow,
+      updatedAt: integrationNow,
+    });
+    const input = {
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: "Pending Airtable title",
+      description: "Pending Airtable description",
+      expectedVersion: before!.version,
+      idempotencyKey: "content-edit-airtable-0001",
+    } as const;
+    const updated = await runAs(seeded.user, updateTalkContent(input));
+    const replayed = await runAs(seeded.user, updateTalkContent(input));
+    const [stored, pending, outbox, agenda] = await Promise.all([
+      seeded.db.select().from(talks).where(eq(talks.id, seeded.talkA)).get(),
+      seeded.db.select().from(airtablePendingEdits).where(eq(airtablePendingEdits.entityId, seeded.talkA)),
+      seeded.db.select().from(airtableOutbox).where(eq(airtableOutbox.entityId, seeded.talkA)),
+      runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "list" })),
+    ]);
+    expect(updated.talk).toMatchObject({ title: input.title, description: input.description, version: before!.version + 1 });
+    expect(replayed).toMatchObject({ replayed: true, changeId: updated.changeId });
+    expect(stored).toMatchObject({ title: before!.title, description: before!.description, version: before!.version + 1 });
+    expect(pending.map((row) => row.fieldKey).sort()).toEqual(["description", "title"]);
+    expect(outbox.map((row) => row.changedFields)).toEqual(expect.arrayContaining([
+      { title: input.title }, { description: input.description },
+    ]));
+    expect(new Set(outbox.map((row) => row.outboundHash)).size).toBe(1);
+    expect(agenda.talks.find((talk) => talk.id === seeded.talkA)).toMatchObject({
+      title: input.title,
+      description: input.description,
+    });
+    const conflicted = await runEither(seeded.user, updateTalkContent({
+      ...input,
+      expectedVersion: updated.talk.version,
+      idempotencyKey: "content-edit-airtable-0002",
+    }));
+    expect(conflicted).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
   });
 
   it("saves room and speaker overlaps as named non-blocking agenda warnings", async () => {
