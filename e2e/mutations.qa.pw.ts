@@ -106,6 +106,110 @@ test("form commands enforce role, idempotency, optimistic concurrency, and repla
   expect(missing.status()).toBe(404);
 });
 
+test("communication template updates enforce role, idempotency, optimistic concurrency, and restoration", async ({ request }, testInfo) => {
+  desktopOnly(testInfo);
+  const collectionPath = `/api/v1/events/${EVENT_ID}/comms/templates`;
+  const ownerHeaders = headers(OWNER_SESSION);
+  const initialResponse = await request.get(collectionPath, { headers: ownerHeaders });
+  expect(initialResponse.status()).toBe(200);
+  const [initial] = await responseBody(initialResponse) as readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly subject: string;
+    readonly textBody: string;
+    readonly htmlBody: string;
+    readonly attachIcs: boolean;
+    readonly version: number;
+  }[];
+  expect(initial).toBeDefined();
+  type Template = NonNullable<typeof initial>;
+  const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const key = (label: string) => `qa-comms-${label}-${runToken}`;
+  const templatePath = `${collectionPath}/${initial!.id}`;
+  const body = (subject: string, expectedVersion: number, idempotencyKey: string) => ({
+    name: initial!.name,
+    subject,
+    textBody: initial!.textBody,
+    htmlBody: initial!.htmlBody,
+    attachIcs: initial!.attachIcs,
+    expectedVersion,
+    idempotencyKey,
+  });
+
+  try {
+    const forbidden = await request.put(templatePath, {
+      headers: headers(REVIEWER_SESSION),
+      data: body("QA reviewer must not save", initial!.version, key("reviewer-denied")),
+    });
+    expect(forbidden.status()).toBe(403);
+
+    const replayKey = key("update-replay");
+    const first = await request.put(templatePath, {
+      headers: ownerHeaders,
+      data: body("QA replay-safe template update", initial!.version, replayKey),
+    });
+    expect(first.status()).toBe(200);
+    const firstBody = await responseBody(first) as { readonly id: string; readonly subject: string; readonly version: number };
+    expect(firstBody).toMatchObject({ id: initial!.id, subject: "QA replay-safe template update", version: initial!.version + 1 });
+    const replay = await request.put(templatePath, {
+      headers: ownerHeaders,
+      data: body("QA replay-safe template update", initial!.version, replayKey),
+    });
+    expect(replay.status()).toBe(200);
+    expect(await responseBody(replay)).toMatchObject({ id: firstBody.id, subject: firstBody.subject, version: firstBody.version });
+
+    const mismatchedReplay = await request.put(templatePath, {
+      headers: ownerHeaders,
+      data: body("QA mismatched template replay", initial!.version, replayKey),
+    });
+    expect(mismatchedReplay.status()).toBe(409);
+
+    const update = (subject: string, key: string) => request.put(templatePath, {
+      headers: ownerHeaders,
+      data: body(subject, firstBody.version, key),
+    });
+    const competing = await Promise.all([
+      update("QA communication writer A", key("competing-a")),
+      update("QA communication writer B", key("competing-b")),
+    ]);
+    expect(competing.map((response) => response.status()).sort()).toEqual([200, 409]);
+
+    const currentResponse = await request.get(collectionPath, { headers: ownerHeaders });
+    expect(currentResponse.status()).toBe(200);
+    const current = (await responseBody(currentResponse) as readonly Template[]).find(({ id }) => id === initial!.id)!;
+    expect(["QA communication writer A", "QA communication writer B"]).toContain(current.subject);
+    expect(current.version).toBe(firstBody.version + 1);
+    const stale = await request.put(templatePath, {
+      headers: ownerHeaders,
+      data: body("QA stale communication overwrite", firstBody.version, key("stale-overwrite")),
+    });
+    expect(stale.status()).toBe(409);
+    expect(JSON.stringify(await responseBody(stale))).not.toMatch(/stack|cause|sql|database/i);
+  } finally {
+    const currentResponse = await request.get(collectionPath, { headers: ownerHeaders });
+    if (currentResponse.ok()) {
+      const current = (await responseBody(currentResponse) as readonly Template[]).find(({ id }) => id === initial!.id);
+      if (current && (current.subject !== initial!.subject || current.name !== initial!.name || current.textBody !== initial!.textBody || current.htmlBody !== initial!.htmlBody || current.attachIcs !== initial!.attachIcs)) {
+        const restored = await request.put(templatePath, {
+          headers: ownerHeaders,
+          data: body(initial!.subject, current.version, key("finally-restore")),
+        });
+        expect(restored.status()).toBe(200);
+      }
+    }
+  }
+
+  const finalResponse = await request.get(collectionPath, { headers: ownerHeaders });
+  const final = (await responseBody(finalResponse) as readonly Template[]).find(({ id }) => id === initial!.id)!;
+  expect(final).toMatchObject({
+    name: initial!.name,
+    subject: initial!.subject,
+    textBody: initial!.textBody,
+    htmlBody: initial!.htmlBody,
+    attachIcs: initial!.attachIcs,
+  });
+});
+
 test("event API keys expose their secret once, honor scope and event boundaries, and stop working after revocation", async ({ request }, testInfo) => {
   desktopOnly(testInfo);
   const collectionPath = `/api/v1/events/${EVENT_ID}/api-keys`;

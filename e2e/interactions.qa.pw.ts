@@ -159,9 +159,13 @@ test("agenda views, setup, and live-show controls are keyboard-reachable and rev
   await expect(live).toBeVisible();
 });
 
-test("communications tabs and new-template editor preserve local-only state", async ({ context, page, baseURL }, testInfo) => {
+test("communications protects unsaved edits and rejects a stale template writer without losing its draft", async ({ context, page, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   await openOwnerPage(context, page, baseURL ?? "http://127.0.0.1:5173", "/comms");
+  const peer = await context.newPage();
+  await peer.goto(`/e/${EVENT}/comms`);
+  await peer.getByRole("heading", { level: 1 }).waitFor({ state: "visible" });
+
   for (const name of ["01 / Templates", "02 / Audience & queue", "03 / Delivery history"]) {
     const tab = page.getByRole("tab", { name });
     await tab.click();
@@ -171,6 +175,41 @@ test("communications tabs and new-template editor preserve local-only state", as
   await page.getByRole("button", { name: "+ New template" }).click();
   await expect(page.getByRole("heading", { name: /New message master/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Create template|Save changes/ })).toBeVisible();
+  await page.getByLabel("Template name").fill("QA unsaved template");
+  await page.getByRole("tab", { name: "02 / Audience & queue" }).click();
+  let dialog = page.getByRole("alertdialog", { name: "Discard unsaved template changes?" });
+  await expect(dialog).toContainText("Your edits have not been saved");
+  await dialog.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page.getByRole("tab", { name: "01 / Templates" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Template name")).toHaveValue("QA unsaved template");
+
+  await page.getByRole("tab", { name: "02 / Audience & queue" }).click();
+  dialog = page.getByRole("alertdialog", { name: "Discard unsaved template changes?" });
+  await dialog.getByRole("button", { name: "Discard changes" }).click();
+  await expect(page.getByRole("tab", { name: "02 / Audience & queue" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "01 / Templates" }).click();
+  await page.getByRole("button").filter({ hasText: /V\d+/ }).first().click();
+
+  const subject = page.getByLabel("Subject line");
+  const originalSubject = await subject.inputValue();
+  const winningSubject = `QA template winner ${Date.now()}`;
+  await subject.fill(winningSubject);
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Template saved").last()).toBeVisible();
+
+  const peerSubject = peer.getByLabel("Subject line");
+  const losingSubject = `QA stale template ${Date.now()}`;
+  await peerSubject.fill(losingSubject);
+  await peer.getByRole("button", { name: "Save changes" }).click();
+  await expect(peer.getByText(/Template (version is|changed concurrently)/).last()).toBeVisible();
+  await expect(peerSubject).toHaveValue(losingSubject);
+
+  await subject.fill(originalSubject);
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Template saved").last()).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Subject line")).toHaveValue(originalSubject);
+  await peer.close();
 });
 
 test("publication and import confirmations disclose scope and Cancel cleanly", async ({ context, page, baseURL }, testInfo) => {
