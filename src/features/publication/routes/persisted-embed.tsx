@@ -56,10 +56,10 @@ export default function PersistedEmbedRoute() {
     return <main className="min-h-dvh bg-canvas p-6"><Skeleton className="mx-auto min-h-[32rem] max-w-7xl rounded-none" /></main>;
   }
   if (state.status === "unavailable") {
-    return <main className="grid min-h-dvh place-items-center bg-canvas p-6"><EmptyState title="Embed unavailable" description="This embed is disabled, missing, or no longer public." /></main>;
+    return <main className="grid min-h-dvh place-items-center bg-canvas p-6"><EmptyState headingLevel={1} title="Embed unavailable" description="This embed is disabled, missing, or no longer public." /></main>;
   }
   if (state.status === "failed") {
-    return <main className="grid min-h-dvh place-items-center bg-canvas p-6"><EmptyState title="Could not load this embed" description={state.message} action={<Button onClick={() => setRequest((value) => value + 1)}>Try again</Button>} /></main>;
+    return <main className="grid min-h-dvh place-items-center bg-canvas p-6"><EmptyState headingLevel={1} title="Could not load this embed" description={state.message} action={<Button onClick={() => setRequest((value) => value + 1)}>Try again</Button>} /></main>;
   }
 
   const design = { aesthetic: state.definition.aesthetic, accent: state.definition.accent } as const;
@@ -78,7 +78,7 @@ export default function PersistedEmbedRoute() {
   }
 
   if (state.content === null) {
-    return <ScheduleEmbedContent agenda={null} error={null} onRetry={() => setRequest((value) => value + 1)} design={design} />;
+    return <main className="min-h-dvh bg-canvas px-3 py-5 text-ink sm:px-8 sm:py-8 lg:px-10 lg:py-10"><div className="mx-auto w-full max-w-6xl"><ScheduleEmbedContent agenda={null} error={null} onRetry={() => setRequest((value) => value + 1)} design={design} /></div></main>;
   }
   const agenda = filterPublishedAgenda(
     state.content as Awaited<ReturnType<typeof getPublicSchedule>>,
@@ -86,13 +86,17 @@ export default function PersistedEmbedRoute() {
     state.definition.trackId,
   );
   return (
-    <ScheduleEmbedContent
-      agenda={agenda}
-      error={null}
-      onRetry={() => setRequest((value) => value + 1)}
-      design={design}
-      includedFields={state.definition.fields}
-      preset={state.definition.preset === "sessions" || state.definition.preset === "itinerary" ? state.definition.preset : "agenda"}
-    />
+    <main className="min-h-dvh bg-canvas px-3 py-5 text-ink sm:px-8 sm:py-8 lg:px-10 lg:py-10">
+      <div className="mx-auto w-full max-w-6xl">
+        <ScheduleEmbedContent
+          agenda={agenda}
+          error={null}
+          onRetry={() => setRequest((value) => value + 1)}
+          design={design}
+          includedFields={state.definition.fields}
+          preset={state.definition.preset === "sessions" || state.definition.preset === "itinerary" ? state.definition.preset : "agenda"}
+        />
+      </div>
+    </main>
   );
 }

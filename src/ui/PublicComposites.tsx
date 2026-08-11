@@ -161,7 +161,7 @@ export function ScheduleList({
               </p>
             )}
             {((visible.has("room") && talk.room) || (visible.has("track") && talk.track)) && (
-              <p className="mt-1 text-xs text-ink-faint">{[
+              <p className="mt-1 text-xs text-ink-secondary">{[
                 visible.has("room") ? talk.room : null,
                 visible.has("track") ? talk.track : null,
               ].filter(Boolean).join(" · ")}</p>

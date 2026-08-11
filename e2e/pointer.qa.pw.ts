@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { loadPublicRouteFixtures } from "./helpers/public-route-fixtures";
 import { installDeterministicBrowser } from "./helpers/visual-readiness";
 
 const EVENT = "ai-engineer-sandbox";
@@ -137,6 +138,7 @@ test("every enabled stable control receives unobstructed pointer input", async (
   expect(directoryResponse.status()).toBe(200);
   const directory = await directoryResponse.json() as { readonly speakers: readonly { readonly speaker: { readonly id: string } }[] };
   expect(directory.speakers.length).toBeGreaterThan(0);
+  const publicFixtures = await loadPublicRouteFixtures(request);
   const targets = [...TARGETS, {
     name: "speaker-detail",
     path: `/e/${EVENT}/speakers/${encodeURIComponent(directory.speakers[0]!.speaker.id)}`,
@@ -144,6 +146,46 @@ test("every enabled stable control receives unobstructed pointer input", async (
   }, {
     name: "public-cfp",
     path: `/submit/${EVENT}/${cfp!.id}`,
+    persona: "public" as const,
+  }, {
+    name: "public-agenda",
+    path: `/event/${EVENT}/agenda`,
+    persona: "public" as const,
+  }, {
+    name: "public-schedule",
+    path: `/event/${EVENT}/schedule`,
+    persona: "public" as const,
+  }, {
+    name: "public-gallery",
+    path: `/event/${EVENT}/gallery`,
+    persona: "public" as const,
+  }, {
+    name: "public-session-detail",
+    path: `/event/${EVENT}/sessions/${encodeURIComponent(publicFixtures.talkId)}`,
+    persona: "public" as const,
+  }, {
+    name: "public-session-missing",
+    path: `/event/${EVENT}/sessions/talk_qa_missing`,
+    persona: "public" as const,
+  }, {
+    name: "public-speaker-detail",
+    path: `/event/${EVENT}/speakers/${encodeURIComponent(publicFixtures.speakerId)}`,
+    persona: "public" as const,
+  }, {
+    name: "public-speaker-missing",
+    path: `/event/${EVENT}/speakers/speaker_qa_missing`,
+    persona: "public" as const,
+  }, {
+    name: "public-gallery-detail",
+    path: `/event/${EVENT}/gallery/${encodeURIComponent(publicFixtures.speakerId)}`,
+    persona: "public" as const,
+  }, {
+    name: "persisted-embed",
+    path: `/embed/${EVENT}/${encodeURIComponent(publicFixtures.embedId)}`,
+    persona: "public" as const,
+  }, {
+    name: "persisted-embed-unavailable",
+    path: `/embed/${EVENT}/embed_qa_missing`,
     persona: "public" as const,
   }];
 
