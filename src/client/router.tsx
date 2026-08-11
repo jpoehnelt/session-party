@@ -61,8 +61,8 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
         <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-accent`} to="/" onClick={onNavigate}>
           {brand}
         </Link>
-        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} border-2 border-on-accent bg-production-lime px-3 py-2.5 text-xs font-black uppercase tracking-[0.1em] text-ink shadow-[4px_4px_0_#7857ff]`} to="/events" onClick={onNavigate}>
-          Event control room →
+        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} border-2 border-on-accent bg-production-lime px-3 py-2.5 text-xs font-black uppercase tracking-[0.1em] text-ink shadow-[4px_4px_0_#7857ff]`} to="/events?choose=1" onClick={onNavigate}>
+          Your home →
         </Link>
       </nav>
     );
@@ -76,10 +76,10 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
       </Link>
       <Link
         className={`${mobile ? "flex min-h-11 items-center" : "block"} border-y border-white/25 px-3 py-2.5 text-[10px] font-black uppercase tracking-[0.14em] text-white/55 hover:bg-white/10 hover:text-white`}
-        to="/events"
+        to="/events?choose=1"
         onClick={onNavigate}
       >
-        ← All events
+        ← Your home
       </Link>
       <div className="space-y-1.5">
         {navItems.map(({ label, segment }) => {
