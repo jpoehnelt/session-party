@@ -15,6 +15,7 @@ import type {
   SpeakerDirectory,
 } from "../schema";
 import type { PublicSubmissionForm } from "@/features/submit/schema";
+import type { FormSummary } from "@/features/forms/schema";
 import {
   claimSpeakerAccount,
   createResource,
@@ -22,6 +23,7 @@ import {
   deleteResource,
   deleteTask,
   getPublicSpeakerGallery,
+  getOrganizerFormSummaries,
   getSpeakerDirectory,
   getSpeakerPortal,
   getSpeakerTaskForm,
@@ -78,6 +80,20 @@ const task: PortalTaskDefinition = {
   version: 3,
   targetMode: "all",
   speakerIds: [],
+};
+
+const taskFormSummary: FormSummary = {
+  id: "form-travel",
+  eventId: event.id,
+  purpose: "additional",
+  name: "Travel details",
+  description: null,
+  status: "open",
+  opensAt: null,
+  closesAt: null,
+  version: 2,
+  publishedVersionNumber: 1,
+  updatedAt: 1_784_000_000_000,
 };
 
 const resource: PortalResource = {
@@ -354,6 +370,22 @@ describe("portal API loading", () => {
       `/api/v1/events/${event.slug}`,
       `/api/v1/events/${event.id}/portal/tasks`,
     ]);
+  });
+
+  it("loads organizer form summaries for task selection", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/v1/events/${event.slug}`) return ok({ id: event.id });
+      if (url === `/api/v1/events/${event.id}/forms`) return ok([taskFormSummary]);
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getOrganizerFormSummaries(event.slug)).resolves.toEqual([taskFormSummary]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/events/${event.id}/forms`,
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
   });
 
   it("decodes only the public gallery endpoint for embeds", async () => {
@@ -780,11 +812,27 @@ describe("organizer content and workflows", () => {
 
     const formTaskMarkup = renderToStaticMarkup(createElement(OrganizerTasksContent, {
       tasks: [{ ...task, id: "task-form", kind: "form", formId: "form-travel", name: "Travel details" }],
+      forms: [taskFormSummary],
+      eventSlug: event.slug,
       onCreate: noop,
       onUpdate: noop,
       onDelete: noop,
     }));
-    expect(formTaskMarkup).toMatch(/<input[^>]*required=""[^>]*name="formId"|<input[^>]*name="formId"[^>]*required=""/);
+    expect(formTaskMarkup).toMatch(/<select[^>]*required=""[^>]*name="formId"|<select[^>]*name="formId"[^>]*required=""/);
+    expect(formTaskMarkup).toContain("Travel details · open");
+    expect(formTaskMarkup).toContain(`/e/${event.slug}/forms?formId=form-travel`);
+    expect(formTaskMarkup).toContain("Open form");
+
+    const unavailableFormTaskMarkup = renderToStaticMarkup(createElement(OrganizerTasksContent, {
+      tasks: [{ ...task, id: "task-form-missing", kind: "form", formId: "form-retired", name: "Retired form task" }],
+      forms: [taskFormSummary],
+      eventSlug: event.slug,
+      onCreate: noop,
+      onUpdate: noop,
+      onDelete: noop,
+    }));
+    expect(unavailableFormTaskMarkup).toContain("Unavailable form · form-retired");
+    expect(unavailableFormTaskMarkup).toContain("formId=form-retired");
 
     const resourceMarkup = renderToStaticMarkup(createElement(OrganizerResourcesContent, {
       resources: [resource],

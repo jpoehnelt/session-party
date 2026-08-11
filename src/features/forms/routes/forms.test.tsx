@@ -22,6 +22,7 @@ import FormsPage, {
 } from "./forms";
 import type { FormDetail, FormSummary } from "../schema";
 import { FormPreview } from "../components/FormPreview";
+import { formSelectionSearch, organizerFormPath, selectedFormIdFromSearch } from "../links";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -102,6 +103,18 @@ function renderRoute(children: ReactElement): string {
 describe("forms organizer route", () => {
   it("exports the forms navigation route", () => {
     expect(path).toBe("/e/:eventSlug/forms");
+  });
+
+  it("builds encoded form deep links while preserving unrelated query state", () => {
+    expect(organizerFormPath("summit/2026", "form/travel")).toBe(
+      "/e/summit%2F2026/forms?formId=form%2Ftravel",
+    );
+    expect(formSelectionSearch("?panel=preview&formId=old", "form/new")).toBe(
+      "?panel=preview&formId=form%2Fnew",
+    );
+    expect(formSelectionSearch("?panel=preview&formId=old", null)).toBe("?panel=preview");
+    expect(selectedFormIdFromSearch("?formId=%20form-new%20")).toBe("form-new");
+    expect(selectedFormIdFromSearch("")).toBeNull();
   });
 
   it("loads the event by slug, then forms and the selected form by authoritative id", async () => {

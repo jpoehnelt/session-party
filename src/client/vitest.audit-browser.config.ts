@@ -20,6 +20,7 @@ export default defineConfig({
       "src/features/submit/routes/submit-draft.browser.tsx",
       "src/features/publication/components/public-program.browser.tsx",
       "src/features/agenda/components/agenda-board.browser.tsx",
+      "src/features/forms/routes/forms.browser.tsx",
     ],
     browser: {
       enabled: true,

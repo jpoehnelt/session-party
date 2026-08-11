@@ -1,5 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useParams } from "react-router";
+import type { FormSummary } from "@/features/forms/schema";
+import { organizerFormPath } from "@/features/forms/links";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,7 +23,7 @@ import {
   toast,
 } from "@/ui";
 import type { CreateTaskInput, PortalTaskDefinition, PortalTaskKind, SpeakerDirectoryItem, UpdateTaskInput } from "../schema";
-import { createTask, deleteTask, getSpeakerDirectory, getTaskDefinitions, resolveOrganizerEventId, updateTask } from "./api";
+import { createTask, deleteTask, getOrganizerFormSummaries, getSpeakerDirectory, getTaskDefinitions, resolveOrganizerEventId, updateTask } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
 import {
   ProductionHeader,
@@ -73,8 +75,12 @@ function updateTaskInput(eventId: string, task: PortalTaskDefinition, form: HTML
 export default function OrganizerTasksRoute() {
   const { eventSlug = "" } = useParams();
   const [state, retry] = useRouteLoad(async () => {
-    const [tasks, directory] = await Promise.all([getTaskDefinitions(eventSlug), getSpeakerDirectory(eventSlug)]);
-    return { tasks, speakers: directory.speakers };
+    const [tasks, directory, forms] = await Promise.all([
+      getTaskDefinitions(eventSlug),
+      getSpeakerDirectory(eventSlug),
+      getOrganizerFormSummaries(eventSlug),
+    ]);
+    return { tasks, speakers: directory.speakers, forms };
   }, eventSlug);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -100,6 +106,7 @@ export default function OrganizerTasksRoute() {
       <OrganizerTasksContent
         tasks={state.data.tasks}
         speakers={state.data.speakers}
+        forms={state.data.forms}
         eventSlug={eventSlug}
         busyId={busyId}
         onCreate={(form) => mutate("new", (eventId) => createTask(eventId, createTaskInput(eventId, form)), "Task created")}
@@ -114,6 +121,7 @@ export default function OrganizerTasksRoute() {
 export function OrganizerTasksContent({
   tasks,
   speakers = [],
+  forms = [],
   eventSlug,
   busyId = null,
   onCreate,
@@ -122,6 +130,7 @@ export function OrganizerTasksContent({
 }: {
   readonly tasks: readonly PortalTaskDefinition[];
   readonly speakers?: readonly SpeakerDirectoryItem[];
+  readonly forms?: readonly FormSummary[];
   readonly eventSlug?: string;
   readonly busyId?: string | null;
   readonly onCreate: (form: HTMLFormElement) => void;
@@ -148,6 +157,7 @@ export function OrganizerTasksContent({
       <Card className={productionCardClass} title="New cue / Create task">
         <TaskFields
           speakers={speakers}
+          forms={forms}
           eventSlug={eventSlug}
           submitLabel="Create task"
           loading={busyId === "new"}
@@ -174,6 +184,7 @@ export function OrganizerTasksContent({
                 <TaskFields
                   task={task}
                   speakers={speakers}
+                  forms={forms}
                   eventSlug={eventSlug}
                   submitLabel="Save changes"
                   loading={busyId === task.id}
@@ -211,6 +222,7 @@ export function OrganizerTasksContent({
 function TaskFields({
   task,
   speakers = [],
+  forms = [],
   eventSlug,
   submitLabel,
   loading,
@@ -219,6 +231,7 @@ function TaskFields({
 }: {
   readonly task?: PortalTaskDefinition;
   readonly speakers?: readonly SpeakerDirectoryItem[];
+  readonly forms?: readonly FormSummary[];
   readonly eventSlug?: string;
   readonly submitLabel: string;
   readonly loading: boolean;
@@ -227,6 +240,10 @@ function TaskFields({
 }) {
   const dateValue = localDateTimeValue(task?.dueAt);
   const [kind, setKind] = useState<PortalTaskKind>(task?.kind ?? "confirm");
+  const [linkedFormId, setLinkedFormId] = useState(task?.formId ?? "");
+  const missingLinkedForm = task?.formId && !forms.some((form) => form.id === task.formId)
+    ? task.formId
+    : null;
   return (
     <form className={`space-y-4 ${productionFormClass}`} onSubmit={onSubmit}>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -237,7 +254,38 @@ function TaskFields({
         <Input name="order" label="Order" type="number" required defaultValue={task?.order ?? 0} />
         <Input name="dueAt" label="Due date" type="datetime-local" step={1} defaultValue={dateValue} />
         {kind === "form" && (
-          <Input name="formId" label="Form ID" hint="Required for form tasks." required defaultValue={task?.formId ?? ""} />
+          <div className="space-y-2">
+            <Select
+              name="formId"
+              label="Form"
+              required
+              value={linkedFormId}
+              onChange={(event) => setLinkedFormId(event.currentTarget.value)}
+            >
+              <option value="">{forms.length === 0 ? "No forms available" : "Choose a form"}</option>
+              {missingLinkedForm ? <option value={missingLinkedForm}>Unavailable form · {missingLinkedForm}</option> : null}
+              {forms.map((form) => (
+                <option key={form.id} value={form.id}>{form.name} · {form.status}</option>
+              ))}
+            </Select>
+            {eventSlug ? (
+              linkedFormId ? (
+                <a
+                  className="inline-flex text-xs font-black uppercase tracking-wide text-accent underline underline-offset-2"
+                  href={organizerFormPath(eventSlug, linkedFormId)}
+                >
+                  Open form
+                </a>
+              ) : (
+                <a
+                  className="inline-flex text-xs font-black uppercase tracking-wide text-accent underline underline-offset-2"
+                  href={`/e/${encodeURIComponent(eventSlug)}/forms`}
+                >
+                  Create a form
+                </a>
+              )
+            ) : null}
+          </div>
         )}
       </div>
       <Textarea name="description" label="Instructions" defaultValue={task?.description ?? ""} />
