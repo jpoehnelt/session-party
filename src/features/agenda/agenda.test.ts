@@ -947,6 +947,42 @@ describe("agenda service", () => {
     expect(conflicted).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
   });
 
+  it("blocks publication while Airtable-authoritative talk content is pending", async () => {
+    const seeded = await seedAgenda("pending-content-publication", { scheduled: true });
+    const [before] = await seeded.db.select().from(talks).where(eq(talks.id, seeded.talkA));
+    const integrationId = `airtable-${seeded.eventId}`;
+    const integrationNow = new Date(FIXED_NOW);
+    await seeded.db.insert(integrations).values({
+      id: integrationId,
+      eventId: seeded.eventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: integrationNow,
+      updatedAt: integrationNow,
+    });
+    await runAs(seeded.user, updateTalkContent({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: "Unconfirmed Airtable title",
+      description: before!.description,
+      expectedVersion: before!.version,
+      idempotencyKey: "pending-content-publication-edit-0001",
+    }));
+
+    const publication = await runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 1,
+      expectedEventVersion: 1,
+      idempotencyKey: "pending-content-publication-0001",
+    }));
+    expect(publication).toMatchObject({ _tag: "Left", left: { _tag: "Validation" } });
+    expect(await seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId), eq(domainChanges.eventType, "agenda/published"),
+    ))).toHaveLength(0);
+  });
+
   it("saves room and speaker overlaps as named non-blocking agenda warnings", async () => {
     const roomSeed = await seedAgenda("room-conflict", { scheduled: true });
     const roomTalk = await runAs(roomSeed.user, createTalk({
@@ -1881,6 +1917,54 @@ describe("agenda service", () => {
     expect(publicationChanges[0]?.payload).toEqual(firstPublication);
     await expect(seeded.db.select().from(auditLog).where(eq(auditLog.eventId, seeded.eventId))).resolves.toHaveLength(2);
     await expect(seeded.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.eventId, seeded.eventId))).resolves.toHaveLength(2);
+  });
+
+  it("rejects an Airtable pending edit introduced after publication sampling", async () => {
+    const seeded = await seedAgenda("publication-pending-race", { scheduled: true });
+    const integrationId = `airtable-${seeded.eventId}`;
+    const now = new Date(FIXED_NOW);
+    await seeded.db.insert(integrations).values({
+      id: integrationId,
+      eventId: seeded.eventId,
+      kind: "airtable",
+      secretRef: "AIRTABLE_PAT",
+      config: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    const barrier = publicationBarrier();
+    const publication = runEither(seeded.user, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publication-pending-race-0001",
+    }, barrier.interlock));
+    await barrier.sampled;
+    try {
+      await seeded.db.insert(airtablePendingEdits).values({
+        id: "publication-pending-race-edit",
+        eventId: seeded.eventId,
+        integrationId,
+        entityType: "talk",
+        entityId: seeded.talkA,
+        speakerId: null,
+        submissionId: null,
+        talkId: seeded.talkA,
+        fieldKey: "title",
+        intendedValue: "Losing pending title",
+        status: "pending",
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } finally {
+      barrier.release();
+    }
+    expect(await publication).toMatchObject({ _tag: "Left", left: { _tag: "Conflict" } });
+    expect(await seeded.db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, seeded.eventId), eq(domainChanges.eventType, "agenda/published"),
+    ))).toHaveLength(0);
   });
 
   it("rejects publication when event metadata changes after the agenda read", async () => {

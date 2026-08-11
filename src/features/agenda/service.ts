@@ -1690,7 +1690,7 @@ export const publishAgenda = (
         message: "Agenda publication requires the event end time to be after the start time",
       }));
     }
-    const [agendaTalks, trackRows, roomRows, speakerRows] = yield* Effect.all([
+    const [agendaTalks, trackRows, roomRows, speakerRows, pendingPublicationRows] = yield* Effect.all([
       loadTalkRows(input.eventId),
       database(() => db.select({ id: tracks.id, name: tracks.name }).from(tracks).where(eq(tracks.eventId, input.eventId))),
       database(() => db.select({ id: rooms.id, name: rooms.name }).from(rooms).where(eq(rooms.eventId, input.eventId))),
@@ -1715,7 +1715,18 @@ export const publishAgenda = (
           .where(and(eq(talkSpeakers.eventId, input.eventId), eq(talks.status, "confirmed")))
           .orderBy(asc(talkSpeakers.talkId), asc(speakers.displayName), asc(speakers.id)),
       ),
+      database(() => db.select({ id: airtablePendingEdits.id }).from(airtablePendingEdits).where(and(
+        eq(airtablePendingEdits.eventId, input.eventId),
+        eq(airtablePendingEdits.entityType, "talk"),
+        eq(airtablePendingEdits.status, "pending"),
+        inArray(airtablePendingEdits.fieldKey, ["title", "description"]),
+      ))),
     ]);
+    if (pendingPublicationRows.length > 0) {
+      return yield* Effect.fail(new Validation({
+        message: "Resolve pending Airtable talk title and description edits before publishing",
+      }));
+    }
     const conflicts = yield* loadConflicts(input.eventId, agendaTalks);
     const incompleteTalks = agendaTalks.filter(({ status, roomId, startsAt }) =>
       status !== "cancelled" && (status !== "confirmed" || roomId === null || startsAt === null)
@@ -2407,6 +2418,14 @@ export const publishAgenda = (
             from ${events}
             where ${events.id} = ${input.eventId}
           ) = ${input.expectedEventVersion}
+          and not exists (
+            select 1
+            from ${airtablePendingEdits}
+            where ${airtablePendingEdits.eventId} = ${input.eventId}
+              and ${airtablePendingEdits.entityType} = 'talk'
+              and ${airtablePendingEdits.status} = 'pending'
+              and ${airtablePendingEdits.fieldKey} in ('title', 'description')
+          )
           and ${dispatchInterlock}
           and not exists (
             with expected_speakers as (

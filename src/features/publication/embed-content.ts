@@ -33,3 +33,22 @@ export function filterPublishedAgenda(
   if (!track) return agenda;
   return { ...agenda, talks: agenda.talks.filter((talk) => talk.track === track) };
 }
+
+export function projectPublishedAgenda(
+  agenda: PublishedAgenda,
+  fields: readonly ScheduleEmbedField[],
+) {
+  const visible = new Set(fields);
+  return {
+    ...agenda,
+    talks: agenda.talks.map((talk) => ({
+      id: talk.id,
+      ...(visible.has("title") ? { title: talk.title } : {}),
+      ...(visible.has("description") ? { description: talk.description } : {}),
+      ...(visible.has("track") ? { track: talk.track } : {}),
+      ...(visible.has("room") ? { room: talk.room } : {}),
+      ...(visible.has("time") ? { startsAt: talk.startsAt, durationMin: talk.durationMin } : {}),
+      ...(visible.has("speakers") ? { speakerNames: talk.speakerNames } : {}),
+    })),
+  };
+}

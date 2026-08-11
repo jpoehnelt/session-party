@@ -127,14 +127,17 @@ export function PublishedSchedule({
   includedFields = SCHEDULE_EMBED_FIELDS,
 }: PublishedScheduleProps) {
   const visible = new Set(includedFields);
-  const supportsTrack = visible.has("track") && agenda.talks.some((talk) => Boolean(talk.track?.trim()));
-  const supportsRoom = visible.has("room") && agenda.talks.some((talk) => Boolean(talk.room?.trim()));
-  const tabs = ([
-    { id: "list", label: VIEW_LABELS.list },
-    { id: "day", label: VIEW_LABELS.day },
-    { id: "week", label: VIEW_LABELS.week },
+  const includesTime = visible.has("time");
+  const supportsTrack = includesTime && visible.has("track") && agenda.talks.some((talk) => Boolean(talk.track?.trim()));
+  const supportsRoom = includesTime && visible.has("room") && agenda.talks.some((talk) => Boolean(talk.room?.trim()));
+  const tabs = (includesTime ? [
+    { id: "list" as const, label: VIEW_LABELS.list },
+    { id: "day" as const, label: VIEW_LABELS.day },
+    { id: "week" as const, label: VIEW_LABELS.week },
     ...(supportsTrack ? [{ id: "track" as const, label: VIEW_LABELS.track }] : []),
     ...(supportsRoom ? [{ id: "room" as const, label: VIEW_LABELS.room }] : []),
+  ] : [
+    { id: "list" as const, label: VIEW_LABELS.list },
   ]) satisfies { id: AgendaView; label: string }[];
   const [selectedView, setSelectedView] = useState<AgendaView>(initialView);
   const view = tabs.some(({ id }) => id === selectedView) ? selectedView : "list";
@@ -153,7 +156,7 @@ export function PublishedSchedule({
 
   return (
     <div className={compact ? "space-y-5" : "space-y-8"}>
-      <section
+      {includesTime && <section
         aria-label="Schedule display controls"
         className={`grid bg-surface lg:grid-cols-[minmax(0,1fr)_auto] ${
           aesthetic === "bold"
@@ -183,7 +186,7 @@ export function PublishedSchedule({
           <p className="text-sm font-black">{agenda.timezone}</p>
           <p className={`text-[10px] font-bold uppercase tracking-[0.12em] ${aesthetic === "bold" ? "text-white/55" : "text-ink-secondary"}`}>{sessionLabel} on air</p>
         </div>
-      </section>
+      </section>}
       <div
         role="region"
         aria-label={`${VIEW_LABELS[view]} schedule view`}
