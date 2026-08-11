@@ -14,10 +14,27 @@ test("deployed static document responses carry baseline browser security headers
     const response = await request.get(path);
     expect(response.status(), path).toBe(200);
     const headers = response.headers();
+    expect(headers["content-security-policy"], path).toContain("default-src 'self'");
+    expect(headers["content-security-policy"], path).toContain("frame-ancestors 'none'");
+    expect(headers["strict-transport-security"], path).toBe("max-age=31536000");
+    expect(headers["x-frame-options"], path).toBe("DENY");
     expect(headers["x-content-type-options"], path).toBe("nosniff");
     expect(headers["referrer-policy"], path).toBe("strict-origin-when-cross-origin");
     expect(headers["permissions-policy"], path).toBe("camera=(), geolocation=(), microphone=()");
   }
+});
+
+test("deployed embed shells remain frameable while retaining the application CSP", async ({ baseURL, request }, testInfo) => {
+  chromiumOnly(testInfo);
+  test.skip(new URL(baseURL ?? "http://127.0.0.1").hostname === "127.0.0.1", "Cloudflare applies public/_headers at build preview and deploy time, not Vite dev time");
+  const response = await request.get(`/embed/${EVENT}/embed_schedule`);
+  expect(response.status()).toBe(200);
+  const headers = response.headers();
+  expect(headers["content-security-policy"]).toContain("default-src 'self'");
+  expect(headers["content-security-policy"]).toContain("frame-ancestors *");
+  expect(headers["content-security-policy"]).not.toContain("frame-ancestors 'none'");
+  expect(headers["x-frame-options"]).toBeUndefined();
+  expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
 });
 
 test("an organizer event-load failure renders a usable retry state and recovers", async ({ page }, testInfo) => {
@@ -41,6 +58,28 @@ test("an organizer event-load failure renders a usable retry state and recovers"
   await retry.click();
   await expect(page.getByRole("heading", { level: 1, name: "CFP & forms" })).toBeVisible();
   await expect(page.getByRole("button", { name: "New additional form" })).toBeEnabled();
+});
+
+test("a malformed public response fails safely and recovers through retry", async ({ page }, testInfo) => {
+  chromiumOnly(testInfo);
+  await installDeterministicBrowser(page);
+  const agendaPattern = `**/api/v1/public/events/${EVENT}/agenda/published`;
+  await page.route(agendaPattern, (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: "{",
+  }));
+
+  await page.goto(`/event/${EVENT}/sessions`);
+  await expect(page.getByRole("heading", { level: 1, name: "Published program unavailable" })).toBeVisible();
+  await expect(page.getByText("The server returned an invalid response. Try again.")).toBeVisible();
+  await expect(page.locator("main")).not.toContainText(/SyntaxError|JSON at position|ParseError|stack/i);
+  await expect(page).toHaveTitle("Published program unavailable — Session Party");
+
+  await page.unroute(agendaPattern);
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
+  await expect(page).toHaveTitle("Sessions — Session Party");
 });
 
 test("agenda mutations fail closed while offline and recover from canonical state after reconnect", async ({ context, page }, testInfo) => {

@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiFetch, invalidateAuthGeneration, synchronizeAuthenticatedPrincipal } from "./api";
 
@@ -20,6 +21,38 @@ describe("apiFetch", () => {
 
     await expect(apiFetch("/api/v1/events")).rejects.toEqual(
       expect.objectContaining({ name: "ApiError", message: "You need to sign in", status: 401 }),
+    );
+  });
+
+  it("replaces malformed successful JSON with a safe response error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("{", { status: 200 })),
+    );
+
+    await expect(apiFetch("/api/v1/events")).rejects.toEqual(
+      expect.objectContaining({
+        name: "ApiError",
+        message: "The server returned an invalid response. Try again.",
+        status: 502,
+      }),
+    );
+  });
+
+  it("replaces successful payload schema drift with the same safe response error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 42 }), { status: 200 })),
+    );
+
+    await expect(apiFetch("/api/v1/events/event-a", {
+      schema: Schema.Struct({ id: Schema.String }),
+    })).rejects.toEqual(
+      expect.objectContaining({
+        name: "ApiError",
+        message: "The server returned an invalid response. Try again.",
+        status: 502,
+      }),
     );
   });
 

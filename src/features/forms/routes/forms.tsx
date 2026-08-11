@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { Schema } from "effect";
 import type { PresenceUser } from "contracts/protocol";
-import { ApiError, apiFetch } from "@/client/api";
+import { ApiError, apiFetch, decodeApiPayload } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { useEventRoom } from "@/client/socket";
 import {
@@ -177,7 +177,7 @@ async function mutationResponse(response: Response): Promise<FormDetail> {
       : `Form request failed with status ${response.status}`;
     throw new ApiError(response.status, message);
   }
-  return Schema.decodeUnknownSync(FormDetail)(payload);
+  return decodeApiPayload(FormDetail, payload);
 }
 
 /** Creates a useful draft through the registered forms.create REST operation. */
@@ -231,7 +231,7 @@ export async function deleteFormDraft(
       : `Form request failed with status ${response.status}`;
     throw new ApiError(response.status, message);
   }
-  return Schema.decodeUnknownSync(DeleteFormOutput)(payload);
+  return decodeApiPayload(DeleteFormOutput, payload);
 }
 
 /** Replaces the editable draft through forms.update, preserving field identities. */

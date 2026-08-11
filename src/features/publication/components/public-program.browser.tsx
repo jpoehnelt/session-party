@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { userEvent } from "vitest/browser";
@@ -109,11 +109,11 @@ const formattedDateTime = (timestamp: number) => new Intl.DateTimeFormat(undefin
   timeZone: agenda.timezone,
 }).format(timestamp);
 
-const byButton = (name: string): HTMLButtonElement => {
-  const button = [...document.querySelectorAll<HTMLButtonElement>("button")]
+const byControl = (name: string): HTMLButtonElement | HTMLAnchorElement => {
+  const control = [...document.querySelectorAll<HTMLButtonElement | HTMLAnchorElement>("button, a")]
     .find((candidate) => candidate.textContent?.includes(name));
-  if (!button) throw new Error(`Missing button: ${name}`);
-  return button;
+  if (!control) throw new Error(`Missing control: ${name}`);
+  return control;
 };
 
 const fieldNamed = <T extends HTMLInputElement | HTMLSelectElement>(name: string): T => {
@@ -142,11 +142,36 @@ describe("public program rendered interactions", () => {
     window.localStorage.clear();
   });
 
+  const ProgramHarness = ({ initialSurface }: { readonly initialSurface: PublicProgramSurface }) => {
+    const basePath = `/event/${agenda.eventSlug}`;
+    const [path, setPath] = useState(`${basePath}/${initialSurface}`);
+    const splat = path.slice(basePath.length + 1);
+    const [surfaceSegment, detailId] = splat.split("/");
+    const surface = (surfaceSegment || initialSurface) as PublicProgramSurface;
+    const detail = detailId
+      ? surface === "sessions"
+        ? { sessionId: detailId }
+        : { speakerId: detailId }
+      : {};
+    const captureInternalNavigation = (event: ReactMouseEvent<HTMLDivElement>) => {
+      const anchor = (event.target as Element).closest<HTMLAnchorElement>("a");
+      const href = anchor?.getAttribute("href");
+      if (!href?.startsWith(`${basePath}/`)) return;
+      event.preventDefault();
+      setPath(href);
+    };
+    return (
+      <div onClickCapture={captureInternalNavigation}>
+        <PublicProgram agenda={agenda} gallery={gallery} surface={surface} detail={detail} />
+      </div>
+    );
+  };
+
   const renderSurface = async (surface: PublicProgramSurface) => {
     await act(async () => {
       root.render(
         <MemoryRouter>
-          <PublicProgram agenda={agenda} gallery={gallery} surface={surface} />
+          <ProgramHarness initialSurface={surface} />
         </MemoryRouter>,
       );
     });
@@ -188,53 +213,55 @@ describe("public program rendered interactions", () => {
     expect(container.textContent).toContain("01 session on the board");
     expect(container.textContent).toContain("Docs That Answer Back");
     await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Track"), ""));
-    await act(async () => userEvent.click(byButton("Show more")));
-    expect(byButton("Show less").getAttribute("aria-expanded")).toBe("true");
+    await act(async () => userEvent.click(byControl("Show more")));
+    expect(byControl("Show less").getAttribute("aria-expanded")).toBe("true");
   });
 
   it("opens and closes a complete searchable speaker list profile", async () => {
     await renderSurface("speakers");
     await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Search speakers"), "Priya Raman"));
     expect(container.textContent).toContain("01 speaker published");
-    await act(async () => userEvent.click(byButton("Priya Raman")));
+    await act(async () => userEvent.click(byControl("Priya Raman")));
     expect(document.body.textContent).toContain("Biography");
     expect(document.body.textContent).toContain("Principal Engineer at Latticework Systems");
     expect(document.body.textContent).toContain("Taming 40-Minute CI");
     expect(document.body.textContent).toContain(formattedDateTime(START));
     expect(document.body.textContent).toContain("Main Stage");
-    await act(async () => userEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!));
-    expect(container.textContent).toContain("01 speaker published");
+    await act(async () => userEvent.click(byControl("Back to speakers")));
+    expect(container.textContent).toContain("04 speakers published");
+    expect(container.textContent).toContain("Priya Raman");
   });
 
   it("renders complete gallery cards, fallbacks, and speaker detail", async () => {
     await renderSurface("gallery");
-    const galleryButtons = [...container.querySelectorAll<HTMLButtonElement>("ul button")];
-    expect(galleryButtons.map((button) => button.textContent)).toEqual([
+    const galleryCards = [...container.querySelectorAll<HTMLLIElement>("ul > li")];
+    expect(galleryCards.map((card) => card.textContent)).toEqual([
       expect.stringContaining("Jamie Chen"),
       expect.stringContaining("Marcus Okafor"),
       expect.stringContaining("Priya Raman"),
       expect.stringContaining("Avery Stone"),
     ]);
-    expect(galleryButtons.find((button) => button.textContent?.includes("Priya Raman"))?.textContent)
+    expect(galleryCards.find((card) => card.textContent?.includes("Priya Raman"))?.textContent)
       .toContain("Principal Engineer at Latticework Systems");
     expect(container.querySelector<HTMLImageElement>('img[alt="Priya Raman"]')?.src).toContain("data:image/svg+xml");
     expect(container.querySelector<HTMLElement>('[role="img"][aria-label="Avery Stone"]')?.textContent).toBe("AS");
-    expect(galleryButtons.find((button) => button.textContent?.includes("Avery Stone"))?.textContent)
+    expect(galleryCards.find((card) => card.textContent?.includes("Avery Stone"))?.textContent)
       .toContain("Independent");
 
     await act(async () => userEvent.fill(fieldNamed<HTMLInputElement>("Search speakers"), "Priya"));
     expect(container.textContent).toContain("01 speaker published");
-    await act(async () => userEvent.click(byButton("Priya Raman")));
-    expect(document.body.querySelectorAll('img[alt="Priya Raman"]')).toHaveLength(2);
+    await act(async () => userEvent.click(byControl("Priya Raman")));
+    expect(document.body.querySelectorAll('img[alt="Priya Raman"]')).toHaveLength(1);
     expect(document.body.textContent).toContain("Principal Engineer at Latticework Systems");
     expect(document.body.textContent).toContain("Show more biography");
-    await act(async () => userEvent.click(byButton("Show more biography")));
-    expect(byButton("Show less biography").getAttribute("aria-expanded")).toBe("true");
+    await act(async () => userEvent.click(byControl("Show more biography")));
+    expect(byControl("Show less biography").getAttribute("aria-expanded")).toBe("true");
     expect(document.body.textContent).toContain("Taming 40-Minute CI");
     expect(document.body.textContent).toContain(formattedDateTime(START));
     expect(document.body.textContent).toContain("Main Stage");
-    await act(async () => userEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!));
-    expect(container.textContent).toContain("01 speaker published");
+    await act(async () => userEvent.click(byControl("Back to speakers")));
+    expect(container.textContent).toContain("04 speakers published");
+    expect(container.textContent).toContain("Priya Raman");
   });
 
   it("switches agenda days and restores the agenda after closing complete session detail", async () => {
@@ -246,12 +273,12 @@ describe("public program rendered interactions", () => {
     await act(async () => userEvent.click(tabs[1]!));
     expect(container.textContent).toContain("Docs That Answer Back");
     expect(container.textContent).not.toContain("Taming 40-Minute CI");
-    await act(async () => userEvent.click(byButton("Docs That Answer Back")));
+    await act(async () => userEvent.click(byControl("Docs That Answer Back")));
     expect(document.body.textContent).toContain("Retrieval-grounded documentation patterns");
     expect(document.body.textContent).toContain("Format · 45 minutes");
     expect(document.body.textContent).toContain("Track · Developer Experience");
     expect(document.body.textContent).toContain("Room · Room 2A");
-    await act(async () => userEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!));
+    await act(async () => userEvent.click(byControl("Back to sessions")));
     expect(container.textContent).toContain("Docs That Answer Back");
   });
 
@@ -271,11 +298,11 @@ describe("public program rendered interactions", () => {
     expect(sampledCard?.textContent).toContain("A detailed account of incremental builds");
     expect(sampledCard?.textContent).toContain("Priya Raman — Principal Engineer at Latticework Systems");
     expect(sampledCard?.textContent).toContain("Jamie Chen — Engineering Manager at Switchyard");
-    await act(async () => userEvent.click(byButton("Add to my schedule")));
+    await act(async () => userEvent.click(byControl("Add to my schedule")));
     const tabs = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     await act(async () => userEvent.click(tabs[1]!));
-    await act(async () => userEvent.click(byButton("Add to my schedule")));
-    await act(async () => userEvent.click(byButton("My schedule (2)")));
+    await act(async () => userEvent.click(byControl("Add to my schedule")));
+    await act(async () => userEvent.click(byControl("My schedule (2)")));
     expect(container.textContent).toContain("Taming 40-Minute CI");
     expect(container.textContent).toContain("Docs That Answer Back");
     expect(container.textContent).not.toContain("Cache Invalidation Without Folklore");
@@ -284,10 +311,10 @@ describe("public program rendered interactions", () => {
     await act(async () => root.unmount());
     root = createRoot(container);
     await renderSurface("schedule");
-    await act(async () => userEvent.click(byButton("My schedule (2)")));
+    await act(async () => userEvent.click(byControl("My schedule (2)")));
     expect(container.textContent).toContain("Taming 40-Minute CI");
     expect(container.textContent).toContain("Docs That Answer Back");
-    await act(async () => userEvent.click(byButton("Remove")));
+    await act(async () => userEvent.click(byControl("Remove")));
     expect(container.textContent).toContain("My schedule (1)");
   });
 

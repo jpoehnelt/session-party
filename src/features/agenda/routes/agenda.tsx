@@ -316,7 +316,6 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   }, [refreshAgenda]);
 
   const closeTalkSheet = useCallback(() => {
-    setSelectedTalkId(null);
     const next = new URLSearchParams(searchParams);
     next.delete("talk");
     setSearchParams(next, { replace: true });
@@ -491,7 +490,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   }, [event.timezone, room, searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!agenda || !linkedTalkId || selectedTalkId === linkedTalkId) return;
+    if (!agenda) return;
+    if (!linkedTalkId) {
+      if (selectedTalkId !== null) setSelectedTalkId(null);
+      return;
+    }
+    if (selectedTalkId === linkedTalkId) return;
     const linkedTalk = agenda.talks.find(({ id }) => id === linkedTalkId);
     if (linkedTalk) selectTalk(linkedTalk);
   }, [agenda, linkedTalkId, selectTalk, selectedTalkId]);

@@ -1,4 +1,4 @@
-import { ApiError } from "@/client/api";
+import { ApiError, decodeApiResponse } from "@/client/api";
 import { Schema } from "effect";
 import {
   AcceptSubmissionOutput,
@@ -79,7 +79,7 @@ async function mutation<T>({
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) throw new ApiError(response.status, await responseMessage(response));
-  return Schema.decodeUnknownSync(schema)(await response.json());
+  return decodeApiResponse(response, schema);
 }
 
 export function assignReviewerRequest(input: AssignReviewerInput) {
@@ -181,7 +181,7 @@ export async function exportReviewResultsRequest(input: ExportReviewResultsInput
     `/api/v1/events/${segment(input.eventId)}/review/rounds/${segment(input.roundId)}/export`,
   );
   if (!response.ok) throw new ApiError(response.status, await responseMessage(response));
-  return Schema.decodeUnknownSync(ExportReviewResultsOutput)(await response.json());
+  return decodeApiResponse(response, ExportReviewResultsOutput);
 }
 
 export function advanceReviewRoundRequest(input: AdvanceReviewRoundInput) {

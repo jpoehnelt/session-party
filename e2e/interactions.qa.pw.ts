@@ -401,6 +401,80 @@ test("speaker directory search, selection, and bulk-action disabled state remain
   await expect(invite).toBeDisabled();
 });
 
+test("reusable speaker profile validates, versions, publishes, and restores its canonical fields", async ({ context, page, request, baseURL }, testInfo) => {
+  desktopOnly(testInfo);
+  const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
+  const profilePath = "/api/v1/speaker-profile";
+  const speakerHeaders = { Cookie: `sp_session=${SPEAKER_SESSION}` };
+  type ReusableProfile = Readonly<{
+    slug: string;
+    displayName: string;
+    title: string | null;
+    company: string | null;
+    bio: string | null;
+    headshotUrl: string | null;
+    links: readonly Readonly<{ label: string; url: string }>[];
+    visible: boolean;
+    version: number;
+  }>;
+  const loadProfile = async (): Promise<ReusableProfile> => {
+    const response = await request.get(profilePath, { headers: speakerHeaders });
+    expect(response.status()).toBe(200);
+    const profile = await response.json() as ReusableProfile | null;
+    expect(profile, "reusable profile fixture must exist").not.toBeNull();
+    return profile!;
+  };
+  const initial = await loadProfile();
+
+  await signIn(context, runtimeBaseURL, SPEAKER_SESSION);
+  await installDeterministicBrowser(page);
+  await page.goto("/speaker/profile", { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { level: 1, name: "Reusable speaker profile" }).waitFor({ state: "visible" });
+  const save = page.getByRole("button", { name: "Save reusable profile" });
+  const displayName = page.getByLabel("Display name");
+  await displayName.fill("");
+  await save.click();
+  expect(await displayName.evaluate((field: HTMLInputElement) => field.validity.valueMissing)).toBe(true);
+  expect((await loadProfile()).version).toBe(initial.version);
+
+  await displayName.fill(initial.displayName);
+  await page.getByLabel("Title").fill(`QA reusable ${testInfo.project.name}`);
+  await page.getByRole("button", { name: "Add another link" }).click();
+  await expect(page.getByLabel("Link 2 label")).toBeVisible();
+  await page.getByLabel("Link 2 label").fill("QA documentation");
+  await page.getByLabel("Link 2 URL").fill("https://example.com/qa-profile");
+  await save.click();
+  await expect(page.getByText("Reusable speaker profile saved", { exact: true }).last()).toBeVisible();
+  await expect(page.getByLabel("Title")).toHaveValue(`QA reusable ${testInfo.project.name}`);
+  await expect.poll(async () => await loadProfile()).toMatchObject({
+    title: `QA reusable ${testInfo.project.name}`,
+    links: [...initial.links, { label: "QA documentation", url: "https://example.com/qa-profile" }],
+    visible: true,
+  });
+
+  await page.getByRole("link", { name: "View public profile" }).click();
+  await expect(page).toHaveURL(`/speakers/${initial.slug}`);
+  await expect(page.getByRole("heading", { level: 1, name: initial.displayName })).toBeVisible();
+  await expect(page.getByRole("link", { name: "QA documentation" })).toHaveAttribute("href", "https://example.com/qa-profile");
+  await page.goBack({ waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { level: 1, name: "Reusable speaker profile" }).waitFor({ state: "visible" });
+  await page.getByLabel("Title").fill(initial.title ?? "");
+  await page.getByLabel("Link 2 label").fill("");
+  await page.getByLabel("Link 2 URL").fill("");
+  await page.getByRole("button", { name: "Save reusable profile" }).click();
+  await expect(page.getByText("Reusable speaker profile saved", { exact: true }).last()).toBeVisible();
+  await expect.poll(async () => await loadProfile()).toMatchObject({
+    slug: initial.slug,
+    displayName: initial.displayName,
+    title: initial.title,
+    company: initial.company,
+    bio: initial.bio,
+    headshotUrl: initial.headshotUrl,
+    links: initial.links,
+    visible: initial.visible,
+  });
+});
+
 test("direct speaker creation validates, resets, preserves a rejected draft, and persists privately", async ({ context, page, request, baseURL }, testInfo) => {
   desktopOnly(testInfo);
   const runtimeBaseURL = baseURL ?? "http://127.0.0.1:5173";
@@ -1302,6 +1376,9 @@ test("agenda card drag-and-drop and keyboard placement move the canonical talk a
     await save.press("Enter");
     await expect(page.getByText("Talk scheduled", { exact: true }).first()).toBeVisible();
     await expect.poll(async () => (await loadAgenda()).talks.find(({ id }) => id === initialTalk!.id)?.trackId).toBe(initialTrack!.id);
+    page.once("dialog", (dialog) => dialog.accept());
+    await editor.getByRole("button", { name: "Close" }).click();
+    await expect(editor).toBeHidden();
 
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("h1").waitFor({ state: "visible" });

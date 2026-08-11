@@ -421,8 +421,8 @@ export function AgendaBoard({
                                 <span className="text-[10px] font-black uppercase tracking-[0.1em] text-ink-faint">{talk.durationMin}m</span>
                               </span>
                               <span className="mt-2 block text-base font-black leading-tight tracking-[-0.025em] text-ink">{talk.title}</span>
-                              <SpeakerLinks className="mt-1.5 block border-t border-line pt-1.5 text-xs font-semibold text-ink-secondary" eventSlug={eventSlug} speakerIds={talk.speakerIds} speakerNames={talk.speakerNames} />
                             </button>
+                            <SpeakerLinks className="mt-1.5 block border-t border-line pt-1.5 text-xs font-semibold text-ink-secondary" eventSlug={eventSlug} speakerIds={talk.speakerIds} speakerNames={talk.speakerNames} />
                             {collaborator && (
                               <p className="mt-2 bg-production-yellow px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-ink">
                                 {collaborator.name} is moving this

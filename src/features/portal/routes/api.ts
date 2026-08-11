@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { ApiError, apiFetch } from "@/client/api";
+import { ApiError, apiFetch, decodeApiPayload } from "@/client/api";
 import {
   CreatePublicSubmissionOutput,
   PublicSubmissionForm,
@@ -125,7 +125,7 @@ export async function submitSpeakerTaskForm(input: CreateTaskSubmissionInput) {
       : response.statusText || `Request failed with status ${response.status}`;
     throw new ApiError(response.status, message);
   }
-  return Schema.decodeUnknownSync(CreatePublicSubmissionOutput)(payload);
+  return decodeApiPayload(CreatePublicSubmissionOutput, payload);
 }
 
 export function updateSpeakerProfile(eventSlug: string, input: UpdateProfileInput) {

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { Schema } from "effect";
-import { ApiError, apiFetch } from "@/client/api";
+import { ApiError, apiFetch, decodeApiResponse } from "@/client/api";
 import {
   Alert,
   AlertDescription,
@@ -54,7 +53,7 @@ export async function updateOwnAbstract(input: {
     },
   );
   if (!response.ok) throw new ApiError(response.status, await responseMessage(response));
-  return Schema.decodeUnknownSync(UpdateOwnSubmissionAbstractOutput)(await response.json());
+  return decodeApiResponse(response, UpdateOwnSubmissionAbstractOutput);
 }
 
 const statusTone = {
