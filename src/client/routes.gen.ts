@@ -8,6 +8,16 @@ export const generatedClientRoutes = [
     load: () => import("../features/agenda/routes/agenda"),
   },
   {
+    path: "/e/:eventSlug/appearance",
+    contentWidth: "compact",
+    load: () => import("../features/branding/routes/event-appearance"),
+  },
+  {
+    path: "/setup",
+    layout: "bare",
+    load: () => import("../features/branding/routes/setup"),
+  },
+  {
     path: "/e/:eventSlug/comms",
     contentWidth: "canvas",
     load: () => import("../features/comms/routes/comms"),

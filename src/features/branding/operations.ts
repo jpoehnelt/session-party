@@ -94,4 +94,3 @@ export const operations = [
     emits: ["branding.event.updated"],
   } satisfies AnyOperationDef,
 ] as const;
-

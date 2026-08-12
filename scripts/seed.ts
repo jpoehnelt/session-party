@@ -67,7 +67,6 @@ const rubric = {
 const sql = `
 DELETE FROM events WHERE id = 'demo-event';
 DELETE FROM events WHERE id = 'demo-other-event';
-DELETE FROM installation_brands WHERE id = 'default';
 DELETE FROM auth_tokens WHERE user_id IN (${personas.map(([id]) => quote(id)).join(", ")});
 DELETE FROM users WHERE id IN (${personas.map(([id]) => quote(id)).join(", ")});
 
@@ -78,17 +77,6 @@ VALUES
 INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at)
 VALUES
   ${tokenValues};
-
-INSERT INTO installation_brands (
-  id, owner_user_id, name, logo_asset_id, favicon_asset_id, primary_color,
-  font, appearance, radius, sender_name, sender_email, reply_to_email,
-  version, created_at, updated_at
-)
-VALUES (
-  'default', 'demo-owner', 'Session Party', NULL, NULL, '#896AFF',
-  'inter', 'system', 'square', 'Session Party', NULL, NULL,
-  1, ${createdAt}, ${createdAt}
-);
 
 INSERT INTO events (
   id, slug, name, description, location, timezone, starts_at, ends_at,

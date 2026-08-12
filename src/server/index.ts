@@ -1,7 +1,7 @@
 import type { Principal } from "contracts/principal";
 import { API } from "contracts/routes";
 import { Hono } from "hono";
-import { Cause, Effect, Exit } from "effect";
+import { Cause, Exit } from "effect";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
 import { getApprovedBrandAsset } from "@/features/branding/service";
