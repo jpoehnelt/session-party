@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router";
 import { userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { RouteCoordinator } from "@/client/router";
 import type { PublishedAgenda } from "@/features/agenda/schema";
 import type { PublicSpeakerGallery } from "@/features/portal/schema";
 import {
@@ -216,6 +217,26 @@ describe("public program rendered interactions", () => {
     await act(async () => userEvent.selectOptions(fieldNamed<HTMLSelectElement>("Format"), ""));
     await act(async () => userEvent.click(byControl("Show more")));
     expect(byControl("Show less").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("refreshes route metadata when an async loading heading is replaced", async () => {
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={[`/event/${agenda.eventSlug}/sessions`]}>
+          <RouteCoordinator><main><h1>Loading published program</h1></main></RouteCoordinator>
+        </MemoryRouter>,
+      );
+    });
+    expect(document.title).toBe("Loading published program — Session Party");
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={[`/event/${agenda.eventSlug}/sessions`]}>
+          <RouteCoordinator><main><h1>Sessions</h1></main></RouteCoordinator>
+        </MemoryRouter>,
+      );
+    });
+    expect(document.title).toBe("Sessions — Session Party");
   });
 
   it("opens and closes a complete searchable speaker list profile", async () => {

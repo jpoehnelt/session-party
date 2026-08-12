@@ -38,7 +38,7 @@
   "vars": {
     "APP_URL": "https://sessionparty.com",
     // Set this to the self-hosted owner email to disable open registration.
-    "INITIAL_ADMIN_EMAIL": "",
+    "INITIAL_ADMIN_EMAIL": "sbek-organizer@example.com",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
     // Optional public project settings. Analytics remains disabled while either value is blank.
     "POSTHOG_KEY": "",

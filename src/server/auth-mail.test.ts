@@ -219,6 +219,33 @@ describe("hackathon demo authentication", () => {
     });
   });
 
+  it("bootstraps the configured demo organizer as install staff", async () => {
+    const closedDemoEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        return property === "INITIAL_ADMIN_EMAIL"
+          ? "sbek-organizer@example.com"
+          : Reflect.get(target, property, receiver);
+      },
+    }) as Env;
+    const response = await worker.fetch(
+      new Request("https://events.example.com/api/v1/auth/demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ persona: "organizer" }),
+      }),
+      closedDemoEnv,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await env.DB.prepare(
+      `SELECT count(*) AS count
+       FROM install_grants g JOIN users u ON u.id = g.user_id
+       WHERE u.email = 'sbek-organizer@example.com'
+         AND g.role = 'staff' AND g.revoked_at IS NULL`,
+    ).first()).toEqual({ count: 1 });
+  });
+
   it("rejects unknown personas without creating a session", async () => {
     const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
       method: "POST",

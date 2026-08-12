@@ -267,7 +267,7 @@ function NotFound() {
   );
 }
 
-function RouteCoordinator({ children }: { children: ReactNode }) {
+export function RouteCoordinator({ children }: { children: ReactNode }) {
   const location = useLocation();
   const previousPath = useRef(location.pathname);
 
@@ -305,16 +305,11 @@ function RouteCoordinator({ children }: { children: ReactNode }) {
       }
       return true;
     };
-    if (apply()) return undefined;
-    const target = document.querySelector("main") ?? document.body;
-    const observer = new MutationObserver(() => {
-      if (apply()) observer.disconnect();
-    });
-    observer.observe(target, { childList: true, subtree: true });
-    const timeout = window.setTimeout(() => observer.disconnect(), 10_000);
+    apply();
+    const observer = new MutationObserver(() => { apply(); });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     return () => {
       observer.disconnect();
-      window.clearTimeout(timeout);
     };
   }, [location.pathname]);
 

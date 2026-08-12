@@ -11,8 +11,8 @@ export const ListSpeakerDirectoryInput = Schema.Struct({
   query: OptionalQuery,
   eventId: Schema.optional(EntityId),
   status: Schema.optional(DirectoryParticipationStatus),
-  page: Schema.optional(Schema.Int.pipe(Schema.positive())),
-  pageSize: Schema.optional(Schema.Int.pipe(Schema.positive(), Schema.lessThanOrEqualTo(100))),
+  page: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.positive())),
+  pageSize: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.between(1, 100))),
 });
 export type ListSpeakerDirectoryInput = typeof ListSpeakerDirectoryInput.Type;
 
