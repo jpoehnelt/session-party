@@ -167,8 +167,9 @@ describe("AirtableSyncLane", () => {
     const stub = env.AIRTABLE_SYNC.get(env.AIRTABLE_SYNC.idFromName("appAlarmOrderingProof"));
     await runInDurableObject(stub, async (_instance, state) => {
       await state.storage.deleteAll();
-      const recovery = Date.now() + 60_000;
-      const poke = Date.now() + 1;
+      const now = Date.now();
+      const recovery = now + 60_000;
+      const poke = now + 10_000;
       await state.storage.setAlarm(recovery);
       await setAirtableAlarmNoLaterThan(state.storage, poke);
       expect(await state.storage.getAlarm()).toBe(poke);
