@@ -102,6 +102,7 @@ import {
   type SendSpeakerMessagesOutput,
 } from "./schema";
 import { portalAssetKey as assetKey, publicSpeakerHeadshotPath } from "./public-assets";
+import { runBoundedProfileSnapshotSync } from "./profile-sync";
 
 const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
   Effect.tryPromise({
@@ -881,7 +882,7 @@ const syncReusableProfileSnapshots = (
     ...(speakerId ? [eq(speakers.id, speakerId)] : []),
   )));
 
-  yield* Effect.forEach(candidates, ({ speaker, profile }) => Effect.gen(function* () {
+  yield* runBoundedProfileSnapshotSync(candidates, ({ speaker, profile }) => Effect.gen(function* () {
     const reusableHeadshotUrl = profile.headshotUrl !== null
       && profile.headshotUrl.startsWith("https://")
       && safeHttpUrl(profile.headshotUrl)
@@ -954,7 +955,7 @@ const syncReusableProfileSnapshots = (
       }).from(speakers).where(guard)),
       db.update(speakers).set(values).where(guard).returning({ id: speakers.id }),
     ]));
-  }), { concurrency: 1, discard: true });
+  }));
 });
 
 const uploadPolicy = (

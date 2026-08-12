@@ -1867,9 +1867,54 @@ describe("portal service", () => {
         profileReviewStatus: "approved",
       },
     });
-    await expect(db.select().from(auditLog).where(and(
+    const reusableSyncAudits = () => db.select().from(auditLog).where(and(
       eq(auditLog.eventId, setup.eventId),
       eq(auditLog.action, "portal.profile.reusable-synced"),
-    ))).resolves.toHaveLength(2);
+    ));
+    await expect(reusableSyncAudits()).resolves.toHaveLength(2);
+
+    const converged = await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }));
+    expect(converged.speakers.find(({ speaker }) => speaker.id === setup.speakerId)?.speaker)
+      .toMatchObject({ profileSourceVersion: 2, bio: "SBEK-PORTAL-BIO-01" });
+    await expect(reusableSyncAudits()).resolves.toHaveLength(2);
+
+    await db.update(speakers).set({ profileReviewStatus: "in_review" }).where(and(
+      eq(speakers.eventId, setup.eventId),
+      eq(speakers.id, setup.speakerId),
+    ));
+    const guardedProfile = await runAs(otherUser, saveMyProfile({
+      expectedVersion: saved.version,
+      slug: saved.slug,
+      displayName: saved.displayName,
+      title: saved.title,
+      company: saved.company,
+      bio: "Must wait for organizer review to finish.",
+      headshotUrl: saved.headshotUrl,
+      links: saved.links,
+      visible: saved.visible,
+    }));
+    expect(guardedProfile.version).toBe(3);
+
+    const guarded = await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }));
+    expect(guarded.speakers.find(({ speaker }) => speaker.id === setup.speakerId)?.speaker)
+      .toMatchObject({
+        profileSourceVersion: 2,
+        profileReviewStatus: "in_review",
+        bio: "SBEK-PORTAL-BIO-01",
+      });
+    await expect(reusableSyncAudits()).resolves.toHaveLength(2);
+
+    await db.update(speakers).set({ profileReviewStatus: "approved" }).where(and(
+      eq(speakers.eventId, setup.eventId),
+      eq(speakers.id, setup.speakerId),
+    ));
+    const resumed = await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }));
+    expect(resumed.speakers.find(({ speaker }) => speaker.id === setup.speakerId)?.speaker)
+      .toMatchObject({
+        profileSourceVersion: 3,
+        profileReviewStatus: "approved",
+        bio: "Must wait for organizer review to finish.",
+      });
+    await expect(reusableSyncAudits()).resolves.toHaveLength(3);
   });
 });
