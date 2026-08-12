@@ -102,6 +102,21 @@ export async function postPublicSubmission(
   return decodeApiPayload(CreatePublicSubmissionOutput, payload);
 }
 
+export async function requestSubmitterAccount(
+  email: string,
+  eventSlug: string,
+): Promise<void> {
+  const response = await fetch("/api/v1/auth/request-link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: email.trim().toLowerCase(),
+      returnTo: `/portal/events/${eventSlug}/submissions`,
+    }),
+  });
+  if (!response.ok) throw new Error("Could not create your submitter account");
+}
+
 const conditionMatches = (
   condition: NonNullable<PublicFormField["logic"]>["conditions"][number],
   sourceType: PublicFormField["type"] | undefined,
@@ -403,6 +418,10 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   const [fieldErrors, setFieldErrors] = useState<Readonly<Record<string, string>>>({});
   const [draftStatus, setDraftStatus] = useState<"restored" | "saved" | null>(null);
   const [success, setSuccess] = useState<typeof CreatePublicSubmissionOutput.Type | null>(initialSuccess);
+  const [accountEmail, setAccountEmail] = useState("");
+  const [requestingAccount, setRequestingAccount] = useState(false);
+  const [accountRequested, setAccountRequested] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const idempotencyKey = useRef(crypto.randomUUID());
   const widgetId = useRef<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
@@ -446,6 +465,28 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
   }, [eventSlug, form, formId]);
 
   const shownFields = useMemo(() => form ? visibleFields(form.form.fields, answers) : [], [answers, form]);
+
+  useEffect(() => {
+    if (!success || accountEmail || !form) return;
+    const emailField = form.form.fields.find((field) => field.type === "email");
+    const submittedEmail = emailField ? answers[emailField.id] : undefined;
+    if (typeof submittedEmail === "string") setAccountEmail(submittedEmail);
+  }, [accountEmail, answers, form, success]);
+
+  const handleAccountRequest = async (event: FormEvent) => {
+    event.preventDefault();
+    if (requestingAccount || !accountEmail.trim()) return;
+    setRequestingAccount(true);
+    setAccountError(null);
+    try {
+      await requestSubmitterAccount(accountEmail, form?.event.slug ?? eventSlug);
+      setAccountRequested(true);
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : "Could not create your submitter account");
+    } finally {
+      setRequestingAccount(false);
+    }
+  };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -520,6 +561,40 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                 <p className="text-[10px] font-black uppercase tracking-[0.14em]">Submission reference</p>
                 <p className="mt-1 break-all font-mono text-sm font-bold">{success.submissionId}</p>
               </div>
+              <section className="mt-8 border-2 border-line-strong bg-surface-muted p-5" aria-labelledby="submitter-account-title">
+                <h2 id="submitter-account-title" className="text-xl font-black">Create your submitter account</h2>
+                <p className="mt-2 text-sm font-semibold leading-6 text-ink-secondary">
+                  Use the same email as your proposal. We will send a one-time sign-in link that creates your account and opens your proposal dashboard.
+                </p>
+                {accountRequested ? (
+                  <Alert className="mt-4" tone="success" role="status">
+                    <AlertTitle>Check your email</AlertTitle>
+                    <AlertDescription>Open the sign-in link to finish creating your account and manage this proposal.</AlertDescription>
+                  </Alert>
+                ) : (
+                  <form className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={handleAccountRequest}>
+                    <Input
+                      className="min-w-0 flex-1"
+                      id="submitter-account-email"
+                      label="Submitter email"
+                      type="email"
+                      autoComplete="email"
+                      value={accountEmail}
+                      onChange={(event) => setAccountEmail(event.currentTarget.value)}
+                      required
+                    />
+                    <Button type="submit" disabled={requestingAccount || !accountEmail.trim()}>
+                      {requestingAccount ? "Sending link…" : "Create account →"}
+                    </Button>
+                  </form>
+                )}
+                {accountError ? (
+                  <Alert className="mt-4" tone="danger">
+                    <AlertTitle>Account link not sent</AlertTitle>
+                    <AlertDescription>{accountError}</AlertDescription>
+                  </Alert>
+                ) : null}
+              </section>
               <Link
                 className="mt-7 inline-flex min-h-12 items-center justify-center border-2 border-line-strong bg-ink px-5 text-xs font-black uppercase tracking-[0.1em] text-on-accent shadow-[5px_5px_0_#7857ff] transition-transform hover:-translate-y-0.5"
                 to={`/portal/events/${form.event.slug}/submissions`}
