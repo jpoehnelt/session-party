@@ -2,11 +2,14 @@ import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import type { AppError } from "contracts/errors";
 import type { BrowserSessionPrincipal, EventApiKeyPrincipal } from "contracts/principal";
 import {
+  auditLog,
   eventMembers,
   events,
   forms,
   formVersions,
+  idempotencyRecords,
   installGrants,
+  mailDeliveries,
   managedSpeakerEmails,
   speakerContacts,
   speakerProfiles,
@@ -18,12 +21,13 @@ import {
   users,
 } from "contracts/schema";
 import { Effect, Exit, Layer } from "effect";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { beforeAll, describe, expect, it } from "vitest";
 import { operationEffect, runEffect } from "@/server/adapt";
 import { AppLayer, CurrentUser } from "@/server/services";
 import { operations } from "./operations";
-import { listSpeakerDirectory } from "./service";
+import { applyReturningSpeakerInvite, listSpeakerDirectory, previewReturningSpeakerInvite } from "./service";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
 const expiresAt = Date.UTC(2100, 0, 1);
@@ -255,5 +259,167 @@ describe("installation speaker directory", () => {
     };
     const exit = await runEffect(configuredEnv, key, operationEffect(operation, {}, key));
     expect(Exit.isFailure(exit)).toBe(true);
+  });
+
+  it("previews link, create, and conflict outcomes, then applies a profile-review invite exactly once", async () => {
+    const db = drizzle(env.DB);
+    const now = new Date("2026-08-12T13:00:00.000Z");
+    await db.insert(events).values({
+      id: "directory-event-c",
+      slug: "directory-event-c",
+      name: "Third Summit",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(speakers).values({
+      id: "directory-speaker-managed-only",
+      eventId: "directory-event-b",
+      contactEmail: "grace@example.com",
+      displayName: "Grace Hopper",
+      title: "Rear admiral",
+      company: "US Navy",
+      bio: "Compiler pioneer",
+      profileReviewStatus: "approved",
+      version: 4,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(managedSpeakerEmails).values({
+      id: "directory-managed-only-email",
+      eventId: "directory-event-b",
+      normalizedEmail: "grace@example.com",
+      speakerId: "directory-speaker-managed-only",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const link = await run(staff, previewReturningSpeakerInvite({
+      eventId: "directory-event-c",
+      groupKey: "email:ada@example.com",
+    }));
+    expect(link).toEqual(expect.objectContaining({
+      action: "link-existing-user",
+      linkedUserId: claimed.userId,
+      normalizedEmail: "ada@example.com",
+      profileCopy: expect.objectContaining({
+        kind: "reusable-profile",
+        sourceId: "directory-reusable-profile",
+        sourceVersion: 1,
+      }),
+      conflictReason: null,
+    }));
+    await expect(run(staff, previewReturningSpeakerInvite({
+      eventId: "directory-event-a",
+      groupKey: "email:ada@example.com",
+    }))).resolves.toMatchObject({ action: "conflict", conflictReason: "already-in-event", profileCopy: null });
+    const create = await run(staff, previewReturningSpeakerInvite({
+      eventId: "directory-event-c",
+      groupKey: "email:grace@example.com",
+    }));
+    expect(create).toMatchObject({
+      action: "create-managed-speaker",
+      linkedUserId: null,
+      profileCopy: { kind: "event-profile", sourceId: "directory-speaker-managed-only", sourceVersion: 4 },
+    });
+
+    const input = {
+      eventId: "directory-event-c",
+      groupKey: link.groupKey,
+      expectedAction: "link-existing-user" as const,
+      expectedSourceId: link.profileCopy!.sourceId,
+      expectedSourceVersion: link.profileCopy!.sourceVersion,
+      idempotencyKey: "directory-returning-speaker-replay",
+    };
+    const first = await run(staff, applyReturningSpeakerInvite(input));
+    const replay = await run(staff, applyReturningSpeakerInvite(input));
+    const created = await run(staff, applyReturningSpeakerInvite({
+      eventId: "directory-event-c",
+      groupKey: create.groupKey,
+      expectedAction: "create-managed-speaker",
+      expectedSourceId: create.profileCopy!.sourceId,
+      expectedSourceVersion: create.profileCopy!.sourceVersion,
+      idempotencyKey: "directory-returning-managed-speaker",
+    }));
+    expect(first).toMatchObject({
+      action: "link-existing-user",
+      linkedUserId: claimed.userId,
+      reviewStatus: "in_review",
+      emailQueued: false,
+      idempotent: false,
+    });
+    expect(replay).toEqual({ ...first, idempotent: true });
+    expect(created).toMatchObject({
+      action: "create-managed-speaker",
+      linkedUserId: null,
+      profileCopy: { kind: "event-profile", sourceId: "directory-speaker-managed-only", sourceVersion: 4 },
+      reviewStatus: "in_review",
+      emailQueued: false,
+    });
+    const invited = await db.select().from(speakers).where(and(
+      eq(speakers.eventId, "directory-event-c"),
+      eq(speakers.userId, claimed.userId),
+    ));
+    expect(invited).toHaveLength(1);
+    expect(invited[0]).toMatchObject({
+      id: first.speakerId,
+      displayName: "Ada Lovelace",
+      profileSourceId: "directory-reusable-profile",
+      profileSourceVersion: 1,
+      profileReviewStatus: "in_review",
+      visible: false,
+    });
+    await expect(db.select().from(managedSpeakerEmails).where(and(
+      eq(managedSpeakerEmails.eventId, "directory-event-c"),
+      eq(managedSpeakerEmails.speakerId, first.speakerId),
+    ))).resolves.toEqual([expect.objectContaining({ normalizedEmail: "ada@example.com" })]);
+    await expect(db.select().from(speakers).where(and(
+      eq(speakers.eventId, "directory-event-c"),
+      eq(speakers.id, created.speakerId),
+    ))).resolves.toEqual([expect.objectContaining({
+      userId: null,
+      displayName: "Grace Hopper",
+      profileSourceId: null,
+      profileSourceVersion: null,
+      profileReviewStatus: "in_review",
+      visible: false,
+    })]);
+    await expect(db.select().from(mailDeliveries)).resolves.toHaveLength(0);
+    await expect(db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, "directory-event-c"),
+      eq(idempotencyRecords.operationId, "directory.inviteReturningSpeaker"),
+    ))).resolves.toHaveLength(2);
+    await expect(db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, "directory-event-c"),
+      eq(auditLog.action, "directory.returning-speaker.invited"),
+    ))).resolves.toHaveLength(2);
+  });
+
+  it("keeps returning-speaker operations browser-only and staff-only", async () => {
+    const previewOperation = operations.find((candidate) => candidate.id === "directory.previewReturningSpeakerInvite");
+    const inviteOperation = operations.find((candidate) => candidate.id === "directory.inviteReturningSpeaker");
+    if (!previewOperation || !inviteOperation) throw new Error("returning-speaker operations missing");
+    expect("mcp" in previewOperation).toBe(false);
+    expect("mcp" in inviteOperation).toBe(false);
+    expect("party" in previewOperation).toBe(false);
+    expect("party" in inviteOperation).toBe(false);
+    const deniedAdmin = await runEither(admin, previewReturningSpeakerInvite({
+      eventId: "directory-event-b",
+      groupKey: "email:ada@example.com",
+    }));
+    expect(deniedAdmin).toEqual(expect.objectContaining({ _tag: "Left", left: expect.objectContaining({ _tag: "Forbidden" }) }));
+    const key: EventApiKeyPrincipal = {
+      kind: "api-key",
+      userId: "api-key:directory-invite-key",
+      apiKeyId: "directory-invite-key",
+      eventId: "directory-event-c",
+      name: "Directory invite key",
+      scopes: ["speakers:write"],
+      expiresAt,
+    };
+    const deniedKey = await runEither(key, previewReturningSpeakerInvite({
+      eventId: "directory-event-c",
+      groupKey: "email:grace@example.com",
+    }));
+    expect(deniedKey).toEqual(expect.objectContaining({ _tag: "Left", left: expect.objectContaining({ _tag: "Forbidden" }) }));
   });
 });

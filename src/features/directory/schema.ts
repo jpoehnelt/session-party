@@ -2,6 +2,7 @@ import { EntityId } from "contracts/domain";
 import { Schema } from "effect";
 
 const OptionalQuery = Schema.optional(Schema.String.pipe(Schema.maxLength(120)));
+const IdempotencyKey = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(255));
 
 export const DirectoryParticipationStatus = Schema.Literal("submitted", "accepted", "spoke");
 export type DirectoryParticipationStatus = typeof DirectoryParticipationStatus.Type;
@@ -51,6 +52,8 @@ export const DirectoryIdentityMember = Schema.Struct({
   profileReviewStatus: Schema.Literal("draft", "in_review", "changes_requested", "approved"),
   profileSourceId: Schema.NullOr(EntityId),
   profileSourceVersion: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
+  version: Schema.Int.pipe(Schema.positive()),
+  updatedAt: Schema.DateFromString,
 });
 export type DirectoryIdentityMember = typeof DirectoryIdentityMember.Type;
 
@@ -107,3 +110,63 @@ export const SpeakerDirectoryPage = Schema.Struct({
   hasMore: Schema.Boolean,
 });
 export type SpeakerDirectoryPage = typeof SpeakerDirectoryPage.Type;
+
+export const ReturningSpeakerProfileCopy = Schema.Union(
+  Schema.Struct({
+    kind: Schema.Literal("reusable-profile"),
+    sourceId: EntityId,
+    sourceVersion: Schema.Int.pipe(Schema.positive()),
+    displayName: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("event-profile"),
+    sourceId: EntityId,
+    sourceVersion: Schema.Int.pipe(Schema.positive()),
+    displayName: Schema.String,
+  }),
+);
+export type ReturningSpeakerProfileCopy = typeof ReturningSpeakerProfileCopy.Type;
+
+export const ReturningSpeakerInvitePlan = Schema.Struct({
+  eventId: EntityId,
+  eventName: Schema.String,
+  groupKey: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(320)),
+  normalizedEmail: Schema.NullOr(Schema.String),
+  action: Schema.Literal("create-managed-speaker", "link-existing-user", "conflict"),
+  linkedUserId: Schema.NullOr(EntityId),
+  profileCopy: Schema.NullOr(ReturningSpeakerProfileCopy),
+  conflictReason: Schema.NullOr(Schema.Literal(
+    "missing-email",
+    "already-in-event",
+    "profile-fields-owned-by-airtable",
+  )),
+});
+export type ReturningSpeakerInvitePlan = typeof ReturningSpeakerInvitePlan.Type;
+
+export const PreviewReturningSpeakerInviteInput = Schema.Struct({
+  eventId: EntityId,
+  groupKey: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(320)),
+});
+export type PreviewReturningSpeakerInviteInput = typeof PreviewReturningSpeakerInviteInput.Type;
+
+export const ApplyReturningSpeakerInviteInput = Schema.Struct({
+  eventId: EntityId,
+  groupKey: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(320)),
+  expectedAction: Schema.Literal("create-managed-speaker", "link-existing-user"),
+  expectedSourceId: EntityId,
+  expectedSourceVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+});
+export type ApplyReturningSpeakerInviteInput = typeof ApplyReturningSpeakerInviteInput.Type;
+
+export const ApplyReturningSpeakerInviteOutput = Schema.Struct({
+  eventId: EntityId,
+  speakerId: EntityId,
+  action: Schema.Literal("create-managed-speaker", "link-existing-user"),
+  linkedUserId: Schema.NullOr(EntityId),
+  profileCopy: ReturningSpeakerProfileCopy,
+  reviewStatus: Schema.Literal("in_review"),
+  emailQueued: Schema.Literal(false),
+  idempotent: Schema.Boolean,
+});
+export type ApplyReturningSpeakerInviteOutput = typeof ApplyReturningSpeakerInviteOutput.Type;

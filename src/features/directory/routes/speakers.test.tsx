@@ -20,5 +20,8 @@ describe("speaker directory route", () => {
     expect(markup).toContain("Speaker directory");
     expect(markup).toContain("grouped only by normalized email");
     expect(markup).toContain("unmerged");
+    expect(markup).toContain("Invite returning speakers");
+    expect(markup).toContain("implies no acceptance");
+    expect(markup).toContain("sends no email");
   });
 });

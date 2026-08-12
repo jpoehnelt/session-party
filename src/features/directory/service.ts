@@ -1,8 +1,12 @@
-import { External, Forbidden, type AppError } from "contracts/errors";
-import { installStaffAuthorization } from "contracts/principal";
+import { Conflict, External, Forbidden, NotFound, type AppError } from "contracts/errors";
+import { eventAuthorization, installStaffAuthorization } from "contracts/principal";
 import {
   acceptanceEvents,
+  auditLog,
+  domainChanges,
   events,
+  idempotencyRecords,
+  integrations,
   managedSpeakerEmails,
   speakerContacts,
   speakerProfiles,
@@ -14,14 +18,22 @@ import {
   users,
 } from "contracts/schema";
 import { Effect } from "effect";
+import { Schema } from "effect";
 import { and, eq, inArray } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { Authorizer, CurrentUser, Db } from "@/server/services";
+import { ApplyReturningSpeakerInviteOutput as ApplyReturningSpeakerInviteOutputSchema } from "./schema";
 import type {
   DirectoryContact,
   DirectoryIdentityMember,
   DirectoryParticipation,
   DirectoryReusableProfile,
+  ApplyReturningSpeakerInviteInput,
+  ApplyReturningSpeakerInviteOutput,
   ListSpeakerDirectoryInput,
+  PreviewReturningSpeakerInviteInput,
+  ReturningSpeakerInvitePlan,
+  ReturningSpeakerProfileCopy,
   SameNameSuggestion,
   SpeakerDirectoryEntry,
   SpeakerDirectoryPage,
@@ -42,6 +54,22 @@ const normalizeEmail = (value: string | null | undefined): string | null => {
 };
 
 const normalizeName = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, " ");
+const commandId = (prefix: string): string => `${prefix}_${nanoid()}`;
+const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1_000;
+
+const sha256 = (value: string): Effect.Effect<string, External> =>
+  Effect.tryPromise({
+    try: async () => {
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+      return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    },
+    catch: (error) => new External({ service: "crypto", detail: error instanceof Error ? error.message : String(error) }),
+  });
+
+const targetOrganizerAuthorization = eventAuthorization(
+  { kind: "event-member", roles: ["owner", "admin"] },
+  { kind: "deny" },
+);
 
 const requireInstallStaff = (): Effect.Effect<void, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
@@ -52,6 +80,14 @@ const requireInstallStaff = (): Effect.Effect<void, AppError, Authorizer | Curre
       return yield* Effect.fail(new Forbidden({ reason: "The speaker directory requires a staff browser session" }));
     }
   });
+
+const requireInviteAuthority = (eventId: string) => Effect.gen(function* () {
+  yield* requireInstallStaff();
+  const principal = yield* CurrentUser;
+  const authorizer = yield* Authorizer;
+  yield* authorizer.authorize({ principal, policy: targetOrganizerAuthorization, eventId });
+  return principal;
+});
 
 type ParticipationAccumulator = {
   eventId: string;
@@ -92,7 +128,7 @@ export const listSpeakerDirectory = (
     yield* requireInstallStaff();
     const { db } = yield* Db;
     const now = new Date();
-    const [submissionRows, talkRows, acceptedRows] = yield* Effect.all([
+    const [submissionRows, talkRows, acceptedRows, allEvents] = yield* Effect.all([
       database(() => db.select({
         speakerId: submissionSpeakers.speakerId,
         submissionId: submissions.id,
@@ -121,6 +157,7 @@ export const listSpeakerDirectory = (
       database(() => db.select({ submissionId: acceptanceEvents.submissionId })
         .from(acceptanceEvents)
         .where(eq(acceptanceEvents.type, "accepted"))),
+      database(() => db.select({ id: events.id, name: events.name }).from(events)),
     ]);
     const acceptedSubmissionIds = new Set(acceptedRows.map((row) => row.submissionId));
     const participatingSpeakerIds = [...new Set([
@@ -128,7 +165,7 @@ export const listSpeakerDirectory = (
       ...talkRows.filter((row) => row.status === "confirmed" && row.startsAt !== null && row.startsAt <= now).map((row) => row.speakerId),
     ])];
     if (participatingSpeakerIds.length === 0) {
-      return { entries: [], events: [], page: input.page ?? 1, pageSize: input.pageSize ?? 25, total: 0, hasMore: false };
+      return { entries: [], events: allEvents, page: input.page ?? 1, pageSize: input.pageSize ?? 25, total: 0, hasMore: false };
     }
 
     const [identityRows, contactRows] = yield* Effect.all([
@@ -193,6 +230,8 @@ export const listSpeakerDirectory = (
         profileReviewStatus: row.speaker.profileReviewStatus,
         profileSourceId: row.speaker.profileSourceId,
         profileSourceVersion: row.speaker.profileSourceVersion,
+        version: row.speaker.version,
+        updatedAt: row.speaker.updatedAt,
       };
       const existing = groups.get(groupKey);
       if (existing) {
@@ -319,11 +358,7 @@ export const listSpeakerDirectory = (
     entries.sort((left, right) => left.displayName.localeCompare(right.displayName)
       || (left.normalizedEmail ?? left.groupKey).localeCompare(right.normalizedEmail ?? right.groupKey));
 
-    const eventMap = new Map<string, string>();
-    for (const group of groups.values()) {
-      for (const participation of group.participation.values()) eventMap.set(participation.eventId, participation.eventName);
-    }
-    const directoryEvents = [...eventMap].map(([id, name]) => ({ id, name }))
+    const directoryEvents = allEvents
       .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const page = input.page ?? 1;
     const pageSize = input.pageSize ?? 25;
@@ -337,3 +372,289 @@ export const listSpeakerDirectory = (
       hasMore: offset + pageSize < entries.length,
     };
   });
+
+type InviteSourceRow = {
+  readonly speaker: typeof speakers.$inferSelect;
+  readonly user: { readonly id: string; readonly email: string } | null;
+  readonly managedEmail: string | null;
+  readonly profile: typeof speakerProfiles.$inferSelect | null;
+};
+
+const loadInviteSourceRows = (groupKey: string) => Effect.gen(function* () {
+  const { db } = yield* Db;
+  const rows = yield* database(() => db.select({
+    speaker: speakers,
+    user: { id: users.id, email: users.email },
+    managedEmail: managedSpeakerEmails.normalizedEmail,
+    profile: speakerProfiles,
+  }).from(speakers)
+    .leftJoin(users, eq(users.id, speakers.userId))
+    .leftJoin(managedSpeakerEmails, and(
+      eq(managedSpeakerEmails.eventId, speakers.eventId),
+      eq(managedSpeakerEmails.speakerId, speakers.id),
+    ))
+    .leftJoin(speakerProfiles, eq(speakerProfiles.userId, speakers.userId)));
+  const filtered = groupKey.startsWith("email:")
+    ? rows.filter((row) => [row.user?.email, row.managedEmail, row.speaker.contactEmail]
+      .some((email) => normalizeEmail(email) === groupKey.slice("email:".length)))
+    : groupKey.startsWith("speaker:")
+      ? rows.filter((row) => row.speaker.id === groupKey.slice("speaker:".length))
+      : [];
+  if (filtered.length === 0) return yield* Effect.fail(new NotFound({ entity: "speaker directory group", id: groupKey }));
+  return filtered as readonly InviteSourceRow[];
+});
+
+const inviteSource = (rows: readonly InviteSourceRow[]): {
+  readonly normalizedEmail: string | null;
+  readonly userId: string | null;
+  readonly copy: ReturningSpeakerProfileCopy;
+  readonly values: Pick<typeof speakers.$inferInsert, "displayName" | "title" | "company" | "bio" | "headshotUrl" | "links">;
+} => {
+  const claimed = rows.find((row) => row.user !== null) ?? null;
+  const profile = claimed?.profile ?? null;
+  const latest = [...rows].sort((left, right) =>
+    right.speaker.updatedAt.getTime() - left.speaker.updatedAt.getTime()
+    || right.speaker.version - left.speaker.version
+    || left.speaker.id.localeCompare(right.speaker.id))[0]!;
+  if (profile) return {
+    normalizedEmail: normalizeEmail(claimed?.user?.email),
+    userId: profile.userId,
+    copy: { kind: "reusable-profile", sourceId: profile.id, sourceVersion: profile.version, displayName: profile.displayName },
+    values: {
+      displayName: profile.displayName,
+      title: profile.title,
+      company: profile.company,
+      bio: profile.bio,
+      headshotUrl: profile.headshotUrl,
+      links: profile.links ?? [],
+    },
+  };
+  return {
+    normalizedEmail: normalizeEmail(latest.user?.email) ?? normalizeEmail(latest.managedEmail) ?? normalizeEmail(latest.speaker.contactEmail),
+    userId: claimed?.user?.id ?? null,
+    copy: { kind: "event-profile", sourceId: latest.speaker.id, sourceVersion: latest.speaker.version, displayName: latest.speaker.displayName },
+    values: {
+      displayName: latest.speaker.displayName,
+      title: latest.speaker.title,
+      company: latest.speaker.company,
+      bio: latest.speaker.bio,
+      headshotUrl: latest.speaker.headshotUrl,
+      links: latest.speaker.links ?? [],
+    },
+  };
+};
+
+const loadReturningSpeakerInvitePlan = (
+  input: PreviewReturningSpeakerInviteInput,
+): Effect.Effect<{ readonly plan: ReturningSpeakerInvitePlan; readonly source: ReturnType<typeof inviteSource> }, AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    yield* requireInviteAuthority(input.eventId);
+    const { db } = yield* Db;
+    const [event] = yield* database(() => db.select({ id: events.id, name: events.name }).from(events).where(eq(events.id, input.eventId)).limit(1));
+    if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventId }));
+    const rows = yield* loadInviteSourceRows(input.groupKey);
+    const source = inviteSource(rows);
+    const [targetRows, airtableRows] = yield* Effect.all([
+      database(() => db.select({
+        speaker: speakers,
+        userEmail: users.email,
+        managedEmail: managedSpeakerEmails.normalizedEmail,
+      }).from(speakers)
+        .leftJoin(users, eq(users.id, speakers.userId))
+        .leftJoin(managedSpeakerEmails, and(
+          eq(managedSpeakerEmails.eventId, speakers.eventId),
+          eq(managedSpeakerEmails.speakerId, speakers.id),
+        ))
+        .where(eq(speakers.eventId, input.eventId))),
+      database(() => db.select({ id: integrations.id }).from(integrations).where(and(
+        eq(integrations.eventId, input.eventId),
+        eq(integrations.kind, "airtable"),
+      )).limit(1)),
+    ]);
+    const alreadyPresent = targetRows.some((row) =>
+      (source.userId !== null && row.speaker.userId === source.userId)
+      || (source.normalizedEmail !== null && [row.userEmail, row.managedEmail, row.speaker.contactEmail]
+        .some((email) => normalizeEmail(email) === source.normalizedEmail)));
+    const conflictReason = source.normalizedEmail === null
+      ? "missing-email" as const
+      : alreadyPresent
+        ? "already-in-event" as const
+        : airtableRows.length > 0
+          ? "profile-fields-owned-by-airtable" as const
+          : null;
+    const action = conflictReason
+      ? "conflict" as const
+      : source.userId
+        ? "link-existing-user" as const
+        : "create-managed-speaker" as const;
+    return {
+      source,
+      plan: {
+        eventId: event.id,
+        eventName: event.name,
+        groupKey: input.groupKey,
+        normalizedEmail: source.normalizedEmail,
+        action,
+        linkedUserId: action === "link-existing-user" ? source.userId : null,
+        profileCopy: conflictReason ? null : source.copy,
+        conflictReason,
+      },
+    };
+  });
+
+export const previewReturningSpeakerInvite = (
+  input: PreviewReturningSpeakerInviteInput,
+): Effect.Effect<ReturningSpeakerInvitePlan, AppError, Authorizer | CurrentUser | Db> =>
+  loadReturningSpeakerInvitePlan(input).pipe(Effect.map(({ plan }) => plan));
+
+const decodeInviteReplay = (value: unknown) => Schema.decodeUnknown(ApplyReturningSpeakerInviteOutputSchema)(value).pipe(
+  Effect.mapError((error) => new External({ service: "database", detail: `Invalid returning-speaker replay: ${String(error)}` })),
+);
+
+const applyReturningSpeakerInviteAttempt = (
+  input: ApplyReturningSpeakerInviteInput,
+  retryOnConcurrentChange: boolean,
+): Effect.Effect<ApplyReturningSpeakerInviteOutput, AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const principal = yield* requireInviteAuthority(input.eventId);
+    const [keyHash, requestHash] = yield* Effect.all([
+      sha256(input.idempotencyKey),
+      sha256(JSON.stringify({
+        eventId: input.eventId,
+        groupKey: input.groupKey,
+        expectedAction: input.expectedAction,
+        expectedSourceId: input.expectedSourceId,
+        expectedSourceVersion: input.expectedSourceVersion,
+      })),
+    ]);
+    const { db } = yield* Db;
+    const [prior] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, input.eventId),
+      eq(idempotencyRecords.operationId, "directory.inviteReturningSpeaker"),
+      eq(idempotencyRecords.principalId, principal.userId),
+      eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1));
+    if (prior) {
+      if (prior.requestHash !== requestHash) return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different request" }));
+      if (prior.status !== "completed" || prior.responseBody === null) return yield* Effect.fail(new Conflict({ message: "This invite is already in progress; retry shortly" }));
+      const replay = yield* decodeInviteReplay(prior.responseBody);
+      return { ...replay, idempotent: true };
+    }
+    const { plan, source } = yield* loadReturningSpeakerInvitePlan(input);
+    if (plan.action === "conflict" || plan.profileCopy === null) {
+      return yield* Effect.fail(new Conflict({ message: `Returning speaker cannot be invited: ${plan.conflictReason ?? "target conflict"}` }));
+    }
+    if (plan.action !== input.expectedAction || plan.profileCopy.sourceId !== input.expectedSourceId || plan.profileCopy.sourceVersion !== input.expectedSourceVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Returning speaker preview changed; preview again before inviting" }));
+    }
+
+    const occurredAt = new Date();
+    const speakerId = commandId("speaker");
+    const recordId = commandId("idempotency");
+    const requestId = `returning-speaker-invite:${recordId}`;
+    const output: ApplyReturningSpeakerInviteOutput = {
+      eventId: input.eventId,
+      speakerId,
+      action: plan.action,
+      linkedUserId: plan.linkedUserId,
+      profileCopy: plan.profileCopy,
+      reviewStatus: "in_review",
+      emailQueued: false,
+      idempotent: false,
+    };
+    const speaker: typeof speakers.$inferInsert = {
+      id: speakerId,
+      eventId: input.eventId,
+      userId: plan.linkedUserId,
+      contactEmail: source.normalizedEmail,
+      ...source.values,
+      workflowStatus: "Invited",
+      headshotAssetId: null,
+      visible: false,
+      profileSourceId: plan.profileCopy.kind === "reusable-profile" ? plan.profileCopy.sourceId : null,
+      profileSourceVersion: plan.profileCopy.kind === "reusable-profile" ? plan.profileCopy.sourceVersion : null,
+      profileReviewStatus: "in_review",
+      profileReviewNote: null,
+      profileSubmittedAt: occurredAt,
+      profileReviewedAt: null,
+      profileReviewedBy: null,
+      version: 1,
+      createdAt: occurredAt,
+      updatedAt: occurredAt,
+    };
+    const statements = [
+      db.insert(idempotencyRecords).values({
+        id: recordId,
+        eventId: input.eventId,
+        operationId: "directory.inviteReturningSpeaker",
+        principalId: principal.userId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 201,
+        responseBody: output,
+        expiresAt: new Date(occurredAt.getTime() + IDEMPOTENCY_TTL_MS),
+        completedAt: occurredAt,
+        createdAt: occurredAt,
+      }),
+      db.insert(speakers).values(speaker),
+      db.insert(managedSpeakerEmails).values({
+        id: commandId("managed_email"),
+        eventId: input.eventId,
+        normalizedEmail: source.normalizedEmail!,
+        speakerId,
+        createdAt: occurredAt,
+        updatedAt: occurredAt,
+      }),
+      db.insert(domainChanges).values({
+        id: commandId("change"),
+        eventId: input.eventId,
+        aggregateType: "speaker",
+        aggregateId: speakerId,
+        aggregateVersion: 1,
+        eventType: "portal.speaker.managed.created",
+        audiences: [{ kind: "admins" }],
+        payload: { speakerId, source: "returning-speaker-directory", action: plan.action, profileCopy: plan.profileCopy },
+        actorUserId: principal.userId,
+        actorApiKeyId: null,
+        requestId,
+        idempotencyRecordId: recordId,
+        occurredAt,
+      }),
+      db.insert(auditLog).values({
+        id: commandId("audit"),
+        eventId: input.eventId,
+        requestId,
+        actorUserId: principal.userId,
+        actorApiKeyId: null,
+        action: "directory.returning-speaker.invited",
+        resourceType: "speaker",
+        resourceId: speakerId,
+        before: null,
+        after: output,
+        metadata: { groupKey: input.groupKey, idempotencyRecordId: recordId, emailQueued: false },
+        occurredAt,
+      }),
+    ];
+    const committed = yield* database(() => db.batch(statements as never)).pipe(Effect.either);
+    if (committed._tag === "Left") {
+      const [raced] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, input.eventId),
+        eq(idempotencyRecords.operationId, "directory.inviteReturningSpeaker"),
+        eq(idempotencyRecords.principalId, principal.userId),
+        eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1));
+      if (raced?.requestHash === requestHash && raced.status === "completed" && raced.responseBody !== null) {
+        const replay = yield* decodeInviteReplay(raced.responseBody);
+        return { ...replay, idempotent: true };
+      }
+      if (retryOnConcurrentChange) return yield* applyReturningSpeakerInviteAttempt(input, false);
+      return yield* Effect.fail(new Conflict({ message: "Returning speaker target changed during invite; preview again" }));
+    }
+    return output;
+  });
+
+export const applyReturningSpeakerInvite = (
+  input: ApplyReturningSpeakerInviteInput,
+): Effect.Effect<ApplyReturningSpeakerInviteOutput, AppError, Authorizer | CurrentUser | Db> =>
+  applyReturningSpeakerInviteAttempt(input, true);
