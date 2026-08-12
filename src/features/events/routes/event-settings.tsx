@@ -7,10 +7,12 @@ import { loginPathForLocation } from "@/client/return-to";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger, Badge, Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Table, Textarea, Toaster, toast } from "@/ui";
 import {
   AddEventMemberOutput,
+  ApplyEventCloneOutput,
   ApplyTeamCopyOutput,
   CreateEventApiKeyOutput,
   EventApiKey,
   EventAccess,
+  EventClonePreview,
   EventMember,
   EventOutput,
   RemoveEventMemberOutput,
@@ -19,6 +21,7 @@ import {
   UpdateEventMemberOutput,
   type EventMember as EventMemberRecord,
   type EventAccess as EventAccessRecord,
+  type EventClonePreview as EventClonePreviewRecord,
   type EventApiKey as EventApiKeyRecord,
   type EventOutput as EventMetadata,
   type TeamCopyPreview as TeamCopyPreviewRecord,
@@ -98,6 +101,53 @@ export function applyEventTeamCopy(eventId: string, sourceEventId: string, idemp
     method: "POST",
     body: { sourceEventId, idempotencyKey },
     schema: ApplyTeamCopyOutput,
+  });
+}
+
+export interface EventCloneTargetValues {
+  readonly name: string;
+  readonly slug: string;
+  readonly startsAt: string;
+  readonly endsAt: string;
+  readonly includeTeam: boolean;
+}
+
+export function buildEventCloneTarget(values: EventCloneTargetValues, timezone: string) {
+  const name = values.name.trim();
+  const slug = values.slug.trim();
+  if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    throw new Error("Enter a name and valid lowercase slug for the new event.");
+  }
+  const startsAt = parseDateTimeInTimezone(values.startsAt, timezone, "Clone start");
+  const endsAt = parseDateTimeInTimezone(values.endsAt, timezone, "Clone end");
+  if (startsAt === null || endsAt === null) throw new Error("Choose start and end dates for the new event.");
+  if (endsAt < startsAt) throw new Error("Clone end must be at or after start.");
+  return { name, slug, startsAt, endsAt, includeTeam: values.includeTeam };
+}
+
+export function previewEventCloneRequest(eventId: string, target: ReturnType<typeof buildEventCloneTarget>) {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/clone/preview`, {
+    method: "POST",
+    body: target,
+    schema: EventClonePreview,
+  });
+}
+
+export function applyEventCloneRequest(
+  eventId: string,
+  target: ReturnType<typeof buildEventCloneTarget>,
+  preview: EventClonePreviewRecord,
+  key: string,
+) {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/clone`, {
+    method: "POST",
+    body: {
+      ...target,
+      expectedSourceVersion: preview.sourceVersion,
+      expectedStructureFingerprint: preview.structureFingerprint,
+      idempotencyKey: key,
+    },
+    schema: ApplyEventCloneOutput,
   });
 }
 
@@ -615,6 +665,7 @@ export default function EventSettingsPage({
         event={event}
         initialSaveError={initialSaveError}
         onSaved={handleSaved}
+        onCloned={(cloned) => navigate(`/e/${encodeURIComponent(cloned.slug)}/settings`)}
         onUnauthenticated={handleUnauthenticated}
       />
       <Toaster />
@@ -626,6 +677,7 @@ export interface EventSettingsFormProps {
   readonly event: EventMetadata;
   readonly initialSaveError?: string | null;
   readonly onSaved?: (event: EventMetadata) => void;
+  readonly onCloned?: (event: EventMetadata) => void;
   readonly onUnauthenticated?: () => void;
 }
 
@@ -633,6 +685,7 @@ export function EventSettingsForm({
   event,
   initialSaveError = null,
   onSaved,
+  onCloned,
   onUnauthenticated,
 }: EventSettingsFormProps) {
   const [values, setValues] = useState<EventFormValues>(() => valuesFromEvent(event));
@@ -654,6 +707,18 @@ export function EventSettingsForm({
   const [teamCopyKey, setTeamCopyKey] = useState<string | null>(null);
   const [teamCopyError, setTeamCopyError] = useState<string | null>(null);
   const [teamCopyLoading, setTeamCopyLoading] = useState(false);
+  const cloneYearMs = 365 * 24 * 60 * 60 * 1_000;
+  const [cloneValues, setCloneValues] = useState<EventCloneTargetValues>(() => ({
+    name: `${event.name} — next edition`,
+    slug: `${event.slug}-next`,
+    startsAt: formatDateTimeForTimezone(event.startsAt ? new Date(event.startsAt.getTime() + cloneYearMs) : null, event.timezone),
+    endsAt: formatDateTimeForTimezone(event.endsAt ? new Date(event.endsAt.getTime() + cloneYearMs) : null, event.timezone),
+    includeTeam: true,
+  }));
+  const [clonePreview, setClonePreview] = useState<EventClonePreviewRecord | null>(null);
+  const [cloneKey, setCloneKey] = useState<string | null>(null);
+  const [cloneError, setCloneError] = useState<string | null>(null);
+  const [cloneLoading, setCloneLoading] = useState(false);
 
   const refreshMembers = () => {
     setMembers(null);
@@ -810,6 +875,47 @@ export function EventSettingsForm({
     }
   };
 
+  const setCloneValue = <K extends keyof EventCloneTargetValues>(key: K, value: EventCloneTargetValues[K]) => {
+    setCloneValues((current) => ({ ...current, [key]: value }));
+    setClonePreview(null);
+    setCloneKey(null);
+  };
+
+  const handleClonePreview = async () => {
+    setCloneError(null);
+    setCloneLoading(true);
+    try {
+      const target = buildEventCloneTarget(cloneValues, event.timezone);
+      setClonePreview(await previewEventCloneRequest(event.id, target));
+      setCloneKey(idempotencyKey());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not preview the event clone";
+      setClonePreview(null);
+      setCloneKey(null);
+      setCloneError(message);
+    } finally {
+      setCloneLoading(false);
+    }
+  };
+
+  const handleCloneApply = async () => {
+    if (!clonePreview || !cloneKey) return;
+    setCloneError(null);
+    setCloneLoading(true);
+    try {
+      const target = buildEventCloneTarget(cloneValues, event.timezone);
+      const result = await applyEventCloneRequest(event.id, target, clonePreview, cloneKey);
+      toast(`${result.event.name} was created as a private, unpublished event.`, { tone: "success" });
+      onCloned?.(result.event);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not clone the event";
+      setCloneError(message);
+      toast(message, { tone: "danger" });
+    } finally {
+      setCloneLoading(false);
+    }
+  };
+
   const actorRole = actorStaff ? "owner" : members?.find((member) => member.userId === actorUserId)?.role ?? null;
   const ownerCount = members?.filter((member) => member.role === "owner").length ?? 0;
 
@@ -924,6 +1030,42 @@ export function EventSettingsForm({
           />
         </div>
       )}
+    </Card>
+    <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Clone as next edition">
+      <p className="mb-4 text-sm text-ink-secondary">Create a private event with reusable structure only. Proposals, reviews, decisions, speakers, agenda state, publications, embeds, deliveries, API keys, and integrations never carry over.</p>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Input label="New event name" value={cloneValues.name} onChange={(change) => setCloneValue("name", change.target.value)} />
+        <Input label="New event slug" value={cloneValues.slug} onChange={(change) => setCloneValue("slug", change.target.value)} />
+        <Input label={`Start (${event.timezone})`} type="datetime-local" value={cloneValues.startsAt} onChange={(change) => setCloneValue("startsAt", change.target.value)} />
+        <Input label={`End (${event.timezone})`} type="datetime-local" value={cloneValues.endsAt} onChange={(change) => setCloneValue("endsAt", change.target.value)} />
+      </div>
+      <label className="mt-4 flex items-center gap-3 text-sm font-bold text-ink">
+        <input type="checkbox" checked={cloneValues.includeTeam} onChange={(change) => setCloneValue("includeTeam", change.target.checked)} />
+        Copy the current team through the reviewed team-copy operation
+      </label>
+      <div className="mt-4"><Button type="button" variant="secondary" loading={cloneLoading} onClick={() => void handleClonePreview()}>Preview clone</Button></div>
+      {cloneError ? <p role="alert" className="mt-3 text-sm text-danger">{cloneError}</p> : null}
+      {clonePreview ? (
+        <div className="mt-4 space-y-4 rounded-control border-2 border-line-strong bg-surface-muted p-4">
+          <div>
+            <h4 className="text-sm font-bold text-ink">Will copy</h4>
+            <div className="mt-2 flex flex-wrap gap-2">{clonePreview.collections.map((item) => <Badge key={item.collection}>{item.count} {item.collection}</Badge>)}</div>
+          </div>
+          <div>
+            <h4 className="text-sm font-bold text-ink">Will never copy</h4>
+            <ul className="mt-2 grid gap-1 text-sm text-ink-secondary sm:grid-cols-2">
+              {clonePreview.excluded.map((item) => <li key={item.collection}>{item.collection} <span className="text-ink-faint">({item.sourceCount} in source)</span></li>)}
+            </ul>
+          </div>
+          <AlertDialog>
+            <AlertDialogTrigger asChild><Button type="button" loading={cloneLoading}>Create private event</Button></AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader><AlertDialogTitle>Create {clonePreview.targetName}?</AlertDialogTitle><AlertDialogDescription>This creates a private, unpublished event at {clonePreview.targetSlug}. Forms are new drafts, review rounds are pending, and no operational or public state is copied.</AlertDialogDescription></AlertDialogHeader>
+              <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void handleCloneApply()}>Clone structure</AlertDialogAction></AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      ) : null}
     </Card>
     <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Copy team from another event">
       <p className="mb-4 text-sm text-ink-secondary">Preview the exact owner, admin, and reviewer memberships that will be added. Existing members are skipped without changing their role.</p>

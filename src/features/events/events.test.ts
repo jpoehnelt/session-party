@@ -10,11 +10,27 @@ import {
   apiKeys,
   auditLog,
   domainChanges,
+  emailTemplates,
+  embeds,
   eventMembers,
   events,
+  formFields,
+  formVersionFields,
+  formVersions,
+  forms,
+  integrations,
   mailDeliveries,
   mailDeliverySnapshots,
+  pages,
+  reviewRounds,
+  reviews,
   reviewerInvitations,
+  rooms,
+  speakers,
+  submissions,
+  talks,
+  tasks,
+  tracks,
 } from "contracts/schema";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
@@ -31,6 +47,7 @@ import {
 } from "@/server/services";
 import {
   addEventMember,
+  applyEventClone,
   applyTeamCopy,
   acceptReviewerInvitation,
   createEventApiKey,
@@ -43,6 +60,7 @@ import {
   listEvents,
   listReviewerInvitations,
   previewTeamCopy,
+  previewEventClone,
   removeEventMember,
   revokeEventApiKey,
   updateEvent,
@@ -478,6 +496,269 @@ describe("events service", () => {
       previewTeamCopy({ eventId: target.id, sourceEventId: source.id }),
       "Forbidden",
     );
+  });
+
+  it("previews and concurrently replays an exact structure-only clone without public or operational state", async () => {
+    const source = await runAs(owner, createEvent({
+      name: "Published 2026 edition",
+      slug: "published-2026-edition",
+      description: "Reusable event structure",
+      location: "Denver",
+      timezone: "America/Denver",
+      startsAt: Date.UTC(2026, 8, 10, 15),
+      endsAt: Date.UTC(2026, 8, 11, 23),
+      accentColor: "#635BFF",
+    }));
+    await runAs(owner, addEventMember({
+      eventId: source.id,
+      email: reviewer.email,
+      role: "reviewer",
+      idempotencyKey: "clone-source-reviewer",
+    }));
+    const db = drizzle(env.DB);
+    const now = new Date("2026-08-12T14:00:00.000Z");
+    await db.batch([
+      db.insert(forms).values({
+        id: "clone-source-form", eventId: source.id, kind: "cfp", name: "Published CFP",
+        description: "Published source form", status: "open", opensAt: now, closesAt: new Date(now.getTime() + 86_400_000),
+        version: 3, createdAt: now, updatedAt: now,
+      }),
+      db.insert(formFields).values([
+        {
+          id: "clone-source-title", eventId: source.id, formId: "clone-source-form", order: 1,
+          type: "text", label: "Session title", semanticKey: "submissionTitle", required: true,
+          options: [], logic: null, routing: {}, version: 2, createdAt: now, updatedAt: now,
+        },
+        {
+          id: "clone-source-track", eventId: source.id, formId: "clone-source-form", order: 2,
+          type: "select", label: "Track", semanticKey: null, required: true,
+          options: ["Systems", "Tools"],
+          logic: { action: "show", mode: "all", conditions: [{ fieldId: "clone-source-title", op: "not_empty" }] },
+          routing: { Systems: "Systems", Tools: "Tools" }, version: 2, createdAt: now, updatedAt: now,
+        },
+      ]),
+      db.insert(formVersions).values({
+        id: "clone-source-form-v2", eventId: source.id, formId: "clone-source-form", versionNumber: 2,
+        name: "Published CFP v2", description: "Immutable source version", publishedAt: now, createdAt: now,
+      }),
+      db.insert(formVersionFields).values([
+        {
+          id: "clone-source-title-v2", eventId: source.id, formVersionId: "clone-source-form-v2",
+          sourceFieldId: "clone-source-title", order: 1, type: "text", label: "Session title",
+          semanticKey: "submissionTitle", required: true, options: [], logic: null, routing: {}, createdAt: now,
+        },
+        {
+          id: "clone-source-track-v2", eventId: source.id, formVersionId: "clone-source-form-v2",
+          sourceFieldId: "clone-source-track", order: 2, type: "select", label: "Track",
+          semanticKey: null, required: true, options: ["Systems", "Tools"],
+          logic: { action: "show", mode: "all", conditions: [{ fieldId: "clone-source-title", op: "not_empty" }] },
+          routing: { Systems: "Systems", Tools: "Tools" }, createdAt: now,
+        },
+      ]),
+      db.insert(reviewRounds).values({
+        id: "clone-source-round", eventId: source.id, name: "Program review", order: 1,
+        status: "active", startsAt: now, endsAt: new Date(now.getTime() + 86_400_000), blind: true,
+        rubric: { criteria: [{ key: "fit", label: "Fit", max: 5 }] }, version: 2, createdAt: now, updatedAt: now,
+      }),
+      db.insert(tracks).values({ id: "clone-source-track-record", eventId: source.id, name: "Systems", color: "#635BFF", order: 1, version: 2, createdAt: now, updatedAt: now }),
+      db.insert(rooms).values({ id: "clone-source-room", eventId: source.id, name: "Main stage", capacity: 300, order: 1, version: 2, createdAt: now, updatedAt: now }),
+      db.insert(tasks).values({
+        id: "clone-source-task", eventId: source.id, name: "Travel form", description: "Collect logistics",
+        kind: "form", formId: "clone-source-form", dueAt: new Date(now.getTime() + 172_800_000), order: 1,
+        targetMode: "selected", version: 2, createdAt: now, updatedAt: now,
+      }),
+      db.insert(pages).values({
+        id: "clone-source-page", eventId: source.id, slug: "speaker-guide", title: "Speaker guide",
+        body: "Reusable guide", htmlEmbed: null, audience: "public", order: 1, version: 2, createdAt: now, updatedAt: now,
+      }),
+      db.insert(emailTemplates).values({
+        id: "clone-source-template", eventId: source.id, name: "Acceptance",
+        subject: "Welcome {{speaker.name}}", body: "Join {{event.name}} at {{event.startsAt}}.",
+        attachIcs: true, version: 2, createdAt: now, updatedAt: now,
+      }),
+      db.insert(submissions).values({
+        id: "clone-source-submission", eventId: source.id, formId: "clone-source-form",
+        formVersionId: "clone-source-form-v2", title: "State must not clone", status: "accepted",
+        submittedAt: now, acceptedAt: now, version: 2, createdAt: now, updatedAt: now,
+      }),
+      db.insert(speakers).values({
+        id: "clone-source-speaker", eventId: source.id, contactEmail: "clone-speaker@example.com",
+        displayName: "Source speaker", profileReviewStatus: "approved", version: 2, createdAt: now, updatedAt: now,
+      }),
+      db.insert(reviews).values({
+        id: "clone-source-review", eventId: source.id, roundId: "clone-source-round",
+        submissionId: "clone-source-submission", reviewerUserId: reviewer.userId, ai: false,
+        score: 5, scores: { fit: 5 }, comment: "Source-only review", version: 1, createdAt: now, updatedAt: now,
+      }),
+      db.insert(talks).values({
+        id: "clone-source-talk", eventId: source.id, submissionId: "clone-source-submission",
+        title: "Placed source talk", trackId: "clone-source-track-record", roomId: "clone-source-room",
+        startsAt: new Date(Date.UTC(2026, 8, 10, 16)), durationMin: 30, status: "confirmed",
+        version: 2, createdAt: now, updatedAt: now,
+      }),
+      db.insert(embeds).values({
+        id: "clone-source-embed", eventId: source.id, name: "Published schedule", widget: "schedule",
+        preset: "agenda", aesthetic: "bold", accent: "#635BFF", trackId: null, track: null,
+        fields: ["title", "time"], enabled: true, version: 1, createdAt: now, updatedAt: now,
+      }),
+      db.insert(integrations).values({
+        id: "clone-source-integration", eventId: source.id, kind: "airtable", secretRef: "AIRTABLE_PAT",
+        config: { baseId: "appSource" }, version: 1, createdAt: now, updatedAt: now,
+      }),
+      db.insert(mailDeliverySnapshots).values({
+        id: "clone-source-delivery", eventId: source.id, templateId: "clone-source-template",
+        recipientEmail: "recipient@example.com", fromEmail: "events@example.com", subject: "Delivered source",
+        renderedHtml: "<p>Source only</p>", renderedText: "Source only", createdAt: now,
+      }),
+      db.insert(domainChanges).values({
+        id: "clone-source-agenda-publication", eventId: source.id, aggregateType: "agenda-publication",
+        aggregateId: source.id, aggregateVersion: 1, eventType: "agenda.published",
+        audiences: [{ kind: "admins" }], payload: { revision: 1 }, actorUserId: owner.userId,
+        actorApiKeyId: null, requestId: "clone-source-publication", idempotencyRecordId: null, occurredAt: now,
+      }),
+    ]);
+    await runAs(owner, createEventApiKey({
+      eventId: source.id,
+      name: "Source key",
+      scopes: ["event:read"],
+      expiresAt: Date.now() + 30 * 24 * 60 * 60_000,
+    }));
+
+    const target = {
+      eventId: source.id,
+      name: "Published 2027 edition",
+      slug: "published-2027-edition",
+      startsAt: Date.UTC(2027, 8, 9, 15),
+      endsAt: Date.UTC(2027, 8, 10, 23),
+      includeTeam: true,
+    } as const;
+    const preview = await runAs(owner, previewEventClone(target));
+    expect(preview.collections).toEqual([
+      { collection: "forms", count: 1 },
+      { collection: "formFields", count: 2 },
+      { collection: "reviewRounds", count: 1 },
+      { collection: "taskTemplates", count: 1 },
+      { collection: "resourcePages", count: 1 },
+      { collection: "tracks", count: 1 },
+      { collection: "rooms", count: 1 },
+      { collection: "messageTemplates", count: 1 },
+      { collection: "teamMemberships", count: 1 },
+    ]);
+    expect(preview.excluded).toEqual([
+      { collection: "submissions", sourceCount: 1 },
+      { collection: "reviews", sourceCount: 1 },
+      { collection: "decisions", sourceCount: 1 },
+      { collection: "speakers", sourceCount: 1 },
+      { collection: "agendaPlacements", sourceCount: 1 },
+      { collection: "publishedFormVersions", sourceCount: 1 },
+      { collection: "publishedAgendaRevisions", sourceCount: 1 },
+      { collection: "embeds", sourceCount: 1 },
+      { collection: "deliveries", sourceCount: 1 },
+      { collection: "apiKeys", sourceCount: 1 },
+      { collection: "integrations", sourceCount: 1 },
+    ]);
+    const cloneInput = {
+      ...target,
+      expectedSourceVersion: preview.sourceVersion,
+      expectedStructureFingerprint: preview.structureFingerprint,
+      idempotencyKey: "clone-published-edition-replay",
+    } as const;
+    const raced = await Promise.all([
+      runAs(owner, applyEventClone(cloneInput)),
+      runAs(owner, applyEventClone(cloneInput)),
+    ]);
+    expect(raced.map((result) => result.idempotent).sort()).toEqual([false, true]);
+    expect(new Set(raced.map((result) => result.event.id)).size).toBe(1);
+    const cloned = raced[0]!.event;
+    await expect(runAs(owner, applyEventClone(cloneInput))).resolves.toEqual({ ...raced[0], idempotent: true });
+    expect(await db.select().from(events).where(eq(events.slug, target.slug))).toHaveLength(1);
+
+    const [clonedForm] = await db.select().from(forms).where(eq(forms.eventId, cloned.id));
+    expect(clonedForm).toMatchObject({
+      name: "Published CFP v2", status: "draft", opensAt: null, closesAt: null,
+      clonedFromEventId: source.id, clonedFromFormId: "clone-source-form", clonedFromVersion: 2, version: 1,
+    });
+    expect(await db.select().from(formVersions).where(eq(formVersions.eventId, cloned.id))).toHaveLength(0);
+    const clonedFieldRows = await db.select().from(formFields).where(eq(formFields.eventId, cloned.id));
+    expect(clonedFieldRows).toHaveLength(2);
+    expect(clonedFieldRows.map((field) => field.semanticKey)).toContain("submissionTitle");
+    const titleField = clonedFieldRows.find((field) => field.semanticKey === "submissionTitle")!;
+    const dependentField = clonedFieldRows.find((field) => field.semanticKey === null)!;
+    const dependentLogic = typeof dependentField.logic === "string"
+      ? JSON.parse(dependentField.logic) as { conditions: readonly { fieldId: string }[] }
+      : dependentField.logic as { conditions: readonly { fieldId: string }[] };
+    expect(dependentLogic.conditions[0]?.fieldId).toBe(titleField.id);
+    const [clonedTask] = await db.select().from(tasks).where(eq(tasks.eventId, cloned.id));
+    expect(clonedTask).toMatchObject({ formId: clonedForm!.id, dueAt: null, targetMode: "selected" });
+    await expect(db.select().from(reviewRounds).where(eq(reviewRounds.eventId, cloned.id))).resolves.toEqual([
+      expect.objectContaining({ status: "pending", startsAt: null, endsAt: null, blind: true }),
+    ]);
+    await expect(db.select().from(emailTemplates).where(eq(emailTemplates.eventId, cloned.id))).resolves.toEqual([
+      expect.objectContaining({ subject: "Welcome {{speaker.name}}", body: "Join {{event.name}} at {{event.startsAt}}." }),
+    ]);
+    await expect(runAs(owner, listEventMembers({ eventId: cloned.id }))).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: owner.userId, role: "owner" }),
+      expect.objectContaining({ userId: reviewer.userId, role: "reviewer" }),
+    ]));
+
+    const excludedTargetRows = await Promise.all([
+      db.select().from(submissions).where(eq(submissions.eventId, cloned.id)),
+      db.select().from(reviews).where(eq(reviews.eventId, cloned.id)),
+      db.select().from(speakers).where(eq(speakers.eventId, cloned.id)),
+      db.select().from(talks).where(eq(talks.eventId, cloned.id)),
+      db.select().from(embeds).where(eq(embeds.eventId, cloned.id)),
+      db.select().from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.eventId, cloned.id)),
+      db.select().from(apiKeys).where(eq(apiKeys.eventId, cloned.id)),
+      db.select().from(integrations).where(eq(integrations.eventId, cloned.id)),
+    ]);
+    expect(excludedTargetRows.every((rows) => rows.length === 0)).toBe(true);
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, cloned.id),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ))).toHaveLength(0);
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, source.id),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+    ))).toEqual([expect.objectContaining({ id: "clone-source-agenda-publication", aggregateVersion: 1 })]);
+    expect(await db.select().from(talks).where(eq(talks.eventId, source.id))).toEqual([
+      expect.objectContaining({ id: "clone-source-talk", status: "confirmed" }),
+    ]);
+    await expect(db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, cloned.id),
+      eq(auditLog.action, "events.clone"),
+    ))).resolves.toHaveLength(1);
+    await expect(db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, cloned.id),
+      eq(auditLog.action, "events.copyTeam"),
+    ))).resolves.toHaveLength(1);
+  });
+
+  it("keeps event clone browser-only, owner/admin authorized, and stale-preview guarded", async () => {
+    const source = await runAs(owner, createEvent({ name: "Clone policy source", slug: "clone-policy-source" }));
+    await addMember(source.id, admin.userId, "admin");
+    const previewOperation = operations.find((candidate) => candidate.id === "events.previewClone");
+    const cloneOperation = operations.find((candidate) => candidate.id === "events.clone");
+    if (!previewOperation || !cloneOperation) throw new Error("Event clone operations missing");
+    expect([previewOperation, cloneOperation].every((operation) => !("mcp" in operation) && !("party" in operation))).toBe(true);
+    const target = {
+      eventId: source.id,
+      name: "Clone policy target",
+      slug: "clone-policy-target",
+      startsAt: Date.UTC(2027, 0, 1),
+      endsAt: Date.UTC(2027, 0, 2),
+      includeTeam: false,
+    } as const;
+    const preview = await runAs(admin, previewEventClone(target));
+    await expectFailure(reviewer, previewEventClone(target), "Forbidden");
+    await expectFailure(outsider, previewEventClone(target), "Forbidden");
+    await expectFailure(apiKeyPrincipal("clone-source-key", source.id, ["event:read", "event:write"]), previewEventClone(target), "Forbidden");
+    await runAs(owner, updateEvent(source.id, { expectedVersion: source.version, description: "Structure version changed" }));
+    await expectFailure(admin, applyEventClone({
+      ...target,
+      expectedSourceVersion: preview.sourceVersion,
+      expectedStructureFingerprint: preview.structureFingerprint,
+      idempotencyKey: "stale-event-clone",
+    }), "Conflict");
   });
 
   it("queues a reviewer invitation and securely accepts it into the existing reviewer membership", async () => {

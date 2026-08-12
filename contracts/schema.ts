@@ -251,6 +251,10 @@ export const forms = sqliteTable(
     status: text("status", { enum: ["draft", "open", "closed"] }).notNull().default("draft"),
     opensAt: integer("opens_at", { mode: "timestamp_ms" }),
     closesAt: integer("closes_at", { mode: "timestamp_ms" }),
+    /** Stable audit provenance for structure-only event clones; deliberately not a live cross-event relationship. */
+    clonedFromEventId: text("cloned_from_event_id"),
+    clonedFromFormId: text("cloned_from_form_id"),
+    clonedFromVersion: integer("cloned_from_version"),
     version: version(),
     ...timestamps,
   },
@@ -258,6 +262,7 @@ export const forms = sqliteTable(
     uniqueIndex("forms_event_id_unique").on(t.eventId, t.id),
     index("forms_event_status").on(t.eventId, t.status),
     check("forms_version_positive", sql`${t.version} > 0`),
+    check("forms_clone_provenance", sql`(${t.clonedFromEventId} is null and ${t.clonedFromFormId} is null and ${t.clonedFromVersion} is null) or (${t.clonedFromEventId} is not null and ${t.clonedFromFormId} is not null and ${t.clonedFromVersion} > 0)`),
     check("forms_date_order", sql`${t.opensAt} is null or ${t.closesAt} is null or ${t.closesAt} >= ${t.opensAt}`),
   ],
 );

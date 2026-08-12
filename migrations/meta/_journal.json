@@ -141,6 +141,13 @@
       "when": 1786561661818,
       "tag": "0019_fearless_reaper",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1786564213723,
+      "tag": "0020_wooden_forgotten_one",
+      "breakpoints": true
     }
   ]
 }

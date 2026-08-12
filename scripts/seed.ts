@@ -7,6 +7,8 @@ const expiresAt = 4_102_444_800_000;
 const expiredAt = 1_700_000_000_000;
 const eventStartsAt = 1_789_660_800_000;
 const eventEndsAt = 1_789_858_800_000;
+const nextEventStartsAt = 1_821_196_800_000;
+const nextEventEndsAt = 1_821_394_800_000;
 
 const hmac = (value: string): string =>
   createHmac("sha256", localSecret).update(value).digest("hex");
@@ -149,6 +151,7 @@ const rubric = {
 const sql = `
 DELETE FROM events WHERE id = 'demo-event';
 DELETE FROM events WHERE id = 'demo-other-event';
+DELETE FROM events WHERE id = 'demo-next-edition';
 DELETE FROM install_grants WHERE user_id IN (${personas.map(([id]) => quote(id)).join(", ")});
 DELETE FROM auth_tokens WHERE user_id IN (${personas.map(([id]) => quote(id)).join(", ")});
 DELETE FROM users WHERE id IN (${personas.map(([id]) => quote(id)).join(", ")});
@@ -185,6 +188,11 @@ VALUES (
   'An isolation fixture that must never grant access to AI Engineer Sandbox.', 'Remote',
   'UTC', ${eventStartsAt}, ${eventEndsAt}, NULL, '#171714', 1,
   ${createdAt}, ${createdAt}
+), (
+  'demo-next-edition', 'ai-engineer-sandbox-2027', 'AI Engineer Sandbox 2027',
+  'A private, unpublished second-edition fixture containing reusable structure only.', 'Pier 27, San Francisco',
+  'America/Los_Angeles', ${nextEventStartsAt}, ${nextEventEndsAt}, NULL, '#635BFF', 1,
+  ${createdAt}, ${createdAt}
 );
 
 INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)
@@ -194,26 +202,41 @@ VALUES
   ('demo-member-reviewer', 'demo-event', 'demo-reviewer', 'reviewer', 1, ${createdAt}, ${createdAt}),
   ('demo-member-reviewer-unassigned', 'demo-event', 'demo-reviewer-unassigned', 'reviewer', 1, ${createdAt}, ${createdAt}),
   ('demo-member-reviewer-recused', 'demo-event', 'demo-reviewer-recused', 'reviewer', 1, ${createdAt}, ${createdAt}),
-  ('demo-member-other-event', 'demo-other-event', 'demo-observer', 'owner', 1, ${createdAt}, ${createdAt});
+  ('demo-member-other-event', 'demo-other-event', 'demo-observer', 'owner', 1, ${createdAt}, ${createdAt}),
+  ('demo-next-member-owner', 'demo-next-edition', 'demo-owner', 'owner', 1, ${createdAt}, ${createdAt}),
+  ('demo-next-member-admin', 'demo-next-edition', 'demo-admin', 'admin', 1, ${createdAt}, ${createdAt}),
+  ('demo-next-member-reviewer', 'demo-next-edition', 'demo-reviewer', 'reviewer', 1, ${createdAt}, ${createdAt}),
+  ('demo-next-member-reviewer-unassigned', 'demo-next-edition', 'demo-reviewer-unassigned', 'reviewer', 1, ${createdAt}, ${createdAt}),
+  ('demo-next-member-reviewer-recused', 'demo-next-edition', 'demo-reviewer-recused', 'reviewer', 1, ${createdAt}, ${createdAt});
 
 INSERT INTO review_rounds (id, event_id, name, \`order\`, status, rubric, version, created_at, updated_at)
 VALUES
   ('demo-review-round-active', 'demo-event', 'Program review', 1, 'active', ${json(rubric)}, 1, ${createdAt}, ${createdAt}),
-  ('demo-review-round-final', 'demo-event', 'Final selection', 2, 'pending', ${json(rubric)}, 1, ${createdAt}, ${createdAt});
+  ('demo-review-round-final', 'demo-event', 'Final selection', 2, 'pending', ${json(rubric)}, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-review-round-program', 'demo-next-edition', 'Program review', 1, 'pending', ${json(rubric)}, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-review-round-final', 'demo-next-edition', 'Final selection', 2, 'pending', ${json(rubric)}, 1, ${createdAt}, ${createdAt});
 
 INSERT INTO tracks (id, event_id, name, color, \`order\`, version, created_at, updated_at)
 VALUES
   ('demo-track-systems', 'demo-event', 'AI systems', '#635BFF', 1, 1, ${createdAt}, ${createdAt}),
   ('demo-track-tools', 'demo-event', 'Developer tools', '#0F9D8A', 2, 1, ${createdAt}, ${createdAt}),
   ('demo-track-research', 'demo-event', 'Applied research', '#D97706', 3, 1, ${createdAt}, ${createdAt}),
-  ('demo-track-leadership', 'demo-event', 'Engineering leadership', '#DB2777', 4, 1, ${createdAt}, ${createdAt});
+  ('demo-track-leadership', 'demo-event', 'Engineering leadership', '#DB2777', 4, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-track-systems', 'demo-next-edition', 'AI systems', '#635BFF', 1, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-track-tools', 'demo-next-edition', 'Developer tools', '#0F9D8A', 2, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-track-research', 'demo-next-edition', 'Applied research', '#D97706', 3, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-track-leadership', 'demo-next-edition', 'Engineering leadership', '#DB2777', 4, 1, ${createdAt}, ${createdAt});
 
 INSERT INTO rooms (id, event_id, name, capacity, \`order\`, version, created_at, updated_at)
 VALUES
   ('demo-room-harbor', 'demo-event', 'Harbor Stage', 220, 1, 1, ${createdAt}, ${createdAt}),
   ('demo-room-summit', 'demo-event', 'Summit Room', 140, 2, 1, ${createdAt}, ${createdAt}),
   ('demo-room-studio', 'demo-event', 'Builder Studio', 90, 3, 1, ${createdAt}, ${createdAt}),
-  ('demo-room-lab', 'demo-event', 'Research Lab', 70, 4, 1, ${createdAt}, ${createdAt});
+  ('demo-room-lab', 'demo-event', 'Research Lab', 70, 4, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-room-harbor', 'demo-next-edition', 'Harbor Stage', 220, 1, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-room-summit', 'demo-next-edition', 'Summit Room', 140, 2, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-room-studio', 'demo-next-edition', 'Builder Studio', 90, 3, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-room-lab', 'demo-next-edition', 'Research Lab', 70, 4, 1, ${createdAt}, ${createdAt});
 
 INSERT INTO integrations (
   id, event_id, kind, secret_ref, config, cursor, last_sync_at, last_error,
@@ -243,11 +266,13 @@ VALUES
 
 INSERT INTO forms (
   id, event_id, kind, name, description, status, opens_at, closes_at,
+  cloned_from_event_id, cloned_from_form_id, cloned_from_version,
   version, created_at, updated_at
 )
 VALUES
-  ('demo-directory-form-main', 'demo-event', 'task', 'Directory fixture history form', NULL, 'closed', NULL, NULL, 1, ${createdAt}, ${createdAt}),
-  ('demo-directory-form-other', 'demo-other-event', 'task', 'Directory fixture history form', NULL, 'closed', NULL, NULL, 1, ${createdAt}, ${createdAt});
+  ('demo-directory-form-main', 'demo-event', 'task', 'Directory fixture history form', NULL, 'closed', NULL, NULL, NULL, NULL, NULL, 1, ${createdAt}, ${createdAt}),
+  ('demo-directory-form-other', 'demo-other-event', 'task', 'Directory fixture history form', NULL, 'closed', NULL, NULL, NULL, NULL, NULL, 1, ${createdAt}, ${createdAt}),
+  ('demo-next-directory-form', 'demo-next-edition', 'task', 'Directory fixture history form', NULL, 'draft', NULL, NULL, 'demo-event', 'demo-directory-form-main', 1, 1, ${createdAt}, ${createdAt});
 
 INSERT INTO form_versions (
   id, event_id, form_id, version_number, name, description, published_at, retired_at, created_at
@@ -255,6 +280,34 @@ INSERT INTO form_versions (
 VALUES
   ('demo-directory-form-version-main', 'demo-event', 'demo-directory-form-main', 1, 'Directory fixture history form', NULL, ${createdAt}, NULL, ${createdAt}),
   ('demo-directory-form-version-other', 'demo-other-event', 'demo-directory-form-other', 1, 'Directory fixture history form', NULL, ${createdAt}, NULL, ${createdAt});
+
+INSERT INTO tasks (
+  id, event_id, name, description, kind, form_id, due_at, \`order\`, target_mode,
+  version, created_at, updated_at
+)
+VALUES (
+  'demo-next-task-directory', 'demo-next-edition', 'Confirm directory details',
+  'Reusable task template with no carried-over assignment or deadline.', 'form',
+  'demo-next-directory-form', NULL, 1, 'all', 1, ${createdAt}, ${createdAt}
+);
+
+INSERT INTO pages (
+  id, event_id, slug, title, body, html_embed, audience, \`order\`,
+  version, created_at, updated_at
+)
+VALUES (
+  'demo-next-page-speaker-guide', 'demo-next-edition', 'speaker-guide', 'Speaker guide',
+  'Reusable guidance for the next edition.', NULL, 'speakers', 1, 1, ${createdAt}, ${createdAt}
+);
+
+INSERT INTO email_templates (
+  id, event_id, name, subject, body, attach_ics, version, created_at, updated_at
+)
+VALUES (
+  'demo-next-template-welcome', 'demo-next-edition', 'Speaker welcome',
+  'Welcome to {{event.name}}', 'Hello {{speaker.name}}, welcome to {{event.name}}.',
+  0, 1, ${createdAt}, ${createdAt}
+);
 
 INSERT INTO speakers (
   id, event_id, user_id, contact_email, display_name, title, company, bio,
@@ -327,5 +380,6 @@ console.log(JSON.stringify({
   mode: "local-fake",
   seeded: true,
   event: { id: "demo-event", slug: "ai-engineer-sandbox" },
+  secondEdition: { id: "demo-next-edition", slug: "ai-engineer-sandbox-2027", structureOnly: true },
   personas: Object.fromEntries(personas.map(([id, , , token]) => [id.replace("demo-", ""), token])),
 }));

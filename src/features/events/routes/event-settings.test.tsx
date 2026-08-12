@@ -6,6 +6,8 @@ import { ApiError } from "@/client/api";
 import EventSettingsPage, {
   ApiAccessPanel,
   apiKeyPresets,
+  applyEventCloneRequest,
+  buildEventCloneTarget,
   buildEventPatch,
   canManageMember,
   createEventApiKey,
@@ -16,6 +18,7 @@ import EventSettingsPage, {
   formatDateTimeForTimezone,
   parseDateTimeInTimezone,
   path,
+  previewEventCloneRequest,
   revokeEventApiKey,
   updateEventMetadata,
 } from "./event-settings";
@@ -152,9 +155,70 @@ describe("event metadata settings route", () => {
     expect(markup).toContain('type="datetime-local"');
     expect(markup).toContain('value="#2255aa"');
     expect(markup).toContain("Copy team from another event");
+    expect(markup).toContain("Clone as next edition");
+    expect(markup).toContain("Proposals, reviews, decisions, speakers, agenda state, publications, embeds, deliveries, API keys, and integrations never carry over.");
     expect(markup).not.toContain("Status");
     expect(markup).not.toContain("Team");
     expect(markup).not.toContain("Security");
+  });
+
+  it("previews exact clone collections and applies the confirmed browser-only request", async () => {
+    const target = buildEventCloneTarget({
+      name: "Production Summit 2027",
+      slug: "production-summit-2027",
+      startsAt: "2027-09-13T09:00",
+      endsAt: "2027-09-14T16:00",
+      includeTeam: true,
+    }, event.timezone);
+    const previewPayload = {
+      sourceEventId: event.id,
+      sourceEventName: event.name,
+      sourceVersion: event.version,
+      targetName: target.name,
+      targetSlug: target.slug,
+      startsAt: new Date(target.startsAt).toISOString(),
+      endsAt: new Date(target.endsAt).toISOString(),
+      includeTeam: true,
+      collections: [{ collection: "forms", count: 2 }],
+      excluded: [{ collection: "submissions", sourceCount: 42 }],
+      structureFingerprint: "a".repeat(64),
+    } as const;
+    const clonedEventPayload = {
+      ...eventPayload,
+      id: "event_2027",
+      slug: target.slug,
+      name: target.name,
+      description: event.description,
+      location: event.location,
+      startsAt: previewPayload.startsAt,
+      endsAt: previewPayload.endsAt,
+      version: 1,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(previewPayload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        sourceEventId: event.id,
+        event: clonedEventPayload,
+        collections: previewPayload.collections,
+        includeTeam: true,
+        idempotent: false,
+      }), { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const preview = await previewEventCloneRequest(event.id, target);
+    const applied = await applyEventCloneRequest(event.id, target, preview, "clone-ui-test-key");
+
+    expect(preview.collections).toEqual([{ collection: "forms", count: 2 }]);
+    expect(applied.event.id).toBe("event_2027");
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `/api/v1/events/${event.id}/clone/preview`, expect.objectContaining({ method: "POST", credentials: "include" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/v1/events/${event.id}/clone`, expect.objectContaining({ method: "POST", credentials: "include" }));
+    const [, applyRequest] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(applyRequest.body))).toEqual({
+      ...target,
+      expectedSourceVersion: event.version,
+      expectedStructureFingerprint: "a".repeat(64),
+      idempotencyKey: "clone-ui-test-key",
+    });
   });
 
   it("round-trips wall time in the event timezone without using the browser timezone", () => {

@@ -9,20 +9,35 @@ import {
   apiKeys,
   auditLog,
   domainChanges,
+  emailTemplates,
   eventMembers,
   events,
+  embeds,
+  formFields,
+  formVersionFields,
+  formVersions,
+  forms,
   idempotencyRecords,
+  integrations,
   mailDeliveries,
   mailDeliverySnapshots,
   managedSpeakerEmails,
+  pages,
+  reviewRounds,
+  reviews,
+  rooms,
   reviewerInvitations,
   speakerProvisioning,
   speakers,
   submissions,
+  talks,
+  tasks,
+  tracks,
   users,
 } from "contracts/schema";
 import { Effect, Schema } from "effect";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { nanoid } from "nanoid";
 import {
   activeInstallRole,
@@ -41,12 +56,18 @@ import {
   type AddEventMemberInput,
   type AddEventMemberOutput as AddEventMemberOutputType,
   ApplyTeamCopyOutput,
+  ApplyEventCloneOutput,
+  type ApplyEventCloneInput,
+  type ApplyEventCloneOutput as ApplyEventCloneOutputType,
   type ApplyTeamCopyInput,
   type ApplyTeamCopyOutput as ApplyTeamCopyOutputType,
   CreateReviewerInvitationOutput,
   type CreateReviewerInvitationInput,
   type CreateReviewerInvitationOutput as CreateReviewerInvitationOutputType,
   type EventMember as EventMemberType,
+  type EventCloneCount,
+  type EventCloneExcludedCount,
+  type EventClonePreview,
   type EventAccess as EventAccessType,
   type EventApiKey as EventApiKeyType,
   type CreateEventApiKeyInput,
@@ -55,6 +76,7 @@ import {
   type ListEventMembersInput,
   type ListReviewerInvitationsInput,
   type PreviewTeamCopyInput,
+  type PreviewEventCloneInput,
   RemoveEventMemberOutput,
   type RemoveEventMemberInput,
   type RemoveEventMemberOutput as RemoveEventMemberOutputType,
@@ -1056,6 +1078,496 @@ export const applyTeamCopy = (
   input: ApplyTeamCopyInput,
 ): Effect.Effect<ApplyTeamCopyOutputType, AppError, Authorizer | CurrentUser | Db> =>
   applyTeamCopyAttempt(input, true);
+
+type CloneFieldSource = {
+  readonly id: string;
+  readonly sourceFieldId: string | null;
+  readonly order: number;
+  readonly type: string;
+  readonly label: string;
+  readonly helpText: string | null;
+  readonly semanticKey: typeof formFields.$inferSelect.semanticKey;
+  readonly required: boolean;
+  readonly options: readonly string[] | null;
+  readonly logic: unknown;
+  readonly routing: unknown;
+};
+
+type CloneFormPlan = {
+  readonly source: typeof forms.$inferSelect;
+  readonly sourceVersion: number;
+  readonly name: string;
+  readonly description: string | null;
+  readonly fields: readonly CloneFieldSource[];
+};
+
+type EventClonePlan = {
+  readonly source: typeof events.$inferSelect;
+  readonly actor: MemberActor;
+  readonly preview: EventClonePreview;
+  readonly forms: readonly CloneFormPlan[];
+  readonly rounds: readonly (typeof reviewRounds.$inferSelect)[];
+  readonly tasks: readonly (typeof tasks.$inferSelect)[];
+  readonly pages: readonly (typeof pages.$inferSelect)[];
+  readonly tracks: readonly (typeof tracks.$inferSelect)[];
+  readonly rooms: readonly (typeof rooms.$inferSelect)[];
+  readonly templates: readonly (typeof emailTemplates.$inferSelect)[];
+};
+
+const parsedJson = <A>(value: unknown, fallback: A): A => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value !== "string") return value as A;
+  try {
+    return JSON.parse(value) as A;
+  } catch {
+    return fallback;
+  }
+};
+
+const cloneCollections = (counts: {
+  readonly forms: number;
+  readonly formFields: number;
+  readonly reviewRounds: number;
+  readonly taskTemplates: number;
+  readonly resourcePages: number;
+  readonly tracks: number;
+  readonly rooms: number;
+  readonly messageTemplates: number;
+  readonly teamMemberships: number;
+}): readonly EventCloneCount[] => [
+  { collection: "forms", count: counts.forms },
+  { collection: "formFields", count: counts.formFields },
+  { collection: "reviewRounds", count: counts.reviewRounds },
+  { collection: "taskTemplates", count: counts.taskTemplates },
+  { collection: "resourcePages", count: counts.resourcePages },
+  { collection: "tracks", count: counts.tracks },
+  { collection: "rooms", count: counts.rooms },
+  { collection: "messageTemplates", count: counts.messageTemplates },
+  { collection: "teamMemberships", count: counts.teamMemberships },
+];
+
+const cloneExcluded = (counts: {
+  readonly submissions: number;
+  readonly reviews: number;
+  readonly decisions: number;
+  readonly speakers: number;
+  readonly agendaPlacements: number;
+  readonly publishedFormVersions: number;
+  readonly publishedAgendaRevisions: number;
+  readonly embeds: number;
+  readonly deliveries: number;
+  readonly apiKeys: number;
+  readonly integrations: number;
+}): readonly EventCloneExcludedCount[] => [
+  { collection: "submissions", sourceCount: counts.submissions },
+  { collection: "reviews", sourceCount: counts.reviews },
+  { collection: "decisions", sourceCount: counts.decisions },
+  { collection: "speakers", sourceCount: counts.speakers },
+  { collection: "agendaPlacements", sourceCount: counts.agendaPlacements },
+  { collection: "publishedFormVersions", sourceCount: counts.publishedFormVersions },
+  { collection: "publishedAgendaRevisions", sourceCount: counts.publishedAgendaRevisions },
+  { collection: "embeds", sourceCount: counts.embeds },
+  { collection: "deliveries", sourceCount: counts.deliveries },
+  { collection: "apiKeys", sourceCount: counts.apiKeys },
+  { collection: "integrations", sourceCount: counts.integrations },
+];
+
+const loadEventClonePlan = (
+  input: PreviewEventCloneInput,
+): Effect.Effect<EventClonePlan, AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const source = yield* findEvent(input.eventId);
+    const actor = yield* requireMemberManager(source.id);
+    const targetName = input.name.trim();
+    if (targetName.length === 0) {
+      return yield* Effect.fail(new Validation({ message: "Event name is required" }));
+    }
+    yield* validateDateOrder(input.startsAt, input.endsAt);
+    const { db } = yield* Db;
+    const [existingSlug] = yield* database(() => db.select({ id: events.id }).from(events).where(eq(events.slug, input.slug)).limit(1));
+    if (existingSlug) return yield* Effect.fail(new Conflict({ message: `Event slug '${input.slug}' is already in use` }));
+
+    const [
+      sourceForms,
+      draftFields,
+      publishedVersions,
+      publishedFields,
+      rounds,
+      taskRows,
+      pageRows,
+      trackRows,
+      roomRows,
+      templateRows,
+      memberRows,
+      submissionRows,
+      reviewRows,
+      speakerRows,
+      talkRows,
+      embedRows,
+      deliveryRows,
+      keyRows,
+      integrationRows,
+      agendaPublicationRows,
+    ] = yield* Effect.all([
+      database(() => db.select().from(forms).where(eq(forms.eventId, source.id)).orderBy(asc(forms.id))),
+      database(() => db.select().from(formFields).where(eq(formFields.eventId, source.id)).orderBy(asc(formFields.formId), asc(formFields.order), asc(formFields.id))),
+      database(() => db.select().from(formVersions).where(eq(formVersions.eventId, source.id)).orderBy(asc(formVersions.formId), desc(formVersions.versionNumber), asc(formVersions.id))),
+      database(() => db.select().from(formVersionFields).where(eq(formVersionFields.eventId, source.id)).orderBy(asc(formVersionFields.formVersionId), asc(formVersionFields.order), asc(formVersionFields.id))),
+      database(() => db.select().from(reviewRounds).where(eq(reviewRounds.eventId, source.id)).orderBy(asc(reviewRounds.order), asc(reviewRounds.id))),
+      database(() => db.select().from(tasks).where(eq(tasks.eventId, source.id)).orderBy(asc(tasks.order), asc(tasks.id))),
+      database(() => db.select().from(pages).where(eq(pages.eventId, source.id)).orderBy(asc(pages.order), asc(pages.id))),
+      database(() => db.select().from(tracks).where(eq(tracks.eventId, source.id)).orderBy(asc(tracks.order), asc(tracks.id))),
+      database(() => db.select().from(rooms).where(eq(rooms.eventId, source.id)).orderBy(asc(rooms.order), asc(rooms.id))),
+      database(() => db.select().from(emailTemplates).where(eq(emailTemplates.eventId, source.id)).orderBy(asc(emailTemplates.name), asc(emailTemplates.id))),
+      database(() => db.select().from(eventMembers).where(eq(eventMembers.eventId, source.id)).orderBy(asc(eventMembers.userId), asc(eventMembers.id))),
+      database(() => db.select().from(submissions).where(eq(submissions.eventId, source.id)).orderBy(asc(submissions.id))),
+      database(() => db.select({ id: reviews.id }).from(reviews).where(eq(reviews.eventId, source.id)).orderBy(asc(reviews.id))),
+      database(() => db.select({ id: speakers.id }).from(speakers).where(eq(speakers.eventId, source.id)).orderBy(asc(speakers.id))),
+      database(() => db.select({ id: talks.id }).from(talks).where(eq(talks.eventId, source.id)).orderBy(asc(talks.id))),
+      database(() => db.select({ id: embeds.id }).from(embeds).where(eq(embeds.eventId, source.id)).orderBy(asc(embeds.id))),
+      database(() => db.select({ id: mailDeliverySnapshots.id }).from(mailDeliverySnapshots).where(eq(mailDeliverySnapshots.eventId, source.id)).orderBy(asc(mailDeliverySnapshots.id))),
+      database(() => db.select({ id: apiKeys.id }).from(apiKeys).where(eq(apiKeys.eventId, source.id)).orderBy(asc(apiKeys.id))),
+      database(() => db.select({ id: integrations.id }).from(integrations).where(eq(integrations.eventId, source.id)).orderBy(asc(integrations.id))),
+      database(() => db.select({ id: domainChanges.id }).from(domainChanges).where(and(
+        eq(domainChanges.eventId, source.id),
+        eq(domainChanges.aggregateType, "agenda-publication"),
+      )).orderBy(asc(domainChanges.sequence))),
+    ], { concurrency: 1 });
+
+    const latestVersionByForm = new Map<string, typeof formVersions.$inferSelect>();
+    for (const version of publishedVersions) {
+      if (!latestVersionByForm.has(version.formId)) latestVersionByForm.set(version.formId, version);
+    }
+    const draftByForm = new Map<string, (typeof formFields.$inferSelect)[]>();
+    for (const field of draftFields) draftByForm.set(field.formId, [...(draftByForm.get(field.formId) ?? []), field]);
+    const versionFieldsByVersion = new Map<string, (typeof formVersionFields.$inferSelect)[]>();
+    for (const field of publishedFields) versionFieldsByVersion.set(field.formVersionId, [...(versionFieldsByVersion.get(field.formVersionId) ?? []), field]);
+
+    const formPlans: CloneFormPlan[] = sourceForms.map((form) => {
+      const version = latestVersionByForm.get(form.id);
+      if (!version) return {
+        source: form,
+        sourceVersion: form.version,
+        name: form.name,
+        description: form.description,
+        fields: (draftByForm.get(form.id) ?? []).map((field) => ({ ...field, sourceFieldId: field.id })),
+      };
+      const currentDraft = draftByForm.get(form.id) ?? [];
+      return {
+        source: form,
+        sourceVersion: version.versionNumber,
+        name: version.name,
+        description: version.description,
+        fields: (versionFieldsByVersion.get(version.id) ?? []).map((field) => ({
+          ...field,
+          sourceFieldId: field.sourceFieldId ?? currentDraft.find((candidate) =>
+            candidate.order === field.order && candidate.semanticKey === field.semanticKey && candidate.type === field.type)?.id ?? null,
+        })),
+      };
+    });
+    for (const form of formPlans) {
+      const sourceIds = new Set(form.fields.flatMap((field) => field.sourceFieldId ? [field.sourceFieldId] : [field.id]));
+      for (const field of form.fields) {
+        const logic = parsedJson<{ readonly conditions?: readonly { readonly fieldId?: string }[] } | null>(field.logic, null);
+        const missing = logic?.conditions?.find((condition) => condition.fieldId && !sourceIds.has(condition.fieldId));
+        if (missing?.fieldId) {
+          return yield* Effect.fail(new Validation({ message: `Form '${form.name}' has clone provenance that cannot map logic field '${missing.fieldId}'` }));
+        }
+      }
+    }
+
+    const collections = cloneCollections({
+      forms: formPlans.length,
+      formFields: formPlans.reduce((total, form) => total + form.fields.length, 0),
+      reviewRounds: rounds.length,
+      taskTemplates: taskRows.length,
+      resourcePages: pageRows.length,
+      tracks: trackRows.length,
+      rooms: roomRows.length,
+      messageTemplates: templateRows.length,
+      teamMemberships: input.includeTeam ? memberRows.filter((member) => member.userId !== actor.userId).length : 0,
+    });
+    const excluded = cloneExcluded({
+      submissions: submissionRows.length,
+      reviews: reviewRows.length,
+      decisions: submissionRows.filter((submission) =>
+        submission.pendingDecision !== null || ["accepted", "rejected", "waitlist"].includes(submission.status)).length,
+      speakers: speakerRows.length,
+      agendaPlacements: talkRows.length,
+      publishedFormVersions: publishedVersions.length,
+      publishedAgendaRevisions: agendaPublicationRows.length,
+      embeds: embedRows.length,
+      deliveries: deliveryRows.length,
+      apiKeys: keyRows.length,
+      integrations: integrationRows.length,
+    });
+    const structureFingerprint = yield* sha256(JSON.stringify({
+      sourceVersion: source.version,
+      includeTeam: input.includeTeam,
+      forms: formPlans,
+      rounds,
+      tasks: taskRows,
+      pages: pageRows,
+      tracks: trackRows,
+      rooms: roomRows,
+      templates: templateRows,
+      team: input.includeTeam ? memberRows : [],
+    }));
+    return {
+      source,
+      actor,
+      forms: formPlans,
+      rounds,
+      tasks: taskRows,
+      pages: pageRows,
+      tracks: trackRows,
+      rooms: roomRows,
+      templates: templateRows,
+      preview: {
+        sourceEventId: source.id,
+        sourceEventName: source.name,
+        sourceVersion: source.version,
+        targetName,
+        targetSlug: input.slug,
+        startsAt: new Date(input.startsAt),
+        endsAt: new Date(input.endsAt),
+        includeTeam: input.includeTeam,
+        collections,
+        excluded,
+        structureFingerprint,
+      },
+    };
+  });
+
+export const previewEventClone = (
+  input: PreviewEventCloneInput,
+): Effect.Effect<EventClonePreview, AppError, Authorizer | CurrentUser | Db> =>
+  loadEventClonePlan(input).pipe(Effect.map(({ preview }) => preview));
+
+const eventCloneReplay = (
+  sourceEventId: string,
+  principalId: string,
+  keyHash: string,
+  requestHash: string,
+): Effect.Effect<ApplyEventCloneOutputType | null, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [record] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, sourceEventId),
+      eq(idempotencyRecords.operationId, "events.clone"),
+      eq(idempotencyRecords.principalId, principalId),
+      eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1));
+    if (!record) return null;
+    if (record.requestHash !== requestHash) return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different event clone" }));
+    if (record.status !== "completed" || record.responseBody === null) return yield* Effect.fail(new Conflict({ message: "This event clone is already in progress; retry shortly" }));
+    return yield* Schema.decodeUnknown(ApplyEventCloneOutput)(record.responseBody).pipe(
+      Effect.mapError((error) => new External({ service: "database", detail: `Invalid event-clone replay: ${String(error)}` })),
+    );
+  });
+
+const chunks = <A>(values: readonly A[], size: number): readonly (readonly A[])[] => {
+  const result: A[][] = [];
+  for (let offset = 0; offset < values.length; offset += size) result.push(values.slice(offset, offset + size));
+  return result;
+};
+
+const ensureClonedTeam = (
+  output: ApplyEventCloneOutputType,
+  keyHash: string,
+): Effect.Effect<void, AppError, Authorizer | CurrentUser | Db> =>
+  output.includeTeam
+    ? applyTeamCopy({
+        eventId: output.event.id,
+        sourceEventId: output.sourceEventId,
+        idempotencyKey: `clone-team:${keyHash}`,
+      }).pipe(Effect.asVoid)
+    : Effect.void;
+
+export const applyEventClone = (
+  input: ApplyEventCloneInput,
+): Effect.Effect<ApplyEventCloneOutputType, AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const source = yield* findEvent(input.eventId);
+    const actor = yield* requireMemberManager(source.id);
+    const [keyHash, requestHash] = yield* Effect.all([
+      sha256(input.idempotencyKey),
+      sha256(JSON.stringify({
+        eventId: input.eventId,
+        name: input.name.trim(),
+        slug: input.slug,
+        startsAt: input.startsAt,
+        endsAt: input.endsAt,
+        includeTeam: input.includeTeam,
+        expectedSourceVersion: input.expectedSourceVersion,
+        expectedStructureFingerprint: input.expectedStructureFingerprint,
+      })),
+    ]);
+    const prior = yield* eventCloneReplay(source.id, actor.userId, keyHash, requestHash);
+    if (prior) {
+      yield* ensureClonedTeam(prior, keyHash);
+      return { ...prior, idempotent: true };
+    }
+
+    const plan = yield* loadEventClonePlan(input);
+    if (plan.preview.sourceVersion !== input.expectedSourceVersion || plan.preview.structureFingerprint !== input.expectedStructureFingerprint) {
+      return yield* Effect.fail(new Conflict({ message: "Source event structure changed; preview the clone again" }));
+    }
+    const { db } = yield* Db;
+    const createdAt = new Date();
+    const eventId = commandId("event");
+    const idempotencyId = commandId("idempotency");
+    const requestId = `event-clone:${idempotencyId}`;
+    const eventRecord: typeof events.$inferInsert = {
+      id: eventId,
+      slug: input.slug,
+      name: input.name.trim(),
+      description: plan.source.description,
+      location: plan.source.location,
+      timezone: plan.source.timezone,
+      startsAt: new Date(input.startsAt),
+      endsAt: new Date(input.endsAt),
+      bannerAssetId: null,
+      accentColor: plan.source.accentColor,
+      version: 1,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const eventOutput = eventRecord as typeof events.$inferSelect;
+    const output: ApplyEventCloneOutputType = {
+      sourceEventId: plan.source.id,
+      event: eventOutput,
+      collections: plan.preview.collections,
+      includeTeam: input.includeTeam,
+      idempotent: false,
+    };
+
+    const formIdBySource = new Map(plan.forms.map((form) => [form.source.id, commandId("form")]));
+    const clonedForms: (typeof forms.$inferInsert)[] = plan.forms.map((form) => ({
+      id: formIdBySource.get(form.source.id)!,
+      eventId,
+      kind: form.source.kind,
+      name: form.name,
+      description: form.description,
+      status: "draft",
+      opensAt: null,
+      closesAt: null,
+      clonedFromEventId: plan.source.id,
+      clonedFromFormId: form.source.id,
+      clonedFromVersion: form.sourceVersion,
+      version: 1,
+      createdAt,
+      updatedAt: createdAt,
+    }));
+    const clonedFields: (typeof formFields.$inferInsert)[] = [];
+    for (const form of plan.forms) {
+      const fieldIdBySource = new Map(form.fields.map((field) => [field.sourceFieldId ?? field.id, commandId("field")]));
+      for (const field of form.fields) {
+        const logic = parsedJson<{ readonly action?: "show" | "hide"; readonly mode: "all" | "any"; readonly conditions: readonly { readonly fieldId: string; readonly op: string; readonly value?: string | readonly string[] }[] } | null>(field.logic, null);
+        const rewrittenLogic = logic === null ? null : {
+          ...logic,
+          conditions: logic.conditions.map((condition) => ({
+            ...condition,
+            fieldId: fieldIdBySource.get(condition.fieldId)!,
+          })),
+        };
+        clonedFields.push({
+          id: fieldIdBySource.get(field.sourceFieldId ?? field.id)!,
+          eventId,
+          formId: formIdBySource.get(form.source.id)!,
+          order: field.order,
+          type: field.type as typeof formFields.$inferInsert.type,
+          label: field.label,
+          helpText: field.helpText,
+          semanticKey: field.semanticKey,
+          required: field.required,
+          options: field.options ?? [],
+          logic: rewrittenLogic === null ? null : JSON.stringify(rewrittenLogic),
+          routing: field.routing === null ? null : typeof field.routing === "string" ? field.routing : JSON.stringify(field.routing),
+          version: 1,
+          createdAt,
+          updatedAt: createdAt,
+        });
+      }
+    }
+    const clonedRounds: (typeof reviewRounds.$inferInsert)[] = plan.rounds.map((round) => ({
+      id: commandId("review_round"), eventId, name: round.name, order: round.order,
+      status: "pending", startsAt: null, endsAt: null, blind: round.blind, rubric: round.rubric,
+      version: 1, createdAt, updatedAt: createdAt,
+    }));
+    const clonedTracks: (typeof tracks.$inferInsert)[] = plan.tracks.map((track) => ({
+      id: commandId("track"), eventId, name: track.name, color: track.color, order: track.order,
+      version: 1, createdAt, updatedAt: createdAt,
+    }));
+    const clonedRooms: (typeof rooms.$inferInsert)[] = plan.rooms.map((room) => ({
+      id: commandId("room"), eventId, name: room.name, capacity: room.capacity, order: room.order,
+      version: 1, createdAt, updatedAt: createdAt,
+    }));
+    const clonedPages: (typeof pages.$inferInsert)[] = plan.pages.map((page) => ({
+      id: commandId("page"), eventId, slug: page.slug, title: page.title, body: page.body,
+      htmlEmbed: page.htmlEmbed, audience: page.audience, order: page.order,
+      version: 1, createdAt, updatedAt: createdAt,
+    }));
+    const clonedTemplates: (typeof emailTemplates.$inferInsert)[] = plan.templates.map((template) => ({
+      id: commandId("email_template"), eventId, name: template.name, subject: template.subject,
+      body: template.body, attachIcs: template.attachIcs, version: 1, createdAt, updatedAt: createdAt,
+    }));
+    const clonedTasks: (typeof tasks.$inferInsert)[] = plan.tasks.map((task) => ({
+      id: commandId("task"), eventId, name: task.name, description: task.description, kind: task.kind,
+      formId: task.formId ? formIdBySource.get(task.formId)! : null,
+      dueAt: null, order: task.order, targetMode: task.targetMode,
+      version: 1, createdAt, updatedAt: createdAt,
+    }));
+
+    const statements: BatchItem<"sqlite">[] = [
+      db.insert(events).values(eventRecord),
+      db.insert(eventMembers).values({
+        id: commandId("member"), eventId, userId: actor.userId, role: "owner", version: 1,
+        createdAt, updatedAt: createdAt,
+      }),
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId, eventId: plan.source.id, operationId: "events.clone", principalId: actor.userId,
+        keyHash, requestHash, status: "completed", responseStatus: 201, responseBody: output,
+        expiresAt: new Date(createdAt.getTime() + 86_400_000), completedAt: createdAt, createdAt,
+      }),
+    ];
+    for (const rows of chunks(clonedForms, 8)) statements.push(db.insert(forms).values([...rows]));
+    for (const rows of chunks(clonedFields, 4)) statements.push(db.insert(formFields).values([...rows]));
+    if (clonedRounds.length > 0) statements.push(db.insert(reviewRounds).values(clonedRounds));
+    if (clonedTracks.length > 0) statements.push(db.insert(tracks).values(clonedTracks));
+    if (clonedRooms.length > 0) statements.push(db.insert(rooms).values(clonedRooms));
+    for (const rows of chunks(clonedPages, 8)) statements.push(db.insert(pages).values([...rows]));
+    for (const rows of chunks(clonedTemplates, 8)) statements.push(db.insert(emailTemplates).values([...rows]));
+    for (const rows of chunks(clonedTasks, 8)) statements.push(db.insert(tasks).values([...rows]));
+    statements.push(
+      db.insert(domainChanges).values({
+        id: commandId("change"), eventId, aggregateType: "event", aggregateId: eventId,
+        aggregateVersion: 1, eventType: "events.cloned", audiences: [{ kind: "admins" }],
+        payload: { sourceEventId: plan.source.id, collections: output.collections, includeTeam: input.includeTeam },
+        actorUserId: actor.userId, actorApiKeyId: null, requestId, idempotencyRecordId: null, occurredAt: createdAt,
+      }),
+      db.insert(auditLog).values({
+        id: commandId("audit"), eventId, requestId, actorUserId: actor.userId, actorApiKeyId: null,
+        action: "events.clone", resourceType: "event", resourceId: eventId, before: null, after: output,
+        metadata: { sourceEventId: plan.source.id, sourceVersion: plan.source.version, structureFingerprint: plan.preview.structureFingerprint, excluded: plan.preview.excluded },
+        occurredAt: createdAt,
+      }),
+    );
+    const committed = yield* database(() => db.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]])).pipe(Effect.either);
+    if (committed._tag === "Left") {
+      const raced = yield* eventCloneReplay(plan.source.id, actor.userId, keyHash, requestHash);
+      if (raced) {
+        yield* ensureClonedTeam(raced, keyHash);
+        return { ...raced, idempotent: true };
+      }
+      if (committed.left.detail?.includes("UNIQUE constraint failed: events.slug")) {
+        return yield* Effect.fail(new Conflict({ message: `Event slug '${input.slug}' is already in use` }));
+      }
+      return yield* Effect.fail(committed.left);
+    }
+    yield* ensureClonedTeam(output, keyHash);
+    return output;
+  });
 
 type ReviewerInvitationRow = {
   readonly invitation: typeof reviewerInvitations.$inferSelect;
