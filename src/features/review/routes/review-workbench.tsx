@@ -71,6 +71,7 @@ export async function loadReviewWorkbench(
     const value = sourceParams.get(key);
     if (value !== null) params.set(key, value);
   }
+  if (!params.has("pageSize")) params.set("pageSize", "100");
   if (selectedSubmissionId) params.set("selectedSubmissionId", selectedSubmissionId);
   const queryString = params.toString();
   const query = queryString ? `?${queryString}` : "";

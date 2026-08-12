@@ -299,7 +299,7 @@ describe("review workbench route", () => {
     }));
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/events/summit-2026", expect.any(Object));
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/events/event_summit/review", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/events/event_summit/review?pageSize=100", expect.any(Object));
     expect(markup).toContain("Authoritative proposal");
     expect(markup).toContain("Returned by the review API.");
     expect(markup).toContain("Review rounds");
@@ -337,7 +337,7 @@ describe("review workbench route", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/events/event_summit/review?selectedSubmissionId=submission_authoritative",
+      "/api/v1/events/event_summit/review?pageSize=100&selectedSubmissionId=submission_authoritative",
       expect.objectContaining({ method: "GET", signal: controller.signal }),
     );
   });
