@@ -100,12 +100,14 @@ beforeAll(async () => {
 
 describe("hackathon demo authentication", () => {
   it("uses Cloudflare test verification only for the exact disposable demo event", () => {
-    const productionEnv = Object.assign(Object.create(env), {
-      LOCAL_MODE: undefined,
-      PREVIEW_MODE: undefined,
-      TURNSTILE_SITE_KEY: "live-site-key",
-      TURNSTILE_SECRET: "live-secret",
-      TURNSTILE_HOSTNAMES: "sessionparty.com,www.sessionparty.com",
+    const productionEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        if (property === "LOCAL_MODE" || property === "PREVIEW_MODE") return undefined;
+        if (property === "TURNSTILE_SITE_KEY") return "live-site-key";
+        if (property === "TURNSTILE_SECRET") return "live-secret";
+        if (property === "TURNSTILE_HOSTNAMES") return "sessionparty.com,www.sessionparty.com";
+        return Reflect.get(target, property, receiver);
+      },
     }) as Env;
 
     expect(turnstileVerificationPolicy(productionEnv, "demo-event")).toMatchObject({
@@ -128,12 +130,17 @@ describe("hackathon demo authentication", () => {
   });
 
   it("keeps non-demo verification fail-closed without live configuration", () => {
-    const productionEnv = Object.assign(Object.create(env), {
-      LOCAL_MODE: undefined,
-      PREVIEW_MODE: undefined,
-      TURNSTILE_SITE_KEY: undefined,
-      TURNSTILE_SECRET: undefined,
-      TURNSTILE_HOSTNAMES: undefined,
+    const productionEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        if (
+          property === "LOCAL_MODE"
+          || property === "PREVIEW_MODE"
+          || property === "TURNSTILE_SITE_KEY"
+          || property === "TURNSTILE_SECRET"
+          || property === "TURNSTILE_HOSTNAMES"
+        ) return undefined;
+        return Reflect.get(target, property, receiver);
+      },
     }) as Env;
 
     expect(turnstileVerificationPolicy(productionEnv, "demo-event").configured).toBe(true);
