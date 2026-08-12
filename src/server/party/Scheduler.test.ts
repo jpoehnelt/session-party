@@ -125,21 +125,31 @@ describe("Scheduler durable delivery recovery", () => {
       ).first();
       expect(delivery).toEqual({
         status: "sent",
-        attempt_count: 1,
+        attempt_count: 2,
         provider: "local-fake",
         provider_message_id: providerBeforeCrash.providerMessageId,
         lease_owner: null,
         lease_expires_at: null,
       });
       const attempts = await env.DB.prepare(
-        "SELECT count(*) AS count, min(status) AS status, min(provider_message_id) AS provider_message_id, min(provider_result) AS provider_result FROM mail_delivery_attempts WHERE delivery_id = 'crash-delivery'",
-      ).first<{ count: number; status: string; provider_message_id: string; provider_result: string }>();
-      expect(attempts).toMatchObject({
-        count: 1,
-        status: "sent",
-        provider_message_id: providerBeforeCrash.providerMessageId,
-      });
-      const attemptResult = JSON.parse(attempts?.provider_result ?? "{}") as Record<string, unknown>;
+        "SELECT attempt_number, status, provider_message_id, provider_result, error FROM mail_delivery_attempts WHERE delivery_id = 'crash-delivery' ORDER BY attempt_number",
+      ).all<{ attempt_number: number; status: string; provider_message_id: string | null; provider_result: string | null; error: string | null }>();
+      expect(attempts.results).toEqual([
+        {
+          attempt_number: 1,
+          status: "retry",
+          provider_message_id: null,
+          provider_result: null,
+          error: "Delivery lease expired before completion; retrying with a new attempt",
+        },
+        expect.objectContaining({
+          attempt_number: 2,
+          status: "sent",
+          provider_message_id: providerBeforeCrash.providerMessageId,
+          error: null,
+        }),
+      ]);
+      const attemptResult = JSON.parse(attempts.results[1]?.provider_result ?? "{}") as Record<string, unknown>;
       expect(attemptResult.outboundCorrelationId).toBe(
         providerBeforeCrash.providerResult.outboundCorrelationId,
       );
@@ -166,6 +176,46 @@ describe("Scheduler durable delivery recovery", () => {
       rendered_text: null,
       ics_filename: null,
       ics_content: null,
+    });
+  });
+
+  it("dead-letters an expired crash-window lease at the maximum attempt count", async () => {
+    const now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO mail_delivery_snapshots
+          (id, event_id, recipient_email, from_email, subject, rendered_html, rendered_text, created_at)
+         VALUES ('exhausted-crash-snapshot', NULL, 'exhausted@example.com', 'Session Party <welcome@sessionparty.com>', 'Exhausted', '<p>Exhausted</p>', 'Exhausted', ?)`,
+      ).bind(now),
+      env.DB.prepare(
+        `INSERT INTO mail_deliveries
+          (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, lease_owner, lease_expires_at, attempt_count, max_attempts, provider, created_at)
+         VALUES ('exhausted-crash-delivery', 'exhausted-crash-snapshot', 'exhausted-crash-delivery', 'dispatching', ?, ?, 'dead-worker', ?, 2, 2, 'cloudflare-email', ?)`,
+      ).bind(now, now, now - 1, now),
+      env.DB.prepare(
+        `INSERT INTO mail_delivery_attempts
+          (id, delivery_id, attempt_number, lease_owner, status, started_at)
+         VALUES ('exhausted-crash-attempt', 'exhausted-crash-delivery', 2, 'dead-worker', 'started', ?)`,
+      ).bind(now - 60_000),
+    ]);
+
+    const scheduler = await resetMailScheduler();
+    await runMailSchedulerAlarm(scheduler);
+    expect(await env.DB.prepare(
+      "SELECT status, attempt_count, last_error, dead_lettered_at IS NOT NULL AS dead_lettered, lease_owner FROM mail_deliveries WHERE id = 'exhausted-crash-delivery'",
+    ).first()).toEqual({
+      status: "dead_letter",
+      attempt_count: 2,
+      last_error: "Delivery lease expired after the maximum number of attempts",
+      dead_lettered: 1,
+      lease_owner: null,
+    });
+    expect(await env.DB.prepare(
+      "SELECT status, error, completed_at IS NOT NULL AS completed FROM mail_delivery_attempts WHERE id = 'exhausted-crash-attempt'",
+    ).first()).toEqual({
+      status: "failed",
+      error: "Delivery lease expired after the maximum number of attempts",
+      completed: 1,
     });
   });
 

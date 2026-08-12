@@ -663,4 +663,74 @@ describe("AirtableSyncLane", () => {
       { id: "outbox-after-invalid", status: "blocked" },
     ]));
   });
+
+  it("rolls back the terminal outbox transition when dead-letter evidence cannot commit", async () => {
+    const db = drizzle(env.DB);
+    const now = new Date();
+    await db.insert(airtableOutbox).values([
+      {
+        id: "outbox-atomic-failure",
+        eventId: EVENT_ID,
+        integrationId: INTEGRATION_ID,
+        entityType: "speaker",
+        entityId: SPEAKER_ID,
+        speakerId: SPEAKER_ID,
+        sessionPartyId: SPEAKER_ID,
+        operation: "upsert",
+        changedFields: { notMapped: "value" },
+        outboundRevision: 100_000,
+        outboundHash: "d".repeat(64),
+        origin: "test",
+        idempotencyKey: "atomic-failure",
+        status: "pending",
+        availableAt: now,
+        attemptCount: 0,
+        createdAt: now,
+      },
+      {
+        id: "outbox-after-atomic-failure",
+        eventId: EVENT_ID,
+        integrationId: INTEGRATION_ID,
+        entityType: "speaker",
+        entityId: SPEAKER_ID,
+        speakerId: SPEAKER_ID,
+        sessionPartyId: SPEAKER_ID,
+        operation: "upsert",
+        changedFields: { visible: false },
+        outboundRevision: 100_001,
+        outboundHash: "e".repeat(64),
+        origin: "test",
+        idempotencyKey: "after-atomic-failure",
+        status: "pending",
+        availableAt: now,
+        attemptCount: 0,
+        createdAt: new Date(now.getTime() + 1),
+      },
+    ]);
+    await env.DB.prepare(
+      "CREATE TRIGGER fail_airtable_dead_letter BEFORE INSERT ON airtable_dead_letters WHEN new.source_id = 'outbox-atomic-failure' BEGIN SELECT RAISE(ABORT, 'forced dead-letter failure'); END",
+    ).run();
+    try {
+      const stub = env.AIRTABLE_SYNC.get(env.AIRTABLE_SYNC.idFromName(BASE_ID));
+      await runInDurableObject(stub, async (_instance, state) => {
+        await expect(drainAirtableBase({
+          database: env.DB,
+          adapter: createFakeAirtableAdapter(state.storage),
+          broadcast: async () => undefined,
+          now: () => now,
+        }, BASE_ID)).rejects.toThrow(/forced dead-letter failure/);
+      });
+    } finally {
+      await env.DB.prepare("DROP TRIGGER IF EXISTS fail_airtable_dead_letter").run();
+    }
+
+    await expect(db.select({ id: airtableOutbox.id, status: airtableOutbox.status }).from(airtableOutbox).where(
+      inArray(airtableOutbox.id, ["outbox-atomic-failure", "outbox-after-atomic-failure"]),
+    )).resolves.toEqual(expect.arrayContaining([
+      { id: "outbox-atomic-failure", status: "claimed" },
+      { id: "outbox-after-atomic-failure", status: "pending" },
+    ]));
+    await expect(db.select().from(airtableDeadLetters).where(eq(airtableDeadLetters.sourceId, "outbox-atomic-failure")))
+      .resolves.toEqual([]);
+  });
 });

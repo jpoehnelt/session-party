@@ -387,11 +387,35 @@ describe("baseline migration parity", () => {
          VALUES
           ('legacy-embed-definition', 'legacy-event', 'Systems schedule', 'schedule', 'agenda', 'minimal', '#005A9C', 'Systems', '["title"]', 1, 1, 1700000000000, 1700000000000)`,
       ),
+      db.prepare(
+        `INSERT INTO acceptance_events
+          (id, event_id, submission_id, primary_submission_speaker_id, primary_speaker_id,
+           primary_association_is_primary, type, submission_version, actor_user_id, occurred_at)
+         VALUES
+          ('legacy-acceptance-event', 'legacy-event', 'legacy-submission', 'legacy-submission-speaker',
+           'legacy-speaker', 1, 'accepted', 1, 'legacy-user', 1700000004000)`,
+      ),
     ]);
     await applyOneByOne(db, migrations.slice(15));
     await expect(db.prepare(
       "SELECT track_id, track FROM embeds WHERE id = 'legacy-embed-definition'",
     ).first()).resolves.toEqual({ track_id: "legacy-embed-track", track: "Systems" });
+    await expect(db.prepare(
+      `SELECT id, event_id, submission_id, primary_submission_speaker_id, primary_speaker_id,
+              primary_association_is_primary, type, submission_version, actor_user_id, occurred_at
+       FROM acceptance_events WHERE id = 'legacy-acceptance-event'`,
+    ).first()).resolves.toEqual({
+      id: "legacy-acceptance-event",
+      event_id: "legacy-event",
+      submission_id: "legacy-submission",
+      primary_submission_speaker_id: "legacy-submission-speaker",
+      primary_speaker_id: "legacy-speaker",
+      primary_association_is_primary: 1,
+      type: "accepted",
+      submission_version: 1,
+      actor_user_id: "legacy-user",
+      occurred_at: 1_700_000_004_000,
+    });
 
     await assertDatabaseIntegrity(db);
     const event = await db.prepare(

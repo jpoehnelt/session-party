@@ -685,7 +685,7 @@ const applyInboundRecord = async (
   };
 };
 
-const deadLetter = async (
+const deadLetterStatement = (
   db: AppDb,
   input: {
     readonly integration: AirtableIntegration;
@@ -695,8 +695,7 @@ const deadLetter = async (
     readonly evidence: Readonly<Record<string, unknown>>;
     readonly now: Date;
   },
-): Promise<void> => {
-  await db.insert(airtableDeadLetters).values({
+) => db.insert(airtableDeadLetters).values({
     id: crypto.randomUUID(),
     eventId: input.integration.eventId,
     integrationId: input.integration.id,
@@ -718,6 +717,12 @@ const deadLetter = async (
       evidence: input.evidence,
     },
   });
+
+const deadLetter = async (
+  db: AppDb,
+  input: Parameters<typeof deadLetterStatement>[1],
+): Promise<void> => {
+  await deadLetterStatement(db, input);
 };
 
 const failOutbound = async (
@@ -735,33 +740,35 @@ const failOutbound = async (
   }).where(eq(integrations.id, integration.id));
   for (const row of rows) {
     const terminal = !failure.retryable || row.attemptCount >= MAX_ATTEMPTS;
-    await db.update(airtableOutbox).set({
-      status: terminal ? "dead_letter" : "retry",
-      availableAt: terminal ? now : retryAt(now, row.attemptCount, failure.retryAfterMs),
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      lastError: failure.message.slice(0, MAX_ERROR_LENGTH),
-      deadLetteredAt: terminal ? now : null,
-    }).where(and(eq(airtableOutbox.id, row.id), eq(airtableOutbox.status, "claimed")));
     if (terminal) {
-      await deadLetter(db, {
-        integration,
-        sourceType: "outbox",
-        sourceId: row.id,
-        error: failure,
-        evidence: { entityType: row.entityType, entityId: row.entityId, attemptCount: row.attemptCount },
-        now,
-      });
-      await db.update(airtableOutbox).set({
-        status: "blocked",
-        lastError: `Blocked by failed revision ${row.outboundRevision}`,
-      }).where(and(
-        eq(airtableOutbox.integrationId, row.integrationId),
-        eq(airtableOutbox.entityType, row.entityType),
-        eq(airtableOutbox.entityId, row.entityId),
-        sql`${airtableOutbox.outboundRevision} > ${row.outboundRevision}`,
-        inArray(airtableOutbox.status, ["pending", "retry"]),
-      ));
+      await db.batch([
+        db.update(airtableOutbox).set({
+          status: "dead_letter",
+          availableAt: now,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          lastError: failure.message.slice(0, MAX_ERROR_LENGTH),
+          deadLetteredAt: now,
+        }).where(and(eq(airtableOutbox.id, row.id), eq(airtableOutbox.status, "claimed"))),
+        deadLetterStatement(db, {
+          integration,
+          sourceType: "outbox",
+          sourceId: row.id,
+          error: failure,
+          evidence: { entityType: row.entityType, entityId: row.entityId, attemptCount: row.attemptCount },
+          now,
+        }),
+        db.update(airtableOutbox).set({
+          status: "blocked",
+          lastError: `Blocked by failed revision ${row.outboundRevision}`,
+        }).where(and(
+          eq(airtableOutbox.integrationId, row.integrationId),
+          eq(airtableOutbox.entityType, row.entityType),
+          eq(airtableOutbox.entityId, row.entityId),
+          sql`${airtableOutbox.outboundRevision} > ${row.outboundRevision}`,
+          inArray(airtableOutbox.status, ["pending", "retry"]),
+        )),
+      ]);
       await integrationBroadcast(broadcast, integration, {
         t: "integrations/airtable_sync",
         entityType: row.entityType,
@@ -769,6 +776,15 @@ const failOutbound = async (
         state: "dead_letter",
         fields: Object.keys(row.changedFields),
       });
+    } else {
+      await db.update(airtableOutbox).set({
+        status: "retry",
+        availableAt: retryAt(now, row.attemptCount, failure.retryAfterMs),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        lastError: failure.message.slice(0, MAX_ERROR_LENGTH),
+        deadLetteredAt: null,
+      }).where(and(eq(airtableOutbox.id, row.id), eq(airtableOutbox.status, "claimed")));
     }
   }
 };
