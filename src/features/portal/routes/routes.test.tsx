@@ -507,6 +507,7 @@ describe("speaker portal content", () => {
     expect(markup).toContain("Speaker production guide");
     expect(markup).toContain("sandbox=");
     expect(markup).toContain("Save profile");
+    expect(markup).toContain('<fieldset class="space-y-5">');
     expect(markup).toContain("headshots up to 10 MiB, slides up to 100 MiB, and documents up to 25 MiB");
   });
 
