@@ -802,6 +802,7 @@ describe("review and acceptance slice", () => {
     expect(reviewerView.selected?.answers).toEqual([
       { label: "Session format", value: "Workshop (120 min)" },
     ]);
+
     const assignedToMe = await runAs(reviewer, getWorkbench({
       eventId: fixtureEventId,
       assignedToMe: true,
@@ -904,6 +905,7 @@ describe("review and acceptance slice", () => {
     }));
     expect(reviewerView.selected?.round).toMatchObject({ id: completedRoundFixture.id, blind: true });
     expect(reviewerView.selected?.speakers).toEqual([]);
+    expect(reviewerView.selected?.answers).toEqual([]);
 
     const organizerView = await runAs(owner, getWorkbench({
       eventId: fixtureEventId,
@@ -916,6 +918,7 @@ describe("review and acceptance slice", () => {
       displayName: "Jordan Lee",
       role: "Primary presenter",
     });
+    expect(organizerView.selected?.answers).toBeDefined();
   });
 
   it("appends multiple idempotent committee messages independently from scoring and broadcasts full-committee evidence", async () => {

@@ -1139,7 +1139,7 @@ export const getWorkbench = (
             ...speaker,
             role: speaker.roleLabel ?? (speaker.isPrimary ? "Primary presenter" : "Co-presenter"),
           })),
-        answers: visibleAnswers,
+        answers: selectedRound?.blind && viewer.role === "reviewer" ? [] : visibleAnswers,
         round: selectedRound ?? null,
         assignments: detailAssignments,
         reviews: detailHumanReviews,
