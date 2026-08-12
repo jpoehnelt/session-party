@@ -20,6 +20,7 @@ import { apiKeyUserFromRequest, hashBearerMaterial, userFromRequest } from "./au
 type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
   readonly MIGRATION_DB: D1Database;
+  readonly REVIEW_MIGRATION_DB: D1Database;
 };
 
 type MigrationShape = D1Migration & {
@@ -605,7 +606,7 @@ describe("baseline migration parity", () => {
 
   it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
-    const db = (env as TestEnv).MIGRATION_DB;
+    const db = (env as TestEnv).REVIEW_MIGRATION_DB;
     expect(migrations).toHaveLength(18);
     await applyOneByOne(db, migrations.slice(0, 11));
     const now = 1_700_000_000_000;
@@ -619,6 +620,7 @@ describe("baseline migration parity", () => {
       db.prepare("INSERT INTO submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, version, created_at, updated_at) VALUES ('recusal-submission', 'recusal-event', 'recusal-form', 'recusal-form-v1', 'Recusal proposal', 'submitted', ?, 1, ?, ?)").bind(now, now, now),
       db.prepare("INSERT INTO review_rounds (id, event_id, name, `order`, status, rubric, version, created_at, updated_at) VALUES ('recusal-round', 'recusal-event', 'Review', 1, 'active', '{\"criteria\":[{\"key\":\"clarity\",\"label\":\"Clarity\",\"max\":5}]}', 1, ?, ?)").bind(now, now),
       db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, version, created_at, updated_at) VALUES ('recusal-assignment-old', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO reviews (id, event_id, round_id, submission_id, reviewer_user_id, ai, score, scores, comment, version, created_at, updated_at) VALUES ('recusal-review-old', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 0, 4, '{\"clarity\":4}', 'Preserve this review', 1, ?, ?)").bind(now, now),
       db.prepare("INSERT INTO assets (id, event_id, uploader_user_id, filename, content_type, size, version, created_at, updated_at) VALUES ('legacy-asset', 'recusal-event', 'recusal-user', 'legacy.pdf', 'application/pdf', 42, 3, ?, ?)").bind(now, now),
     ]);
     await db.prepare(
@@ -639,6 +641,15 @@ describe("baseline migration parity", () => {
       version: 1,
     });
     expect(await db.prepare(
+      "SELECT id, score, scores, comment, version FROM reviews WHERE id = 'recusal-review-old'",
+    ).first()).toEqual({
+      id: "recusal-review-old",
+      score: 4,
+      scores: '{"clarity":4}',
+      comment: "Preserve this review",
+      version: 1,
+    });
+    expect(await db.prepare(
       "SELECT speaker_id, purpose, supersedes_asset_id, restored_from_asset_id, current, version FROM assets WHERE id = 'legacy-asset'",
     ).first()).toEqual({
       speaker_id: null,
@@ -654,6 +665,9 @@ describe("baseline migration parity", () => {
     expect(await db.prepare(
       "SELECT starts_at, ends_at, blind FROM review_rounds WHERE id = 'recusal-round'",
     ).first()).toEqual({ starts_at: null, ends_at: null, blind: 0 });
+    await expect(db.prepare(
+      "UPDATE review_rounds SET starts_at = ?, ends_at = ? WHERE id = 'recusal-round'",
+    ).bind(now + 2, now + 1).run()).rejects.toThrow(/review_rounds_date_order/);
     await db.prepare("UPDATE review_assignments SET status = 'recused', recusal_reason = 'Conflict', recused_at = ?, version = 2, updated_at = ? WHERE id = 'recusal-assignment-old'").bind(now + 1, now + 1).run();
     await db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-new', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 2, now + 2).run();
     await expect(db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-duplicate', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 3, now + 3).run()).rejects.toThrow(/review_assignments/);
