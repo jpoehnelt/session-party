@@ -1,8 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
-import { ProductionBareFrame } from "../components/production-ui";
+import { ProductionBareFrame } from "./production-ui";
 import type { PortalSnapshot, PortalTask } from "../schema";
-import { SpeakerPortalContent } from "./speaker-portal";
+import { SpeakerPortalContent } from "../routes/speaker-portal";
 
 const TASK_DUE_AT = Date.UTC(2027, 3, 15);
 
