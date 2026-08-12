@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { scheduledAgendaFixture } from "@/features/agenda/fixtures";
 import {
   path,
+  PUBLICATION_ACTIONS_CLASS,
+  PUBLICATION_HEADER_CLASS,
   REFRESH_LIVE_WIDGETS_LABEL,
   refreshLiveWidgets,
 } from "./publication";
@@ -12,6 +14,20 @@ describe("publication organizer route", () => {
   it("exposes the distinct live-widget refresh action", () => {
     expect(path).toBe("/e/:eventSlug/publication");
     expect(REFRESH_LIVE_WIDGETS_LABEL).toBe("Refresh live widgets");
+  });
+
+  it("keeps the title full width and wraps four publication actions without horizontal overflow", () => {
+    expect(PUBLICATION_HEADER_CLASS.split(" ")).toEqual(expect.arrayContaining([
+      "sm:flex-col",
+      "sm:items-stretch",
+    ]));
+    expect(PUBLICATION_ACTIONS_CLASS.split(" ")).toEqual(expect.arrayContaining([
+      "w-full",
+      "min-w-0",
+      "grid-cols-1",
+      "sm:grid-cols-2",
+      "2xl:grid-cols-4",
+    ]));
   });
 
   it("refreshes through the existing immutable agenda publication channel", async () => {

@@ -31,6 +31,8 @@ import { getPublicSchedule } from "../api";
 export const path = "/e/:eventSlug/publication";
 export const contentWidth = "wide" as const;
 export const REFRESH_LIVE_WIDGETS_LABEL = "Refresh live widgets";
+export const PUBLICATION_HEADER_CLASS = "sm:flex-col sm:items-stretch";
+export const PUBLICATION_ACTIONS_CLASS = "grid w-full min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4";
 
 export const refreshLiveWidgets = (status: AgendaSnapshot): Promise<PublishedAgenda> =>
   apiFetch(
@@ -205,11 +207,13 @@ export default function PublicationPage() {
       <PageHeader
         title="Publish the run of show"
         description={`${status.eventName} · ${status.timezone} · one trusted audience-facing revision`}
-        actions={<>
-          <a className="inline-flex h-12 items-center border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button" href={publicProgramPath} target="_blank" rel="noreferrer">Open public program ↗</a>
-          <Button variant="secondary" onClick={() => void copyText(`${window.location.origin}${publicProgramPath}`).then(() => toast("Public link copied", { tone: "success" }), () => toast("Could not copy public link", { tone: "danger" }))}>Copy public link</Button>
+        className={PUBLICATION_HEADER_CLASS}
+        actions={<div className={PUBLICATION_ACTIONS_CLASS} data-testid="publication-actions">
+          <a className="inline-flex h-12 w-full items-center justify-center whitespace-nowrap border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button" href={publicProgramPath} target="_blank" rel="noreferrer">Open public program ↗</a>
+          <Button className="h-12 w-full" variant="secondary" onClick={() => void copyText(`${window.location.origin}${publicProgramPath}`).then(() => toast("Public link copied", { tone: "success" }), () => toast("Could not copy public link", { tone: "danger" }))}>Copy public link</Button>
           {isPublished ? (
             <Button
+              className="h-12 w-full"
               variant="secondary"
               loading={publicationAction === "refresh"}
               disabled={hasConflicts || publicationAction !== null}
@@ -220,7 +224,7 @@ export default function PublicationPage() {
             </Button>
           ) : null}
           <AlertDialog>
-            <AlertDialogTrigger asChild><Button className="h-12 rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow" loading={publicationAction === "publish"} disabled={hasConflicts || publicationAction !== null}>{status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}</Button></AlertDialogTrigger>
+            <AlertDialogTrigger asChild><Button className="h-12 w-full rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow" loading={publicationAction === "publish"} disabled={hasConflicts || publicationAction !== null}>{status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}</Button></AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>Publish revision {status.publication.revision + 1}?</AlertDialogTitle>
@@ -231,7 +235,7 @@ export default function PublicationPage() {
               <AlertDialogFooter><AlertDialogCancel>Keep backstage</AlertDialogCancel><AlertDialogAction onClick={() => void publish("publish")}>Publish revision {status.publication.revision + 1}</AlertDialogAction></AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-        </>}
+        </div>}
       />
       <section aria-label="Publication status" className="mb-7 grid border-2 border-line-strong bg-surface shadow-card sm:grid-cols-3">
         {[
