@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { Schema } from "effect";
 import { ApiError, apiFetch } from "@/client/api";
 import { getMyProfile } from "@/features/profiles/routes/api";
+import { useBrand } from "@/features/branding/components/client";
 import {
   Badge,
   Button,
@@ -451,6 +452,7 @@ export function fetchEventAccess(): Promise<readonly EventAccessSummary[]> {
 }
 
 export default function EventsHome() {
+  const { brand } = useBrand();
   const [access, setAccess] = useState<readonly EventAccessSummary[] | null>(null);
   const [hasReusableProfile, setHasReusableProfile] = useState<boolean | null>(null);
   const { search } = useLocation();
@@ -516,7 +518,7 @@ export default function EventsHome() {
   return (
     <>
       <PageHeader
-        title="Your Session Party"
+        title={`Your ${brand.name}`}
         description="Continue as a speaker, organizer, or reviewer. Your account only shows workspaces it can access."
       />
       {loadError === "unauthenticated" ? (

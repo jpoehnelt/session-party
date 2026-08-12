@@ -127,6 +127,13 @@
       "when": 1786471442902,
       "tag": "0017_add_reusable_speaker_profile_pages",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1786522857704,
+      "tag": "0018_optimal_bug",
+      "breakpoints": true
     }
   ]
 }

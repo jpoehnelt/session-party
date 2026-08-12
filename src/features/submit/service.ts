@@ -221,7 +221,7 @@ const loadPublishedForm = (
       fields,
       publicForm: {
         event: {
-          name: record.event.name,
+          name: record.event.publicName ?? record.event.name,
           slug: record.event.slug,
           description: record.event.description,
           timezone: record.event.timezone,
@@ -1671,13 +1671,13 @@ export const getOwnSubmissions = (
     const owner = yield* requireSubmissionOwner();
     const { db } = yield* Db;
     const [event] = yield* database(() =>
-      db.select({ id: events.id, name: events.name, slug: events.slug }).from(events).where(eq(events.slug, input.eventSlug)).limit(1),
+      db.select({ id: events.id, name: events.name, publicName: events.publicName, slug: events.slug }).from(events).where(eq(events.slug, input.eventSlug)).limit(1),
     );
     if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventSlug }));
     const owned = yield* ownSubmissionRows(event.id, owner);
     const at = Date.now();
     return {
-      event: { name: event.name, slug: event.slug },
+      event: { name: event.publicName ?? event.name, slug: event.slug },
       submissions: owned.submissions.map((row) => ownSummary(row, owned.answers, owned.participants, at)),
     };
   });

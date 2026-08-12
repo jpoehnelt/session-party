@@ -243,7 +243,7 @@ type PrincipalActor = { readonly userId: string; readonly actorUserId: string | 
 const eventView = (event: typeof events.$inferSelect): PortalEvent => ({
   id: event.id,
   slug: event.slug,
-  name: event.name,
+  name: event.publicName ?? event.name,
   description: event.description,
   location: event.location,
   timezone: event.timezone,
@@ -3833,7 +3833,7 @@ export const sendSpeakerMessages = (input: SendSpeakerMessagesInput): Effect.Eff
     return { ...(yield* decodeReplay(SendSpeakerMessagesOutputSchema, replay)), idempotent: true };
   }
   const [eventRows, speakerRows, definitions, assignments, completions] = yield* Effect.all([
-    database(() => db.select({ name: events.name, slug: events.slug }).from(events).where(eq(events.id, input.eventId)).limit(1)),
+    database(() => db.select({ name: events.name, publicName: events.publicName, slug: events.slug }).from(events).where(eq(events.id, input.eventId)).limit(1)),
     database(() => db.select({ speaker: speakers, userEmail: users.email, userName: users.name }).from(speakers)
       .leftJoin(users, eq(users.id, speakers.userId))
       .where(and(eq(speakers.eventId, input.eventId), inArray(speakers.id, requestedIds)))),
@@ -3865,17 +3865,17 @@ export const sendSpeakerMessages = (input: SendSpeakerMessagesInput): Effect.Eff
     const snapshotId = id("mail_snapshot");
     const invite = input.kind === "invite";
     const subject = invite
-      ? `Your ${event.name} speaker portal`
-      : `${recipient.outstanding.length} ${event.name} speaker task${recipient.outstanding.length === 1 ? "" : "s"} outstanding`;
+      ? `Your ${event.publicName ?? event.name} speaker portal`
+      : `${recipient.outstanding.length} ${event.publicName ?? event.name} speaker task${recipient.outstanding.length === 1 ? "" : "s"} outstanding`;
     const detail = recipient.next
       ? ` Your next task is “${recipient.next.name}”${recipient.next.dueAt ? `, due ${recipient.next.dueAt.toISOString().slice(0, 10)}` : ""}.`
       : "";
     const text = invite
-      ? `Hi ${recipient.recipientName},\n\nUse your speaker portal to manage your ${event.name} profile, tasks, and files:\n${portalUrl}`
-      : `Hi ${recipient.recipientName},\n\nYou have ${recipient.outstanding.length} outstanding speaker task${recipient.outstanding.length === 1 ? "" : "s"} for ${event.name}.${detail}\n\nOpen your speaker portal: ${portalUrl}`;
+      ? `Hi ${recipient.recipientName},\n\nUse your speaker portal to manage your ${event.publicName ?? event.name} profile, tasks, and files:\n${portalUrl}`
+      : `Hi ${recipient.recipientName},\n\nYou have ${recipient.outstanding.length} outstanding speaker task${recipient.outstanding.length === 1 ? "" : "s"} for ${event.publicName ?? event.name}.${detail}\n\nOpen your speaker portal: ${portalUrl}`;
     const html = invite
-      ? `<p>Hi ${escapeHtml(recipient.recipientName)},</p><p>Use your speaker portal to manage your ${escapeHtml(event.name)} profile, tasks, and files.</p><p><a href="${escapeHtml(portalUrl)}">Open your speaker portal</a></p>`
-      : `<p>Hi ${escapeHtml(recipient.recipientName)},</p><p>You have <strong>${recipient.outstanding.length}</strong> outstanding speaker task${recipient.outstanding.length === 1 ? "" : "s"} for ${escapeHtml(event.name)}.${escapeHtml(detail)}</p><p><a href="${escapeHtml(portalUrl)}">Open your speaker portal</a></p>`;
+      ? `<p>Hi ${escapeHtml(recipient.recipientName)},</p><p>Use your speaker portal to manage your ${escapeHtml(event.publicName ?? event.name)} profile, tasks, and files.</p><p><a href="${escapeHtml(portalUrl)}">Open your speaker portal</a></p>`
+      : `<p>Hi ${escapeHtml(recipient.recipientName)},</p><p>You have <strong>${recipient.outstanding.length}</strong> outstanding speaker task${recipient.outstanding.length === 1 ? "" : "s"} for ${escapeHtml(event.publicName ?? event.name)}.${escapeHtml(detail)}</p><p><a href="${escapeHtml(portalUrl)}">Open your speaker portal</a></p>`;
     return {
       snapshot: {
         id: snapshotId, eventId: input.eventId, templateId: null, recipientUserId: recipient.speaker.userId,
@@ -3933,7 +3933,7 @@ export const enqueueAutomatedDueTaskReminders = (runAt = now()): Effect.Effect<{
   const eventIds = [...new Set(dueTasks.map((task) => task.eventId))];
   const taskIds = dueTasks.map((task) => task.id);
   const [eventRows, speakerRows, assignments, completions, eligibleSpeakerIds] = yield* Effect.all([
-    database(() => db.select({ id: events.id, name: events.name, slug: events.slug }).from(events).where(inArray(events.id, eventIds))),
+    database(() => db.select({ id: events.id, name: events.name, publicName: events.publicName, slug: events.slug }).from(events).where(inArray(events.id, eventIds))),
     database(() => db.select({ speaker: speakers, userEmail: users.email, userName: users.name }).from(speakers)
       .leftJoin(users, eq(users.id, speakers.userId)).where(inArray(speakers.eventId, eventIds))),
     database(() => db.select().from(taskAssignments).where(inArray(taskAssignments.taskId, taskIds))),
@@ -3963,7 +3963,7 @@ export const enqueueAutomatedDueTaskReminders = (runAt = now()): Effect.Effect<{
     const snapshotId = id("mail_snapshot");
     const next = candidate.outstanding[0]!;
     const portalUrl = `${queue.appOrigin}${clientRoutes.portal(encodeURIComponent(candidate.event.slug))}`;
-    const subject = `${candidate.outstanding.length} ${candidate.event.name} task${candidate.outstanding.length === 1 ? "" : "s"} due`;
+    const subject = `${candidate.outstanding.length} ${candidate.event.publicName ?? candidate.event.name} task${candidate.outstanding.length === 1 ? "" : "s"} due`;
     const dueText = next.dueAt && next.dueAt <= runAt ? "is overdue" : `is due ${next.dueAt?.toISOString().slice(0, 10) ?? "soon"}`;
     const text = `Hi ${candidate.recipientName},\n\nYour next speaker task, “${next.name}”, ${dueText}. You have ${candidate.outstanding.length} due or overdue task${candidate.outstanding.length === 1 ? "" : "s"}.\n\nOpen your speaker portal: ${portalUrl}`;
     const html = `<p>Hi ${escapeHtml(candidate.recipientName)},</p><p>Your next speaker task, <strong>${escapeHtml(next.name)}</strong>, ${escapeHtml(dueText)}. You have ${candidate.outstanding.length} due or overdue task${candidate.outstanding.length === 1 ? "" : "s"}.</p><p><a href="${escapeHtml(portalUrl)}">Open your speaker portal</a></p>`;

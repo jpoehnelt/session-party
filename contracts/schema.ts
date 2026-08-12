@@ -116,6 +116,9 @@ export const events = sqliteTable(
     timezone: text("timezone").notNull().default("America/Los_Angeles"),
     startsAt: integer("starts_at", { mode: "timestamp_ms" }),
     endsAt: integer("ends_at", { mode: "timestamp_ms" }),
+    publicName: text("public_name"),
+    inheritInstallationBrand: integer("inherit_installation_brand", { mode: "boolean" }).notNull().default(true),
+    logoAssetId: text("logo_asset_id"),
     bannerAssetId: text("banner_asset_id"),
     accentColor: text("accent_color"),
     version: version(),
@@ -137,6 +140,7 @@ export const assets = sqliteTable(
     /** Portal ownership and immutable lineage; null for non-portal event assets. */
     speakerId: text("speaker_id"),
     purpose: text("purpose", { enum: ["headshot", "slides", "document"] }),
+    brandKind: text("brand_kind", { enum: ["installation-logo", "installation-favicon", "event-logo", "event-banner"] }),
     supersedesAssetId: text("supersedes_asset_id"),
     restoredFromAssetId: text("restored_from_asset_id"),
     current: integer("current", { mode: "boolean" }).notNull().default(true),
@@ -160,6 +164,31 @@ export const assets = sqliteTable(
       .onDelete("restrict").onUpdate("cascade"),
     foreignKey({ columns: [t.eventId, t.restoredFromAssetId], foreignColumns: [t.eventId, t.id], name: "assets_restored_from_fk" })
       .onDelete("restrict").onUpdate("cascade"),
+  ],
+);
+
+/** One runtime-owned installation identity. The first authenticated setup claims ownership. */
+export const installationBrands = sqliteTable(
+  "installation_brands",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    name: text("name").notNull(),
+    logoAssetId: text("logo_asset_id").references(() => assets.id, { onDelete: "set null", onUpdate: "cascade" }),
+    faviconAssetId: text("favicon_asset_id").references(() => assets.id, { onDelete: "set null", onUpdate: "cascade" }),
+    primaryColor: text("primary_color").notNull(),
+    font: text("font", { enum: ["system", "inter", "manrope", "source-sans"] }).notNull(),
+    appearance: text("appearance", { enum: ["light", "dark", "system"] }).notNull(),
+    radius: text("radius", { enum: ["square", "soft", "round"] }).notNull(),
+    senderName: text("sender_name").notNull(),
+    senderEmail: text("sender_email"),
+    replyToEmail: text("reply_to_email"),
+    version: version(),
+    ...timestamps,
+  },
+  (t) => [
+    check("installation_brands_singleton", sql`${t.id} = 'default'`),
+    check("installation_brands_version_positive", sql`${t.version} > 0`),
   ],
 );
 

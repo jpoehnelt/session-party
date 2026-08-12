@@ -23,6 +23,7 @@ import {
   renderPublishedCalendar,
 } from "../feeds";
 import { publicEventSpeakerPath, publicSessionPath } from "../links";
+import { brandAssetUrl, useEventBrand } from "@/features/branding/components/client";
 
 export type PublicProgramSurface =
   | "sessions"
@@ -798,6 +799,7 @@ export function PublicProgram({
   readonly detail?: PublicProgramDetail;
 }) {
   const [searchParams] = useSearchParams();
+  const eventBrand = useEventBrand(agenda.eventSlug);
   const speakers = useMemo(() => speakerLookup(gallery), [gallery]);
   const selectedTalk = detail.sessionId
     ? agenda.talks.find(({ id }) => id === detail.sessionId)
@@ -835,11 +837,11 @@ export function PublicProgram({
           <div className="flex flex-wrap items-center justify-between gap-5 pb-5">
             <div className="flex min-w-0 items-center gap-4">
               <Link
-                className="grid size-11 shrink-0 place-items-center border-2 border-on-accent bg-production-lime text-[11px] font-black tracking-[-0.04em] text-ink shadow-[4px_4px_0_#7857ff]"
+                className="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-control border-2 border-on-accent bg-accent px-2 text-[11px] font-black tracking-[-0.04em] text-on-accent shadow-button"
                 to={`/event/${agenda.eventSlug}/sessions`}
                 aria-label={`${agenda.eventName} public program home`}
               >
-                SP
+                {eventBrand?.effectiveLogoAssetId ? <img className="max-h-10 max-w-32 object-contain" src={brandAssetUrl(eventBrand.effectiveLogoAssetId)!} alt="" /> : agenda.eventName.slice(0, 2).toUpperCase()}
               </Link>
               <div className="min-w-0">
                 <Link className="block truncate text-xl font-black tracking-[-0.035em] text-on-accent underline-offset-4 hover:underline sm:text-2xl" to={`/event/${agenda.eventSlug}/sessions`}>{agenda.eventName}</Link>
@@ -851,6 +853,7 @@ export function PublicProgram({
               <Badge tone="success">Published program · R{String(agenda.revision).padStart(2, "0")}</Badge>
             </div>
           </div>
+          {eventBrand && !eventBrand.inheritInstallationBrand && eventBrand.bannerAssetId ? <img className="mb-5 aspect-[4/1] w-full rounded-card border-2 border-on-accent object-cover" src={brandAssetUrl(eventBrand.bannerAssetId)!} alt="" /> : null}
           <p className="border-t-2 border-on-accent bg-production-sky px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.12em] text-ink sm:hidden">Swipe horizontally for more sections →</p>
           <nav className="-mx-4 flex overflow-x-auto border-t-2 border-on-accent bg-surface text-ink sm:-mx-6 lg:-mx-8" aria-label="Public event navigation">
             {SURFACES.map((item) => (
@@ -894,7 +897,7 @@ export function PublicProgram({
       </div>
       <footer className="mt-4 border-t-2 border-line-strong bg-ink text-on-accent">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
-          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-production-sky">Session Party · Public program feed</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-production-sky">{agenda.eventName} · Public program feed</p>
           <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-white/60">Schedule revision {agenda.revision} · Published {publishedAt}</p>
         </div>
       </footer>

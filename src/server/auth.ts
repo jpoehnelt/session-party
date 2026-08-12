@@ -1,7 +1,7 @@
 import { appErrorStatus, External, toPublicAppError, Unauthenticated, Validation, type AppError } from "contracts/errors";
 import type { Principal } from "contracts/principal";
 import { ApiScopes } from "contracts/principal";
-import { apiKeys, authTokens, users } from "contracts/schema";
+import { apiKeys, authTokens, installationBrands, users } from "contracts/schema";
 import { Schema } from "effect";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
@@ -14,6 +14,7 @@ import {
   mailFrom,
   sessionSecret,
 } from "./services";
+import { readableBrandForeground } from "@/features/branding/colors";
 
 type AppHono = { Bindings: Env };
 
@@ -60,6 +61,20 @@ const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const MAX_ACTIVE_DEMO_SESSIONS_PER_PERSONA = 20;
 const HOST_SESSION_COOKIE = "__Host-sp_session";
 const LEGACY_SESSION_COOKIE = "sp_session";
+
+const escapeHtml = (value: string): string => value
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
+
+const brandedMailbox = (fallback: string, name: string, email: string | null): string => {
+  const safeName = name.replace(/[\r\n"\\]/g, " ").trim() || "Session Party";
+  if (email) return `${safeName} <${email}>`;
+  const fallbackEmail = fallback.match(/<([^<>]+)>\s*$/)?.[1];
+  return fallbackEmail ? `${safeName} <${fallbackEmail}>` : fallback;
+};
 
 const RETURN_TO_ORIGIN = "https://return-to.invalid";
 const validatedReturnTo = (returnTo: string | undefined): string => {
@@ -630,6 +645,18 @@ auth.post("/request-link", async (c) => {
   try {
     const nowMs = Date.now();
     const db = drizzle(c.env.DB);
+    const [installationBrand] = await db
+      .select({
+        name: installationBrands.name,
+        logoAssetId: installationBrands.logoAssetId,
+        primaryColor: installationBrands.primaryColor,
+        senderName: installationBrands.senderName,
+        senderEmail: installationBrands.senderEmail,
+        replyToEmail: installationBrands.replyToEmail,
+      })
+      .from(installationBrands)
+      .where(eq(installationBrands.id, "default"))
+      .limit(1);
     const [existingUser] = await db
       .select({ id: users.id, name: users.name })
       .from(users)
@@ -666,9 +693,21 @@ auth.post("/request-link", async (c) => {
     const deliveryIdempotencyKey = `auth-magic-link:${tokenId}`;
     const link = new URL("/api/v1/auth/verify", c.env.APP_URL);
     link.hash = new URLSearchParams({ token, returnTo }).toString();
-    const renderedHtml =
-      `<p>Use this link to sign in. It expires in 15 minutes.</p><p><a href="${link.toString()}" rel="noreferrer">Sign in to Session Party</a></p>`;
-    const renderedText = `Sign in to Session Party: ${link.toString()}\n\nThis link expires in 15 minutes.`;
+    const brandName = installationBrand?.name ?? "Session Party";
+    const primaryColor = installationBrand?.primaryColor && /^#[0-9a-fA-F]{6}$/.test(installationBrand.primaryColor)
+      ? installationBrand.primaryColor
+      : "#896aff";
+    const onPrimaryColor = readableBrandForeground(primaryColor);
+    const logoUrl = installationBrand?.logoAssetId
+      ? new URL(`/api/v1/assets/${encodeURIComponent(installationBrand.logoAssetId)}`, c.env.APP_URL).toString()
+      : null;
+    const renderedHtml = `<div style="font-family:ui-sans-serif,system-ui,sans-serif;color:#171714;line-height:1.5">${logoUrl ? `<p><img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(brandName)}" style="max-height:56px;max-width:220px"></p>` : ""}<h1 style="font-size:24px">Sign in to ${escapeHtml(brandName)}</h1><p>Use this link to sign in. It expires in 15 minutes.</p><p><a href="${escapeHtml(link.toString())}" style="display:inline-block;background:${primaryColor};color:${onPrimaryColor};padding:12px 18px;text-decoration:none;font-weight:700">Sign in to ${escapeHtml(brandName)}</a></p></div>`;
+    const renderedText = `Sign in to ${brandName}: ${link.toString()}\n\nThis link expires in 15 minutes.`;
+    const fromEmail = brandedMailbox(
+      mailFrom(c.env),
+      installationBrand?.senderName ?? brandName,
+      installationBrand?.senderEmail ?? null,
+    );
     const statements: D1PreparedStatement[] = [];
 
     if (!existingUser) {
@@ -694,14 +733,15 @@ auth.post("/request-link", async (c) => {
         "INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES (?, ?, ?, 'magic_link', ?, NULL, ?)",
       ).bind(tokenId, tokenHash, userId, nowMs + 15 * 60_000, nowMs),
       c.env.DB.prepare(
-        "INSERT INTO mail_delivery_snapshots (id, event_id, template_id, recipient_user_id, recipient_email, recipient_name, from_email, reply_to_email, subject, rendered_html, rendered_text, ics_filename, ics_content, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, ?)",
+        "INSERT INTO mail_delivery_snapshots (id, event_id, template_id, recipient_user_id, recipient_email, recipient_name, from_email, reply_to_email, subject, rendered_html, rendered_text, ics_filename, ics_content, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
       ).bind(
         snapshotId,
         userId,
         email,
         existingUser?.name ?? name,
-        mailFrom(c.env),
-        "Sign in to Session Party",
+        fromEmail,
+        installationBrand?.replyToEmail ?? null,
+        `Sign in to ${brandName}`,
         renderedHtml,
         renderedText,
         nowMs,

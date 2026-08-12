@@ -22,6 +22,7 @@ import {
   type PublicSubmissionForm as PublicSubmissionFormValue,
 } from "../schema";
 import { TURNSTILE_DEMO_DISABLED_SITE_KEY } from "../abuse";
+import { brandAssetUrl, useBrand, useEventBrand } from "@/features/branding/components/client";
 
 export const path = "/submit/:eventSlug/:formId";
 export const layout = "bare" as const;
@@ -287,21 +288,25 @@ export interface PublicSubmitPageProps {
 }
 
 function PublicSubmitShell({ children }: { readonly children: ReactNode }) {
+  const { eventSlug } = useParams();
+  const { brand: installationBrand } = useBrand();
+  const eventBrand = useEventBrand(eventSlug);
+  const brandName = eventBrand?.publicName ?? installationBrand.name;
+  const logoAssetId = eventBrand?.effectiveLogoAssetId ?? installationBrand.logoAssetId;
   return (
     <div className="production-grid min-h-dvh bg-canvas text-ink">
       <header className="border-b-2 border-line-strong bg-canvas">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-          <Link className="inline-flex items-center gap-3 no-underline" to="/" aria-label="Session Party home">
-            <span className="grid size-9 place-items-center border-2 border-line-strong bg-production-lime text-[11px] font-black tracking-[-0.04em] shadow-[3px_3px_0_#171714]">
-              SP
-            </span>
-            <span className="text-sm font-black tracking-[-0.03em]">Session Party</span>
+          <Link className="inline-flex items-center gap-3 no-underline" to="/" aria-label={`${brandName} home`}>
+            {logoAssetId ? <img className="max-h-10 max-w-36 object-contain" src={brandAssetUrl(logoAssetId)!} alt="" /> : <span className="grid size-9 place-items-center rounded-control border-2 border-line-strong bg-accent text-[11px] font-black tracking-[-0.04em] text-on-accent shadow-button">{brandName.slice(0, 2).toUpperCase()}</span>}
+            <span className="text-sm font-black tracking-[-0.03em]">{brandName}</span>
           </Link>
           <span className="border-2 border-line-strong bg-surface px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] shadow-[3px_3px_0_#171714]">
             Proposal desk
           </span>
         </div>
       </header>
+      {eventBrand && !eventBrand.inheritInstallationBrand && eventBrand.bannerAssetId ? <img className="mx-auto mt-6 aspect-[5/1] w-[min(72rem,calc(100%-2rem))] rounded-card border-2 border-line-strong object-cover shadow-card" src={brandAssetUrl(eventBrand.bannerAssetId)!} alt="" /> : null}
       {children}
     </div>
   );

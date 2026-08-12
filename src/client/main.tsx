@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router/dom";
 import "@/ui/styles.css";
 import { initializeAnalytics } from "./analytics";
+import { BrandProvider, initializeBrand } from "@/features/branding/components/client";
 import { router } from "./router";
 
 void initializeAnalytics();
@@ -10,8 +11,12 @@ void initializeAnalytics();
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing application root.");
 
+await initializeBrand();
+
 createRoot(root).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <BrandProvider>
+      <RouterProvider router={router} />
+    </BrandProvider>
   </StrictMode>,
 );

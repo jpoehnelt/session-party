@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import { clientRoutes } from "contracts/routes";
+import { brandAssetUrl, useBrand } from "@/features/branding/components/client";
 
 export const path = "/";
 export const layout = "bare";
@@ -85,20 +86,21 @@ const primaryLinkClass =
   "inline-flex min-h-12 items-center justify-center gap-3 border-2 border-[#171714] bg-[#171714] px-6 text-sm font-black uppercase tracking-[0.08em] text-white shadow-[6px_6px_0_#7857ff] transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7857ff] focus-visible:ring-offset-4";
 
 function Brand({ inverse = false }: { inverse?: boolean }) {
+  const { brand } = useBrand();
   return (
     <Link
       className={`inline-flex items-center gap-3 no-underline ${inverse ? "text-white" : "text-[#171714]"}`}
       to="/"
-      aria-label="Session Party home"
+      aria-label={`${brand.name} home`}
     >
-      <span
+      {brand.logoAssetId ? <img className="max-h-11 max-w-40 object-contain" src={brandAssetUrl(brand.logoAssetId)!} alt="" /> : <span
         className={`grid size-10 place-items-center border-2 text-xs font-black tracking-[-0.04em] shadow-[3px_3px_0_#7857ff] ${
           inverse ? "border-white bg-white text-[#171714]" : "border-[#171714] bg-[#caff4a] text-[#171714]"
         }`}
       >
-        SP
-      </span>
-      <span className="text-base font-black tracking-[-0.03em]">Session Party</span>
+        {brand.name.slice(0, 2).toUpperCase()}
+      </span>}
+      <span className="text-base font-black tracking-[-0.03em]">{brand.name}</span>
     </Link>
   );
 }

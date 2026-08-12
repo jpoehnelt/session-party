@@ -39,7 +39,7 @@ export interface ScheduleEmbedContentProps {
   readonly preset?: "sessions" | "agenda" | "itinerary";
 }
 
-function ScheduleMasthead({ label, design }: { readonly label: string; readonly design: EmbedDesign }) {
+function ScheduleMasthead({ label, design, brandName = "Event program" }: { readonly label: string; readonly design: EmbedDesign; readonly brandName?: string }) {
   return (
     <header className={`mb-8 flex flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-5 ${
       design.aesthetic === "bold"
@@ -52,10 +52,10 @@ function ScheduleMasthead({ label, design }: { readonly label: string; readonly 
         <span className={`grid size-9 place-items-center bg-accent text-[10px] font-black tracking-[-0.04em] text-on-accent ${
           design.aesthetic === "bold" ? "border-2 border-on-accent" : design.aesthetic === "minimal" ? "rounded-full" : "border border-line-strong"
         }`}>
-          SP
+          {brandName.slice(0, 2).toUpperCase()}
         </span>
         <div>
-          <p className="text-sm font-black tracking-[-0.025em]">Session Party</p>
+          <p className="text-sm font-black tracking-[-0.025em]">{brandName}</p>
           <p className={`text-[9px] font-bold uppercase tracking-[0.16em] ${design.aesthetic === "bold" ? "text-white/55" : "text-ink-secondary"}`}>Public program feed</p>
         </div>
       </div>
@@ -152,7 +152,7 @@ function ScheduleEmbedBody({
   }
   return (
     <>
-      <ScheduleMasthead label={`${preset === "sessions" ? "Sessions" : preset === "itinerary" ? "Itinerary" : "Agenda"} live`} design={design} />
+      <ScheduleMasthead label={`${preset === "sessions" ? "Sessions" : preset === "itinerary" ? "Itinerary" : "Agenda"} live`} design={design} brandName={agenda.eventName} />
       <section className={`mb-10 grid bg-surface lg:grid-cols-[minmax(0,1fr)_18rem] ${
         design.aesthetic === "bold"
           ? "border-2 border-line-strong shadow-[8px_8px_0_#171714]"
@@ -212,7 +212,7 @@ function ScheduleEmbedBody({
       <footer className={`mt-12 flex flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-5 ${
         design.aesthetic === "bold" ? "border-2 border-line-strong bg-ink text-on-accent" : "border-t border-line-strong bg-transparent text-ink"
       }`}>
-        <p className={`text-[10px] font-black uppercase tracking-[0.14em] ${design.aesthetic === "bold" ? "text-white/55" : "text-ink-secondary"}`}>Session Party · Audience feed</p>
+        <p className={`text-[10px] font-black uppercase tracking-[0.14em] ${design.aesthetic === "bold" ? "text-white/55" : "text-ink-secondary"}`}>{agenda.eventName} · Audience feed</p>
         <p className={`text-[10px] font-bold uppercase tracking-[0.1em] ${design.aesthetic === "bold" ? "text-white/70" : "text-ink-secondary"}`}>
           Updated {new Intl.DateTimeFormat(undefined, {
             dateStyle: "medium",
