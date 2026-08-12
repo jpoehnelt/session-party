@@ -56,6 +56,7 @@ const DEMO_DESTINATIONS: Readonly<Record<DemoPersona, string>> = {
 };
 const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const MAX_ACTIVE_DEMO_SESSIONS_PER_PERSONA = 20;
 
 const RETURN_TO_ORIGIN = "https://return-to.invalid";
 const validatedReturnTo = (returnTo: string | undefined): string => {
@@ -186,6 +187,37 @@ const authorizeRequestLink = async (
   }
 };
 
+const authorizeDemoLogin = async (
+  request: Request,
+  env: Env,
+  requestId: string,
+): Promise<boolean> => {
+  if (isExplicitLocalEnvironment(env)) return true;
+  try {
+    const source = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+    const sourceHash = await hashBearerMaterial(env, `demo-login-source:${source.slice(0, 128)}`);
+    const limiterId = env.SCHEDULER.idFromName("auth-rate-limit");
+    const response = await env.SCHEDULER.get(limiterId).fetch(
+      "https://scheduler/auth/demo/authorize",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-session-party-internal": sessionSecret(env),
+        },
+        body: JSON.stringify({ sourceHash }),
+      },
+    );
+    return response.ok;
+  } catch {
+    console.error(JSON.stringify({
+      message: "Demo-login authorization unavailable",
+      requestId,
+    }));
+    return false;
+  }
+};
+
 const displayName = (email: string, name: string | null | undefined): string =>
   name?.trim() || email.slice(0, email.indexOf("@")) || email;
 
@@ -248,18 +280,28 @@ const setBrowserSessionCookie = (c: Context<AppHono>, session: string): void => 
   });
 };
 
-const issueBrowserSession = async (env: Env, userId: string): Promise<string> => {
+const issueDemoBrowserSession = async (env: Env, userId: string): Promise<string> => {
   const session = nanoid(48);
   const nowMs = Date.now();
-  await env.DB.prepare(
-    "INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES (?, ?, ?, 'session', ?, NULL, ?)",
-  ).bind(
-    nanoid(),
-    await hashBearerMaterial(env, session),
-    userId,
-    nowMs + SESSION_MAX_AGE_SECONDS * 1_000,
-    nowMs,
-  ).run();
+  const tokenId = nanoid();
+  const tokenHash = await hashBearerMaterial(env, session);
+  await env.DB.batch([
+    env.DB.prepare(
+      "DELETE FROM auth_tokens WHERE user_id = ? AND kind = 'session' AND (expires_at <= ? OR consumed_at IS NOT NULL)",
+    ).bind(userId, nowMs),
+    env.DB.prepare(
+      `DELETE FROM auth_tokens
+       WHERE id IN (
+         SELECT id FROM auth_tokens
+         WHERE user_id = ? AND kind = 'session' AND consumed_at IS NULL AND expires_at > ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT -1 OFFSET ?
+       )`,
+    ).bind(userId, nowMs, MAX_ACTIVE_DEMO_SESSIONS_PER_PERSONA - 1),
+    env.DB.prepare(
+      "INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES (?, ?, ?, 'session', ?, NULL, ?)",
+    ).bind(tokenId, tokenHash, userId, nowMs + SESSION_MAX_AGE_SECONDS * 1_000, nowMs),
+  ]);
   return session;
 };
 
@@ -522,11 +564,18 @@ auth.post("/demo", async (c) => {
   if (!parsed) {
     return errorResponse(c, new Validation({ message: "A valid demo persona is required" }), requestId);
   }
+  if (!(await authorizeDemoLogin(c.req.raw, c.env, requestId))) {
+    return c.json({
+      error: "TooManyRequests",
+      message: "Too many demo login attempts. Try again later.",
+      requestId,
+    }, 429);
+  }
 
   try {
     const identity = DEMO_IDENTITIES[parsed.persona];
     const seed = await ensureDemoSeed(c.env);
-    const session = await issueBrowserSession(c.env, seed.users[parsed.persona]);
+    const session = await issueDemoBrowserSession(c.env, seed.users[parsed.persona]);
     setBrowserSessionCookie(c, session);
     return c.json({
       ok: true,

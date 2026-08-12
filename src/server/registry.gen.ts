@@ -41208,18 +41208,30 @@ export const openApi = {
                         "value": {
                           "anyOf": [
                             {
+                              "description": "a string at most 20000 character(s) long",
+                              "maxLength": 20000,
+                              "title": "maxLength(20000)",
                               "type": "string"
                             },
                             {
+                              "description": "an array of at most 100 item(s)",
                               "items": {
+                                "description": "a string at most 20000 character(s) long",
+                                "maxLength": 20000,
+                                "title": "maxLength(20000)",
                                 "type": "string"
                               },
+                              "maxItems": 100,
+                              "title": "maxItems(100)",
                               "type": "array"
                             },
                             {
                               "additionalProperties": false,
                               "properties": {
                                 "assetId": {
+                                  "description": "a string at most 128 character(s) long",
+                                  "maxLength": 128,
+                                  "title": "maxLength(128)",
                                   "type": "string"
                                 }
                               },
@@ -58235,6 +58247,7 @@ export const openApi = {
                 "additionalProperties": false,
                 "properties": {
                   "answers": {
+                    "description": "an array of at most 100 item(s)",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
@@ -58249,18 +58262,30 @@ export const openApi = {
                         "value": {
                           "anyOf": [
                             {
+                              "description": "a string at most 20000 character(s) long",
+                              "maxLength": 20000,
+                              "title": "maxLength(20000)",
                               "type": "string"
                             },
                             {
+                              "description": "an array of at most 100 item(s)",
                               "items": {
+                                "description": "a string at most 20000 character(s) long",
+                                "maxLength": 20000,
+                                "title": "maxLength(20000)",
                                 "type": "string"
                               },
+                              "maxItems": 100,
+                              "title": "maxItems(100)",
                               "type": "array"
                             },
                             {
                               "additionalProperties": false,
                               "properties": {
                                 "assetId": {
+                                  "description": "a string at most 128 character(s) long",
+                                  "maxLength": 128,
+                                  "title": "maxLength(128)",
                                   "type": "string"
                                 }
                               },
@@ -58278,6 +58303,8 @@ export const openApi = {
                       ],
                       "type": "object"
                     },
+                    "maxItems": 100,
+                    "title": "maxItems(100)",
                     "type": "array"
                   },
                   "coSpeakers": {

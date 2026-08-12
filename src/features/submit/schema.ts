@@ -11,6 +11,7 @@ const EventSlug = Schema.String.pipe(
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(200));
 const TurnstileToken = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(2_048));
 const NullableText = Schema.NullOr(Schema.String);
+export const MAX_PUBLIC_SUBMISSION_ANSWERS = 100;
 
 export const SubmissionStatus = Schema.Literal(
   "submitted",
@@ -103,7 +104,7 @@ export const CreatePublicSubmissionInput = Schema.Struct({
   idempotencyKey: IdempotencyKey,
   /** Omitted only for a known idempotent replay; fresh production writes fail closed. */
   turnstileToken: Schema.optional(TurnstileToken),
-  answers: Schema.Array(SubmissionAnswer),
+  answers: Schema.Array(SubmissionAnswer).pipe(Schema.maxItems(MAX_PUBLIC_SUBMISSION_ANSWERS)),
   /** Optional public profile context for the primary speaker. */
   primarySpeakerTitle: Schema.optional(SpeakerProfileText),
   primarySpeakerOrganization: Schema.optional(SpeakerProfileText),

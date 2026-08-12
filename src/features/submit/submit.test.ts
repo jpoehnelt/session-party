@@ -29,7 +29,7 @@ import { drizzle } from "drizzle-orm/d1";
 import { Hono } from "hono";
 import { Effect, Either, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
-import { runRestOperation, type AppHono } from "@/server/adapt";
+import { MAX_PUBLIC_SUBMISSION_BODY_BYTES, runRestOperation, type AppHono } from "@/server/adapt";
 import { AirtableSync, AppLayer, CurrentUser, MailQueue } from "@/server/services";
 import {
   createPublicSubmissionOperation,
@@ -1069,6 +1069,35 @@ describe("public submission creation", () => {
       message: "Public submissions are only available for CFP forms.",
       requestId: expect.any(String),
     });
+  });
+
+  it("rejects oversized and structurally unbounded anonymous submission payloads", async () => {
+    const app = new Hono<AppHono>();
+    const rest = createPublicSubmissionOperation.rest;
+    app.post(`/api/v1${rest.path}`, (context) =>
+      runRestOperation(context, null, createPublicSubmissionOperation, rest.input));
+    const url = `/api/v1/public/events/${EVENT_SLUG}/forms/${OPEN_FORM_ID}/submissions`;
+    const request = (body: string, key: string) => app.request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+      body,
+    }, env);
+
+    const oversized = await request(JSON.stringify({
+      answers: [],
+      padding: "x".repeat(MAX_PUBLIC_SUBMISSION_BODY_BYTES),
+    }), "submit-oversized-body-001");
+    expect(oversized.status).toBe(413);
+
+    const tooManyAnswers = await request(JSON.stringify({
+      answers: Array.from({ length: 101 }, (_, index) => ({ fieldId: `field-${index}`, value: "x" })),
+    }), "submit-too-many-answers-001");
+    expect(tooManyAnswers.status).toBe(400);
+
+    const overlongAnswer = await request(JSON.stringify({
+      answers: [{ fieldId: `${OPEN_VERSION_ID}-${fieldIds.title}`, value: "x".repeat(20_001) }],
+    }), "submit-overlong-answer-001");
+    expect(overlongAnswer.status).toBe(400);
   });
 
   it("replays one creation and rejects reuse with different answers", async () => {

@@ -44,7 +44,12 @@ export type FieldRouting = typeof FieldRouting.Type;
 
 // ---------- submission answers ----------
 
-export const AnswerValue = S.Union(S.String, S.Array(S.String), S.Struct({ assetId: S.String }));
+const AnswerText = S.String.pipe(S.maxLength(20_000));
+export const AnswerValue = S.Union(
+  AnswerText,
+  S.Array(AnswerText).pipe(S.maxItems(100)),
+  S.Struct({ assetId: S.String.pipe(S.maxLength(128)) }),
+);
 export type AnswerValue = typeof AnswerValue.Type;
 
 // ---------- review rubric (review_rounds.rubric) ----------

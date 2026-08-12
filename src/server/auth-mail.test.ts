@@ -302,6 +302,22 @@ describe("hackathon demo authentication", () => {
     expect((await versions()).results).toEqual(before.results);
   });
 
+  it("keeps only the newest twenty active sessions for each demo persona", async () => {
+    const login = () => SELF.fetch("https://example.test/api/v1/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona: "organizer" }),
+    });
+    for (let index = 0; index < 25; index += 1) expect((await login()).status).toBe(200);
+    const sessions = await env.DB.prepare(
+      `SELECT count(*) AS count
+       FROM auth_tokens t JOIN users u ON u.id = t.user_id
+       WHERE u.email = 'sbek-organizer@example.com'
+         AND t.kind = 'session' AND t.consumed_at IS NULL AND t.expires_at > ?`,
+    ).bind(Date.now()).first<{ count: number }>();
+    expect(sessions?.count).toBe(20);
+  });
+
   it("normalizes unsafe return paths", async () => {
     const response = await SELF.fetch("https://example.test/api/v1/auth/demo", {
       method: "POST",
