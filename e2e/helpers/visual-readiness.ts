@@ -54,6 +54,12 @@ export async function gotoVisualTarget(page: Page, path: string): Promise<void> 
   });
 
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
+  await page.waitForFunction(
+    () => ![...document.querySelectorAll('[role="status"]')]
+      .some((element) => element.textContent?.includes("Loading page…")),
+    undefined,
+    { timeout: 8_000 },
+  );
   await page
     .waitForFunction(() => !document.querySelector('[aria-busy="true"]'), undefined, {
       timeout: 8_000,
