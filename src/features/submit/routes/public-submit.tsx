@@ -21,7 +21,7 @@ import {
   type PublicFormField,
   type PublicSubmissionForm as PublicSubmissionFormValue,
 } from "../schema";
-import { TURNSTILE_ALWAYS_PASS_SITE_KEY } from "../abuse";
+import { TURNSTILE_DEMO_DISABLED_SITE_KEY } from "../abuse";
 
 export const path = "/submit/:eventSlug/:formId";
 export const layout = "bare" as const;
@@ -345,6 +345,10 @@ function TurnstileChallenge({
   const mountRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!siteKey) return;
+    if (siteKey === TURNSTILE_DEMO_DISABLED_SITE_KEY) {
+      onToken("demo-verification-disabled");
+      return () => onToken(null);
+    }
     if (!mountRef.current) return;
     let mounted = true;
     const render = () => {
@@ -375,17 +379,12 @@ function TurnstileChallenge({
   if (!siteKey) {
     return <Alert tone="danger"><AlertTitle>Human verification unavailable</AlertTitle><AlertDescription>Please try again later.</AlertDescription></Alert>;
   }
-  if (siteKey === TURNSTILE_ALWAYS_PASS_SITE_KEY) {
+  if (siteKey === TURNSTILE_DEMO_DISABLED_SITE_KEY) {
     return (
-      <div className="space-y-3">
-        <Alert tone="success" role="status">
-          <AlertTitle>Demo verification</AlertTitle>
-          <AlertDescription>
-            This disposable demo event uses Cloudflare&apos;s published test widget. Verification is still checked by Cloudflare before submission.
-          </AlertDescription>
-        </Alert>
-        <div aria-label="Demo verification widget" aria-disabled={disabled} ref={mountRef} />
-      </div>
+      <Alert tone="success" role="status">
+        <AlertTitle>Demo verification disabled</AlertTitle>
+        <AlertDescription>This disposable hackathon event does not require a verification challenge.</AlertDescription>
+      </Alert>
     );
   }
   return <div aria-label="Human verification" aria-disabled={disabled} ref={mountRef} />;

@@ -20,6 +20,7 @@ import {
   requireMailConfiguration,
   sendMail,
   sessionSecret,
+  turnstileVerificationAccepted,
   turnstileVerificationPolicy,
 } from "./services";
 
@@ -99,7 +100,7 @@ beforeAll(async () => {
 });
 
 describe("hackathon demo authentication", () => {
-  it("uses Cloudflare test verification only for the exact disposable demo event", () => {
+  it("bypasses Turnstile only for the exact disposable demo event", () => {
     const productionEnv = new Proxy(env, {
       get(target, property, receiver) {
         if (property === "LOCAL_MODE" || property === "PREVIEW_MODE") return undefined;
@@ -112,12 +113,12 @@ describe("hackathon demo authentication", () => {
 
     expect(turnstileVerificationPolicy(productionEnv, "demo-event")).toMatchObject({
       demoVerification: true,
-      secret: "1x0000000000000000000000000000000AA",
-      acceptedAction: "test",
+      secret: null,
+      acceptedAction: null,
       configured: true,
     });
     expect([...turnstileVerificationPolicy(productionEnv, "demo-event").acceptedHostnames])
-      .toEqual(["localhost"]);
+      .toEqual([]);
 
     expect(turnstileVerificationPolicy(productionEnv, "another-event")).toMatchObject({
       demoVerification: false,
@@ -145,6 +146,31 @@ describe("hackathon demo authentication", () => {
 
     expect(turnstileVerificationPolicy(productionEnv, "demo-event").configured).toBe(true);
     expect(turnstileVerificationPolicy(productionEnv, "another-event").configured).toBe(false);
+  });
+
+  it("bypasses Cloudflare only for the disposable demo while keeping live verification strict", () => {
+    const productionEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        if (property === "LOCAL_MODE" || property === "PREVIEW_MODE") return undefined;
+        if (property === "TURNSTILE_SITE_KEY") return "live-site-key";
+        if (property === "TURNSTILE_SECRET") return "live-secret";
+        if (property === "TURNSTILE_HOSTNAMES") return "sessionparty.com";
+        return Reflect.get(target, property, receiver);
+      },
+    }) as Env;
+    const demoPolicy = turnstileVerificationPolicy(productionEnv, "demo-event");
+    const livePolicy = turnstileVerificationPolicy(productionEnv, "another-event");
+    expect(turnstileVerificationAccepted(demoPolicy, {})).toBe(true);
+    expect(turnstileVerificationAccepted(livePolicy, {
+      success: true,
+      hostname: "example.com",
+      metadata: { result_with_testing_key: true },
+    })).toBe(false);
+    expect(turnstileVerificationAccepted(livePolicy, {
+      success: true,
+      action: "cfp-submit",
+      hostname: "sessionparty.com",
+    })).toBe(true);
   });
 
   it.each([

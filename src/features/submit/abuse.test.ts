@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  TURNSTILE_ALWAYS_PASS_SITE_KEY,
+  TURNSTILE_DEMO_DISABLED_SITE_KEY,
   TURNSTILE_DEMO_EVENT_ID,
   turnstileSiteKeyForEvent,
 } from "./abuse";
 
 describe("demo event Turnstile selection", () => {
-  it("uses Cloudflare's official test sitekey only for the exact demo event ID", () => {
+  it("disables Turnstile only for the exact disposable demo event ID", () => {
     expect(turnstileSiteKeyForEvent(TURNSTILE_DEMO_EVENT_ID, "live-site-key"))
-      .toBe(TURNSTILE_ALWAYS_PASS_SITE_KEY);
+      .toBe(TURNSTILE_DEMO_DISABLED_SITE_KEY);
     expect(turnstileSiteKeyForEvent("demo-event-copy", "live-site-key"))
       .toBe("live-site-key");
     expect(turnstileSiteKeyForEvent("other-event", "live-site-key"))
