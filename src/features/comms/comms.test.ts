@@ -33,6 +33,7 @@ import { AppLayer, Authorizer, CurrentUser, Db, MailQueue, type AppDatabase } fr
 import {
   enqueueCommunication,
   listAudience,
+  listDeliveries,
   listTemplates,
   previewCommunication,
   retryDelivery,
@@ -622,6 +623,58 @@ describe("communications authorization and validation", () => {
 });
 
 describe("communications immutable delivery workflow", () => {
+  it("loads delivery history after a bulk campaign crosses D1's query parameter ceiling", async () => {
+    const seeded = await seedCommunication("bulk-history");
+    const historySize = 101;
+    const snapshots = Array.from({ length: historySize }, (_, index) => ({
+      id: `snapshot-comms-bulk-history-${index}`,
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      recipientEmail: `speaker-${index}@example.com`,
+      recipientName: `Speaker ${index}`,
+      fromEmail: "Events <configured@example.com>",
+      subject: `Welcome, Speaker ${index}`,
+      renderedHtml: `<p>Welcome, Speaker ${index}</p>`,
+      renderedText: `Welcome, Speaker ${index}`,
+      createdAt: new Date(now.getTime() + index),
+    }));
+    const deliveries = snapshots.map((snapshot, index) => ({
+      id: `delivery-comms-bulk-history-${index}`,
+      snapshotId: snapshot.id,
+      idempotencyKey: `comms-bulk-history-${index}`,
+      status: index === historySize - 1 ? "dead_letter" as const : "cancelled" as const,
+      scheduledFor: snapshot.createdAt,
+      availableAt: snapshot.createdAt,
+      attemptCount: index === historySize - 1 ? 1 : 0,
+      deadLetteredAt: index === historySize - 1 ? snapshot.createdAt : null,
+      createdAt: snapshot.createdAt,
+    }));
+    for (let start = 0; start < historySize; start += 25) {
+      const statements = [
+        ...snapshots.slice(start, start + 25).map((snapshot) => seeded.db.insert(mailDeliverySnapshots).values(snapshot)),
+        ...deliveries.slice(start, start + 25).map((delivery) => seeded.db.insert(mailDeliveries).values(delivery)),
+      ];
+      await seeded.db.batch([statements[0]!, ...statements.slice(1)]);
+    }
+    await seeded.db.insert(mailDeliveryAttempts).values({
+      id: "attempt-comms-bulk-history-100",
+      deliveryId: deliveries[100]!.id,
+      attemptNumber: 1,
+      leaseOwner: "test-worker",
+      status: "failed",
+      error: "temporary failure",
+      startedAt: deliveries[100]!.createdAt,
+      completedAt: deliveries[100]!.createdAt,
+    });
+
+    const history = await runAs(seeded.owner, listDeliveries({ eventId: seeded.eventId }));
+
+    expect(history.deliveries).toHaveLength(historySize);
+    expect(history.deliveries.find(({ id }) => id === deliveries[100]!.id)?.attempts).toEqual([
+      expect.objectContaining({ attemptNumber: 1, status: "failed", error: "temporary failure" }),
+    ]);
+  });
+
   it("wakes only after one durable enqueue and wakes the same durable row again on replay", async () => {
     const seeded = await seedCommunication("enqueue");
     const wakeObservations: Array<{

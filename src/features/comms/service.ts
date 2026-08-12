@@ -1193,8 +1193,19 @@ export const listDeliveries = (
       return { eventId: input.eventId, deliveries: [], localCaptureCount: 0 };
     }
     const attempts = yield* database(() =>
-      db.select().from(mailDeliveryAttempts)
-        .where(inArray(mailDeliveryAttempts.deliveryId, rows.map((row) => row.id)))
+      db.select({
+        id: mailDeliveryAttempts.id,
+        deliveryId: mailDeliveryAttempts.deliveryId,
+        attemptNumber: mailDeliveryAttempts.attemptNumber,
+        status: mailDeliveryAttempts.status,
+        providerMessageId: mailDeliveryAttempts.providerMessageId,
+        error: mailDeliveryAttempts.error,
+        startedAt: mailDeliveryAttempts.startedAt,
+        completedAt: mailDeliveryAttempts.completedAt,
+      }).from(mailDeliveryAttempts)
+        .innerJoin(mailDeliveries, eq(mailDeliveries.id, mailDeliveryAttempts.deliveryId))
+        .innerJoin(mailDeliverySnapshots, eq(mailDeliverySnapshots.id, mailDeliveries.snapshotId))
+        .where(eq(mailDeliverySnapshots.eventId, input.eventId))
         .orderBy(asc(mailDeliveryAttempts.deliveryId), asc(mailDeliveryAttempts.attemptNumber)),
     );
     const attemptsByDelivery = new Map<string, DeliveryAttempt[]>();
