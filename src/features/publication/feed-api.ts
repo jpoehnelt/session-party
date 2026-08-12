@@ -5,7 +5,11 @@ import { Hono, type Context } from "hono";
 import { getPublishedAgendaOperation } from "@/features/agenda/operations";
 import { PublishedAgenda, type PublishedAgenda as PublishedAgendaType } from "@/features/agenda/schema";
 import { runRestOperation } from "@/server/adapt";
-import { renderPublishedCalendar } from "./feeds";
+import {
+  renderPublishedCalendar,
+  renderPublishedScheduleHtml,
+  renderPublishedScheduleXml,
+} from "./feeds";
 import {
   embedContentFromSearch,
   filterPublishedAgenda,
@@ -59,27 +63,38 @@ const loadPublishedAgenda = async (
 
 const feedHeaders = (
   agenda: PublishedAgendaType,
-  kind: "calendar" | "json",
+  kind: "calendar" | "json" | "xml" | "html",
   talkId?: string,
   track?: string | null,
   fields: readonly ScheduleEmbedField[] = SCHEDULE_EMBED_FIELDS,
 ): Headers => {
   const suffix = talkId ? `session-${talkId}` : "schedule";
-  const extension = kind === "calendar" ? "ics" : "json";
+  const extension = kind === "calendar" ? "ics" : kind;
   const revision = kind === "calendar" ? agenda.calendarRevision ?? agenda.revision : agenda.revision;
   const updatedAt = kind === "calendar" ? agenda.calendarUpdatedAt ?? agenda.publishedAt : agenda.publishedAt;
-  return new Headers({
+  const headers = new Headers({
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": CACHE_CONTROL,
     "Content-Disposition": `inline; filename="${agenda.eventSlug}-${suffix}.${extension}"`,
     "Content-Type": kind === "calendar"
       ? "text/calendar; charset=utf-8"
-      : "application/json; charset=utf-8",
+      : kind === "json"
+        ? "application/json; charset=utf-8"
+        : kind === "xml"
+          ? "application/xml; charset=utf-8"
+          : "text/html; charset=utf-8",
     ETag: `"${agenda.eventId}:r${revision}:c${contentFingerprint(agenda)}:${suffix}:${extension}${track ? `:track:${encodeURIComponent(track)}` : ""}:fields:${[...fields].sort().join(".")}"`,
     "Last-Modified": new Date(updatedAt).toUTCString(),
     "X-Content-Type-Options": "nosniff",
     "X-Session-Party-Revision": String(revision),
   });
+  if (kind === "html") {
+    headers.set(
+      "Content-Security-Policy",
+      "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors *",
+    );
+  }
+  return headers;
 };
 
 const notModified = (c: FeedContext, headers: Headers): Response | null => {
@@ -98,6 +113,26 @@ app.get("/events/:eventSlug/schedule.json", async (c) => {
   const headers = feedHeaders(agenda, "json", undefined, selection.track, selection.fields);
   return notModified(c, headers)
     ?? new Response(JSON.stringify(projectPublishedAgenda(agenda, selection.fields)), { status: 200, headers });
+});
+
+app.get("/events/:eventSlug/schedule.xml", async (c) => {
+  const loaded = await loadPublishedAgenda(c);
+  if ("response" in loaded) return loaded.response;
+  const selection = embedContentFromSearch(new URL(c.req.url).searchParams);
+  const agenda = filterPublishedAgenda(loaded.agenda, selection.track);
+  const headers = feedHeaders(agenda, "xml", undefined, selection.track, selection.fields);
+  return notModified(c, headers)
+    ?? new Response(renderPublishedScheduleXml(agenda, selection.fields), { status: 200, headers });
+});
+
+app.get("/events/:eventSlug/schedule.html", async (c) => {
+  const loaded = await loadPublishedAgenda(c);
+  if ("response" in loaded) return loaded.response;
+  const selection = embedContentFromSearch(new URL(c.req.url).searchParams);
+  const agenda = filterPublishedAgenda(loaded.agenda, selection.track);
+  const headers = feedHeaders(agenda, "html", undefined, selection.track, selection.fields);
+  return notModified(c, headers)
+    ?? new Response(renderPublishedScheduleHtml(agenda, selection.fields), { status: 200, headers });
 });
 
 app.get("/events/:eventSlug/schedule.ics", async (c) => {
