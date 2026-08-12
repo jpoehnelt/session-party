@@ -1,4 +1,4 @@
-import { EntityId, UnixTimestampMs } from "contracts/domain";
+import { EntityId, Pagination, PaginationInput, UnixTimestampMs } from "contracts/domain";
 import { Schema } from "effect";
 
 export const AgendaView = Schema.Literal("list", "day", "week", "track", "room");
@@ -54,6 +54,12 @@ export type TalkContentRevision = typeof TalkContentRevision.Type;
 
 export const TalkContentHistory = Schema.Array(TalkContentRevision);
 export type TalkContentHistory = typeof TalkContentHistory.Type;
+
+export const TalkContentHistoryPage = Schema.Struct({
+  results: TalkContentHistory,
+  pagination: Pagination,
+});
+export type TalkContentHistoryPage = typeof TalkContentHistoryPage.Type;
 
 export const BacklogProposal = Schema.Struct({
   submissionId: EntityId,
@@ -119,10 +125,13 @@ export const ListAgendaInput = Schema.Struct({
 });
 export type ListAgendaInput = typeof ListAgendaInput.Type;
 
-export const ListTalkContentHistoryInput = Schema.Struct({
-  eventId: EntityId,
-  talkId: EntityId,
-});
+export const ListTalkContentHistoryInput = Schema.extend(
+  Schema.Struct({
+    eventId: EntityId,
+    talkId: EntityId,
+  }),
+  PaginationInput,
+);
 export type ListTalkContentHistoryInput = typeof ListTalkContentHistoryInput.Type;
 
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(200));

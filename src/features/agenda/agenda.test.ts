@@ -1157,21 +1157,31 @@ describe("agenda service", () => {
     const history = await runAs(seeded.user, listTalkContentHistory({
       eventId: seeded.eventId,
       talkId: seeded.talkA,
+      page: 1,
+      pageSize: 1,
     }));
-    expect(history).toHaveLength(2);
-    expect(history.map((revision) => revision.description)).toEqual([
+    expect(history.pagination).toEqual({ page: 1, pageSize: 1, total: 2, pageCount: 2 });
+    expect(history.results.map((revision) => revision.description)).toEqual([
       "The first organizer revision. A second sentence.",
+    ]);
+    expect(history.results.every((revision) => revision.editorName === "Agenda Owner")).toBe(true);
+    expect(history.results.every((revision) => Number.isFinite(revision.occurredAt))).toBe(true);
+    const olderHistory = await runAs(seeded.user, listTalkContentHistory({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      page: 2,
+      pageSize: 1,
+    }));
+    expect(olderHistory.results.map((revision) => revision.description)).toEqual([
       "The first organizer revision.",
     ]);
-    expect(history.every((revision) => revision.editorName === "Agenda Owner")).toBe(true);
-    expect(history.every((revision) => Number.isFinite(revision.occurredAt))).toBe(true);
-    expect(history[0]!.occurredAt).toBeGreaterThanOrEqual(history[1]!.occurredAt);
+    expect(history.results[0]!.occurredAt).toBeGreaterThanOrEqual(olderHistory.results[0]!.occurredAt);
 
     const restored = await runAs(seeded.user, updateTalkContent({
       eventId: seeded.eventId,
       talkId: seeded.talkA,
-      title: history[1]!.title,
-      description: history[1]!.description,
+      title: olderHistory.results[0]!.title,
+      description: olderHistory.results[0]!.description,
       expectedVersion: second.talk.version,
       idempotencyKey: "content-history-restore-0001",
     }));
@@ -1179,7 +1189,9 @@ describe("agenda service", () => {
     await expect(runAs(seeded.user, listTalkContentHistory({
       eventId: seeded.eventId,
       talkId: seeded.talkA,
-    }))).resolves.toHaveLength(3);
+      page: 1,
+      pageSize: 25,
+    }))).resolves.toMatchObject({ pagination: { total: 3 } });
   });
 
   it("keeps Airtable-authoritative talk content as a pending overlay", async () => {

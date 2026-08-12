@@ -76,7 +76,7 @@ import type {
   ScheduleTalkInput,
   Track,
   TrackMutationResult,
-  TalkContentHistory,
+  TalkContentHistoryPage,
   UpdateTalkContentInput,
   UpdateRoomInput,
   UpdateTrackInput,
@@ -741,23 +741,31 @@ const decodeAgendaTalk = (payload: unknown): Effect.Effect<AgendaTalk, External>
 
 export const listTalkContentHistory = (
   input: ListTalkContentHistoryInput,
-): Effect.Effect<TalkContentHistory, AppError, Db> =>
+): Effect.Effect<TalkContentHistoryPage, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     yield* loadTalk(input.eventId, input.talkId);
-    const rows = yield* database(() => db.select({
-      id: auditLog.id,
-      after: auditLog.after,
-      actorApiKeyId: auditLog.actorApiKeyId,
-      actorName: users.name,
-      occurredAt: auditLog.occurredAt,
-    }).from(auditLog).leftJoin(users, eq(users.id, auditLog.actorUserId)).where(and(
+    const historyFilter = and(
       eq(auditLog.eventId, input.eventId),
       eq(auditLog.action, "agenda.talk_content_updated"),
       eq(auditLog.resourceType, "talk"),
       eq(auditLog.resourceId, input.talkId),
-    )).orderBy(desc(auditLog.occurredAt), desc(auditLog.id)));
-    return yield* Effect.forEach(rows, (row) => decodeAgendaTalk(row.after).pipe(
+    );
+    const [rows, totalRows] = yield* Effect.all([
+      database(() => db.select({
+        id: auditLog.id,
+        after: auditLog.after,
+        actorApiKeyId: auditLog.actorApiKeyId,
+        actorName: users.name,
+        occurredAt: auditLog.occurredAt,
+      }).from(auditLog).leftJoin(users, eq(users.id, auditLog.actorUserId)).where(historyFilter)
+        .orderBy(desc(auditLog.occurredAt), desc(auditLog.id))
+        .limit(input.pageSize)
+        .offset((input.page - 1) * input.pageSize)),
+      database(() => db.select({ total: sql<number>`count(*)` }).from(auditLog).where(historyFilter)),
+    ]);
+    const total = totalRows[0]?.total ?? 0;
+    const results = yield* Effect.forEach(rows, (row) => decodeAgendaTalk(row.after).pipe(
       Effect.map((talk) => ({
         id: row.id,
         title: talk.title,
@@ -767,6 +775,15 @@ export const listTalkContentHistory = (
         occurredAt: row.occurredAt.getTime(),
       })),
     ));
+    return {
+      results,
+      pagination: {
+        page: input.page,
+        pageSize: input.pageSize,
+        total,
+        pageCount: total === 0 ? 0 : Math.ceil(total / input.pageSize),
+      },
+    };
   });
 
 const latestPublication = (eventId: string): Effect.Effect<PublishedAgenda | null, AppError, Db> =>
