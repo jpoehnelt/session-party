@@ -4,7 +4,10 @@ import { Schema } from "effect";
 import { Hono, type Context } from "hono";
 import { getPublishedAgendaOperation } from "@/features/agenda/operations";
 import { PublishedAgenda, type PublishedAgenda as PublishedAgendaType } from "@/features/agenda/schema";
+import { PublicSpeakerGallery, type PublicSpeakerGallery as PublicSpeakerGalleryType } from "@/features/portal/schema";
 import { runRestOperation } from "@/server/adapt";
+import { openApi, operationById } from "@/server/registry.gen";
+import { eventAgentDocument, renderEventLlmsText } from "./agent-docs";
 import {
   renderPublishedCalendar,
   renderPublishedScheduleHtml,
@@ -26,14 +29,7 @@ const CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300";
 const requestIdFor = (c: FeedContext): string =>
   c.req.header("x-request-id") ?? crypto.randomUUID();
 
-const contentFingerprint = (agenda: PublishedAgendaType): string => {
-  const source = JSON.stringify({
-    eventName: agenda.eventName,
-    eventSlug: agenda.eventSlug,
-    timezone: agenda.timezone,
-    location: agenda.location,
-    talks: agenda.talks,
-  });
+const stringFingerprint = (source: string): string => {
   let hash = 2_166_136_261;
   for (let index = 0; index < source.length; index += 1) {
     hash ^= source.charCodeAt(index);
@@ -41,6 +37,15 @@ const contentFingerprint = (agenda: PublishedAgendaType): string => {
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
 };
+
+const contentFingerprint = (agenda: PublishedAgendaType): string =>
+  stringFingerprint(JSON.stringify({
+    eventName: agenda.eventName,
+    eventSlug: agenda.eventSlug,
+    timezone: agenda.timezone,
+    location: agenda.location,
+    talks: agenda.talks,
+  }));
 
 const publicError = (
   c: FeedContext,
@@ -59,6 +64,24 @@ const loadPublishedAgenda = async (
   );
   if (!response.ok) return { response };
   return { agenda: Schema.decodeUnknownSync(PublishedAgenda)(await response.json()) };
+};
+
+const loadPublishedEvent = async (
+  c: FeedContext,
+): Promise<
+  | { readonly agenda: PublishedAgendaType; readonly gallery: PublicSpeakerGalleryType }
+  | { readonly response: Response }
+> => {
+  const agenda = await loadPublishedAgenda(c);
+  if ("response" in agenda) return agenda;
+  const operation = operationById["portal.getPublicSpeakers"];
+  if (!operation) return { response: c.json({ error: "Internal", message: "Public speaker operation unavailable" }, 500) };
+  const response = await runRestOperation(c, null, operation, { path: ["eventSlug"] });
+  if (!response.ok) return { response };
+  return {
+    agenda: agenda.agenda,
+    gallery: Schema.decodeUnknownSync(PublicSpeakerGallery)(await response.json()),
+  };
 };
 
 const feedHeaders = (
@@ -104,6 +127,43 @@ const notModified = (c: FeedContext, headers: Headers): Response | null => {
     ? new Response(null, { status: 304, headers })
     : null;
 };
+
+const agentHeaders = (
+  agenda: PublishedAgendaType,
+  body: string,
+  kind: "llms" | "agent-docs",
+): Headers => new Headers({
+  "Access-Control-Allow-Origin": "*",
+  "Cache-Control": CACHE_CONTROL,
+  "Content-Disposition": `inline; filename="${agenda.eventSlug}-${kind === "llms" ? "llms.txt" : "agent-docs.json"}"`,
+  "Content-Type": kind === "llms" ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
+  ETag: `"${agenda.eventId}:r${agenda.revision}:${kind}:c${stringFingerprint(body)}"`,
+  "Last-Modified": new Date(agenda.publishedAt).toUTCString(),
+  Link: `</events/${encodeURIComponent(agenda.eventSlug)}/llms.txt>; rel="alternate"; type="text/plain", </events/${encodeURIComponent(agenda.eventSlug)}/agent-docs.json>; rel="describedby"; type="application/json"`,
+  "X-Content-Type-Options": "nosniff",
+  "X-Session-Party-Revision": String(agenda.revision),
+});
+
+app.get("/events/:eventSlug/llms.txt", async (c) => {
+  const loaded = await loadPublishedEvent(c);
+  if ("response" in loaded) return loaded.response;
+  const body = renderEventLlmsText(loaded.agenda, loaded.gallery, new URL(c.req.url).origin);
+  const headers = agentHeaders(loaded.agenda, body, "llms");
+  return notModified(c, headers) ?? new Response(body, { status: 200, headers });
+});
+
+app.get("/events/:eventSlug/agent-docs.json", async (c) => {
+  const loaded = await loadPublishedEvent(c);
+  if ("response" in loaded) return loaded.response;
+  const body = JSON.stringify(eventAgentDocument(
+    loaded.agenda,
+    loaded.gallery,
+    new URL(c.req.url).origin,
+    openApi,
+  ));
+  const headers = agentHeaders(loaded.agenda, body, "agent-docs");
+  return notModified(c, headers) ?? new Response(body, { status: 200, headers });
+});
 
 app.get("/events/:eventSlug/schedule.json", async (c) => {
   const loaded = await loadPublishedAgenda(c);
