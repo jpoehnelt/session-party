@@ -15,6 +15,7 @@ export interface ProductionEventIdentity {
 }
 
 const sqlQuote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+const demoProfileOwnerUserId = "demo-speaker";
 
 const appendUpsert = (
   statement: string,
@@ -113,6 +114,14 @@ export function buildDemoReplacementSql(
     "-- Session Party demo-event replacement. Generated locally after isolated import validation.",
     `-- Scope is locked to ${demoTarget.eventId}/${demoTarget.eventSlug}; user rows are retained when their exact identity already exists.`,
     "PRAGMA defer_foreign_keys=TRUE;",
+    `DELETE FROM speaker_profile_changes
+WHERE profile_id IN (
+  SELECT id FROM speaker_profiles WHERE user_id = ${sqlQuote(demoProfileOwnerUserId)}
+)
+AND EXISTS (
+  SELECT 1 FROM events
+  WHERE id = ${sqlQuote(demoTarget.eventId)} AND slug = ${sqlQuote(demoTarget.eventSlug)}
+);`,
     `DELETE FROM events WHERE id = ${sqlQuote(demoTarget.eventId)} AND slug = ${sqlQuote(demoTarget.eventSlug)};`,
     ...safeInserts,
     `INSERT INTO event_members (id, event_id, user_id, role, version, created_at, updated_at)

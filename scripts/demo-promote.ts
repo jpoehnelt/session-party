@@ -73,6 +73,8 @@ const snapshotTables = [
 const verificationSql = `
 SELECT
   (SELECT count(*) FROM events WHERE id = '${eventId}' AND slug = '${eventSlug}') AS events,
+  (SELECT count(*) FROM submissions WHERE event_id = '${eventId}') AS total_submissions,
+  (SELECT count(*) FROM speakers WHERE event_id = '${eventId}') AS total_speakers,
   (SELECT count(*) FROM forms WHERE event_id = '${eventId}') AS forms,
   (SELECT count(*) FROM submissions s INNER JOIN forms f ON f.event_id = s.event_id AND f.id = s.form_id WHERE s.event_id = '${eventId}' AND f.kind = 'cfp') AS submissions,
   (SELECT count(*) FROM submissions s INNER JOIN forms f ON f.event_id = s.event_id AND f.id = s.form_id WHERE s.event_id = '${eventId}' AND f.kind = 'cfp' AND s.status = 'accepted') AS accepted,
@@ -102,6 +104,8 @@ SELECT
 
 type Verification = {
   readonly events: number;
+  readonly total_submissions: number;
+  readonly total_speakers: number;
   readonly forms: number;
   readonly submissions: number;
   readonly accepted: number;
@@ -188,6 +192,8 @@ const verifyDemo = (row: Record<string, unknown>, location: "local" | "productio
   const counts = row as Verification;
   const expected: Record<keyof Verification, number | ((value: number) => boolean)> = {
     events: 1,
+    total_submissions: 61,
+    total_speakers: 63,
     forms: 2,
     submissions: 60,
     accepted: 30,

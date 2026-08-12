@@ -12,6 +12,7 @@ import { nanoid } from "nanoid";
 import { CurrentUser, Db } from "@/server/services";
 import { PublishedAgenda as PublishedAgendaSchema } from "@/features/agenda/schema";
 import { PublishedSpeakerGallerySnapshot as PublishedSpeakerGallerySnapshotSchema } from "@/features/portal/schema";
+import { publicSpeakerHeadshotPath } from "@/features/portal/public-assets";
 import {
   type GetPublicProfileInput,
   type MyProfile,
@@ -172,6 +173,7 @@ export const getPublicProfile = (input: GetPublicProfileInput): Effect.Effect<Pu
     eq(speakerProfiles.visible, true),
   )).limit(1));
   if (!profile) return yield* Effect.fail(new NotFound({ entity: "public speaker profile", id: input.slug }));
+  const publicProfile = profileView(profile);
   const eventRows = yield* database(() => db.select({
     speakerId: speakers.id,
     eventId: events.id,
@@ -182,7 +184,7 @@ export const getPublicProfile = (input: GetPublicProfileInput): Effect.Effect<Pu
     startsAt: events.startsAt,
     endsAt: events.endsAt,
   }).from(speakers).innerJoin(events, eq(events.id, speakers.eventId)).where(eq(speakers.profileSourceId, profile.id)));
-  if (eventRows.length === 0) return { profile: profileView(profile), appearances: [] };
+  if (eventRows.length === 0) return { profile: publicProfile, appearances: [] };
   const eventIds = eventRows.map(({ eventId }) => eventId);
   const changes = yield* database(() => db.select({
     eventId: domainChanges.eventId,
@@ -198,11 +200,22 @@ export const getPublicProfile = (input: GetPublicProfileInput): Effect.Effect<Pu
     if (!latest.has(key)) latest.set(key, change.payload);
   }
   const appearances: PublicProfileAppearance[] = [];
+  const managedHeadshots = new Map<string, string>();
   for (const event of eventRows) {
     const galleryPayload = latest.get(`${event.eventId}\u0000speaker-publication`);
     if (!galleryPayload) continue;
     const gallery = yield* Schema.decodeUnknown(PublishedSpeakerGallerySnapshotSchema)(galleryPayload).pipe(Effect.orElseSucceed(() => null));
-    if (!gallery?.speakers.some(({ id, publicProfileSlug }) => id === event.speakerId && publicProfileSlug === profile.slug)) continue;
+    const publishedSpeaker = gallery?.speakers.find(({ id, publicProfileSlug }) =>
+      id === event.speakerId && publicProfileSlug === profile.slug);
+    if (!gallery || !publishedSpeaker) continue;
+    if (publishedSpeaker.headshotAssetId !== null) {
+      managedHeadshots.set(event.eventId, publicSpeakerHeadshotPath(
+        event.eventSlug,
+        event.speakerId,
+        publishedSpeaker.headshotAssetId,
+        gallery.revision,
+      ));
+    }
     const agendaPayload = latest.get(`${event.eventId}\u0000agenda-publication`);
     const agenda = agendaPayload
       ? yield* Schema.decodeUnknown(PublishedAgendaSchema)(agendaPayload).pipe(Effect.orElseSucceed(() => null))
@@ -229,5 +242,11 @@ export const getPublicProfile = (input: GetPublicProfileInput): Effect.Effect<Pu
     });
   }
   appearances.sort((left, right) => (right.startsAt ?? 0) - (left.startsAt ?? 0) || left.eventName.localeCompare(right.eventName));
-  return { profile: profileView(profile), appearances };
+  const managedHeadshot = appearances.find(({ eventId }) => managedHeadshots.has(eventId));
+  return {
+    profile: publicProfile.headshotUrl === null && managedHeadshot
+      ? { ...publicProfile, headshotUrl: managedHeadshots.get(managedHeadshot.eventId)! }
+      : publicProfile,
+    appearances,
+  };
 });
