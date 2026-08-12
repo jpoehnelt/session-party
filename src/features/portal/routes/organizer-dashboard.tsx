@@ -165,6 +165,16 @@ export function OrganizerDashboardContent({
                       />
                     ))}
                   </div>
+                  {(item.readiness.taskItems ?? []).length > 0 && (
+                    <ul className="mt-2 space-y-1 text-xs" aria-label={`${item.speaker.displayName} task detail`}>
+                      {(item.readiness.taskItems ?? []).map((task) => (
+                        <li key={task.id} className={task.overdue ? "font-medium text-danger" : "text-ink-faint"}>
+                          {task.completed ? "✓" : "○"} {task.name}
+                          {task.dueAt !== null ? ` · ${task.completed ? "was due" : "due"} ${new Date(task.dueAt).toLocaleDateString()}` : " · no due date"}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               ),
             },

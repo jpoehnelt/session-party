@@ -497,16 +497,31 @@ const loadCurrentProvisioning = (eventId: string, speakerId: string) => Effect.g
 const selfSpeaker = (eventId: string) => Effect.gen(function* () {
   const actor = yield* selfPrincipal();
   const { db } = yield* Db;
-  const [speaker] = yield* database(() => db.select().from(speakers).where(and(
+  const speakerRows = yield* database(() => db.select().from(speakers).where(and(
     eq(speakers.eventId, eventId),
     eq(speakers.userId, actor.userId),
-  )).limit(1));
-  if (!speaker) return yield* Effect.fail(new Forbidden({ reason: "This browser session is not linked to a speaker for this event" }));
-  const [managedIdentity] = yield* database(() => db.select({ id: managedSpeakerEmails.id }).from(managedSpeakerEmails).where(and(
-    eq(managedSpeakerEmails.eventId, eventId), eq(managedSpeakerEmails.speakerId, speaker.id),
-  )).limit(1));
-  const acceptance = managedIdentity ? null : yield* loadCurrentProvisioning(eventId, speaker.id);
-  return { actor, speaker, acceptance };
+  )).orderBy(asc(speakers.id)));
+  if (speakerRows.length === 0) return yield* Effect.fail(new Forbidden({ reason: "This browser session is not linked to a speaker for this event" }));
+  const managedRows = yield* database(() => db.select({ speakerId: managedSpeakerEmails.speakerId }).from(managedSpeakerEmails).where(and(
+    eq(managedSpeakerEmails.eventId, eventId),
+    inArray(managedSpeakerEmails.speakerId, speakerRows.map((speaker) => speaker.id)),
+  )));
+  const managedIds = new Set(managedRows.map(({ speakerId }) => speakerId));
+  const accepted = yield* Effect.forEach(
+    speakerRows.filter((speaker) => !managedIds.has(speaker.id)),
+    (speaker) => loadCurrentProvisioning(eventId, speaker.id).pipe(
+      Effect.map((acceptance) => ({ speaker, acceptance })),
+      Effect.option,
+    ),
+    { concurrency: 1 },
+  );
+  const currentAccepted = accepted.flatMap((candidate) => candidate._tag === "Some" ? [candidate.value] : [])
+    .sort((left, right) => right.acceptance.acceptance.occurredAt.getTime() - left.acceptance.acceptance.occurredAt.getTime()
+      || left.speaker.id.localeCompare(right.speaker.id))[0];
+  if (currentAccepted) return { actor, ...currentAccepted };
+  const managed = speakerRows.find((speaker) => managedIds.has(speaker.id));
+  if (managed) return { actor, speaker: managed, acceptance: null };
+  return yield* Effect.fail(new Forbidden({ reason: "A current accepted and provisioned speaker record is required" }));
 });
 
 const taskView = (
@@ -535,6 +550,7 @@ const readiness = (
   const outstandingTaskIds = outstandingDefinitions.map((task) => task.id);
   const tasksTotal = definitions.length;
   const tasksDone = tasksTotal - outstandingTaskIds.length;
+  const completionByTask = new Map(completions.map((completion) => [completion.taskId, completion]));
   const missingItems = outstandingDefinitions.map((task) => {
     const dueAt = millis(task.dueAt);
     const overdue = dueAt !== null && dueAt < currentTime;
@@ -568,6 +584,19 @@ const readiness = (
     overdueCount: missingItems.filter((item) => item.overdue).length,
     clearestBlocker: missingItems[0]?.blocker ?? null,
     recommendedNextAction: missingItems[0]?.recommendedAction ?? null,
+    taskItems: definitions.map((task) => {
+      const completion = completionByTask.get(task.id);
+      const dueAt = millis(task.dueAt);
+      return {
+        id: task.id,
+        name: task.name,
+        kind: task.kind,
+        dueAt,
+        completed: completion !== undefined,
+        completedAt: completion ? millis(completion.completedAt) : null,
+        overdue: completion === undefined && dueAt !== null && dueAt < currentTime,
+      };
+    }),
   };
 };
 
@@ -1645,8 +1674,18 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
       ))),
   ], { concurrency: 1 });
   const { head } = yield* Files;
+  const commentRows = uploaded.length === 0 ? [] : yield* database(() => db.select({ comment: assetComments, authorName: users.name }).from(assetComments)
+    .innerJoin(users, eq(users.id, assetComments.actorUserId))
+    .where(and(eq(assetComments.eventId, event.id), inArray(assetComments.assetId, uploaded.map((asset) => asset.id))))
+    .orderBy(asc(assetComments.createdAt), asc(assetComments.id)));
   const uploadedAssets = yield* Effect.forEach(uploaded, (asset) => Effect.gen(function* () {
-    if (asset.id === speaker.headshotAssetId) return assetView(asset, "headshot");
+    const comments = commentRows.filter((row) => row.comment.assetId === asset.id).map((row) => ({
+      id: row.comment.id,
+      authorName: row.authorName ?? "Speaker",
+      body: row.comment.body,
+      createdAt: row.comment.createdAt.getTime(),
+    }));
+    if (asset.id === speaker.headshotAssetId) return { ...assetView(asset, "headshot"), comments };
     const object = yield* head(assetKey(event.id, asset.id));
     const storedPurpose = object?.customMetadata?.portalPurpose;
     const purpose = storedPurpose === "headshot" || storedPurpose === "slides" || storedPurpose === "document"
@@ -1654,7 +1693,7 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
       : asset.contentType.includes("presentation")
         ? "slides"
         : "document";
-    return assetView(asset, purpose);
+    return { ...assetView(asset, purpose), comments };
   }));
   const pending = new Map(
     pendingRows.flatMap(({ fieldKey, intendedValue }) =>
