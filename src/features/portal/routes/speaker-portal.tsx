@@ -470,7 +470,7 @@ export function SpeakerPortalContent({
                 )}
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button type="button" variant="ghost" className={productionButtonClass} disabled={busyAction !== null}>
+                    <Button type="button" variant="ghost" className={`${productionButtonClass} text-[#171714] hover:text-[#171714]`} disabled={busyAction !== null}>
                       Withdraw session
                     </Button>
                   </AlertDialogTrigger>
