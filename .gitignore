@@ -14,5 +14,8 @@ test-results/
 vitest-rubric.json
 .wrangler/
 .dev.vars
+.env
+.env.*
+!.env.example
 *.tsbuildinfo
 .DS_Store

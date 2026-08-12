@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "session-party-local",
   "main": "src/server/index.ts",
-  "compatibility_date": "2025-08-01",
+  "compatibility_date": "2026-08-12",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "not_found_handling": "single-page-application",
@@ -31,6 +31,7 @@
   "vars": {
     "LOCAL_MODE": "1",
     "APP_URL": "http://127.0.0.1:5173",
+    "INITIAL_ADMIN_EMAIL": "",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
     "TURNSTILE_HOSTNAMES": "localhost,127.0.0.1"
   }

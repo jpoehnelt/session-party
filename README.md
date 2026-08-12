@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://sessionparty.com">Live demo</a> ·
+  <a href="#self-host-on-cloudflare">Self-host</a> ·
   <a href="#local-development">Local development</a> ·
   <a href="PLAN.md">Architecture plan</a> ·
   <a href="LICENSE">MIT license</a>
@@ -119,6 +120,45 @@ Correctness is part of the product design:
 
 See [PLAN.md](PLAN.md) for the authoritative architecture, security model, scope, and implementation decisions.
 
+## Self-host on Cloudflare
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jpoehnelt/session-party)
+
+The deploy flow copies this repository into your GitHub or GitLab account, provisions the Worker, D1 database, R2 bucket, Durable Objects, and Workers AI binding, applies database migrations, and enables deployments from your new repository.
+
+### Before you deploy
+
+Session Party uses passwordless email for sign-in and Turnstile for public proposal forms. In the Cloudflare account that will own the installation:
+
+1. Add the domain to Cloudflare.
+2. [Onboard its sending domain to Cloudflare Email Service](https://developers.cloudflare.com/email-service/get-started/).
+3. [Create a Turnstile widget](https://developers.cloudflare.com/turnstile/get-started/) for the hostname you plan to use.
+
+Review these values in the deployment form:
+
+| Setting | Value |
+|---|---|
+| `APP_URL` | The final origin, for example `https://events.example.com` |
+| `INITIAL_ADMIN_EMAIL` | Your email address; this closes public registration |
+| `MAIL_FROM` | A sender on the onboarded domain, for example `Session Party <welcome@example.com>` |
+| `SESSION_SECRET` | A unique value generated with `openssl rand -hex 32` |
+| `TURNSTILE_SITE_KEY` | The widget's site key |
+| `TURNSTILE_SECRET` | The widget's secret key |
+| `TURNSTILE_HOSTNAMES` | The final hostname, for example `events.example.com` |
+
+Keep `INITIAL_ADMIN_EMAIL` set for a private installation. That address can sign in and create the first event; reviewer invitations and managed-speaker onboarding remain available without opening public registration. Leaving it blank preserves open registration for a hosted, multi-tenant service.
+
+### Connect the domain
+
+After the first deployment:
+
+1. Open **Workers & Pages** in Cloudflare and select the new Worker.
+2. Go to **Settings → Domains & Routes → Add → Custom Domain**.
+3. Enter the exact hostname used by `APP_URL` and `TURNSTILE_HOSTNAMES`.
+4. Open the hostname, sign in with `INITIAL_ADMIN_EMAIL`, and create the first event.
+
+Cloudflare creates the DNS record and certificate. Remove any existing CNAME for that hostname before attaching it.
+
 ## Local development
 
 ### Prerequisites
@@ -168,18 +208,17 @@ Feature modules own their domain logic and declare their routes and transports. 
 
 ## Production deployment
 
-Self-hosting requires a Cloudflare account and project-owned D1, R2, Durable Object, Workers AI, Turnstile, and Email Sending resources. Create your own resources and replace the checked-in binding identifiers before deploying a fork.
+Self-hosting requires a Cloudflare account and project-owned D1, R2, Durable Object, Workers AI, Turnstile, and Email Sending resources. The deploy button provisions the supported resources and rewrites their binding identifiers in the copied repository.
 
 Production requires `SESSION_SECRET` and `TURNSTILE_SECRET`. Live Accelevents and Airtable integrations additionally use `ACCELEVENTS_API_TOKEN` and `AIRTABLE_PAT`; those provider secrets are never accepted from the browser.
 
 After reviewing the target bindings and migration plan:
 
 ```bash
-pnpm db:migrate:remote
 pnpm deploy
 ```
 
-The repository's CI workflow runs migrations and deployment only after the complete gate succeeds on `main`. Production writes, DNS, email-sender authorization, and secret provisioning should be treated as separate operator decisions.
+`pnpm deploy` builds the application, applies pending migrations through the `DB` binding, and deploys the Worker. The repository's CI workflow performs the same migration and deployment sequence only after the complete gate succeeds on `main`.
 
 ## License
 

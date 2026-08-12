@@ -189,6 +189,36 @@ const authorizeRequestLink = async (
 const displayName = (email: string, name: string | null | undefined): string =>
   name?.trim() || email.slice(0, email.indexOf("@")) || email;
 
+/**
+ * A configured bootstrap address turns a self-hosted instance into a closed
+ * installation. Existing users still sign in normally, including accounts an
+ * owner creates through the event-member invitation flow.
+ */
+const mayCreateUser = (env: Env, email: string): boolean => {
+  const configured = typeof env.INITIAL_ADMIN_EMAIL === "string"
+    ? env.INITIAL_ADMIN_EMAIL.trim().toLowerCase()
+    : "";
+  return configured.length === 0 || email === configured;
+};
+
+const hasInvitationOrManagedSpeaker = async (
+  env: Env,
+  email: string,
+  nowMs: number,
+): Promise<boolean> => {
+  const eligible = await env.DB.prepare(
+    `SELECT 1 AS eligible
+     FROM reviewer_invitations
+     WHERE email = ? AND status = 'pending' AND expires_at > ?
+     UNION ALL
+     SELECT 1 AS eligible
+     FROM managed_speaker_emails
+     WHERE normalized_email = ?
+     LIMIT 1`,
+  ).bind(email, nowMs, email).first<{ eligible: number }>();
+  return eligible?.eligible === 1;
+};
+
 const bearerFromRequest = (request: Request): string | null => {
   const authorization = request.headers.get("Authorization");
   if (!authorization) return null;
@@ -538,6 +568,13 @@ auth.post("/request-link", async (c) => {
       .from(users)
       .where(eq(users.email, email))
       .limit(1);
+    if (
+      !existingUser
+      && !mayCreateUser(c.env, email)
+      && !(await hasInvitationOrManagedSpeaker(c.env, email, nowMs))
+    ) {
+      return c.json({ ok: true }, 202);
+    }
     const userId = existingUser?.id ?? nanoid();
     const [outstanding] = existingUser
       ? await db

@@ -19,7 +19,7 @@
     "build": "vite build",
     "storybook": "storybook dev -p 6006 --no-open",
     "storybook:build": "storybook build --output-dir storybook-static",
-    "deploy": "pnpm build && wrangler deploy",
+    "deploy": "pnpm build && pnpm db:migrate:remote && wrangler deploy",
     "gen": "tsx --tsconfig tsconfig.worker.json scripts/gen.ts",
     "check:registry": "pnpm gen --check",
     "check:types": "tsc -b",
@@ -43,8 +43,8 @@
     "test": "pnpm test:worker",
     "ci": "pnpm check && pnpm rubric:test && pnpm test:worker && pnpm test:audit-browser && pnpm test:storybook && pnpm test:visual-tools && pnpm build && pnpm storybook:build",
     "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply session-party --local",
-    "db:migrate:remote": "wrangler d1 migrations apply session-party --remote"
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.7.1",
@@ -101,5 +101,30 @@
       "workerd",
       "sharp"
     ]
+  },
+  "cloudflare": {
+    "bindings": {
+      "APP_URL": {
+        "description": "The public origin for this installation, such as `https://events.example.com`. Use the same hostname when you connect the Custom Domain."
+      },
+      "INITIAL_ADMIN_EMAIL": {
+        "description": "Recommended for self-hosting: the first administrator email. When set, unknown emails cannot register unless they have a reviewer invitation or managed-speaker record. Leave blank only for an open-registration service."
+      },
+      "MAIL_FROM": {
+        "description": "A sender on a domain onboarded to [Cloudflare Email Service](https://developers.cloudflare.com/email-service/get-started/), such as `Session Party <welcome@example.com>`."
+      },
+      "SESSION_SECRET": {
+        "description": "Generate a unique signing secret with `openssl rand -hex 32`. Rotating it signs every user out."
+      },
+      "TURNSTILE_HOSTNAMES": {
+        "description": "Comma-separated hostnames accepted by the Turnstile widget, such as `events.example.com`."
+      },
+      "TURNSTILE_SECRET": {
+        "description": "The secret key for a [Cloudflare Turnstile widget](https://developers.cloudflare.com/turnstile/get-started/)."
+      },
+      "TURNSTILE_SITE_KEY": {
+        "description": "The site key for the Turnstile widget configured for this installation's public hostname."
+      }
+    }
   }
 }

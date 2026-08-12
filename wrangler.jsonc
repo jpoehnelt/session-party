@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "session-party",
   "main": "src/server/index.ts",
-  "compatibility_date": "2025-08-01",
+  "compatibility_date": "2026-08-12",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "binding": "ASSETS",
@@ -37,9 +37,14 @@
   "send_email": [{ "name": "EMAIL" }],
   "vars": {
     "APP_URL": "https://sessionparty.com",
+    // Set this to the self-hosted owner email to disable open registration.
+    "INITIAL_ADMIN_EMAIL": "",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAELTRHiRum336lV9",
     "TURNSTILE_HOSTNAMES": "sessionparty.com"
+  },
+  "secrets": {
+    "required": ["SESSION_SECRET", "TURNSTILE_SECRET"]
   },
   "env": {
     "preview": {
@@ -71,6 +76,7 @@
       "vars": {
         "PREVIEW_MODE": "1",
         "APP_URL": "https://preview.invalid",
+        "INITIAL_ADMIN_EMAIL": "",
         "MAIL_FROM": "Session Party Preview <welcome@sessionparty.com>",
         "TURNSTILE_SITE_KEY": "preview-fake",
         "TURNSTILE_HOSTNAMES": "invalid"
