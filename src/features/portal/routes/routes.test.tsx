@@ -737,10 +737,11 @@ describe("organizer content and workflows", () => {
     ));
     expect(speakersMarkup).toContain("River Okafor");
     expect(speakersMarkup).toContain("The calm show call");
-    expect(speakersMarkup).toContain("Public gallery");
+    expect(speakersMarkup).toContain("public gallery");
     expect(speakersMarkup).toContain("0/1");
     expect(speakersMarkup).toContain('aria-label="Speaker readiness"');
-    expect(speakersMarkup).toContain("Outstanding task 1");
+    expect(speakersMarkup).toContain("Review speaker profile");
+    expect(speakersMarkup).toContain("Readiness inspector");
     expect(speakersMarkup).toContain("Provision");
     expect(speakersMarkup).toContain("Search speakers");
     expect(speakersMarkup).toContain(`/e/${event.slug}/speakers/${profile.id}`);
@@ -761,7 +762,6 @@ describe("organizer content and workflows", () => {
     const managedDirectory: SpeakerDirectory = {
       ...directory,
       speakers: [
-        ...directory.speakers,
         {
           ...directory.speakers[0]!,
           speaker: {
@@ -778,6 +778,7 @@ describe("organizer content and workflows", () => {
           provisioningVersion: 0,
           provisionedAt: null,
         },
+        ...directory.speakers,
       ],
     };
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null,
@@ -799,7 +800,7 @@ describe("organizer content and workflows", () => {
     expect(markup).toContain("Remind outstanding");
     expect(markup).toContain("Replace headshot");
     expect(markup).toContain("Edit profile");
-    expect(markup).toContain("Profile details are managed by this accepted speaker in their portal.");
+    expect(markup).toContain("Inspect Dana Operations");
   });
 
   it("filters a large speaker directory by search text and operational state", () => {

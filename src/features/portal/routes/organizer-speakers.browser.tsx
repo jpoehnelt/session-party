@@ -143,7 +143,7 @@ describe("organizer bulk speaker reminders", () => {
       </MemoryRouter>,
     ));
     await vi.waitFor(() => expect(buttonNamed("Remind outstanding")).toBeTruthy());
-    expect(container.textContent).toContain("Outstanding task 1");
+    expect(container.textContent).toContain("Upload slides");
 
     await act(async () => userEvent.click(checkboxNamed("Select Ada Rivera")));
     await act(async () => userEvent.click(checkboxNamed("Select Lin Chen")));
