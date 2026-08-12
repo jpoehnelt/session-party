@@ -671,6 +671,7 @@ export const createPublicSubmission = (
             ? sql<string | null>`null`.as("category")
             : sql<string | null>`${validated.category}`.as("category"),
           status: sql<"submitted">`'submitted'`.as("status"),
+          pendingDecision: sql<null>`null`.as("pending_decision"),
           submittedAt: sql<Date>`${nowMs}`.as("submitted_at"),
           acceptedAt: sql<Date | null>`null`.as("accepted_at"),
           version: sql<number>`1`.as("version"),
@@ -1126,6 +1127,7 @@ export const createTaskSubmission = (
           title: sql<string>`${validated.title}`.as("title"),
           category: sql<string | null>`null`.as("category"),
           status: sql<"submitted">`'submitted'`.as("status"),
+          pendingDecision: sql<null>`null`.as("pending_decision"),
           submittedAt: sql<Date>`${nowMs}`.as("submitted_at"),
           acceptedAt: sql<Date | null>`null`.as("accepted_at"),
           version: sql<number>`1`.as("version"),

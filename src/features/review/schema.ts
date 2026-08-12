@@ -275,6 +275,7 @@ export const SubmissionReviewSummary = Schema.Struct({
   title: NonEmptyText,
   category: Schema.NullOr(Schema.String),
   status: SubmissionStatus,
+  pendingDecision: Schema.optional(Schema.NullOr(Schema.Literal("accepted", "rejected"))),
   submittedAt: UnixTimestampMs,
   version: Schema.Int.pipe(Schema.positive()),
   reviewState: ReviewState,
@@ -571,3 +572,45 @@ export const RejectSubmissionOutput = Schema.Struct({
   idempotent: Schema.Boolean,
 });
 export type RejectSubmissionOutput = typeof RejectSubmissionOutput.Type;
+
+export const StageDecisionInput = Schema.Struct({
+  eventId: EntityId,
+  submissionId: EntityId,
+  decision: Schema.NullOr(Schema.Literal("accepted", "rejected")),
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type StageDecisionInput = typeof StageDecisionInput.Type;
+
+export const StageDecisionOutput = Schema.Struct({
+  submissionId: EntityId,
+  submissionVersion: Schema.Int.pipe(Schema.positive()),
+  pendingDecision: Schema.NullOr(Schema.Literal("accepted", "rejected")),
+  idempotent: Schema.Boolean,
+});
+export type StageDecisionOutput = typeof StageDecisionOutput.Type;
+
+export const DecisionReleaseItem = Schema.Struct({
+  submissionId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  expectedDecision: Schema.Literal("accepted", "rejected"),
+});
+
+export const ReleaseDecisionsInput = Schema.Struct({
+  eventId: EntityId,
+  decisions: Schema.NonEmptyArray(DecisionReleaseItem).pipe(Schema.maxItems(100)),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type ReleaseDecisionsInput = typeof ReleaseDecisionsInput.Type;
+
+export const ReleaseDecisionsOutput = Schema.Struct({
+  releaseId: EntityId,
+  releasedCount: Schema.Int.pipe(Schema.nonNegative()),
+  acceptedCount: Schema.Int.pipe(Schema.nonNegative()),
+  rejectedCount: Schema.Int.pipe(Schema.nonNegative()),
+  submissionIds: Schema.Array(EntityId),
+  idempotent: Schema.Boolean,
+});
+export type ReleaseDecisionsOutput = typeof ReleaseDecisionsOutput.Type;

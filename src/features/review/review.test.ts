@@ -27,11 +27,13 @@ import {
   users,
 } from "contracts/schema";
 import * as dbSchema from "contracts/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Effect, Either, Layer, Schema } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AiService, CurrentUser, Db, MailQueue } from "@/server/services";
+import { listAudience } from "@/features/comms/service";
+import { getOwnSubmissions } from "@/features/submit/service";
+import { AiService, Authorizer, authorizePrincipal, CurrentUser, Db, MailQueue } from "@/server/services";
 import {
   activeRoundFixture,
   completedRoundFixture,
@@ -58,11 +60,13 @@ import {
   getWorkbench,
   recuseAssignment,
   rejectSubmission,
+  releaseDecisions,
   removeAssignment,
   revokeAcceptance,
   requestAiSuggestion,
   saveScore,
   sendReviewReminders,
+  stageDecision,
   updateReviewRound,
 } from "./service";
 
@@ -148,11 +152,12 @@ const mailQueueLayer = Layer.succeed(MailQueue, {
   appOrigin: "https://session-party.example",
   wake: () => Effect.sync(() => { mailQueueWakeCount += 1; }),
 });
+const authorizerLayer = Layer.succeed(Authorizer, { authorize: authorizePrincipal });
 
 const runAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(
     effect.pipe(
-      Effect.provide(Layer.mergeAll(dbLayer, aiLayer, mailQueueLayer, Layer.succeed(CurrentUser, principal))),
+      Effect.provide(Layer.mergeAll(dbLayer, aiLayer, mailQueueLayer, authorizerLayer, Layer.succeed(CurrentUser, principal))),
     ) as Effect.Effect<A, E, never>,
   );
 
@@ -160,7 +165,7 @@ const runEitherAs = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, 
   Effect.runPromise(
     effect.pipe(
       Effect.either,
-      Effect.provide(Layer.mergeAll(dbLayer, aiLayer, mailQueueLayer, Layer.succeed(CurrentUser, principal))),
+      Effect.provide(Layer.mergeAll(dbLayer, aiLayer, mailQueueLayer, authorizerLayer, Layer.succeed(CurrentUser, principal))),
     ) as Effect.Effect<Either.Either<A, E>, never, never>,
   );
 let transitionSubmissionSequence = 0;
@@ -549,7 +554,6 @@ describe("review and acceptance slice", () => {
     const ids = operations.map((operation) => operation.id);
     expect(ids).toEqual([...ids].sort());
     expect(ids).toEqual([
-      "review.acceptSubmission",
       "review.advanceRound",
       "review.appendComment",
       "review.assignReviewer",
@@ -558,12 +562,13 @@ describe("review and acceptance slice", () => {
       "review.exportResults",
       "review.getWorkbench",
       "review.recuseAssignment",
-      "review.rejectSubmission",
+      "review.releaseDecisions",
       "review.removeAssignment",
       "review.requestAiSuggestion",
       "review.revokeAcceptance",
       "review.saveScore",
       "review.sendReminders",
+      "review.stageDecision",
       "review.updateRound",
     ]);
     for (const operation of operations) {
@@ -575,8 +580,16 @@ describe("review and acceptance slice", () => {
         expect("mcp" in operation).toBe(true);
       }
     }
-    expect(operations[0].emits).toEqual(["review.submission.accepted", "speaker.provisioning.requested"]);
-    const acceptanceAuthorization = operations[0].authorize;
+    const releaseOperation = operations.find((operation) => operation.id === "review.releaseDecisions")!;
+    expect(releaseOperation.emits).toEqual([
+      "review.decisions.released",
+      "review.submission.accepted",
+      "review.submission.rejected",
+      "speaker.provisioning.requested",
+    ]);
+    expect(ids).not.toContain("review.acceptSubmission");
+    expect(ids).not.toContain("review.rejectSubmission");
+    const acceptanceAuthorization = releaseOperation.authorize;
     expect(acceptanceAuthorization.kind).toBe("event");
     if (acceptanceAuthorization.kind === "event") expect(acceptanceAuthorization.apiKey.kind).toBe("deny");
     const aiAuthorization = operations.find((operation) => operation.id === "review.requestAiSuggestion")!.authorize;
@@ -2488,6 +2501,225 @@ describe("review and acceptance slice", () => {
         outboundRevision: 1,
         status: "pending",
       })]);
+  });
+
+  it("stages an organizer-only decision without exposing or provisioning it", async () => {
+    const input = {
+      eventId: fixtureEventId,
+      submissionId: "submission_55",
+      decision: "accepted" as const,
+      expectedVersion: 2,
+      idempotencyKey: "stage-accept-submission-55",
+      requestId: "request_stage_accept_55",
+    };
+    const staged = await runAs(owner, stageDecision(input));
+    expect(await runAs(owner, stageDecision(input))).toEqual({ ...staged, idempotent: true });
+    expect(staged).toMatchObject({ pendingDecision: "accepted", submissionVersion: 3, idempotent: false });
+    const [stored] = await db.select().from(submissions).where(eq(submissions.id, input.submissionId));
+    expect(stored).toMatchObject({ status: "submitted", pendingDecision: "accepted", version: 3, acceptedAt: null });
+    await expect(db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, input.submissionId))).resolves.toEqual([]);
+    await expect(db.select().from(speakerProvisioning).where(eq(speakerProvisioning.submissionId, input.submissionId))).resolves.toEqual([]);
+
+    const organizerView = await runAs(owner, getWorkbench({
+      eventId: fixtureEventId, selectedSubmissionId: input.submissionId, page: 1, pageSize: 100,
+    }));
+    expect(organizerView.selected?.pendingDecision).toBe("accepted");
+    const apiView = await runAs({ ...reviewApiKey, scopes: [...reviewApiKey.scopes, "reviews:read"] }, getWorkbench({
+      eventId: fixtureEventId, selectedSubmissionId: input.submissionId, page: 1, pageSize: 100,
+    }));
+    expect(apiView.selected?.pendingDecision).toBeNull();
+    const [change] = await db.select().from(domainChanges).where(eq(domainChanges.requestId, input.requestId));
+    expect(change).toMatchObject({ eventType: "review.decision.staged", audiences: [{ kind: "admins" }] });
+
+    await expect(db.update(submissions).set({ status: "accepted", acceptedAt: new Date() }).where(eq(submissions.id, input.submissionId)))
+      .rejects.toThrow(/Failed query/);
+    await expect(db.select().from(submissions).where(eq(submissions.id, input.submissionId)))
+      .resolves.toEqual([expect.objectContaining({ status: "submitted", pendingDecision: "accepted", version: 3 })]);
+
+    const cleared = await runAs(owner, stageDecision({
+      ...input,
+      decision: null,
+      expectedVersion: staged.submissionVersion,
+      idempotencyKey: "clear-staged-submission-55",
+      requestId: "request_clear_staged_55",
+    }));
+    expect(cleared).toMatchObject({ pendingDecision: null, submissionVersion: 4, idempotent: false });
+    await expect(db.select().from(submissions).where(eq(submissions.id, input.submissionId)))
+      .resolves.toEqual([expect.objectContaining({ status: "submitted", pendingDecision: null, version: 4 })]);
+
+    const forbidden = await runEitherAs(reviewApiKey, stageDecision({
+      ...input,
+      submissionId: "submission_54",
+      idempotencyKey: "stage-api-key-denied-54",
+      requestId: "request_stage_api_key_denied_54",
+    }));
+    expect(forbidden._tag).toBe("Left");
+    if (forbidden._tag === "Left") expect(forbidden.left._tag).toBe("Forbidden");
+  });
+
+  it("replays concurrent matching staged-decision keys without duplicate evidence", async () => {
+    const { submissionId, version } = await seedTransitionSubmission("submitted", 1);
+    const input = {
+      eventId: fixtureEventId,
+      submissionId,
+      decision: "accepted" as const,
+      expectedVersion: version,
+      idempotencyKey: `concurrent-stage-${submissionId}`,
+      requestId: `request_concurrent_stage_${submissionId}`,
+    };
+    const results = await Promise.all([
+      runAs(owner, stageDecision(input)),
+      runAs(owner, stageDecision(input)),
+    ]);
+    expect(results.map((result) => result.idempotent).sort()).toEqual([false, true]);
+    expect(new Set(results.map((result) => result.submissionVersion))).toEqual(new Set([version + 1]));
+    await expect(db.select().from(domainChanges).where(eq(domainChanges.requestId, input.requestId))).resolves.toHaveLength(1);
+    await expect(db.select().from(auditLog).where(eq(auditLog.requestId, input.requestId))).resolves.toHaveLength(1);
+  });
+
+  it("atomically releases a mixed staged batch into submitter, provisioning, Airtable, and Communications projections", async () => {
+    const createdAt = new Date(fixtureClock + 5_000);
+    const decisionUserId = "user_decision_release";
+    const decisionSpeakerId = "speaker_decision_release";
+    const acceptedSubmissionId = "submission_decision_accept";
+    const rejectedSubmissionId = "submission_decision_reject";
+    const submitter: Principal = {
+      kind: "browser-session",
+      userId: decisionUserId,
+      email: "decision-release@example.com",
+      name: "Decision Release Speaker",
+      sessionId: "session-decision-release",
+      expiresAt: fixtureClock + 86_400_000,
+    };
+    await db.batch([
+      db.insert(users).values({ id: decisionUserId, email: submitter.email!, name: submitter.name, createdAt, updatedAt: createdAt }),
+      db.insert(speakers).values({ id: decisionSpeakerId, eventId: fixtureEventId, userId: decisionUserId, displayName: submitter.name!, createdAt, updatedAt: createdAt }),
+      db.insert(submissions).values({
+        id: acceptedSubmissionId, eventId: fixtureEventId, formId: "form_cfp", formVersionId: "form_version_01",
+        title: "Release accepted proposal", status: "submitted", submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+      }),
+      db.insert(submissions).values({
+        id: rejectedSubmissionId, eventId: fixtureEventId, formId: "form_cfp", formVersionId: "form_version_01",
+        title: "Release rejected proposal", status: "in_review", submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+      }),
+      db.insert(submissionSpeakers).values({
+        id: "association_decision_accept", eventId: fixtureEventId, submissionId: acceptedSubmissionId,
+        speakerId: decisionSpeakerId, isPrimary: true, createdAt,
+      }),
+      db.insert(submissionSpeakers).values({
+        id: "association_decision_reject", eventId: fixtureEventId, submissionId: rejectedSubmissionId,
+        speakerId: decisionSpeakerId, isPrimary: true, createdAt,
+      }),
+      db.insert(integrations).values({
+        id: "airtable-review-acceptance", eventId: fixtureEventId, kind: "airtable", secretRef: "AIRTABLE_PAT",
+        config: {}, createdAt, updatedAt: createdAt,
+      }).onConflictDoNothing(),
+    ] as never);
+
+    const stagedAccept = await runAs(owner, stageDecision({
+      eventId: fixtureEventId, submissionId: acceptedSubmissionId, decision: "accepted", expectedVersion: 1,
+      idempotencyKey: "stage-release-accepted", requestId: "request_stage_release_accepted",
+    }));
+    const stagedReject = await runAs(owner, stageDecision({
+      eventId: fixtureEventId, submissionId: rejectedSubmissionId, decision: "rejected", expectedVersion: 1,
+      idempotencyKey: "stage-release-rejected", requestId: "request_stage_release_rejected",
+    }));
+    const ownBefore = await runAs(submitter, getOwnSubmissions({ eventSlug: "fieldcraft-2026" }));
+    expect(ownBefore.submissions.filter((submission) => [acceptedSubmissionId, rejectedSubmissionId].includes(submission.id)).map((submission) => submission.status).sort())
+      .toEqual(["in_review", "submitted"]);
+    const audienceBefore = await runAs(owner, listAudience({ eventId: fixtureEventId, page: 1, pageSize: 100 }));
+    expect(audienceBefore.recipients.some((recipient) => recipient.speakerId === decisionSpeakerId)).toBe(false);
+    const deliveriesBefore = await db.select().from(mailDeliveries);
+
+    const releaseInput = {
+      eventId: fixtureEventId,
+      decisions: [
+        { submissionId: acceptedSubmissionId, expectedVersion: stagedAccept.submissionVersion, expectedDecision: "accepted" as const },
+        { submissionId: rejectedSubmissionId, expectedVersion: stagedReject.submissionVersion, expectedDecision: "rejected" as const },
+      ] as const,
+      idempotencyKey: "release-mixed-decision-batch",
+      requestId: "request_release_mixed_decisions",
+    };
+    const released = await runAs(owner, releaseDecisions(releaseInput));
+    expect(released).toMatchObject({ releasedCount: 2, acceptedCount: 1, rejectedCount: 1, idempotent: false });
+    expect(await runAs(owner, releaseDecisions(releaseInput))).toEqual({ ...released, idempotent: true });
+
+    const releasedRows = await db.select().from(submissions).where(and(
+      eq(submissions.eventId, fixtureEventId),
+      sql`${submissions.id} in (${acceptedSubmissionId}, ${rejectedSubmissionId})`,
+    ));
+    expect(releasedRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: acceptedSubmissionId, status: "accepted", pendingDecision: null, version: 3 }),
+      expect.objectContaining({ id: rejectedSubmissionId, status: "rejected", pendingDecision: null, version: 3, acceptedAt: null }),
+    ]));
+    await expect(db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, acceptedSubmissionId)))
+      .resolves.toHaveLength(1);
+    await expect(db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, rejectedSubmissionId)))
+      .resolves.toHaveLength(0);
+    await expect(db.select().from(speakerProvisioning).where(eq(speakerProvisioning.submissionId, acceptedSubmissionId)))
+      .resolves.toEqual([expect.objectContaining({ primarySpeakerId: decisionSpeakerId, status: "pending" })]);
+    await expect(db.select().from(speakerProvisioning).where(eq(speakerProvisioning.submissionId, rejectedSubmissionId)))
+      .resolves.toHaveLength(0);
+
+    const ownAfter = await runAs(submitter, getOwnSubmissions({ eventSlug: "fieldcraft-2026" }));
+    expect(ownAfter.submissions.filter((submission) => [acceptedSubmissionId, rejectedSubmissionId].includes(submission.id)).map((submission) => submission.status).sort())
+      .toEqual(["accepted", "rejected"]);
+    const audienceAfter = await runAs(owner, listAudience({ eventId: fixtureEventId, page: 1, pageSize: 100 }));
+    expect(audienceAfter.recipients).toEqual(expect.arrayContaining([
+      expect.objectContaining({ recipientKey: `${decisionSpeakerId}:accepted`, decision: "accepted" }),
+      expect.objectContaining({ recipientKey: `${decisionSpeakerId}:rejected`, decision: "rejected" }),
+    ]));
+    await expect(db.select().from(mailDeliveries)).resolves.toEqual(deliveriesBefore);
+    await expect(db.select().from(auditLog).where(eq(auditLog.requestId, releaseInput.requestId))).resolves.toHaveLength(2);
+    const changes = await db.select().from(domainChanges).where(eq(domainChanges.requestId, releaseInput.requestId));
+    expect(changes.map((change) => change.eventType).sort()).toEqual([
+      "review.decisions.released",
+      "review.submission.accepted",
+      "review.submission.rejected",
+      "speaker.provisioning.requested",
+    ]);
+    const outbox = await db.select().from(airtableOutbox).where(and(
+      eq(airtableOutbox.integrationId, "airtable-review-acceptance"),
+      sql`${airtableOutbox.entityId} in (${acceptedSubmissionId}, ${rejectedSubmissionId})`,
+    ));
+    expect(outbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityId: acceptedSubmissionId, changedFields: { status: "accepted" }, status: "pending" }),
+      expect.objectContaining({ entityId: rejectedSubmissionId, changedFields: { status: "rejected" }, status: "pending" }),
+    ]));
+  });
+
+  it("rolls back every selected decision when one staged version is stale", async () => {
+    const first = await seedTransitionSubmission("submitted", 1);
+    const second = await seedTransitionSubmission("waitlist", 1);
+    const firstStage = await runAs(owner, stageDecision({
+      eventId: fixtureEventId, submissionId: first.submissionId, decision: "accepted", expectedVersion: 1,
+      idempotencyKey: `stage-atomic-${first.submissionId}`, requestId: `request_stage_atomic_${first.submissionId}`,
+    }));
+    const secondStage = await runAs(owner, stageDecision({
+      eventId: fixtureEventId, submissionId: second.submissionId, decision: "rejected", expectedVersion: 1,
+      idempotencyKey: `stage-atomic-${second.submissionId}`, requestId: `request_stage_atomic_${second.submissionId}`,
+    }));
+    await db.update(submissions).set({ version: secondStage.submissionVersion + 1 }).where(eq(submissions.id, second.submissionId));
+    const releaseRequestId = `request_release_atomic_${first.submissionId}`;
+    const failed = await runEitherAs(owner, releaseDecisions({
+      eventId: fixtureEventId,
+      decisions: [
+        { submissionId: first.submissionId, expectedVersion: firstStage.submissionVersion, expectedDecision: "accepted" },
+        { submissionId: second.submissionId, expectedVersion: secondStage.submissionVersion, expectedDecision: "rejected" },
+      ],
+      idempotencyKey: `release-atomic-${first.submissionId}`,
+      requestId: releaseRequestId,
+    }));
+    expect(failed._tag).toBe("Left");
+    if (failed._tag === "Left") expect(failed.left._tag).toBe("Conflict");
+    await expect(db.select().from(submissions).where(eq(submissions.id, first.submissionId)))
+      .resolves.toEqual([expect.objectContaining({ status: "submitted", pendingDecision: "accepted", version: firstStage.submissionVersion })]);
+    await expect(db.select().from(acceptanceEvents).where(eq(acceptanceEvents.submissionId, first.submissionId))).resolves.toHaveLength(0);
+    await expect(db.select().from(speakerProvisioning).where(eq(speakerProvisioning.submissionId, first.submissionId))).resolves.toHaveLength(0);
+    await expect(db.select().from(domainChanges).where(eq(domainChanges.requestId, releaseRequestId))).resolves.toHaveLength(0);
+    await expect(db.select().from(auditLog).where(eq(auditLog.requestId, releaseRequestId))).resolves.toHaveLength(0);
+    await expect(db.select().from(idempotencyRecords).where(eq(idempotencyRecords.operationId, "review.releaseDecisions")))
+      .resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ responseBody: expect.objectContaining({ submissionIds: expect.arrayContaining([first.submissionId]) }) })]));
   });
 
   it("keeps a legacy accepted submission reviewable when its provisioning fact is missing", async () => {

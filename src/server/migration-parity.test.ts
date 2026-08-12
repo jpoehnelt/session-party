@@ -21,6 +21,7 @@ type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
   readonly MIGRATION_DB: D1Database;
   readonly REVIEW_MIGRATION_DB: D1Database;
+  readonly DECISION_MIGRATION_DB: D1Database;
 };
 
 type MigrationShape = D1Migration & {
@@ -318,7 +319,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -333,7 +334,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -533,7 +534,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -631,7 +632,7 @@ describe("baseline migration parity", () => {
   it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).REVIEW_MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     await applyOneByOne(db, migrations.slice(0, 11));
     const now = 1_700_000_000_000;
     await db.batch([
@@ -698,10 +699,44 @@ describe("baseline migration parity", () => {
     await assertDatabaseIntegrity(db);
   });
 
+  it("adds private staged decisions without rebuilding or exposing impossible final states", async () => {
+    const migrations = testMigrations();
+    const db = (env as TestEnv).DECISION_MIGRATION_DB;
+    expect(migrations).toHaveLength(20);
+    await applyOneByOne(db, migrations.slice(0, 19));
+    const now = 1_700_000_000_000;
+    await db.batch([
+      db.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('decision-event', 'decision-event', 'Decision Event', 'UTC', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO forms (id, event_id, kind, name, status, version, created_at, updated_at) VALUES ('decision-form', 'decision-event', 'cfp', 'Decision CFP', 'closed', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO form_versions (id, event_id, form_id, version_number, name, published_at, created_at) VALUES ('decision-form-v1', 'decision-event', 'decision-form', 1, 'Decision CFP', ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, version, created_at, updated_at) VALUES ('decision-submission', 'decision-event', 'decision-form', 'decision-form-v1', 'Private staged proposal', 'submitted', ?, 7, ?, ?)").bind(now, now, now),
+    ]);
+    expect((await db.prepare("PRAGMA table_info(submissions)").all<{ name: string }>()).results.map(({ name }) => name))
+      .not.toContain("pending_decision");
+
+    await applyOneByOne(db, migrations.slice(18));
+    expect(await db.prepare("SELECT id, status, pending_decision, version FROM submissions WHERE id = 'decision-submission'").first()).toEqual({
+      id: "decision-submission",
+      status: "submitted",
+      pending_decision: null,
+      version: 7,
+    });
+    await db.prepare("UPDATE submissions SET pending_decision = 'accepted', version = 8 WHERE id = 'decision-submission'").run();
+    await expect(db.prepare("UPDATE submissions SET pending_decision = 'maybe' WHERE id = 'decision-submission'").run()).rejects.toThrow();
+    await expect(db.prepare("UPDATE submissions SET status = 'accepted', accepted_at = ? WHERE id = 'decision-submission'").bind(now + 1).run()).rejects.toThrow();
+    expect(await db.prepare("SELECT status, pending_decision, version FROM submissions WHERE id = 'decision-submission'").first()).toEqual({
+      status: "submitted",
+      pending_decision: "accepted",
+      version: 8,
+    });
+    await db.prepare("UPDATE submissions SET status = 'accepted', pending_decision = NULL, accepted_at = ?, version = 9 WHERE id = 'decision-submission'").bind(now + 1).run();
+    await assertDatabaseIntegrity(db);
+  });
+
   it("freezes the latest legacy public speaker gallery without exposing ineligible profiles", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     const backfill = speakerPublicationMigration(migrations);
     expect(backfill.queries).toHaveLength(1);
     expect(backfill.queries[0]).toContain("speaker_publication_backfill");
@@ -750,7 +785,7 @@ describe("baseline migration parity", () => {
   it("repairs duplicate current asset lineages before enforcing uniqueness", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     const lineageMigration = migrations.find(({ name }) => name.startsWith("0012_groovy_epoch"));
     if (!lineageMigration) throw new Error("Asset-lineage migration is unavailable");
     await applyOneByOne(db, migrations.filter((migration) => migration !== lineageMigration));

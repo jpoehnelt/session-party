@@ -346,8 +346,8 @@ describe("review workbench route", () => {
     expect(markup).toContain("Reviewer invitations");
     expect(markup).toContain("Invite reviewer");
     expect(markup).toContain("Request AI suggestion");
-    expect(markup).toContain("Accept &amp; provision primary speaker");
-    expect(markup).toContain("No email is sent");
+    expect(markup).toContain("Stage acceptance");
+    expect(markup).toContain("Staging does not provision a speaker");
     expect(markup).toContain("Save my review");
   });
 

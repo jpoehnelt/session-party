@@ -22,6 +22,7 @@ import {
   users,
 } from "contracts/schema";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
 import { AiService, CurrentUser, Db, effectiveEventAuthority, MailQueue } from "@/server/services";
@@ -53,6 +54,8 @@ import {
   RequestAiSuggestionOutput,
   RejectSubmissionOutput,
   type RejectSubmissionInput,
+  ReleaseDecisionsOutput,
+  type ReleaseDecisionsInput,
   RevokeAcceptanceOutput,
   type RevokeAcceptanceInput,
   ReviewRubric,
@@ -61,6 +64,8 @@ import {
   type ReviewWorkbench,
   type SaveScoreInput,
   type SaveScoreOutput,
+  StageDecisionOutput,
+  type StageDecisionInput,
   SendReviewRemindersOutput,
   type SendReviewRemindersInput,
   type SubmissionReviewDetail,
@@ -929,6 +934,7 @@ export const getWorkbench = (
           title: submissions.title,
           category: submissions.category,
           status: submissions.status,
+          pendingDecision: submissions.pendingDecision,
           submittedAt: submissions.submittedAt,
           version: submissions.version,
         })
@@ -1001,6 +1007,7 @@ export const getWorkbench = (
         title: submission.title,
         category: submission.category,
         status: submission.status,
+        pendingDecision: viewer.role === "reviewer" || viewer.actorApiKeyId !== null ? null : submission.pendingDecision,
         submittedAt: toMillis(submission.submittedAt),
         version: submission.version,
         reviewState,
@@ -2786,7 +2793,7 @@ export const acceptSubmission = (
           id: idempotencyId, eventId: input.eventId, operationId: "review.acceptSubmission", principalId,
           keyHash, requestHash, status: "in_progress", expiresAt: new Date(acceptedAt.getTime() + 86_400_000), createdAt: acceptedAt,
         }),
-        db.update(submissions).set({ status: "accepted", acceptedAt, version: nextVersion, updatedAt: acceptedAt }).where(and(
+        db.update(submissions).set({ status: "accepted", pendingDecision: null, acceptedAt, version: nextVersion, updatedAt: acceptedAt }).where(and(
           eq(submissions.eventId, input.eventId),
           eq(submissions.id, input.submissionId),
           eq(submissions.version, input.expectedVersion),
@@ -2873,6 +2880,545 @@ const readIdempotentRevocation = (value: unknown) =>
     Effect.map((output) => ({ ...output, idempotent: true })),
     Effect.mapError((error) => new External({ service: "database", detail: `Invalid stored revocation output: ${String(error)}` })),
   );
+
+const readStagedDecision = (value: unknown) =>
+  Schema.decodeUnknown(StageDecisionOutput)(value).pipe(
+    Effect.map((output) => ({ ...output, idempotent: true })),
+    Effect.mapError((error) => new External({ service: "database", detail: `Invalid staged-decision replay: ${String(error)}` })),
+  );
+
+const readReleasedDecisions = (value: unknown) =>
+  Schema.decodeUnknown(ReleaseDecisionsOutput)(value).pipe(
+    Effect.map((output) => ({ ...output, idempotent: true })),
+    Effect.mapError((error) => new External({ service: "database", detail: `Invalid decision-release replay: ${String(error)}` })),
+  );
+
+export const stageDecision = (
+  input: StageDecisionInput,
+): Effect.Effect<typeof StageDecisionOutput.Type, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write", "submissions:write"]);
+    if (viewer.actorApiKeyId) return yield* Effect.fail(new Forbidden({ reason: "API keys cannot stage submission decisions" }));
+    yield* requireOrganizer(viewer);
+    const { db } = yield* Db;
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId, submissionId: input.submissionId,
+      decision: input.decision, expectedVersion: input.expectedVersion,
+    }));
+    const replay = () => Effect.gen(function* () {
+      const [record] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, input.eventId), eq(idempotencyRecords.operationId, "review.stageDecision"),
+        eq(idempotencyRecords.principalId, viewer.userId), eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1));
+      if (!record) return null;
+      if (record.requestHash !== requestHash) return yield* Effect.fail(new Conflict({ message: "Idempotency key was used for a different staged decision" }));
+      if (record.status !== "completed") return yield* Effect.fail(new Conflict({ message: "This decision is still being staged" }));
+      return yield* readStagedDecision(record.responseBody);
+    });
+    const prior = yield* replay();
+    if (prior) return prior;
+    const [submission] = yield* database(() => db.select({
+      status: submissions.status, version: submissions.version, pendingDecision: submissions.pendingDecision,
+    }).from(submissions).innerJoin(forms, and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId))).where(and(
+      eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId), eq(forms.kind, "cfp"),
+    )).limit(1));
+    if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
+    if (submission.version !== input.expectedVersion || !isReviewDecisionSourceStatus(submission.status)) {
+      return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before staging its decision" }));
+    }
+    if (input.decision === "accepted") {
+      const [primary] = yield* database(() => db.select({ id: submissionSpeakers.id }).from(submissionSpeakers).where(and(
+        eq(submissionSpeakers.eventId, input.eventId), eq(submissionSpeakers.submissionId, input.submissionId), eq(submissionSpeakers.isPrimary, true),
+      )).limit(1));
+      if (!primary) return yield* Effect.fail(new Validation({ message: "Acceptance requires exactly one primary speaker" }));
+    }
+    const stagedAt = now();
+    const nextVersion = submission.version + 1;
+    const idempotencyId = id("idempotency");
+    const output = { submissionId: input.submissionId, submissionVersion: nextVersion, pendingDecision: input.decision, idempotent: false } as const;
+    const marker = and(
+      eq(submissions.eventId, input.eventId),
+      eq(submissions.id, input.submissionId),
+      eq(submissions.version, nextVersion),
+      input.decision === null ? sql`${submissions.pendingDecision} is null` : eq(submissions.pendingDecision, input.decision),
+    );
+    const stagedBatch = yield* database(() => db.batch([
+      db.update(submissions).set({ pendingDecision: input.decision, version: nextVersion, updatedAt: stagedAt }).where(and(
+        eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId), eq(submissions.version, input.expectedVersion),
+        inArray(submissions.status, REVIEW_DECISION_SOURCE_STATUSES),
+      )),
+      db.insert(idempotencyRecords).select(db.select({
+        id: sql<string>`${idempotencyId}`.as("id"), eventId: submissions.eventId, operationId: sql<string>`'review.stageDecision'`.as("operation_id"),
+        principalId: sql<string>`${viewer.userId}`.as("principal_id"), keyHash: sql<string>`${keyHash}`.as("key_hash"), requestHash: sql<string>`${requestHash}`.as("request_hash"),
+        status: sql<"completed">`'completed'`.as("status"), responseStatus: sql<number>`200`.as("response_status"), responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+        expiresAt: sql<Date>`${stagedAt.getTime() + 86_400_000}`.as("expires_at"), completedAt: sql<Date>`${stagedAt.getTime()}`.as("completed_at"), createdAt: sql<Date>`${stagedAt.getTime()}`.as("created_at"),
+      }).from(submissions).where(marker)),
+      db.insert(domainChanges).select(db.select({
+        sequence: sql<number | null>`null`.as("sequence"), id: sql<string>`${id("change")}`.as("id"), eventId: submissions.eventId,
+        aggregateType: sql<string>`'submission'`.as("aggregate_type"), aggregateId: submissions.id, aggregateVersion: submissions.version,
+        eventType: sql<string>`'review.decision.staged'`.as("event_type"), audiences: sql<unknown>`${JSON.stringify([{ kind: "admins" }])}`.as("audiences"),
+        payload: sql<unknown>`${JSON.stringify({ submissionId: input.submissionId, pendingDecision: input.decision })}`.as("payload"),
+        actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"), actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+        requestId: sql<string>`${input.requestId}`.as("request_id"), idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"), occurredAt: sql<Date>`${stagedAt.getTime()}`.as("occurred_at"),
+      }).from(submissions).where(marker)),
+      db.insert(auditLog).select(db.select({
+        id: sql<string>`${id("audit")}`.as("id"), eventId: submissions.eventId, requestId: sql<string>`${input.requestId}`.as("request_id"),
+        actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"), actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+        action: sql<string>`'review.stageDecision'`.as("action"), resourceType: sql<string>`'submission'`.as("resource_type"), resourceId: submissions.id,
+        before: sql<unknown>`${JSON.stringify({ status: submission.status, pendingDecision: submission.pendingDecision, version: submission.version })}`.as("before"),
+        after: sql<unknown>`${JSON.stringify(output)}`.as("after"), metadata: sql<unknown>`${JSON.stringify({ idempotencyRecordId: idempotencyId })}`.as("metadata"), occurredAt: sql<Date>`${stagedAt.getTime()}`.as("occurred_at"),
+      }).from(submissions).where(marker)),
+    ] as never)).pipe(Effect.either);
+    if (stagedBatch._tag === "Left") {
+      const concurrent = yield* replay();
+      if (concurrent) return concurrent;
+      const [current] = yield* database(() => db.select({
+        status: submissions.status,
+        version: submissions.version,
+        pendingDecision: submissions.pendingDecision,
+      }).from(submissions).where(and(
+        eq(submissions.eventId, input.eventId),
+        eq(submissions.id, input.submissionId),
+      )).limit(1));
+      if (
+        !current
+        || current.version !== input.expectedVersion
+        || !isReviewDecisionSourceStatus(current.status)
+      ) {
+        return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before staging its decision" }));
+      }
+      return yield* Effect.fail(stagedBatch.left);
+    }
+    const committed = yield* replay();
+    if (committed) return { ...committed, idempotent: false };
+    return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before staging its decision" }));
+  });
+
+export const releaseDecisions = (
+  input: ReleaseDecisionsInput,
+): Effect.Effect<typeof ReleaseDecisionsOutput.Type, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write", "submissions:write", "speakers:write"]);
+    if (viewer.actorApiKeyId) return yield* Effect.fail(new Forbidden({ reason: "API keys cannot release submission decisions" }));
+    yield* requireOrganizer(viewer);
+
+    const uniqueSubmissionIds = new Set(input.decisions.map((decision) => decision.submissionId));
+    if (uniqueSubmissionIds.size !== input.decisions.length) {
+      return yield* Effect.fail(new Validation({ message: "Each staged decision may be released only once per request" }));
+    }
+
+    const { db } = yield* Db;
+    const principalId = viewer.userId;
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({ eventId: input.eventId, decisions: input.decisions }));
+    const replay = () => Effect.gen(function* () {
+      const [record] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, input.eventId),
+        eq(idempotencyRecords.operationId, "review.releaseDecisions"),
+        eq(idempotencyRecords.principalId, principalId),
+        eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1));
+      if (!record) return null;
+      if (record.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was used for a different decision release" }));
+      }
+      if (record.status !== "completed") {
+        return yield* Effect.fail(new Conflict({ message: "This decision release is already in progress" }));
+      }
+      return yield* readReleasedDecisions(record.responseBody);
+    });
+    const prior = yield* replay();
+    if (prior) return prior;
+
+    const requestedJson = JSON.stringify(input.decisions);
+    const submissionRows = yield* database(() => db.select({
+      id: submissions.id,
+      title: submissions.title,
+      category: submissions.category,
+      status: submissions.status,
+      pendingDecision: submissions.pendingDecision,
+      submittedAt: submissions.submittedAt,
+      acceptedAt: submissions.acceptedAt,
+      version: submissions.version,
+    }).from(submissions).innerJoin(
+      forms,
+      and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+    ).where(and(
+      eq(submissions.eventId, input.eventId),
+      eq(forms.kind, "cfp"),
+      sql`${submissions.id} in (select json_extract(value, '$.submissionId') from json_each(${requestedJson}))`,
+    )));
+    const submissionById = new Map(submissionRows.map((submission) => [submission.id, submission]));
+    for (const decision of input.decisions) {
+      const submission = submissionById.get(decision.submissionId);
+      if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: decision.submissionId }));
+      if (
+        submission.version !== decision.expectedVersion
+        || submission.pendingDecision !== decision.expectedDecision
+        || !isReviewDecisionSourceStatus(submission.status)
+      ) {
+        return yield* Effect.fail(new Conflict({ message: "Staged decisions changed; reload the release queue before continuing" }));
+      }
+    }
+
+    const speakerRows = yield* database(() => db.select({
+      id: submissionSpeakers.id,
+      submissionId: submissionSpeakers.submissionId,
+      speakerId: submissionSpeakers.speakerId,
+      isPrimary: submissionSpeakers.isPrimary,
+    }).from(submissionSpeakers).where(and(
+      eq(submissionSpeakers.eventId, input.eventId),
+      sql`${submissionSpeakers.submissionId} in (select json_extract(value, '$.submissionId') from json_each(${requestedJson}))`,
+    )));
+    const speakersBySubmission = new Map<string, typeof speakerRows>();
+    for (const speaker of speakerRows) {
+      const current = speakersBySubmission.get(speaker.submissionId) ?? [];
+      current.push(speaker);
+      speakersBySubmission.set(speaker.submissionId, current);
+    }
+    for (const decision of input.decisions) {
+      const primarySpeakers = (speakersBySubmission.get(decision.submissionId) ?? [])
+        .filter((speaker) => speaker.isPrimary);
+      if (
+        decision.expectedDecision === "accepted"
+        && primarySpeakers.length !== 1
+      ) {
+        return yield* Effect.fail(new Validation({ message: `Acceptance for ${decision.submissionId} requires exactly one primary speaker` }));
+      }
+    }
+
+    const releasedAt = now();
+    const releasedAtMs = releasedAt.getTime();
+    const idempotencyId = id("idempotency");
+    const releaseId = id("decision_release");
+    const releaseRows = input.decisions.map((decision) => {
+      const submission = submissionById.get(decision.submissionId)!;
+      const associatedSpeakers = speakersBySubmission.get(decision.submissionId) ?? [];
+      const primarySpeaker = associatedSpeakers.find((speaker) => speaker.isPrimary);
+      const nextVersion = decision.expectedVersion + 1;
+      const acceptanceEventId = decision.expectedDecision === "accepted" ? id("acceptance") : null;
+      const provisioningId = decision.expectedDecision === "accepted" ? id("speaker_provisioning") : null;
+      return {
+        submissionId: decision.submissionId,
+        decision: decision.expectedDecision,
+        expectedVersion: decision.expectedVersion,
+        nextVersion,
+        acceptanceEventId,
+        provisioningId,
+        primarySubmissionSpeakerId: primarySpeaker?.id ?? null,
+        primarySpeakerId: primarySpeaker?.speakerId ?? null,
+        audiences: [
+          { kind: "admins" },
+          ...(associatedSpeakers.length > 0
+            ? [{ kind: "speaker", speakerIds: associatedSpeakers.map((speaker) => speaker.speakerId) }]
+            : []),
+        ],
+        before: {
+          status: submission.status,
+          pendingDecision: submission.pendingDecision,
+          version: submission.version,
+          acceptedAt: submission.acceptedAt?.getTime() ?? null,
+        },
+        after: {
+          status: decision.expectedDecision,
+          pendingDecision: null,
+          version: nextVersion,
+          acceptedAt: decision.expectedDecision === "accepted" ? releasedAtMs : null,
+          acceptanceEventId,
+          provisioningId,
+        },
+      };
+    });
+    const releaseJson = JSON.stringify(releaseRows);
+    const acceptedCount = releaseRows.filter((row) => row.decision === "accepted").length;
+    const rejectedCount = releaseRows.length - acceptedCount;
+    const output = {
+      releaseId,
+      releasedCount: releaseRows.length,
+      acceptedCount,
+      rejectedCount,
+      submissionIds: releaseRows.map((row) => row.submissionId),
+      idempotent: false,
+    } as const;
+
+    const airtableProjections = yield* database(() => Promise.all(releaseRows.map((row) => {
+      const submission = submissionById.get(row.submissionId)!;
+      return prepareAirtableSubmissionProjection(db, {
+        eventId: input.eventId,
+        submission: {
+          id: submission.id,
+          title: submission.title,
+          category: submission.category,
+          status: row.decision,
+          submittedAt: submission.submittedAt,
+          version: row.nextVersion,
+        },
+        changedKeys: ["status"],
+        origin: "review.releaseDecisions",
+        idempotencyKey: `review.releaseDecisions:${releaseId}:${row.submissionId}`,
+        now: releasedAt,
+      });
+    })));
+
+    const exactRequestedDecision = sql`exists (
+      select 1 from json_each(${requestedJson}) requested
+      where json_extract(requested.value, '$.submissionId') = ${submissions.id}
+        and cast(json_extract(requested.value, '$.expectedVersion') as integer) = ${submissions.version}
+        and json_extract(requested.value, '$.expectedDecision') = ${submissions.pendingDecision}
+    )`;
+    const releaseGuard = sql`exists (select 1 from idempotency_records where id = ${idempotencyId})`;
+    const statements: BatchItem<"sqlite">[] = [];
+    statements.push(db.insert(idempotencyRecords).select(db.select({
+      id: sql<string>`${idempotencyId}`.as("id"),
+      eventId: submissions.eventId,
+      operationId: sql<string>`'review.releaseDecisions'`.as("operation_id"),
+      principalId: sql<string>`${principalId}`.as("principal_id"),
+      keyHash: sql<string>`${keyHash}`.as("key_hash"),
+      requestHash: sql<string>`${requestHash}`.as("request_hash"),
+      status: sql<"in_progress">`'in_progress'`.as("status"),
+      responseStatus: sql<number | null>`null`.as("response_status"),
+      responseBody: sql<unknown>`null`.as("response_body"),
+      expiresAt: sql<Date>`${releasedAtMs + 86_400_000}`.as("expires_at"),
+      completedAt: sql<Date | null>`null`.as("completed_at"),
+      createdAt: sql<Date>`${releasedAtMs}`.as("created_at"),
+    }).from(submissions).innerJoin(
+      forms,
+      and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+    ).where(and(
+      eq(submissions.eventId, input.eventId),
+      eq(forms.kind, "cfp"),
+      inArray(submissions.status, REVIEW_DECISION_SOURCE_STATUSES),
+      exactRequestedDecision,
+    )).groupBy(submissions.eventId).having(sql`count(*) = ${input.decisions.length}`)));
+
+    const releasedDecision = sql<"accepted" | "rejected">`(
+      select json_extract(release.value, '$.decision') from json_each(${releaseJson}) release
+      where json_extract(release.value, '$.submissionId') = ${submissions.id}
+    )`;
+    const outerSubmissionId = sql.raw('"submissions"."id"');
+    const outerAcceptanceEventId = sql.raw('"acceptance_events"."id"');
+    const outerProvisioningId = sql.raw('"speaker_provisioning"."id"');
+    statements.push(db.update(submissions).set({
+      status: releasedDecision,
+      pendingDecision: null,
+      acceptedAt: sql`case when ${releasedDecision} = 'accepted' then ${releasedAtMs} else null end`,
+      version: sql`${submissions.version} + 1`,
+      updatedAt: releasedAt,
+    }).where(and(
+      eq(submissions.eventId, input.eventId),
+      exactRequestedDecision,
+      releaseGuard,
+    )));
+
+    statements.push(db.insert(acceptanceEvents).select(db.select({
+      id: sql<string>`(
+        select json_extract(release.value, '$.acceptanceEventId') from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.submissionId') = ${outerSubmissionId}
+      )`.as("id"),
+      eventId: submissions.eventId,
+      submissionId: submissions.id,
+      primarySubmissionSpeakerId: sql<string>`(
+        select json_extract(release.value, '$.primarySubmissionSpeakerId') from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.submissionId') = ${outerSubmissionId}
+      )`.as("primary_submission_speaker_id"),
+      primarySpeakerId: sql<string>`(
+        select json_extract(release.value, '$.primarySpeakerId') from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.submissionId') = ${outerSubmissionId}
+      )`.as("primary_speaker_id"),
+      primaryAssociationIsPrimary: sql<boolean>`1`.as("primary_association_is_primary"),
+      type: sql<"accepted">`'accepted'`.as("type"),
+      submissionVersion: submissions.version,
+      actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+      occurredAt: sql<Date>`${releasedAtMs}`.as("occurred_at"),
+    }).from(submissions).where(and(
+      eq(submissions.eventId, input.eventId),
+      eq(submissions.status, "accepted"),
+      sql`${submissions.id} in (
+        select json_extract(value, '$.submissionId') from json_each(${releaseJson})
+        where json_extract(value, '$.decision') = 'accepted'
+      )`,
+      releaseGuard,
+    ))));
+
+    statements.push(db.insert(speakerProvisioning).select(db.select({
+      id: sql<string>`(
+        select json_extract(release.value, '$.provisioningId') from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.acceptanceEventId') = ${outerAcceptanceEventId}
+      )`.as("id"),
+      eventId: acceptanceEvents.eventId,
+      acceptanceEventId: acceptanceEvents.id,
+      submissionId: acceptanceEvents.submissionId,
+      primarySpeakerId: acceptanceEvents.primarySpeakerId,
+      status: sql<"pending">`'pending'`.as("status"),
+      availableAt: sql<Date>`${releasedAtMs}`.as("available_at"),
+      leaseOwner: sql<string | null>`null`.as("lease_owner"),
+      leaseExpiresAt: sql<Date | null>`null`.as("lease_expires_at"),
+      attemptCount: sql<number>`0`.as("attempt_count"),
+      lastError: sql<string | null>`null`.as("last_error"),
+      provisionedAt: sql<Date | null>`null`.as("provisioned_at"),
+      version: sql<number>`1`.as("version"),
+      createdAt: sql<Date>`${releasedAtMs}`.as("created_at"),
+      updatedAt: sql<Date>`${releasedAtMs}`.as("updated_at"),
+    }).from(acceptanceEvents).where(and(
+      eq(acceptanceEvents.eventId, input.eventId),
+      sql`${acceptanceEvents.id} in (
+        select json_extract(value, '$.acceptanceEventId') from json_each(${releaseJson})
+        where json_extract(value, '$.decision') = 'accepted'
+      )`,
+      releaseGuard,
+    ))));
+
+    statements.push(db.insert(domainChanges).select(db.select({
+      sequence: sql<number | null>`null`.as("sequence"),
+      id: sql<string>`('change_' || lower(hex(randomblob(12))))`.as("id"),
+      eventId: submissions.eventId,
+      aggregateType: sql<string>`'submission'`.as("aggregate_type"),
+      aggregateId: submissions.id,
+      aggregateVersion: submissions.version,
+      eventType: sql<string>`case when ${submissions.status} = 'accepted' then 'review.submission.accepted' else 'review.submission.rejected' end`.as("event_type"),
+      audiences: sql<unknown>`(
+        select json_extract(release.value, '$.audiences') from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.submissionId') = ${outerSubmissionId}
+      )`.as("audiences"),
+      payload: sql<unknown>`(
+        select json_object(
+          'releaseId', ${releaseId},
+          'acceptanceEventId', json_extract(release.value, '$.acceptanceEventId'),
+          'submissionId', json_extract(release.value, '$.submissionId'),
+          'primarySpeakerId', json_extract(release.value, '$.primarySpeakerId'),
+          'submissionVersion', json_extract(release.value, '$.nextVersion')
+        ) from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.submissionId') = ${outerSubmissionId}
+      )`.as("payload"),
+      actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+      requestId: sql<string>`${input.requestId}`.as("request_id"),
+      idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+      occurredAt: sql<Date>`${releasedAtMs}`.as("occurred_at"),
+    }).from(submissions).where(and(
+      eq(submissions.eventId, input.eventId),
+      sql`${submissions.id} in (select json_extract(value, '$.submissionId') from json_each(${releaseJson}))`,
+      releaseGuard,
+    ))));
+
+    statements.push(db.insert(domainChanges).select(db.select({
+      sequence: sql<number | null>`null`.as("sequence"),
+      id: sql<string>`('change_' || lower(hex(randomblob(12))))`.as("id"),
+      eventId: speakerProvisioning.eventId,
+      aggregateType: sql<string>`'speakerProvisioning'`.as("aggregate_type"),
+      aggregateId: speakerProvisioning.id,
+      aggregateVersion: speakerProvisioning.version,
+      eventType: sql<string>`'speaker.provisioning.requested'`.as("event_type"),
+      audiences: sql<unknown>`(
+        select json_array(json_object('kind', 'admins'), json_object('kind', 'speaker', 'speakerIds', json_array(json_extract(release.value, '$.primarySpeakerId'))))
+        from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.provisioningId') = ${outerProvisioningId}
+      )`.as("audiences"),
+      payload: sql<unknown>`(
+        select json_object(
+          'releaseId', ${releaseId},
+          'acceptanceEventId', json_extract(release.value, '$.acceptanceEventId'),
+          'provisioningId', json_extract(release.value, '$.provisioningId'),
+          'submissionId', json_extract(release.value, '$.submissionId'),
+          'primarySpeakerId', json_extract(release.value, '$.primarySpeakerId'),
+          'status', 'pending'
+        ) from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.provisioningId') = ${outerProvisioningId}
+      )`.as("payload"),
+      actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+      requestId: sql<string>`${input.requestId}`.as("request_id"),
+      idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+      occurredAt: sql<Date>`${releasedAtMs}`.as("occurred_at"),
+    }).from(speakerProvisioning).where(and(
+      eq(speakerProvisioning.eventId, input.eventId),
+      sql`${speakerProvisioning.id} in (
+        select json_extract(value, '$.provisioningId') from json_each(${releaseJson})
+        where json_extract(value, '$.decision') = 'accepted'
+      )`,
+      releaseGuard,
+    ))));
+
+    statements.push(db.insert(domainChanges).select(db.select({
+      sequence: sql<number | null>`null`.as("sequence"),
+      id: sql<string>`('change_' || lower(hex(randomblob(12))))`.as("id"),
+      eventId: idempotencyRecords.eventId,
+      aggregateType: sql<string>`'decisionRelease'`.as("aggregate_type"),
+      aggregateId: sql<string>`${releaseId}`.as("aggregate_id"),
+      aggregateVersion: sql<number>`1`.as("aggregate_version"),
+      eventType: sql<string>`'review.decisions.released'`.as("event_type"),
+      audiences: sql<unknown>`${JSON.stringify([{ kind: "admins" }])}`.as("audiences"),
+      payload: sql<unknown>`${JSON.stringify(output)}`.as("payload"),
+      actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+      requestId: sql<string>`${input.requestId}`.as("request_id"),
+      idempotencyRecordId: idempotencyRecords.id,
+      occurredAt: sql<Date>`${releasedAtMs}`.as("occurred_at"),
+    }).from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId))));
+
+    statements.push(db.insert(auditLog).select(db.select({
+      id: sql<string>`('audit_' || lower(hex(randomblob(12))))`.as("id"),
+      eventId: submissions.eventId,
+      requestId: sql<string>`${input.requestId}`.as("request_id"),
+      actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+      actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+      action: sql<string>`'review.releaseDecisions'`.as("action"),
+      resourceType: sql<string>`'submission'`.as("resource_type"),
+      resourceId: submissions.id,
+      before: sql<unknown>`(
+        select json_extract(release.value, '$.before') from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.submissionId') = ${outerSubmissionId}
+      )`.as("before"),
+      after: sql<unknown>`(
+        select json_extract(release.value, '$.after') from json_each(${releaseJson}) release
+        where json_extract(release.value, '$.submissionId') = ${outerSubmissionId}
+      )`.as("after"),
+      metadata: sql<unknown>`${JSON.stringify({ idempotencyRecordId: idempotencyId, releaseId, releaseSize: releaseRows.length })}`.as("metadata"),
+      occurredAt: sql<Date>`${releasedAtMs}`.as("occurred_at"),
+    }).from(submissions).where(and(
+      eq(submissions.eventId, input.eventId),
+      sql`${submissions.id} in (select json_extract(value, '$.submissionId') from json_each(${releaseJson}))`,
+      releaseGuard,
+    ))));
+
+    statements.push(...airtableProjections.flatMap((projection) => projection ? [projection.statement] : []));
+    statements.push(db.update(idempotencyRecords).set({
+      status: "completed",
+      responseStatus: 200,
+      responseBody: output,
+      completedAt: releasedAt,
+    }).where(eq(idempotencyRecords.id, idempotencyId)));
+
+    const committedBatch = yield* database(() => db.batch(statements as never)).pipe(Effect.either);
+    if (committedBatch._tag === "Left") {
+      const concurrent = yield* replay();
+      if (concurrent) return concurrent;
+      const currentRows = yield* database(() => db.select({
+        id: submissions.id,
+        status: submissions.status,
+        pendingDecision: submissions.pendingDecision,
+        version: submissions.version,
+      }).from(submissions).where(and(
+        eq(submissions.eventId, input.eventId),
+        sql`${submissions.id} in (select json_extract(value, '$.submissionId') from json_each(${requestedJson}))`,
+      )));
+      const currentById = new Map(currentRows.map((row) => [row.id, row]));
+      if (input.decisions.some((decision) => {
+        const current = currentById.get(decision.submissionId);
+        return !current
+          || current.version !== decision.expectedVersion
+          || current.pendingDecision !== decision.expectedDecision
+          || !isReviewDecisionSourceStatus(current.status);
+      })) {
+        return yield* Effect.fail(new Conflict({ message: "Staged decisions changed; no decisions were released" }));
+      }
+      return yield* Effect.fail(committedBatch.left);
+    }
+    const committed = yield* replay();
+    if (committed) return { ...committed, idempotent: false };
+    return yield* Effect.fail(new Conflict({ message: "Staged decisions changed; no decisions were released" }));
+  });
 
 export const revokeAcceptance = (
   input: RevokeAcceptanceInput,
@@ -2962,7 +3508,7 @@ export const revokeAcceptance = (
     };
 
     yield* database(() => db.batch([
-      db.update(submissions).set({ status: "in_review", acceptedAt: null, version: nextVersion, updatedAt: revokedAt }).where(and(
+      db.update(submissions).set({ status: "in_review", pendingDecision: null, acceptedAt: null, version: nextVersion, updatedAt: revokedAt }).where(and(
         eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId),
         eq(submissions.version, input.expectedVersion), eq(submissions.status, "accepted"),
       )),
@@ -3103,7 +3649,7 @@ export const rejectSubmission = (
       idempotent: false,
     };
     yield* database(() => db.batch([
-      db.update(submissions).set({ status: "rejected", acceptedAt: null, version: nextVersion, updatedAt: rejectedAt }).where(and(
+      db.update(submissions).set({ status: "rejected", pendingDecision: null, acceptedAt: null, version: nextVersion, updatedAt: rejectedAt }).where(and(
         eq(submissions.eventId, input.eventId),
         eq(submissions.id, input.submissionId),
         eq(submissions.version, input.expectedVersion),
