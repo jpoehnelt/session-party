@@ -19,14 +19,21 @@ export const speakerPortalScene: Scene = {
     if (await accepted.count()) await spotlight("text=Taming 40-Minute CI", "Accepted session");
     await pause(1_800);
     await clearSpotlight();
+    const participation = page.getByRole("checkbox", { name: /Confirm participation/i });
+    if (await participation.count()) {
+      await spotlight("label:has-text('Confirm participation')", "Persisted task state");
+      await pause(1_800);
+      await clearSpotlight();
+    }
     await scrollBy(520);
-    await pause(2_800);
     await clearTechnicalOverlay();
     const headshot = page.getByText(/Uploaded: headshot\.png/i).first();
     if (await headshot.count()) await spotlight("text=Uploaded: headshot.png", "Persisted upload");
     await pause(2_000);
     await clearSpotlight();
-    await scrollBy(620);
-    await pause(3_000);
+    const comments = page.locator("ul[aria-label='Comments for slides.pdf']").first();
+    if (await comments.count()) await spotlight("ul[aria-label='Comments for slides.pdf']", "Cross-role file thread");
+    await pause(2_200);
+    await clearSpotlight();
   },
 };

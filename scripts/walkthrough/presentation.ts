@@ -98,6 +98,6 @@ export async function clearSpotlight(page: Page) {
 }
 
 export async function scrollBy(page: Page, pixels: number) {
-  await page.evaluate((distance) => ((globalThis as any).scrollBy)({ top: distance, behavior: "smooth" }), pixels);
-  await page.waitForTimeout(1_200);
+  await page.evaluate((distance) => ((globalThis as any).scrollBy)({ top: distance, behavior: "instant" }), pixels);
+  await page.waitForTimeout(500);
 }
