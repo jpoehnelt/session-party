@@ -30,11 +30,11 @@ import { getPublicSchedule } from "../api";
 
 export const path = "/e/:eventSlug/publication";
 export const contentWidth = "wide" as const;
-export const REFRESH_LIVE_WIDGETS_LABEL = "Refresh live widgets";
+export const RELOAD_PUBLICATION_LABEL = "Reload publication status";
 export const PUBLICATION_HEADER_CLASS = "sm:flex-col sm:items-stretch";
 export const PUBLICATION_ACTIONS_CLASS = "grid w-full min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4";
 
-export const refreshLiveWidgets = (status: AgendaSnapshot): Promise<PublishedAgenda> =>
+export const publishAgendaRevision = (status: AgendaSnapshot): Promise<PublishedAgenda> =>
   apiFetch(
     `/api/v1/events/${encodeURIComponent(status.eventId)}/agenda/publications`,
     {
@@ -48,6 +48,29 @@ export const refreshLiveWidgets = (status: AgendaSnapshot): Promise<PublishedAge
       schema: PublishedAgenda,
     },
   );
+
+export interface PublicationStatus {
+  readonly status: AgendaSnapshot;
+  readonly published: PublishedAgenda | null;
+}
+
+export async function reloadPublicationStatus(eventSlug: string): Promise<PublicationStatus> {
+  const event = await apiFetch(
+    `/api/v1/events/${encodeURIComponent(eventSlug)}`,
+    { schema: EventOutput },
+  );
+  const status = await apiFetch(
+    `/api/v1/events/${encodeURIComponent(event.id)}/agenda?view=day`,
+    { schema: AgendaSnapshot },
+  );
+  const published = status.publication.revision === 0
+    ? null
+    : await getPublicSchedule(eventSlug, {
+        eventId: status.eventId,
+        revision: status.publication.revision,
+      });
+  return { status, published };
+}
 
 type PublicationLoadError =
   | { readonly kind: "unauthenticated" }
@@ -63,7 +86,7 @@ export default function PublicationPage() {
   const [status, setStatus] = useState<AgendaSnapshot | null | undefined>(undefined);
   const [published, setPublished] = useState<PublishedAgenda | null>(null);
   const [loadError, setLoadError] = useState<PublicationLoadError | null>(null);
-  const [publicationAction, setPublicationAction] = useState<"publish" | "refresh" | null>(null);
+  const [publicationAction, setPublicationAction] = useState<"publish" | "reload" | null>(null);
   const [request, setRequest] = useState(0);
 
   useEffect(() => {
@@ -71,22 +94,10 @@ export default function PublicationPage() {
     setStatus(undefined);
     setPublished(null);
     setLoadError(null);
-    void apiFetch(
-      `/api/v1/events/${encodeURIComponent(eventSlug)}`,
-      { schema: EventOutput },
-    ).then(async (event) => {
-      const loaded = await apiFetch(
-        `/api/v1/events/${encodeURIComponent(event.id)}/agenda?view=day`,
-        { schema: AgendaSnapshot },
-      );
+    void reloadPublicationStatus(eventSlug).then(({ status: loaded, published: loadedPublished }) => {
       if (!active) return;
       setStatus(loaded);
-      if (loaded.publication.revision === 0) return;
-      const projection = await getPublicSchedule(eventSlug, {
-        eventId: loaded.eventId,
-        revision: loaded.publication.revision,
-      });
-      if (active) setPublished(projection);
+      setPublished(loadedPublished);
     }).catch((caught: unknown) => {
       if (!active) return;
       setStatus(null);
@@ -111,28 +122,40 @@ export default function PublicationPage() {
     };
   }, [eventSlug, request]);
 
-  const publish = async (action: "publish" | "refresh") => {
+  const publish = async () => {
     if (!status) return;
-    setPublicationAction(action);
+    setPublicationAction("publish");
     try {
-      const projection = await refreshLiveWidgets(status);
+      const projection = await publishAgendaRevision(status);
       setPublished(projection);
-      toast(
-        action === "refresh"
-          ? "Live widgets refreshed. Existing embed URLs and settings are unchanged."
-          : `Schedule revision ${projection.revision} published`,
-        { tone: "success" },
-      );
+      toast(`Schedule revision ${projection.revision} published`, { tone: "success" });
       setRequest((current) => current + 1);
     } catch (caught: unknown) {
       toast(
         caught instanceof Error
           ? caught.message
-          : action === "refresh"
-            ? "Could not refresh live widgets"
-            : "Could not publish the schedule",
+          : "Could not publish the schedule",
         { tone: "danger" },
       );
+    } finally {
+      setPublicationAction(null);
+    }
+  };
+
+  const reload = async () => {
+    setPublicationAction("reload");
+    try {
+      const loaded = await reloadPublicationStatus(eventSlug);
+      setStatus(loaded.status);
+      setPublished(loaded.published);
+      toast(
+        loaded.status.publication.revision === 0
+          ? "Publication status reloaded. The schedule is not published yet."
+          : `Publication status reloaded at revision ${loaded.status.publication.revision}.`,
+        { tone: "success" },
+      );
+    } catch (caught: unknown) {
+      toast(caught instanceof Error ? caught.message : "Could not reload publication status", { tone: "danger" });
     } finally {
       setPublicationAction(null);
     }
@@ -199,6 +222,16 @@ export default function PublicationPage() {
       }).format(status.publication.publishedAt);
   const isPublished = status.publication.revision > 0;
   const hasConflicts = status.conflicts.length > 0;
+  const unplacedTalkCount = status.warnings.unplacedTalkCount;
+  const hasPublicationHold = hasConflicts || unplacedTalkCount > 0;
+  const publicationHoldMessage = [
+    hasConflicts
+      ? `${status.conflicts.length} schedule ${status.conflicts.length === 1 ? "conflict" : "conflicts"}`
+      : null,
+    unplacedTalkCount > 0
+      ? `${unplacedTalkCount} unplaced ${unplacedTalkCount === 1 ? "talk" : "talks"}`
+      : null,
+  ].filter((issue): issue is string => issue !== null).join(" and ");
   const publicSessionCount = status.publication.talkCount;
   const publicProgramPath = `/event/${eventSlug}/sessions`;
 
@@ -211,20 +244,18 @@ export default function PublicationPage() {
         actions={<div className={PUBLICATION_ACTIONS_CLASS} data-testid="publication-actions">
           <a className="inline-flex h-12 w-full items-center justify-center whitespace-nowrap border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button" href={publicProgramPath} target="_blank" rel="noreferrer">Open public program ↗</a>
           <Button className="h-12 w-full" variant="secondary" onClick={() => void copyText(`${window.location.origin}${publicProgramPath}`).then(() => toast("Public link copied", { tone: "success" }), () => toast("Could not copy public link", { tone: "danger" }))}>Copy public link</Button>
-          {isPublished ? (
-            <Button
-              className="h-12 w-full"
-              variant="secondary"
-              loading={publicationAction === "refresh"}
-              disabled={hasConflicts || publicationAction !== null}
-              onClick={() => void publish("refresh")}
-              title="Update every saved widget from the current agenda without changing its embed URL or settings"
-            >
-              {REFRESH_LIVE_WIDGETS_LABEL}
-            </Button>
-          ) : null}
+          <Button
+            className="h-12 w-full"
+            variant="secondary"
+            loading={publicationAction === "reload"}
+            disabled={publicationAction !== null}
+            onClick={() => void reload()}
+            title="Reload the current public revision without publishing private agenda changes"
+          >
+            {RELOAD_PUBLICATION_LABEL}
+          </Button>
           <AlertDialog>
-            <AlertDialogTrigger asChild><Button className="h-12 w-full rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow" loading={publicationAction === "publish"} disabled={hasConflicts || publicationAction !== null}>{status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}</Button></AlertDialogTrigger>
+            <AlertDialogTrigger asChild><Button className="h-12 w-full rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow" loading={publicationAction === "publish"} disabled={hasPublicationHold || publicationAction !== null} title={hasPublicationHold ? `Resolve ${publicationHoldMessage} before publishing` : undefined}>{status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}</Button></AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>Publish revision {status.publication.revision + 1}?</AlertDialogTitle>
@@ -232,7 +263,7 @@ export default function PublicationPage() {
                   This replaces the audience-facing program with {confirmedTalkCount} confirmed {confirmedTalkCount === 1 ? "session" : "sessions"}. The current public revision has {publicSessionCount}. Later agenda edits stay backstage until another revision is published.
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <AlertDialogFooter><AlertDialogCancel>Keep backstage</AlertDialogCancel><AlertDialogAction onClick={() => void publish("publish")}>Publish revision {status.publication.revision + 1}</AlertDialogAction></AlertDialogFooter>
+              <AlertDialogFooter><AlertDialogCancel>Keep backstage</AlertDialogCancel><AlertDialogAction onClick={() => void publish()}>Publish revision {status.publication.revision + 1}</AlertDialogAction></AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
         </div>}
@@ -241,7 +272,7 @@ export default function PublicationPage() {
         {[
           [String(confirmedTalkCount).padStart(2, "0"), "Confirmed cues", "Current private agenda", "bg-production-sky"],
           [String(publicSessionCount).padStart(2, "0"), "Public cues", isPublished ? `Revision ${status.publication.revision}` : "Waiting for first publish", "bg-production-lime"],
-          [String(status.conflicts.length).padStart(2, "0"), "Blocking conflicts", hasConflicts ? "Hold publication" : "Clear to broadcast", hasConflicts ? "bg-production-coral" : "bg-production-yellow"],
+          [String(status.conflicts.length + unplacedTalkCount).padStart(2, "0"), "Publication blockers", hasPublicationHold ? "Hold publication" : "Clear to broadcast", hasPublicationHold ? "bg-production-coral" : "bg-production-yellow"],
         ].map(([value, label, detail, color], index) => (
           <div className={`p-4 sm:p-5 ${color} ${index > 0 ? "border-t-2 border-line-strong sm:border-l-2 sm:border-t-0" : ""}`} key={label}>
             <p className="text-4xl font-black tracking-[-0.06em]">{value}</p>
@@ -275,15 +306,15 @@ export default function PublicationPage() {
           </Card>
 
           <section
-            className={`border-2 border-line-strong p-4 shadow-[5px_5px_0_#171714] ${hasConflicts ? "bg-production-coral" : "bg-ink text-on-accent"}`}
+            className={`border-2 border-line-strong p-4 shadow-[5px_5px_0_#171714] ${hasPublicationHold ? "bg-production-coral" : "bg-ink text-on-accent"}`}
             aria-live="polite"
           >
-            <p className={`text-[10px] font-black uppercase tracking-[0.16em] ${hasConflicts ? "text-ink" : "text-production-lime"}`}>
-              {hasConflicts ? "Publication hold" : "Immutable by design"}
+            <p className={`text-[10px] font-black uppercase tracking-[0.16em] ${hasPublicationHold ? "text-ink" : "text-production-lime"}`}>
+              {hasPublicationHold ? "Publication hold" : "Immutable by design"}
             </p>
-            {hasConflicts ? (
+            {hasPublicationHold ? (
               <p className="mt-2 text-sm font-bold leading-6 text-ink">
-                Resolve {status.conflicts.length} schedule {status.conflicts.length === 1 ? "conflict" : "conflicts"} before publishing.
+                Resolve {publicationHoldMessage} before publishing. Reloading the current public revision remains available.
               </p>
             ) : (
               <p className="mt-2 text-sm font-semibold leading-6 text-white/75">

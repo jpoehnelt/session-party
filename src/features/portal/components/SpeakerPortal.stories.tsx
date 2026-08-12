@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, userEvent, within } from "storybook/test";
 import { ProductionBareFrame } from "./production-ui";
 import type { PortalSnapshot, PortalTask } from "../schema";
 import { SpeakerPortalContent } from "../routes/speaker-portal";
@@ -188,4 +188,25 @@ export const TasksInProgress: Story = {
 
 export const AllTasksComplete: Story = {
   render: () => <PortalStory snapshot={makeSnapshot(11)} />,
+};
+
+export const OptimisticTaskToggle: Story = {
+  render: () => (
+    <ProductionBareFrame>
+      <SpeakerPortalContent
+        snapshot={makeSnapshot(11)}
+        onSaveProfile={() => undefined}
+        onToggleTask={() => Promise.resolve(true)}
+        onUpload={() => undefined}
+        onSubmitTaskForm={async () => true}
+      />
+    </ProductionBareFrame>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const participation = canvas.getByRole("checkbox", { name: /Confirm participation/i });
+    expect(participation).toBeChecked();
+    await userEvent.click(participation);
+    expect(participation).not.toBeChecked();
+  },
 };

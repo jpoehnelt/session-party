@@ -206,17 +206,19 @@ export default function SpeakerPortalRoute() {
     );
   }
 
-  async function mutate(label: string, action: () => Promise<unknown>) {
+  async function mutate(label: string, action: () => Promise<unknown>): Promise<boolean> {
     setMutation(label);
     setMutationError(null);
     try {
       await action();
       toast(`${label} saved`, { tone: "success" });
       retry();
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : `${label} could not be saved`;
       setMutationError(message);
       toast(message, { tone: "danger" });
+      return false;
     } finally {
       setMutation(null);
     }
@@ -369,7 +371,7 @@ export interface SpeakerPortalContentProps {
   readonly onSaveProfile: (input: UpdateProfileInput) => void;
   readonly onImportReusableProfile?: () => void;
   readonly onSubmitProfileReview?: () => void;
-  readonly onToggleTask: (task: PortalTask, completed: boolean) => void;
+  readonly onToggleTask: (task: PortalTask, completed: boolean) => boolean | void | Promise<boolean | void>;
   readonly onRespondToSession?: (action: "confirm" | "withdraw") => void;
   readonly onUpload: (input: UploadPortalAssetInput) => void;
   readonly onAddComment?: (assetId: string, body: string) => void;
@@ -396,6 +398,7 @@ export function SpeakerPortalContent({
   downloadedHeadshotUrl,
 }: SpeakerPortalContentProps) {
   const [activeFormTaskId, setActiveFormTaskId] = useState<string | null>(null);
+  const [taskCompletionOverrides, setTaskCompletionOverrides] = useState<Readonly<Record<string, boolean>>>({});
   const loadedHeadshotUrl = useDownloadedHeadshot(snapshot.event.id, snapshot.speaker.headshotAssetId);
   const headshotUrl = preferredHeadshotUrl(
     downloadedHeadshotUrl === undefined ? loadedHeadshotUrl : downloadedHeadshotUrl,
@@ -403,6 +406,37 @@ export function SpeakerPortalContent({
   );
   const incompleteFormTasks = snapshot.tasks.filter((task) => task.kind === "form" && !task.completed);
   const activeFormTask = incompleteFormTasks.find((task) => task.id === activeFormTaskId);
+  useEffect(() => {
+    setTaskCompletionOverrides((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const task of snapshot.tasks) {
+        if (next[task.id] === task.completed) {
+          delete next[task.id];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [snapshot.tasks]);
+
+  const toggleTask = (task: PortalTask, completed: boolean) => {
+    setTaskCompletionOverrides((current) => ({ ...current, [task.id]: completed }));
+    void Promise.resolve(onToggleTask(task, completed)).then((saved) => {
+      if (saved !== false) return;
+      setTaskCompletionOverrides((current) => {
+        const next = { ...current };
+        delete next[task.id];
+        return next;
+      });
+    }, () => {
+      setTaskCompletionOverrides((current) => {
+        const next = { ...current };
+        delete next[task.id];
+        return next;
+      });
+    });
+  };
   return (
     <div className="space-y-9">
       <ProductionHeader
@@ -576,12 +610,12 @@ export function SpeakerPortalContent({
                     id: task.id,
                     label: task.name,
                     description: [task.prerequisite.message ?? task.description, taskMeta(task, snapshot.assets)].filter(Boolean).join(" · ") || undefined,
-                    completed: task.completed,
+                    completed: taskCompletionOverrides[task.id] ?? task.completed,
                     disabled: busyAction !== null || (!task.completed && !task.prerequisite.satisfied),
                   }))}
                   onToggle={(taskId, completed) => {
                     const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
-                    if (task) onToggleTask(task, completed);
+                    if (task) toggleTask(task, completed);
                   }}
                 />
               </Card>
