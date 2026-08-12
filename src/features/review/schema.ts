@@ -383,6 +383,26 @@ export const RecuseAssignmentOutput = Schema.Struct({
 });
 export type RecuseAssignmentOutput = typeof RecuseAssignmentOutput.Type;
 
+export const RemoveAssignmentInput = Schema.Struct({
+  eventId: EntityId,
+  assignmentId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type RemoveAssignmentInput = typeof RemoveAssignmentInput.Type;
+
+export const RemoveAssignmentOutput = Schema.Struct({
+  assignmentId: EntityId,
+  roundId: EntityId,
+  submissionId: EntityId,
+  reviewerUserId: EntityId,
+  removedAt: UnixTimestampMs,
+  preservedReviewCount: Schema.Int.pipe(Schema.nonNegative()),
+  idempotent: Schema.Boolean,
+});
+export type RemoveAssignmentOutput = typeof RemoveAssignmentOutput.Type;
+
 export const BulkAssignReviewersInput = Schema.Struct({
   eventId: EntityId,
   roundId: EntityId,

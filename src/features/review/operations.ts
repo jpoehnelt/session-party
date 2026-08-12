@@ -22,6 +22,8 @@ import {
   RejectSubmissionOutput,
   RecuseAssignmentInput,
   RecuseAssignmentOutput,
+  RemoveAssignmentInput,
+  RemoveAssignmentOutput,
   RevokeAcceptanceInput,
   RevokeAcceptanceOutput,
   ReviewWorkbench,
@@ -44,6 +46,7 @@ import {
   requestAiSuggestion,
   rejectSubmission,
   recuseAssignment,
+  removeAssignment,
   revokeAcceptance,
   saveScore,
   sendReviewReminders,
@@ -347,6 +350,34 @@ const rejectSubmissionOperation = {
   emits: ["review.submission.rejected"],
 } as const satisfies AnyOperationDef;
 
+const removeAssignmentOperation = {
+  id: "review.removeAssignment",
+  kind: "command",
+  input: RemoveAssignmentInput,
+  output: RemoveAssignmentOutput,
+  authorize: organizerWrite,
+  invoke: removeAssignment,
+  rest: {
+    method: "delete",
+    path: "/events/:eventId/review/assignments/:assignmentId",
+    input: {
+      path: ["eventId", "assignmentId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["expectedVersion"],
+    },
+    summary: "Remove an assignment from the active reviewer queue while preserving its review and audit evidence",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "review_remove_assignment",
+    description: "Remove a stale reviewer assignment from the active queue without deleting the review or audit history.",
+  },
+  party: { intentType: "review/removeAssignment" },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.assignment.removed"],
+} as const satisfies AnyOperationDef;
+
 const recuseAssignmentOperation = {
   id: "review.recuseAssignment",
   kind: "command",
@@ -480,6 +511,7 @@ export const operations = [
   getWorkbenchOperation,
   recuseAssignmentOperation,
   rejectSubmissionOperation,
+  removeAssignmentOperation,
   requestAiSuggestionOperation,
   revokeAcceptanceOperation,
   saveScoreOperation,

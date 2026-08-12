@@ -47,6 +47,8 @@ import {
   type ReviewExportRow,
   RecuseAssignmentOutput,
   type RecuseAssignmentInput,
+  RemoveAssignmentOutput,
+  type RemoveAssignmentInput,
   type RequestAiSuggestionInput,
   type RequestAiSuggestionOutput,
   RejectSubmissionOutput,
@@ -1842,6 +1844,156 @@ export const bulkAssignReviewers = (
     }
     const stored = yield* decodeCompleted(completed.responseBody);
     return { ...stored, idempotent: resumed };
+  });
+
+export const removeAssignment = (
+  input: RemoveAssignmentInput,
+): Effect.Effect<typeof RemoveAssignmentOutput.Type, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    yield* requireOrganizer(viewer);
+    const { db } = yield* Db;
+    const principalId = roundCommandPrincipalId(viewer);
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      assignmentId: input.assignmentId,
+      expectedVersion: input.expectedVersion,
+    }));
+    const readReplay = (): Effect.Effect<typeof RemoveAssignmentOutput.Type | null, AppError> =>
+      Effect.gen(function* () {
+        const [record] = yield* database(() =>
+          db.select().from(idempotencyRecords).where(and(
+            eq(idempotencyRecords.eventId, input.eventId),
+            eq(idempotencyRecords.operationId, "review.removeAssignment"),
+            eq(idempotencyRecords.principalId, principalId),
+            eq(idempotencyRecords.keyHash, keyHash),
+          )).limit(1),
+        );
+        if (!record) return null;
+        if (record.requestHash !== requestHash) {
+          return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different assignment removal" }));
+        }
+        if (record.status !== "completed") {
+          return yield* Effect.fail(new Conflict({ message: "Assignment removal with this idempotency key is still in progress" }));
+        }
+        return yield* Schema.decodeUnknown(RemoveAssignmentOutput)(record.responseBody).pipe(
+          Effect.map((output) => ({ ...output, idempotent: true })),
+          Effect.mapError((error) => new External({ service: "database", detail: `Invalid assignment-removal replay: ${String(error)}` })),
+        );
+      });
+    const replay = yield* readReplay();
+    if (replay) return replay;
+
+    const [current] = yield* database(() =>
+      db.select({ assignment: reviewAssignments, reviewerName: users.name })
+        .from(reviewAssignments)
+        .innerJoin(users, eq(users.id, reviewAssignments.reviewerUserId))
+        .where(and(
+          eq(reviewAssignments.eventId, input.eventId),
+          eq(reviewAssignments.id, input.assignmentId),
+        ))
+        .limit(1),
+    );
+    if (!current) return yield* Effect.fail(new NotFound({ entity: "reviewAssignment", id: input.assignmentId }));
+    if (current.assignment.status !== "assigned" || current.assignment.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Reviewer assignment changed; reload before removing it" }));
+    }
+    const preservedReviews = yield* database(() =>
+      db.select({ id: reviews.id }).from(reviews).where(and(
+        eq(reviews.eventId, input.eventId),
+        eq(reviews.roundId, current.assignment.roundId),
+        eq(reviews.submissionId, current.assignment.submissionId),
+        eq(reviews.reviewerUserId, current.assignment.reviewerUserId),
+        eq(reviews.ai, false),
+      )),
+    );
+    const removedAt = now();
+    const removedAtMs = removedAt.getTime();
+    const idempotencyId = id("idempotency");
+    const nextVersion = current.assignment.version + 1;
+    const output = {
+      assignmentId: current.assignment.id,
+      roundId: current.assignment.roundId,
+      submissionId: current.assignment.submissionId,
+      reviewerUserId: current.assignment.reviewerUserId,
+      removedAt: removedAtMs,
+      preservedReviewCount: preservedReviews.length,
+      idempotent: false,
+    } as const;
+    const before = {
+      id: current.assignment.id,
+      roundId: current.assignment.roundId,
+      submissionId: current.assignment.submissionId,
+      reviewerUserId: current.assignment.reviewerUserId,
+      reviewerName: current.reviewerName ?? "Reviewer",
+      status: current.assignment.status,
+      version: current.assignment.version,
+    };
+    const marker = and(
+      eq(reviewAssignments.eventId, input.eventId),
+      eq(reviewAssignments.id, input.assignmentId),
+      eq(reviewAssignments.status, "assigned"),
+      eq(reviewAssignments.version, input.expectedVersion),
+    );
+    yield* database(() => db.batch([
+      db.insert(idempotencyRecords).select(db.select({
+        id: sql<string>`${idempotencyId}`.as("id"),
+        eventId: reviewAssignments.eventId,
+        operationId: sql<string>`'review.removeAssignment'`.as("operation_id"),
+        principalId: sql<string>`${principalId}`.as("principal_id"),
+        keyHash: sql<string>`${keyHash}`.as("key_hash"),
+        requestHash: sql<string>`${requestHash}`.as("request_hash"),
+        status: sql<"completed">`'completed'`.as("status"),
+        responseStatus: sql<number>`200`.as("response_status"),
+        responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+        expiresAt: sql<Date>`${removedAtMs + 86_400_000}`.as("expires_at"),
+        completedAt: sql<Date>`${removedAtMs}`.as("completed_at"),
+        createdAt: sql<Date>`${removedAtMs}`.as("created_at"),
+      }).from(reviewAssignments).where(marker)),
+      db.insert(domainChanges).select(db.select({
+        sequence: sql<number | null>`null`.as("sequence"),
+        id: sql<string>`${id("change")}`.as("id"),
+        eventId: reviewAssignments.eventId,
+        aggregateType: sql<string>`'reviewAssignment'`.as("aggregate_type"),
+        aggregateId: reviewAssignments.id,
+        aggregateVersion: sql<number>`${nextVersion}`.as("aggregate_version"),
+        eventType: sql<string>`'review.assignment.removed'`.as("event_type"),
+        audiences: sql<unknown>`${JSON.stringify([{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: [current.assignment.reviewerUserId] }])}`.as("audiences"),
+        payload: sql<unknown>`${JSON.stringify(output)}`.as("payload"),
+        actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+        actorApiKeyId: sql<string | null>`${viewer.actorApiKeyId}`.as("actor_api_key_id"),
+        requestId: sql<string>`${input.requestId}`.as("request_id"),
+        idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+        occurredAt: sql<Date>`${removedAtMs}`.as("occurred_at"),
+      }).from(reviewAssignments).where(marker)),
+      db.insert(auditLog).select(db.select({
+        id: sql<string>`${id("audit")}`.as("id"),
+        eventId: reviewAssignments.eventId,
+        requestId: sql<string>`${input.requestId}`.as("request_id"),
+        actorUserId: sql<string | null>`${viewer.actorUserId}`.as("actor_user_id"),
+        actorApiKeyId: sql<string | null>`${viewer.actorApiKeyId}`.as("actor_api_key_id"),
+        action: sql<string>`'review.removeAssignment'`.as("action"),
+        resourceType: sql<string>`'reviewAssignment'`.as("resource_type"),
+        resourceId: reviewAssignments.id,
+        before: sql<unknown>`${JSON.stringify(before)}`.as("before"),
+        after: sql<unknown>`null`.as("after"),
+        metadata: sql<unknown>`${JSON.stringify({ idempotencyRecordId: idempotencyId, preservedReviewIds: preservedReviews.map(({ id: reviewId }) => reviewId) })}`.as("metadata"),
+        occurredAt: sql<Date>`${removedAtMs}`.as("occurred_at"),
+      }).from(reviewAssignments).where(marker)),
+      db.delete(reviewAssignments).where(marker),
+    ] as never));
+    const stored = yield* readReplay();
+    if (!stored) return yield* Effect.fail(new Conflict({ message: "Reviewer assignment changed; reload before removing it" }));
+    const [storedRecord] = yield* database(() =>
+      db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, input.eventId),
+        eq(idempotencyRecords.operationId, "review.removeAssignment"),
+        eq(idempotencyRecords.principalId, principalId),
+        eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1),
+    );
+    return { ...stored, idempotent: storedRecord?.id !== idempotencyId };
   });
 
 export const recuseAssignment = (

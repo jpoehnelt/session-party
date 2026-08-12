@@ -11,6 +11,7 @@ import {
   RequestAiSuggestionOutput,
   RejectSubmissionOutput,
   RecuseAssignmentOutput,
+  RemoveAssignmentOutput,
   RevokeAcceptanceOutput,
   SaveScoreOutput,
   SendReviewRemindersOutput,
@@ -25,6 +26,7 @@ import {
   type RequestAiSuggestionInput,
   type RejectSubmissionInput,
   type RecuseAssignmentInput,
+  type RemoveAssignmentInput,
   type RevokeAcceptanceInput,
   type SaveScoreInput,
   type SendReviewRemindersInput,
@@ -108,6 +110,17 @@ export function recuseAssignmentRequest(input: RecuseAssignmentInput) {
       ...(input.reason === undefined ? {} : { reason: input.reason }),
     },
     schema: RecuseAssignmentOutput,
+  });
+}
+
+export function removeAssignmentRequest(input: RemoveAssignmentInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/assignments/${segment(input.assignmentId)}`,
+    method: "DELETE",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: { expectedVersion: input.expectedVersion },
+    schema: RemoveAssignmentOutput,
   });
 }
 
