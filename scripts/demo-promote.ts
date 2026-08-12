@@ -263,6 +263,21 @@ const localAssets = queryRows(
 if (localAssets.length !== localCounts.assets) {
   throw new Error(`Local asset inventory mismatch: D1=${localCounts.assets}, R2=${localAssets.length}`);
 }
+const localHeadshotAssetIds = new Set(queryRows(
+  false,
+  `SELECT headshot_asset_id AS id FROM speakers WHERE event_id = '${eventId}' AND headshot_asset_id IS NOT NULL ORDER BY id;`,
+).map((row) => {
+  if (typeof row.id !== "string") throw new Error(`Invalid local headshot asset identity: ${JSON.stringify(row)}`);
+  return row.id;
+}));
+const localHeadshotContents = localAssets
+  .filter(({ id }) => localHeadshotAssetIds.has(id))
+  .map(({ file }) => readFileSync(file).toString("base64"));
+if (localHeadshotAssetIds.size !== localCounts.public_headshots || new Set(localHeadshotContents).size !== localCounts.public_headshots) {
+  throw new Error(
+    `Local demo requires ${localCounts.public_headshots} distinct headshot files; found ${localHeadshotAssetIds.size} identities and ${new Set(localHeadshotContents).size} unique files.`,
+  );
+}
 const exportArguments = [
   "wrangler",
   "d1",

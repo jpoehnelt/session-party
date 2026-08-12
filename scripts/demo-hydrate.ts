@@ -1,4 +1,5 @@
 import type { EnqueueCommunicationInput } from "../src/features/comms/schema";
+import { createDemoAvatarBase64 } from "./demo-avatar";
 import { resolveLocalRuntime } from "./local-runtime";
 
 const { origin } = resolveLocalRuntime();
@@ -10,7 +11,6 @@ const reviewerSession = "demo-reviewer-session";
 const recusedReviewerSession = "demo-reviewer-recused-session";
 const speakerSession = "demo-speaker-session";
 const DAY_MS = 86_400_000;
-const demoHeadshotBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 const fixtureSpeakerNames = [
   "Priya Raman", "Alex Morgan", "Avery Chen", "Blair Okafor", "Cameron Singh",
@@ -618,7 +618,7 @@ await request(`/events/${eventId}/portal/assets`, {
     purpose: "headshot",
     filename: "priya-raman.png",
     contentType: "image/png",
-    contentBase64: demoHeadshotBase64,
+    contentBase64: createDemoAvatarBase64(fixtureSpeakerNames[0], 0),
     expectedVersion: profile.version,
     idempotencyKey: "demo-headshot-upload-v1",
   },
@@ -711,7 +711,7 @@ for (const [index, person] of acceptedPeople.entries()) {
         expectedVersion: approvedProfile.version,
         filename: `demo-speaker-${String(index + 1).padStart(2, "0")}.png`,
         contentType: "image/png",
-        contentBase64: demoHeadshotBase64,
+        contentBase64: createDemoAvatarBase64(person.speaker.name, index),
         idempotencyKey: `demo-speaker-headshot-${index + 1}-v1`,
       },
     });
@@ -841,13 +841,17 @@ if (firstImport.counts.created !== 4 || secondImport.counts.unchanged !== 4) {
 }
 
 const [publicSpeakers, publicAgenda] = await Promise.all([
-  request<{ readonly speakers: readonly unknown[] }>(`/public/events/${eventSlug}/speakers`),
+  request<{ readonly speakers: readonly { readonly headshotUrl: string | null }[] }>(`/public/events/${eventSlug}/speakers`),
   request<{ readonly revision: number; readonly talks: readonly unknown[] }>(`/public/events/${eventSlug}/agenda/published`),
 ]);
 if (publicSpeakers.speakers.length !== 30 || publicAgenda.talks.length !== 18) {
   throw new Error(
     `Public demo scale mismatch: expected 30 published speakers and 18 talks, received ${publicSpeakers.speakers.length} speakers and ${publicAgenda.talks.length} talks`,
   );
+}
+const publicHeadshots = publicSpeakers.speakers.map(({ headshotUrl }) => headshotUrl);
+if (publicHeadshots.some((headshotUrl) => !headshotUrl) || new Set(publicHeadshots).size !== 30) {
+  throw new Error("Public demo must expose 30 distinct headshot images.");
 }
 
 console.log(JSON.stringify({
