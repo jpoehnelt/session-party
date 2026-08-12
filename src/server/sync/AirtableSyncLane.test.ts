@@ -28,7 +28,13 @@ import {
   type AirtableRecord,
 } from "../airtable";
 import { sessionSecret } from "../services";
-import { drainAirtableBase, requestRefreshRows } from "./airtable-engine";
+import { setAirtableAlarmNoLaterThan } from "./AirtableSyncLane";
+import {
+  AIRTABLE_PROJECTION_SCAN_PAGE_SIZE,
+  drainAirtableBase,
+  type AirtableProjectionCursor,
+  requestRefreshRows,
+} from "./airtable-engine";
 import { sha256 } from "./airtable-mapping";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
@@ -155,6 +161,21 @@ describe("AirtableSyncLane", () => {
       body: JSON.stringify({ baseId: "appDifferentBase" }),
     });
     expect(mismatch.status).toBe(409);
+  });
+
+  it("never postpones an earlier poke alarm", async () => {
+    const stub = env.AIRTABLE_SYNC.get(env.AIRTABLE_SYNC.idFromName("appAlarmOrderingProof"));
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.deleteAll();
+      const now = Date.now();
+      const recovery = now + 60_000;
+      const poke = now + 10_000;
+      await state.storage.setAlarm(recovery);
+      await setAirtableAlarmNoLaterThan(state.storage, poke);
+      expect(await state.storage.getAlarm()).toBe(poke);
+      await setAirtableAlarmNoLaterThan(state.storage, recovery + 60_000);
+      expect(await state.storage.getAlarm()).toBe(poke);
+    });
   });
 
   it("bootstraps outbound state, confirms pending edits, and broadcasts only after commit", async () => {
@@ -732,5 +753,208 @@ describe("AirtableSyncLane", () => {
     ]));
     await expect(db.select().from(airtableDeadLetters).where(eq(airtableDeadLetters.sourceId, "outbox-atomic-failure")))
       .resolves.toEqual([]);
+  });
+
+  it("advances a durable bounded recovery cursor instead of rescanning the event", async () => {
+    const now = new Date();
+    const hash = await sha256({ visible: true });
+    const ids = Array.from(
+      { length: AIRTABLE_PROJECTION_SCAN_PAGE_SIZE + 5 },
+      (_, index) => `zz-airtable-scan-${String(index).padStart(2, "0")}`,
+    );
+    await env.DB.batch(ids.map((id) => env.DB.prepare(
+      `INSERT INTO speakers (id, event_id, display_name, visible, version, created_at, updated_at)
+       VALUES (?, ?, ?, 1, 1, ?, ?)`,
+    ).bind(id, EVENT_ID, id, now.getTime(), now.getTime())));
+    await env.DB.batch(ids.map((id, index) => env.DB.prepare(
+      `INSERT INTO airtable_record_links
+        (id, event_id, integration_id, entity_type, entity_id, speaker_id, session_party_id,
+         airtable_record_id, outbound_revision, outbound_hash, origin, last_refreshed_at,
+         version, created_at, updated_at)
+       VALUES (?, ?, ?, 'speaker', ?, ?, ?, ?, 1, ?, ?, ?, 1, ?, ?)`,
+    ).bind(
+      `zz-airtable-scan-link-${index}`,
+      EVENT_ID,
+      INTEGRATION_ID,
+      id,
+      id,
+      id,
+      `recAirtableScan${String(index).padStart(2, "0")}`,
+      hash,
+      config.origin,
+      now.getTime(),
+      now.getTime(),
+      now.getTime(),
+    )));
+    await env.DB.prepare(
+      `UPDATE airtable_refresh_state
+       SET status = 'idle', due_at = NULL, last_success_at = ?, cursor = NULL,
+           lease_owner = NULL, lease_expires_at = NULL, last_error = NULL, dead_lettered_at = NULL
+       WHERE integration_id = ?`,
+    ).bind(now.getTime(), INTEGRATION_ID).run();
+
+    const stub = env.AIRTABLE_SYNC.get(env.AIRTABLE_SYNC.idFromName(BASE_ID));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const cursorKey = "test-performance-projection-cursor";
+      await state.storage.put<AirtableProjectionCursor>(cursorKey, {
+        entityType: "speaker",
+        afterId: "zz-airtable-scan-",
+      });
+      const cursorStore = {
+        get: async () => state.storage.get<AirtableProjectionCursor>(cursorKey),
+        set: async (_integrationId: string, cursor: AirtableProjectionCursor) => state.storage.put(cursorKey, cursor),
+      };
+      let requests = 0;
+      const noRequestAdapter = {
+        mode: "fake" as const,
+        upsertBatch: async (): Promise<readonly AirtableRecord[]> => { requests += 1; return []; },
+        deleteBatch: async (): Promise<void> => { requests += 1; },
+        listPage: async () => { requests += 1; return { records: [] }; },
+      };
+      await drainAirtableBase({
+        database: env.DB,
+        adapter: noRequestAdapter,
+        broadcast: async () => undefined,
+        now: () => now,
+        projectionCursor: cursorStore,
+      }, BASE_ID);
+      expect(await state.storage.get(cursorKey)).toEqual({
+        entityType: "speaker",
+        afterId: ids[AIRTABLE_PROJECTION_SCAN_PAGE_SIZE - 1],
+      });
+      await drainAirtableBase({
+        database: env.DB,
+        adapter: noRequestAdapter,
+        broadcast: async () => undefined,
+        now: () => now,
+        projectionCursor: cursorStore,
+      }, BASE_ID);
+      expect(await state.storage.get(cursorKey)).toEqual({ entityType: "submission", afterId: null });
+      expect(requests).toBe(0);
+    });
+  });
+
+  it("processes one refresh page with bounded record concurrency", async () => {
+    const now = new Date(Date.now() + 1_000);
+    const ids = Array.from({ length: 8 }, (_, index) => `zz-airtable-scan-${String(index).padStart(2, "0")}`);
+    await requestRefreshRows(env.DB, INTEGRATION_ID, EVENT_ID, ["speaker"], now);
+    let listRequests = 0;
+    let activeBroadcasts = 0;
+    let maxActiveBroadcasts = 0;
+    const records = ids.map((id, index): AirtableRecord => ({
+      id: `recAirtableScan${String(index).padStart(2, "0")}`,
+      createdTime: "2000-01-01T00:00:00.000Z",
+      fields: {
+        [config.tables.speakers.fields.sessionPartyId]: id,
+        [config.tables.speakers.fields.displayName]: id,
+        [config.tables.speakers.fields.visibility]: true,
+      },
+    }));
+    await drainAirtableBase({
+      database: env.DB,
+      adapter: {
+        mode: "fake",
+        upsertBatch: async () => { throw new Error("unexpected outbound request"); },
+        deleteBatch: async () => { throw new Error("unexpected delete request"); },
+        listPage: async () => { listRequests += 1; return { records }; },
+      },
+      broadcast: async () => {
+        activeBroadcasts += 1;
+        maxActiveBroadcasts = Math.max(maxActiveBroadcasts, activeBroadcasts);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        activeBroadcasts -= 1;
+      },
+      now: () => now,
+      projectionCursor: {
+        get: async () => ({ entityType: "submission", afterId: "zzzz" }),
+        set: async () => undefined,
+      },
+    }, BASE_ID);
+    expect(listRequests).toBe(1);
+    expect(maxActiveBroadcasts).toBeGreaterThan(1);
+    expect(maxActiveBroadcasts).toBeLessThanOrEqual(4);
+  });
+
+  it("batches independent outbox claims while preserving earlier-revision ordering", async () => {
+    const now = new Date(Date.now() + 2_000);
+    const dueIds = Array.from({ length: 10 }, (_, index) => `zz-airtable-scan-${String(index).padStart(2, "0")}`);
+    await env.DB.batch(dueIds.map((entityId, index) => env.DB.prepare(
+      `INSERT INTO airtable_outbox
+        (id, event_id, integration_id, entity_type, entity_id, speaker_id, session_party_id,
+         operation, changed_fields, outbound_revision, outbound_hash, origin, idempotency_key,
+         status, available_at, attempt_count, created_at)
+       VALUES (?, ?, ?, 'speaker', ?, ?, ?, 'upsert', '{"visible":false}', 2, ?, 'test', ?, 'pending', ?, 0, ?)`,
+    ).bind(
+      `batched-claim-${index}`,
+      EVENT_ID,
+      INTEGRATION_ID,
+      entityId,
+      entityId,
+      entityId,
+      "f".repeat(64),
+      `batched-claim-${index}`,
+      now.getTime(),
+      now.getTime(),
+    )));
+    const orderedEntity = "zz-airtable-scan-10";
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO airtable_outbox
+          (id, event_id, integration_id, entity_type, entity_id, speaker_id, session_party_id,
+           operation, changed_fields, outbound_revision, outbound_hash, origin, idempotency_key,
+           status, available_at, attempt_count, created_at)
+         VALUES ('ordered-earlier', ?, ?, 'speaker', ?, ?, ?, 'upsert', '{"visible":true}', 2, ?, 'test', 'ordered-earlier', 'pending', ?, 0, ?)`,
+      ).bind(EVENT_ID, INTEGRATION_ID, orderedEntity, orderedEntity, orderedEntity, "e".repeat(64), now.getTime() + 60_000, now.getTime()),
+      env.DB.prepare(
+        `INSERT INTO airtable_outbox
+          (id, event_id, integration_id, entity_type, entity_id, speaker_id, session_party_id,
+           operation, changed_fields, outbound_revision, outbound_hash, origin, idempotency_key,
+           status, available_at, attempt_count, created_at)
+         VALUES ('ordered-later', ?, ?, 'speaker', ?, ?, ?, 'upsert', '{"visible":false}', 3, ?, 'test', 'ordered-later', 'pending', ?, 0, ?)`,
+      ).bind(EVENT_ID, INTEGRATION_ID, orderedEntity, orderedEntity, orderedEntity, "d".repeat(64), now.getTime(), now.getTime() + 1),
+    ]);
+
+    let batchCalls = 0;
+    const countedDatabase = new Proxy(env.DB, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (property === "batch") {
+          return (...args: Parameters<D1Database["batch"]>) => {
+            batchCalls += 1;
+            return target.batch(...args);
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    let claimedRecords = 0;
+    await drainAirtableBase({
+      database: countedDatabase,
+      adapter: {
+        mode: "live",
+        upsertBatch: async (input): Promise<readonly AirtableRecord[]> => {
+          claimedRecords = input.records.length;
+          throw new AirtableAdapterError({ code: "test_retry", message: "retry", retryable: true });
+        },
+        deleteBatch: async () => undefined,
+        listPage: async () => ({ records: [] }),
+      },
+      broadcast: async () => undefined,
+      now: () => now,
+      projectionCursor: {
+        get: async () => ({ entityType: "speaker", afterId: "zzzz" }),
+        set: async () => undefined,
+      },
+    }, BASE_ID);
+    expect(claimedRecords).toBe(10);
+    expect(batchCalls).toBe(1);
+    await expect(env.DB.prepare(
+      "SELECT id, status, attempt_count FROM airtable_outbox WHERE id IN ('ordered-earlier', 'ordered-later') ORDER BY id",
+    ).all()).resolves.toMatchObject({
+      results: [
+        { id: "ordered-earlier", status: "pending", attempt_count: 0 },
+        { id: "ordered-later", status: "pending", attempt_count: 0 },
+      ],
+    });
   });
 });

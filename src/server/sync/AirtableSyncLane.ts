@@ -7,10 +7,14 @@ import {
   type AirtableAdapterService,
 } from "../airtable";
 import { isExplicitLocalEnvironment, sessionSecret } from "../services";
-import { drainAirtableBase } from "./airtable-engine";
+import {
+  drainAirtableBase,
+  type AirtableProjectionCursor,
+} from "./airtable-engine";
 import { withGlobalAirtableRateLimit } from "./AirtableRateLimiter";
 
 const BASE_ID_KEY = "airtable-base-id";
+const PROJECTION_CURSOR_PREFIX = "airtable-projection-cursor:";
 const MAX_BASE_ID_LENGTH = 128;
 
 type AirtableEnv = Env & { readonly AIRTABLE_PAT?: string };
@@ -40,6 +44,16 @@ const unavailableAdapter = (): AirtableAdapterService => {
     deleteBatch: async () => fail(),
     listPage: async () => fail(),
   };
+};
+
+export const setAirtableAlarmNoLaterThan = async (
+  storage: DurableObjectStorage,
+  next: number,
+): Promise<void> => {
+  await storage.transaction(async (transaction) => {
+    const current = await transaction.getAlarm();
+    if (current === null || current > next) await transaction.setAlarm(next);
+  });
 };
 
 export class AirtableSyncLane extends DurableObject<Env> {
@@ -94,9 +108,8 @@ export class AirtableSyncLane extends DurableObject<Env> {
     if (!(await this.bindBase(baseId))) {
       return new Response("Durable Object is already bound to another Airtable base", { status: 409 });
     }
-    const current = await this.ctx.storage.getAlarm();
     const next = Date.now() + 1;
-    if (current === null || current > next) await this.ctx.storage.setAlarm(next);
+    await setAirtableAlarmNoLaterThan(this.ctx.storage, next);
     return Response.json({ ok: true });
   }
 
@@ -108,15 +121,24 @@ export class AirtableSyncLane extends DurableObject<Env> {
         database: this.env.DB,
         adapter: this.adapter(),
         broadcast: (eventId, message) => this.broadcast(eventId, message),
+        projectionCursor: {
+          get: (integrationId) => this.ctx.storage.get<AirtableProjectionCursor>(
+            `${PROJECTION_CURSOR_PREFIX}${integrationId}`,
+          ),
+          set: (integrationId, cursor) => this.ctx.storage.put(
+            `${PROJECTION_CURSOR_PREFIX}${integrationId}`,
+            cursor,
+          ),
+        },
       }, baseId);
-      await this.ctx.storage.setAlarm(result.nextAlarmAt);
+      await setAirtableAlarmNoLaterThan(this.ctx.storage, result.nextAlarmAt);
     } catch (error) {
       console.error(JSON.stringify({
         message: "Airtable sync lane failed",
         baseId,
         error: error instanceof Error ? error.message : String(error),
       }));
-      await this.ctx.storage.setAlarm(Date.now() + 60_000);
+      await setAirtableAlarmNoLaterThan(this.ctx.storage, Date.now() + 60_000);
     }
   }
 }
