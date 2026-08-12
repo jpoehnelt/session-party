@@ -44,12 +44,27 @@ const fixtureSpeakerPersonas = fixtureSpeakerNames.map((name, index) => {
   ] as const;
 });
 
-const personas = [...corePersonas, ...fixtureSpeakerPersonas] as const;
+const directoryPersonaNames = [
+  "Noor Ahmed", "Ari Bennett", "Bea Costa", "Chidi Eze", "Devika Iyer", "Eleni Markou",
+  "Fatima Zahra", "Gabe Torres", "Hana Sato", "Idris Bello", "Jules Martin", "Kira Novak", "Luis Ortega",
+] as const;
+const directoryPersonas = directoryPersonaNames.map((name, index) => {
+  const ordinal = String(index + 1).padStart(2, "0");
+  return [
+    `demo-directory-user-${ordinal}`,
+    `directory${ordinal}@sessionparty.local`,
+    name,
+    `demo-directory-user-${ordinal}-session`,
+    expiresAt,
+  ] as const;
+});
+
+const personas = [...corePersonas, ...fixtureSpeakerPersonas, ...directoryPersonas] as const;
 
 const directorySpeakers = [
-  { speakerId: "demo-directory-priya", eventId: "demo-event", userId: "demo-speaker", email: "sbek-speaker@example.com", name: "Priya Raman" },
-  { speakerId: "demo-directory-priya-managed", eventId: "demo-other-event", userId: null, email: "sbek-speaker@example.com", name: "Priya Raman" },
-  ...fixtureSpeakerPersonas.slice(0, 12).map(([userId, email, name], index) => ({
+  { speakerId: "demo-directory-noor", eventId: "demo-event", userId: directoryPersonas[0]![0], email: directoryPersonas[0]![1], name: directoryPersonas[0]![2] },
+  { speakerId: "demo-directory-noor-managed", eventId: "demo-other-event", userId: null, email: directoryPersonas[0]![1], name: directoryPersonas[0]![2] },
+  ...directoryPersonas.slice(1).map(([userId, email, name], index) => ({
     speakerId: `demo-directory-speaker-${String(index + 2).padStart(2, "0")}`,
     eventId: index % 3 === 0 ? "demo-other-event" : "demo-event",
     userId,
@@ -93,7 +108,9 @@ const directoryAssociationValues = directorySpeakers.map((speaker, index) => `(
   ${quote(`demo-directory-submission-${index}`)}, ${quote(speaker.speakerId)}, 1,
   'speaker', NULL, NULL, ${createdAt + index * 86_400_000}
 )`).join(",\n  ");
-const confirmedDirectorySpeakers = directorySpeakers.filter((_, index) => index % 2 === 0);
+// Keep historical talks in the secondary fixture event so demo hydration owns
+// the primary event's complete agenda state without inheriting unplaced talks.
+const confirmedDirectorySpeakers = directorySpeakers.filter((speaker) => speaker.eventId === "demo-other-event");
 const directoryTalkValues = confirmedDirectorySpeakers.map((speaker, index) => {
   const sourceIndex = directorySpeakers.indexOf(speaker);
   const at = createdAt + index * 3_600_000;
@@ -229,15 +246,15 @@ INSERT INTO forms (
   version, created_at, updated_at
 )
 VALUES
-  ('demo-directory-form-main', 'demo-event', 'cfp', 'Directory fixture CFP', NULL, 'closed', NULL, NULL, 1, ${createdAt}, ${createdAt}),
-  ('demo-directory-form-other', 'demo-other-event', 'cfp', 'Directory fixture CFP', NULL, 'closed', NULL, NULL, 1, ${createdAt}, ${createdAt});
+  ('demo-directory-form-main', 'demo-event', 'task', 'Directory fixture history form', NULL, 'closed', NULL, NULL, 1, ${createdAt}, ${createdAt}),
+  ('demo-directory-form-other', 'demo-other-event', 'task', 'Directory fixture history form', NULL, 'closed', NULL, NULL, 1, ${createdAt}, ${createdAt});
 
 INSERT INTO form_versions (
   id, event_id, form_id, version_number, name, description, published_at, retired_at, created_at
 )
 VALUES
-  ('demo-directory-form-version-main', 'demo-event', 'demo-directory-form-main', 1, 'Directory fixture CFP', NULL, ${createdAt}, NULL, ${createdAt}),
-  ('demo-directory-form-version-other', 'demo-other-event', 'demo-directory-form-other', 1, 'Directory fixture CFP', NULL, ${createdAt}, NULL, ${createdAt});
+  ('demo-directory-form-version-main', 'demo-event', 'demo-directory-form-main', 1, 'Directory fixture history form', NULL, ${createdAt}, NULL, ${createdAt}),
+  ('demo-directory-form-version-other', 'demo-other-event', 'demo-directory-form-other', 1, 'Directory fixture history form', NULL, ${createdAt}, NULL, ${createdAt});
 
 INSERT INTO speakers (
   id, event_id, user_id, contact_email, display_name, title, company, bio,
@@ -251,8 +268,8 @@ VALUES
 
 INSERT INTO managed_speaker_emails (id, event_id, normalized_email, speaker_id, created_at, updated_at)
 VALUES (
-  'demo-directory-priya-managed-email', 'demo-other-event', 'sbek-speaker@example.com',
-  'demo-directory-priya-managed', ${createdAt}, ${createdAt}
+  'demo-directory-noor-managed-email', 'demo-other-event', 'directory01@sessionparty.local',
+  'demo-directory-noor-managed', ${createdAt}, ${createdAt}
 );
 
 INSERT INTO submissions (
@@ -284,9 +301,9 @@ INSERT INTO speaker_contacts (
   id, event_id, speaker_id, actor_user_id, medium, note, contacted_at, created_at
 )
 VALUES
-  ('demo-directory-contact-priya', 'demo-event', 'demo-directory-priya', 'demo-owner',
-   'personalEmail', 'Asked Priya about the next edition.', ${createdAt}, ${createdAt}),
-  ('demo-directory-contact-priya-managed', 'demo-other-event', 'demo-directory-priya-managed', 'demo-owner',
+  ('demo-directory-contact-noor', 'demo-event', 'demo-directory-noor', 'demo-owner',
+   'personalEmail', 'Asked Noor about the next edition.', ${createdAt}, ${createdAt}),
+  ('demo-directory-contact-noor-managed', 'demo-other-event', 'demo-directory-noor-managed', 'demo-owner',
    'toolEmail', 'Sent the prior-event logistics note.', ${createdAt + 86_400_000}, ${createdAt + 86_400_000});
 `;
 
