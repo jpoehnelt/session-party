@@ -31,6 +31,7 @@ import { recoverMailScheduler } from "@/server/index";
 import { MAIL_SCHEDULER_NAME } from "@/server/party/Scheduler";
 import { AppLayer, Authorizer, CurrentUser, Db, MailQueue, type AppDatabase } from "@/server/services";
 import {
+  audienceSpeakerCandidates,
   enqueueCommunication,
   listAudience,
   listDeliveries,
@@ -67,11 +68,50 @@ const runAs = <A, E>(
   principal: Principal,
   effect: Effect.Effect<A, E, Authorizer | CurrentUser | Db | MailQueue>,
   mailQueue?: MailQueueStub,
+  appDatabase?: AppDatabase,
 ) => {
   const withQueue = mailQueue === undefined ? effect : effect.pipe(Effect.provideService(MailQueue, mailQueue));
-  return Effect.runPromise(withQueue.pipe(
+  const withDatabase = appDatabase === undefined
+    ? withQueue
+    : withQueue.pipe(Effect.provideService(Db, { db: appDatabase }));
+  return Effect.runPromise(withDatabase.pipe(
     Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
   ));
+};
+
+interface SqlObservation {
+  readonly sql: string;
+  params: readonly unknown[];
+}
+
+const observingDatabase = (): { readonly db: AppDatabase; readonly observations: SqlObservation[] } => {
+  const observations: SqlObservation[] = [];
+  const database = new Proxy(env.DB, {
+    get(target, property) {
+      if (property === "prepare") {
+        return (sql: string) => {
+          const observation: SqlObservation = { sql, params: [] };
+          observations.push(observation);
+          const prepared = target.prepare(sql);
+          return new Proxy(prepared, {
+            get(statement, statementProperty) {
+              if (statementProperty === "bind") {
+                return (...params: unknown[]) => {
+                  observation.params = params;
+                  return statement.bind(...params);
+                };
+              }
+              const value = Reflect.get(statement, statementProperty, statement);
+              return typeof value === "function" ? value.bind(statement) : value;
+            },
+          });
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as D1Database;
+  return { db: drizzle(database, { schema: contractSchema }), observations };
 };
 
 const runEitherAs = <A, E>(
@@ -324,6 +364,66 @@ afterAll(async () => {
 });
 
 describe("communications authorization and validation", () => {
+  it("derives at most two bounded speaker candidates per selected recipient key", () => {
+    expect(audienceSpeakerCandidates([
+      "speaker-a:accepted",
+      "speaker-b",
+      "speaker-c:rejected",
+      "speaker-a:accepted",
+    ])).toEqual([
+      "speaker-a:accepted",
+      "speaker-a",
+      "speaker-b",
+      "speaker-c:rejected",
+      "speaker-c",
+    ]);
+  });
+
+  it("constrains preview and enqueue audience queries to the requested speakers", async () => {
+    const seeded = await seedCommunication("selected-audience-query");
+    const queue: MailQueueStub = {
+      appOrigin: "https://events.example.com",
+      fromEmail: "Events <configured@example.com>",
+      wake: () => Effect.void,
+    };
+
+    const previewDatabase = observingDatabase();
+    const preview = await runAs(seeded.owner, previewCommunication({
+      eventId: seeded.eventId,
+      subject: "{{speaker.name}}",
+      textBody: "{{talk.title}}",
+      htmlBody: "<p>{{talk.title}}</p>",
+      attachIcs: false,
+      recipientKey: `${seeded.speakerId}:accepted`,
+    }), queue, previewDatabase.db);
+    expect(preview).toMatchObject({ mode: "decidedApplicant", recipientName: "Accepted Speaker" });
+    const previewAudienceQuery = previewDatabase.observations.find(({ sql }) =>
+      sql.includes('from "submissions"') && sql.includes('"speakers"."id" in'));
+    const previewCandidateParam = previewAudienceQuery?.params.find((value) =>
+      typeof value === "string" && value.startsWith("["));
+    expect(JSON.parse(String(previewCandidateParam))).toEqual([
+      `${seeded.speakerId}:accepted`,
+      seeded.speakerId,
+    ]);
+
+    const enqueueDatabase = observingDatabase();
+    const enqueued = await runAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      expectedTemplateVersion: 1,
+      recipientKeys: [seeded.speakerId],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-selected-audience-query-001",
+    }), queue, enqueueDatabase.db);
+    expect(enqueued.deliveries).toHaveLength(1);
+    const enqueueAudienceQuery = enqueueDatabase.observations.find(({ sql }) =>
+      sql.includes('from "submissions"') && sql.includes('"speakers"."id" in'));
+    const enqueueCandidateParam = enqueueAudienceQuery?.params.find((value) =>
+      typeof value === "string" && value.startsWith("["));
+    expect(JSON.parse(String(enqueueCandidateParam))).toEqual([seeded.speakerId]);
+  });
+
   it("limits organizer reads to owners/admins and exact communications scopes", async () => {
     const seeded = await seedCommunication("authorization");
     const reviewerId = "reviewer-comms-authorization";
