@@ -40,6 +40,26 @@ const waitForMessage = (
     socket.addEventListener("message", onMessage);
   });
 
+const waitForMessageFromAny = (
+  sockets: readonly WebSocket[],
+  predicate: (message: ServerMessage) => boolean,
+): Promise<ServerMessage> =>
+  new Promise((resolve) => {
+    const listeners = sockets.map((socket) => {
+      const listener = (event: MessageEvent) => {
+        if (typeof event.data !== "string") return;
+        const message = JSON.parse(event.data) as ServerMessage;
+        if (!predicate(message)) return;
+        for (const [index, candidate] of sockets.entries()) {
+          candidate.removeEventListener("message", listeners[index]!);
+        }
+        resolve(message);
+      };
+      socket.addEventListener("message", listener);
+      return listener;
+    });
+  });
+
 const connect = async (
   credential: { cookie: string } | { bearer: string },
   eventId = EVENT_ID,
@@ -260,6 +280,29 @@ describe("EventRoom live authorization", () => {
     expect(await released).toEqual({ t: "agenda/collaboration", collaborators: [] });
   });
 
+  it("atomically grants one advisory lock when two organizers focus the same talk", async () => {
+    const owner = await connect({ cookie: "room-owner-session" });
+    const peer = await connect({ cookie: "room-demoted-session" });
+    const observer = await connect({ bearer: "room-agenda-key" });
+    const conflict = waitForMessageFromAny([owner, peer], (message) =>
+      message.t === "room/error" && message.error === "Conflict");
+    const collaboration = waitForMessage(observer, (message) =>
+      message.t === "agenda/collaboration" && message.collaborators.length === 1);
+
+    owner.send(JSON.stringify({ t: "agenda/focus", talkId: "room-live-talk" }));
+    peer.send(JSON.stringify({ t: "agenda/focus", talkId: "room-live-talk" }));
+
+    expect(await conflict).toMatchObject({
+      t: "room/error",
+      error: "Conflict",
+      message: expect.stringMatching(/Room (Owner|Demoted) is already moving this talk/),
+    });
+    expect(await collaboration).toMatchObject({
+      t: "agenda/collaboration",
+      collaborators: [expect.objectContaining({ talkId: "room-live-talk" })],
+    });
+  });
+
   it("persists synchronized show state and routes room cues to matching surfaces", async () => {
     const control = await connect({ cookie: "room-owner-session" });
     const roomDisplay = await connect({ cookie: "room-demoted-session" });
@@ -325,6 +368,62 @@ describe("EventRoom live authorization", () => {
       message.t === "show/state" && message.state.status === "idle" && message.state.revision === 2);
     control.send(JSON.stringify({ t: "show/control", requestId: "reset-show", action: "reset" }));
     expect(await reset).toMatchObject({ t: "show/state", state: { status: "idle", revision: 2 } });
+  });
+
+  it("serializes concurrent show transitions across the D1 validation boundary", async () => {
+    const owner = await connect({ cookie: "room-owner-session" });
+    const peer = await connect({ cookie: "room-demoted-session" });
+    const baselineState = waitForType(owner, "show/state");
+    owner.send(JSON.stringify({ t: "room/hello", surface: "show:control" }));
+    const baseline = await baselineState;
+    if (baseline.t !== "show/state") throw new Error("Expected baseline show state");
+    const ownerResult = waitForMessage(owner, (message) =>
+      message.t === "room/result" && message.replyTo === "concurrent-select");
+    const peerResult = waitForMessage(peer, (message) =>
+      message.t === "room/result" && message.replyTo === "concurrent-start");
+
+    owner.send(JSON.stringify({
+      t: "show/control",
+      requestId: "concurrent-select",
+      action: "select",
+      talkId: "room-live-talk",
+    }));
+    peer.send(JSON.stringify({
+      t: "show/control",
+      requestId: "concurrent-start",
+      action: "start",
+      talkId: "room-live-talk",
+    }));
+
+    const results = await Promise.all([ownerResult, peerResult]);
+    const revisions = results.map((message) => {
+      if (message.t !== "room/result") throw new Error("Expected show result");
+      return (message.result as { revision: number }).revision;
+    }).sort((left, right) => left - right);
+    expect(revisions).toEqual([baseline.state.revision + 1, baseline.state.revision + 2]);
+
+    const lateControl = await connect({ cookie: "room-owner-session" });
+    const restored = waitForMessage(lateControl, (message) =>
+      message.t === "show/state" && message.state.revision === baseline.state.revision + 2);
+    lateControl.send(JSON.stringify({ t: "room/hello", surface: "show:control" }));
+    expect(await restored).toMatchObject({
+      t: "show/state",
+      state: { revision: baseline.state.revision + 2, currentTalkId: "room-live-talk" },
+    });
+  });
+
+  it("continues an authorized fanout when a recipient closes during delivery", async () => {
+    const owner = await connect({ cookie: "room-owner-session" });
+    const closing = await connect({ cookie: "room-reviewer-session" });
+    const agenda = await connect({ bearer: "room-agenda-key" });
+    const ownerReceipt = waitForType(owner, "agenda/conflicts");
+    const agendaReceipt = waitForType(agenda, "agenda/conflicts");
+    closing.close();
+
+    await broadcast({ t: "agenda/conflicts", conflicts: [] });
+
+    expect(await ownerReceipt).toMatchObject({ t: "agenda/conflicts" });
+    expect(await agendaReceipt).toMatchObject({ t: "agenda/conflicts" });
   });
 
   it("denies show control to reviewers", async () => {

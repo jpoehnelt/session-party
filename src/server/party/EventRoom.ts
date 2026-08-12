@@ -1,4 +1,4 @@
-import { ApiScope, ApiScopes, type EventRole, type Principal } from "contracts/principal";
+import { ApiScopes, type ApiScope, type EventRole, type Principal } from "contracts/principal";
 import {
   decodeServerMessage,
   type AgendaPreviewTarget,
@@ -19,7 +19,7 @@ import { drizzle } from "drizzle-orm/d1";
 import { Schema } from "effect";
 import { runTransportOperation } from "../adapt";
 import { userFromRequest } from "../auth";
-import { operationById, partyHandlers, partyIntents } from "../registry.gen";
+import { operationById, partyIntents } from "../registry.gen";
 import { sessionSecret } from "../services";
 
 const MAX_MESSAGE_BYTES = 32 * 1024;
@@ -329,7 +329,12 @@ const sendServerMessage = (
       connection.readyState === WebSocket.CLOSING
       || connection.readyState === WebSocket.CLOSED
     ) return;
-    throw error;
+    console.error(JSON.stringify({
+      message: "event room delivery failed",
+      connectionId: connection.id,
+      type: message.t,
+      error: error instanceof Error ? error.message : String(error),
+    }));
   }
 };
 
@@ -429,7 +434,11 @@ export class EventRoom extends Server<Env> {
         sendServerMessage(connection, { t: "room/error", message: "Access denied" });
         return;
       }
-      await this.handleAgendaCollaboration(connection, refreshed, message);
+      await this.runRealtimeHandler(
+        connection,
+        message,
+        () => this.handleAgendaCollaboration(connection, refreshed, message),
+      );
       return;
     }
 
@@ -442,8 +451,13 @@ export class EventRoom extends Server<Env> {
         });
         return;
       }
-      if (message.t === "show/control") await this.handleShowControl(connection, refreshed, message);
-      else await this.handleShowCue(connection, refreshed, message);
+      await this.runRealtimeHandler(
+        connection,
+        message,
+        () => message.t === "show/control"
+          ? this.handleShowControl(connection, refreshed, message)
+          : this.handleShowCue(connection, refreshed, message),
+      );
       return;
     }
     const operationIntent = partyIntents.find(({ intentType }) => intentType === message.t);
@@ -489,44 +503,11 @@ export class EventRoom extends Server<Env> {
       return;
     }
 
-    const requiredCapability = await this.requiredCapability(message);
-    if (!requiredCapability || !refreshed.authorization.capabilities.includes(requiredCapability)) {
-      sendServerMessage(connection, {
-        t: "room/error",
-        message: "Access denied",
-        replyTo: replyToFor(message),
-      });
-      return;
-    }
-
-    const prefix = message.t.split("/", 1)[0];
-    const handler = prefix ? partyHandlers[prefix] : undefined;
-    if (!handler) {
-      sendServerMessage(connection, {
-        t: "room/error",
-        message: `No handler for ${message.t}`,
-        replyTo: replyToFor(message),
-      });
-      return;
-    }
-
-    try {
-      await handler(this, connection, message);
-    } catch (error) {
-      console.error(
-        JSON.stringify({
-          message: "party handler failed",
-          room: this.name,
-          type: message.t,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-      sendServerMessage(connection, {
-        t: "room/error",
-        message: "Message could not be applied",
-        replyTo: replyToFor(message),
-      });
-    }
+    sendServerMessage(connection, {
+      t: "room/error",
+      message: `No operation for ${message.t}`,
+      replyTo: replyToFor(message),
+    });
   }
 
   override async onClose(connection: Connection<EventRoomConnectionState>): Promise<void> {
@@ -665,6 +646,45 @@ export class EventRoom extends Server<Env> {
     }
   }
 
+  private async refreshConnectionsAuthorization(
+    connections: readonly Connection<EventRoomConnectionState>[] = [
+      ...this.getConnections<EventRoomConnectionState>(),
+    ],
+  ): Promise<readonly {
+    readonly connection: Connection<EventRoomConnectionState>;
+    readonly state: EventRoomConnectionState;
+  }[]> {
+    const refreshed = await Promise.all(connections.map(async (connection) => ({
+      connection,
+      state: await this.refreshConnectionAuthorization(connection),
+    })));
+    return refreshed.filter((entry): entry is {
+      readonly connection: Connection<EventRoomConnectionState>;
+      readonly state: EventRoomConnectionState;
+    } => entry.state !== null);
+  }
+
+  private async runRealtimeHandler(
+    connection: Connection<EventRoomConnectionState>,
+    message: Extract<ClientMessage, { t: "agenda/focus" | "agenda/preview" | "show/control" | "show/cue" }>,
+    handler: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await handler();
+    } catch (error) {
+      console.error(JSON.stringify({
+        message: "event room realtime handler failed",
+        room: this.name,
+        type: message.t,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      sendServerMessage(connection, {
+        t: "room/error",
+        message: "Message could not be applied",
+        replyTo: replyToFor(message),
+      });
+    }
+  }
 
   private consumeMessageBudget(
     connection: Connection<EventRoomConnectionState>,
@@ -692,32 +712,39 @@ export class EventRoom extends Server<Env> {
     message: Extract<ClientMessage, { t: "agenda/focus" | "agenda/preview" }>,
   ): Promise<void> {
     if (message.t === "agenda/focus" && message.talkId === null) {
-      connection.setState({ ...state, agendaCollaboration: null });
+      await this.ctx.blockConcurrencyWhile(async () => {
+        connection.setState({ ...(connection.state ?? state), agendaCollaboration: null });
+      });
       await this.broadcastAgendaCollaboration();
       return;
     }
 
     const talkId = message.talkId;
     if (talkId === null) return;
-    for (const candidate of this.getConnections<EventRoomConnectionState>()) {
-      if (candidate.id === connection.id) continue;
-      const candidateState = await this.refreshConnectionAuthorization(candidate);
-      if (candidateState?.agendaCollaboration?.talkId !== talkId) continue;
+    const holder = await this.ctx.blockConcurrencyWhile(async () => {
+      const candidates = [...this.getConnections<EventRoomConnectionState>()]
+        .filter((candidate) => candidate.id !== connection.id);
+      const authorized = await this.refreshConnectionsAuthorization(candidates);
+      const conflict = authorized.find(({ state: candidateState }) =>
+        candidateState.agendaCollaboration?.talkId === talkId);
+      if (conflict) return conflict.state;
+      connection.setState({
+        ...(connection.state ?? state),
+        agendaCollaboration: {
+          talkId,
+          preview: message.t === "agenda/preview" ? message.target : null,
+        },
+      });
+      return null;
+    });
+    if (holder) {
       sendServerMessage(connection, {
         t: "room/error",
         error: "Conflict",
-        message: `${candidateState.user.name} is already moving this talk`,
+        message: `${holder.user.name} is already moving this talk`,
       });
       return;
     }
-
-    connection.setState({
-      ...state,
-      agendaCollaboration: {
-        talkId,
-        preview: message.t === "agenda/preview" ? message.target : null,
-      },
-    });
     await this.broadcastAgendaCollaboration();
   }
 
@@ -741,14 +768,86 @@ export class EventRoom extends Server<Env> {
     state: EventRoomConnectionState,
     message: Extract<ClientMessage, { t: "show/control" }>,
   ): Promise<void> {
-    const current = await this.getShowState();
-    const now = Date.now();
     const actor = { userId: state.user.userId, name: state.user.name };
-    const talkId = message.talkId ?? current.currentTalkId;
-    let next: ShowRunState | null = null;
+    const transition = await this.ctx.blockConcurrencyWhile(async () => {
+      const current = await this.getShowState();
+      const now = Date.now();
+      const talkId = message.talkId ?? current.currentTalkId;
+      let next: ShowRunState | null = null;
 
-    if ((message.action === "select" || message.action === "start") &&
-      (!talkId || !(await this.isCurrentEventTalk(talkId)))) {
+      if ((message.action === "select" || message.action === "start") &&
+        (!talkId || !(await this.isCurrentEventTalk(talkId)))) {
+        return { kind: "not-found" as const };
+      }
+
+      switch (message.action) {
+        case "select":
+          next = {
+            revision: current.revision + 1,
+            status: "ready",
+            currentTalkId: talkId!,
+            startedAt: null,
+            holdStartedAt: null,
+            accumulatedHoldMs: 0,
+            updatedAt: now,
+            updatedBy: actor,
+          };
+          break;
+        case "start":
+          next = {
+            revision: current.revision + 1,
+            status: "running",
+            currentTalkId: talkId!,
+            startedAt: now,
+            holdStartedAt: null,
+            accumulatedHoldMs: 0,
+            updatedAt: now,
+            updatedBy: actor,
+          };
+          break;
+        case "hold":
+          if (current.status === "running") {
+            next = { ...current, revision: current.revision + 1, status: "held", holdStartedAt: now, updatedAt: now, updatedBy: actor };
+          }
+          break;
+        case "resume":
+          if (current.status === "held" && current.holdStartedAt !== null) {
+            next = {
+              ...current,
+              revision: current.revision + 1,
+              status: "running",
+              holdStartedAt: null,
+              accumulatedHoldMs: current.accumulatedHoldMs + Math.max(0, now - current.holdStartedAt),
+              updatedAt: now,
+              updatedBy: actor,
+            };
+          }
+          break;
+        case "complete":
+          if (current.currentTalkId !== null && (current.status === "running" || current.status === "held")) {
+            next = {
+              ...current,
+              revision: current.revision + 1,
+              status: "completed",
+              holdStartedAt: null,
+              accumulatedHoldMs: current.accumulatedHoldMs +
+                (current.holdStartedAt === null ? 0 : Math.max(0, now - current.holdStartedAt)),
+              updatedAt: now,
+              updatedBy: actor,
+            };
+          }
+          break;
+        case "reset":
+          next = { ...initialShowState(), revision: current.revision + 1, updatedAt: now, updatedBy: actor };
+          break;
+      }
+
+      if (!next) return { kind: "conflict" as const, status: current.status };
+      await this.ctx.storage.put(SHOW_STATE_KEY, next);
+      return { kind: "success" as const, state: next };
+    });
+
+    if (transition.kind === "not-found") {
       sendServerMessage(connection, {
         t: "room/error",
         error: "NotFound",
@@ -757,80 +856,17 @@ export class EventRoom extends Server<Env> {
       });
       return;
     }
-
-    switch (message.action) {
-      case "select":
-        next = {
-          revision: current.revision + 1,
-          status: "ready",
-          currentTalkId: talkId!,
-          startedAt: null,
-          holdStartedAt: null,
-          accumulatedHoldMs: 0,
-          updatedAt: now,
-          updatedBy: actor,
-        };
-        break;
-      case "start":
-        next = {
-          revision: current.revision + 1,
-          status: "running",
-          currentTalkId: talkId!,
-          startedAt: now,
-          holdStartedAt: null,
-          accumulatedHoldMs: 0,
-          updatedAt: now,
-          updatedBy: actor,
-        };
-        break;
-      case "hold":
-        if (current.status === "running") {
-          next = { ...current, revision: current.revision + 1, status: "held", holdStartedAt: now, updatedAt: now, updatedBy: actor };
-        }
-        break;
-      case "resume":
-        if (current.status === "held" && current.holdStartedAt !== null) {
-          next = {
-            ...current,
-            revision: current.revision + 1,
-            status: "running",
-            holdStartedAt: null,
-            accumulatedHoldMs: current.accumulatedHoldMs + Math.max(0, now - current.holdStartedAt),
-            updatedAt: now,
-            updatedBy: actor,
-          };
-        }
-        break;
-      case "complete":
-        if (current.currentTalkId !== null && (current.status === "running" || current.status === "held")) {
-          next = {
-            ...current,
-            revision: current.revision + 1,
-            status: "completed",
-            holdStartedAt: null,
-            accumulatedHoldMs: current.accumulatedHoldMs +
-              (current.holdStartedAt === null ? 0 : Math.max(0, now - current.holdStartedAt)),
-            updatedAt: now,
-            updatedBy: actor,
-          };
-        }
-        break;
-      case "reset":
-        next = { ...initialShowState(), revision: current.revision + 1, updatedAt: now, updatedBy: actor };
-        break;
-    }
-
-    if (!next) {
+    if (transition.kind === "conflict") {
       sendServerMessage(connection, {
         t: "room/error",
         error: "Conflict",
-        message: `Cannot ${message.action} while show state is ${current.status}`,
+        message: `Cannot ${message.action} while show state is ${transition.status}`,
         replyTo: message.requestId,
       });
       return;
     }
 
-    await this.ctx.storage.put(SHOW_STATE_KEY, next);
+    const next = transition.state;
     await this.broadcastAuthorized({ t: "show/state", state: next });
     sendServerMessage(connection, {
       t: "room/result",
@@ -873,9 +909,8 @@ export class EventRoom extends Server<Env> {
       by: { userId: state.user.userId, name: state.user.name },
     };
     let recipients = 0;
-    for (const candidate of this.getConnections<EventRoomConnectionState>()) {
-      const candidateState = await this.refreshConnectionAuthorization(candidate);
-      if (!candidateState || !this.cueMatchesConnection(message.target, candidateState)) continue;
+    for (const { connection: candidate, state: candidateState } of await this.refreshConnectionsAuthorization()) {
+      if (!this.cueMatchesConnection(message.target, candidateState)) continue;
       sendServerMessage(candidate, { t: "show/cue", cue });
       recipients += 1;
     }
@@ -887,11 +922,6 @@ export class EventRoom extends Server<Env> {
     });
   }
 
-  private async requiredCapability(message: Exclude<ClientMessage, { t: "room/hello" }>): Promise<ApiScope | null> {
-    const prefix = message.t.split("/", 1)[0];
-    return Schema.decodeUnknownPromise(ApiScope)(`${prefix}:write`).catch(() => null);
-  }
-
   private async broadcastAuthorized(input: ServerMessage): Promise<void> {
     const message = decodeServerMessage(input);
     if (!message) {
@@ -900,22 +930,18 @@ export class EventRoom extends Server<Env> {
     }
     const audiences = audiencesForServerMessage(message);
     if (!audiences) return;
-    const encoded = JSON.stringify(message);
-    for (const connection of this.getConnections<EventRoomConnectionState>()) {
-      const state = await this.refreshConnectionAuthorization(connection);
-      if (!state || !audiences.some((audience) => state.authorization.audiences.includes(audience))) {
+    for (const { connection, state } of await this.refreshConnectionsAuthorization()) {
+      if (!audiences.some((audience) => state.authorization.audiences.includes(audience))) {
         continue;
       }
-      connection.send(encoded);
+      sendServerMessage(connection, message);
     }
   }
 
   private async broadcastAgendaCollaboration(): Promise<void> {
     const collaborators: Extract<ServerMessage, { t: "agenda/collaboration" }>["collaborators"] = [];
     const recipients: Connection<EventRoomConnectionState>[] = [];
-    for (const connection of this.getConnections<EventRoomConnectionState>()) {
-      const state = await this.refreshConnectionAuthorization(connection);
-      if (!state) continue;
+    for (const { connection, state } of await this.refreshConnectionsAuthorization()) {
       if (
         state.authorization.role === "owner" ||
         state.authorization.role === "admin" ||
@@ -940,9 +966,8 @@ export class EventRoom extends Server<Env> {
   private async broadcastPresence(): Promise<void> {
     const usersById = new Map<string, PresenceUser>();
     const recipients: Connection<EventRoomConnectionState>[] = [];
-    for (const connection of this.getConnections<EventRoomConnectionState>()) {
-      const state = await this.refreshConnectionAuthorization(connection);
-      if (!state || state.authorization.kind !== "browser-session") continue;
+    for (const { connection, state } of await this.refreshConnectionsAuthorization()) {
+      if (state.authorization.kind !== "browser-session") continue;
       recipients.push(connection);
       usersById.set(state.user.userId, {
         userId: state.user.userId,
