@@ -89,6 +89,22 @@ function makeSnapshot(completedCount: number): PortalSnapshot {
       version: 3,
       confirmationStatus: "awaiting_confirmation",
     },
+    sessions: [{
+      id: "talk-reliable-agents",
+      title: "Reliable agents: from prototype to production",
+      startsAt: Date.UTC(2027, 4, 12, 18, 30),
+      durationMin: 30,
+      status: "confirmed",
+      version: 5,
+      roomName: "Main stage",
+      publicationRevision: 3,
+      scheduleAcknowledgment: {
+        status: "pending",
+        note: null,
+        respondedAt: null,
+        respondedPublicationRevision: null,
+      },
+    }],
     provisioningStatus: "provisioned",
     tasks,
     resources: [{
@@ -183,6 +199,9 @@ export const TasksInProgress: Story = {
     expect(canvas.queryByText("Cues complete")).not.toBeInTheDocument();
     expect(canvas.queryByText("Cues remaining")).not.toBeInTheDocument();
     expect(canvas.queryByText("9 of 11 complete")).not.toBeInTheDocument();
+    expect(canvas.getByText("Response needed")).toBeVisible();
+    await userEvent.click(canvas.getByRole("button", { name: "Report a conflict" }));
+    expect(canvas.getByLabelText("Conflict note (optional)")).toBeVisible();
   },
 };
 

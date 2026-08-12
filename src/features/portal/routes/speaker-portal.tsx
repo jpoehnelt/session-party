@@ -40,6 +40,7 @@ import {
   PortalResource,
   PortalSnapshot,
   PortalTask,
+  SpeakerSession,
   SpeakerProfile,
   UpdateProfileInput,
   UploadPortalAssetInput,
@@ -52,6 +53,7 @@ import {
   importReusableProfile,
   setSpeakerTaskCompletion,
   respondToAcceptedSession,
+  respondToPublishedSchedule,
   submitSpeakerTaskForm,
   submitProfileReview,
   updateSpeakerProfile,
@@ -306,6 +308,18 @@ export default function SpeakerPortalRoute() {
           )
         }
         onRespondToSession={(action) => void respondToSession(action)}
+        onRespondToSchedule={(session, response, note) => mutate(
+          response === "acknowledged" ? "Schedule acknowledgment" : "Schedule conflict",
+          () => respondToPublishedSchedule(eventSlug, {
+            eventId: snapshot.event.id,
+            talkId: session.id,
+            expectedTalkVersion: session.version,
+            expectedPublicationRevision: session.publicationRevision!,
+            response,
+            note,
+            idempotencyKey: crypto.randomUUID(),
+          }),
+        )}
         onUpload={(input) => mutate("Upload", () => uploadSpeakerAsset(eventSlug, input))}
         onAddComment={(assetId, body) => mutate("Comment", () => addContentComment(snapshot.event.id, {
           eventId: snapshot.event.id,
@@ -373,6 +387,11 @@ export interface SpeakerPortalContentProps {
   readonly onSubmitProfileReview?: () => void;
   readonly onToggleTask: (task: PortalTask, completed: boolean) => boolean | void | Promise<boolean | void>;
   readonly onRespondToSession?: (action: "confirm" | "withdraw") => void;
+  readonly onRespondToSchedule?: (
+    session: SpeakerSession,
+    response: "acknowledged" | "conflict",
+    note: string | null,
+  ) => boolean | void | Promise<boolean | void>;
   readonly onUpload: (input: UploadPortalAssetInput) => void;
   readonly onAddComment?: (assetId: string, body: string) => void;
   readonly onSubmitTaskForm: (
@@ -392,12 +411,15 @@ export function SpeakerPortalContent({
   onSubmitProfileReview = () => undefined,
   onToggleTask,
   onRespondToSession = () => undefined,
+  onRespondToSchedule = () => undefined,
   onUpload,
   onAddComment = () => undefined,
   onSubmitTaskForm,
   downloadedHeadshotUrl,
 }: SpeakerPortalContentProps) {
   const [activeFormTaskId, setActiveFormTaskId] = useState<string | null>(null);
+  const [conflictSessionId, setConflictSessionId] = useState<string | null>(null);
+  const [conflictNote, setConflictNote] = useState("");
   const [taskCompletionOverrides, setTaskCompletionOverrides] = useState<Readonly<Record<string, boolean>>>({});
   const loadedHeadshotUrl = useDownloadedHeadshot(snapshot.event.id, snapshot.speaker.headshotAssetId);
   const headshotUrl = preferredHeadshotUrl(
@@ -521,6 +543,124 @@ export function SpeakerPortalContent({
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
+              </div>
+            </section>
+          )}
+
+          {snapshot.sessions.some((session) => session.scheduleAcknowledgment !== null) && (
+            <section className="space-y-4" aria-label="Published schedule">
+              <ProductionSectionLabel>Published schedule</ProductionSectionLabel>
+              <div className="space-y-4">
+                {snapshot.sessions.filter((session) => session.scheduleAcknowledgment !== null).map((session) => {
+                  const acknowledgment = session.scheduleAcknowledgment!;
+                  const statusLabel = acknowledgment.status === "acknowledged"
+                    ? "Schedule acknowledged"
+                    : acknowledgment.status === "conflict"
+                      ? "Conflict reported"
+                      : acknowledgment.status === "stale"
+                        ? "Schedule changed — respond again"
+                        : "Response needed";
+                  const tone = acknowledgment.status === "acknowledged"
+                    ? "success" as const
+                    : acknowledgment.status === "conflict"
+                      ? "danger" as const
+                      : "warning" as const;
+                  const enteringConflict = conflictSessionId === session.id;
+                  return (
+                    <Card key={session.id} className={productionCardClass}>
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <h2 className="text-xl font-black tracking-[-0.03em] text-ink">{session.title}</h2>
+                          <p className="mt-2 font-bold text-ink">
+                            {session.startsAt === null ? "Time to be announced" : new Intl.DateTimeFormat(undefined, {
+                              dateStyle: "full",
+                              timeStyle: "short",
+                              timeZone: snapshot.event.timezone,
+                            }).format(new Date(session.startsAt))}
+                          </p>
+                          <p className="mt-1 text-sm text-ink-secondary">
+                            {session.durationMin} minutes{session.roomName ? ` · ${session.roomName}` : " · Room to be announced"}
+                          </p>
+                        </div>
+                        <Badge tone={tone}>{statusLabel}</Badge>
+                      </div>
+                      {acknowledgment.status === "stale" && (
+                        <Alert className="mt-4" tone="warning">
+                          <AlertTitle>Your session time changed</AlertTitle>
+                          <AlertDescription>Review the current published time and send a new response.</AlertDescription>
+                        </Alert>
+                      )}
+                      {acknowledgment.status === "conflict" && acknowledgment.note && (
+                        <p className="mt-4 border-l-4 border-danger bg-danger/10 px-3 py-2 text-sm font-semibold text-ink">{acknowledgment.note}</p>
+                      )}
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {acknowledgment.status !== "acknowledged" && (
+                          <Button
+                            type="button"
+                            className={`${productionButtonClass} bg-[#caff4a] text-[#171714]`}
+                            disabled={busyAction !== null}
+                            onClick={() => onRespondToSchedule(session, "acknowledged", null)}
+                          >
+                            Acknowledge schedule
+                          </Button>
+                        )}
+                        {acknowledgment.status !== "conflict" && (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className={productionButtonClass}
+                            disabled={busyAction !== null}
+                            aria-expanded={enteringConflict}
+                            onClick={() => {
+                              setConflictSessionId(enteringConflict ? null : session.id);
+                              setConflictNote("");
+                            }}
+                          >
+                            Report a conflict
+                          </Button>
+                        )}
+                        {acknowledgment.status === "conflict" && (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className={productionButtonClass}
+                            disabled={busyAction !== null}
+                            onClick={() => onRespondToSchedule(session, "acknowledged", null)}
+                          >
+                            This time now works
+                          </Button>
+                        )}
+                      </div>
+                      {enteringConflict && (
+                        <div className="mt-4 space-y-3 border-2 border-line-strong bg-surface p-4">
+                          <Textarea
+                            label="Conflict note (optional)"
+                            value={conflictNote}
+                            maxLength={2_000}
+                            placeholder="Briefly tell the event team what does not work."
+                            onChange={(event) => setConflictNote(event.currentTarget.value)}
+                          />
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              disabled={busyAction !== null}
+                              onClick={() => {
+                                void Promise.resolve(onRespondToSchedule(session, "conflict", conflictNote.trim() || null)).then((saved) => {
+                                  if (saved === false) return;
+                                  setConflictSessionId(null);
+                                  setConflictNote("");
+                                });
+                              }}
+                            >
+                              Send conflict to organizers
+                            </Button>
+                            <Button type="button" variant="ghost" onClick={() => setConflictSessionId(null)}>Cancel</Button>
+                          </div>
+                        </div>
+                      )}
+                    </Card>
+                  );
+                })}
               </div>
             </section>
           )}

@@ -19,6 +19,7 @@ import {
   mailDeliveries,
   mailDeliverySnapshots,
   pages,
+  rooms,
   speakerProvisioning,
   speakerProfiles,
   speakerContacts,
@@ -79,15 +80,21 @@ import {
   type PublicSpeakerGallery,
   type PublicSpeakersInput,
   type ReadinessSummary,
+  type RecordedScheduleAcknowledgment,
+  RecordedScheduleAcknowledgment as RecordedScheduleAcknowledgmentSchema,
   type RespondToAcceptedSessionInput,
   type RespondToAcceptedSessionOutput,
   RespondToAcceptedSessionOutput as RespondToAcceptedSessionOutputSchema,
+  type RespondToPublishedScheduleInput,
+  type RespondToPublishedScheduleOutput,
+  RespondToPublishedScheduleOutput as RespondToPublishedScheduleOutputSchema,
   type ReviewSpeakerProfileInput,
   type LogSpeakerContactInput,
   type SpeakerContact,
   type SetTaskCompletionInput,
   type SpeakerDirectory,
   type SpeakerDirectoryItem,
+  type SpeakerSession,
   SpeakerPrivateFieldValue as SpeakerPrivateFieldValueSchema,
   type SpeakerProfile,
   type SubmitProfileReviewInput,
@@ -104,6 +111,10 @@ import {
   SendSpeakerMessagesOutput as SendSpeakerMessagesOutputSchema,
   type SendSpeakerMessagesOutput,
 } from "./schema";
+import {
+  PublishedAgenda as PublishedAgendaSchema,
+  type PublishedAgenda,
+} from "@/features/agenda/schema";
 import { portalAssetKey as assetKey, publicSpeakerHeadshotPath } from "./public-assets";
 import { runBoundedProfileSnapshotSync } from "./profile-sync";
 
@@ -688,6 +699,138 @@ const loadSessionConfirmation = (eventId: string, submissionId: string, submissi
     return confirmation !== undefined;
   });
 
+const SCHEDULE_ACKNOWLEDGMENT_AGGREGATE = "schedule-acknowledgment";
+const SCHEDULE_ACKNOWLEDGMENT_VERSION_CLAIM = "scheduleAcknowledgment.versionClaim";
+const SCHEDULE_ACKNOWLEDGED_EVENT = "portal.schedule.acknowledged";
+const SCHEDULE_CONFLICT_EVENT = "portal.schedule.conflict-reported";
+const scheduleAcknowledgmentId = (talkId: string, speakerId: string) => `${talkId}:${speakerId}`;
+
+const decodePublishedAgenda = (payload: unknown): Effect.Effect<PublishedAgenda, External> =>
+  Schema.decodeUnknown(PublishedAgendaSchema)(payload).pipe(
+    Effect.mapError((error) => new External({
+      service: "agenda-publication",
+      detail: `Invalid published agenda while loading speaker schedule: ${String(error)}`,
+    })),
+  );
+
+const latestPublishedSchedule = (eventId: string): Effect.Effect<PublishedAgenda | null, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [publication] = yield* database(() => db.select({ payload: domainChanges.payload }).from(domainChanges).where(and(
+      eq(domainChanges.eventId, eventId),
+      eq(domainChanges.aggregateType, "agenda-publication"),
+      eq(domainChanges.aggregateId, eventId),
+      eq(domainChanges.eventType, "agenda/published"),
+    )).orderBy(desc(domainChanges.aggregateVersion), desc(domainChanges.sequence)).limit(1));
+    return publication ? yield* decodePublishedAgenda(publication.payload) : null;
+  });
+
+const latestScheduleAcknowledgments = (
+  eventId: string,
+  speakerIds: readonly string[],
+): Effect.Effect<ReadonlyMap<string, RecordedScheduleAcknowledgment>, AppError, Db> =>
+  Effect.gen(function* () {
+    if (speakerIds.length === 0) return new Map();
+    const { db } = yield* Db;
+    const rows = yield* database(() => db.select({
+      aggregateId: domainChanges.aggregateId,
+      payload: domainChanges.payload,
+    }).from(domainChanges).where(and(
+      eq(domainChanges.eventId, eventId),
+      eq(domainChanges.aggregateType, SCHEDULE_ACKNOWLEDGMENT_AGGREGATE),
+      inArray(domainChanges.eventType, [SCHEDULE_ACKNOWLEDGED_EVENT, SCHEDULE_CONFLICT_EVENT]),
+      inArray(sql<string>`json_extract(${domainChanges.payload}, '$.speakerId')`, speakerIds),
+      sql`${domainChanges.sequence} in (
+        select max(latest_schedule_response.sequence)
+        from domain_changes as latest_schedule_response
+        where latest_schedule_response.event_id = ${eventId}
+          and latest_schedule_response.aggregate_type = ${SCHEDULE_ACKNOWLEDGMENT_AGGREGATE}
+          and latest_schedule_response.event_type in (${SCHEDULE_ACKNOWLEDGED_EVENT}, ${SCHEDULE_CONFLICT_EVENT})
+        group by latest_schedule_response.aggregate_id
+      )`,
+    )));
+    const latest = new Map<string, RecordedScheduleAcknowledgment>();
+    for (const row of rows) {
+      if (latest.has(row.aggregateId)) continue;
+      const decoded = yield* Schema.decodeUnknown(RecordedScheduleAcknowledgmentSchema)(row.payload).pipe(
+        Effect.mapError((error) => new External({
+          service: "database",
+          detail: `Invalid schedule acknowledgment ${row.aggregateId}: ${String(error)}`,
+        })),
+      );
+      if (scheduleAcknowledgmentId(decoded.talkId, decoded.speakerId) !== row.aggregateId) {
+        return yield* Effect.fail(new External({
+          service: "database",
+          detail: `Schedule acknowledgment identity mismatch for ${row.aggregateId}`,
+        }));
+      }
+      latest.set(row.aggregateId, decoded);
+    }
+    return latest;
+  });
+
+const loadPublishedSpeakerSessions = (
+  eventId: string,
+  speakerIds: readonly string[],
+): Effect.Effect<readonly { readonly speakerId: string; readonly session: SpeakerSession }[], AppError, Db> =>
+  Effect.gen(function* () {
+    if (speakerIds.length === 0) return [];
+    const { db } = yield* Db;
+    const [sessionRows, publication, acknowledgments] = yield* Effect.all([
+      database(() => db.select({
+        speakerId: talkSpeakers.speakerId,
+        id: talks.id,
+        title: talks.title,
+        startsAt: talks.startsAt,
+        durationMin: talks.durationMin,
+        status: talks.status,
+        version: talks.version,
+        roomId: talks.roomId,
+        roomName: rooms.name,
+      }).from(talkSpeakers).innerJoin(talks, and(
+        eq(talks.eventId, talkSpeakers.eventId),
+        eq(talks.id, talkSpeakers.talkId),
+      )).leftJoin(rooms, and(
+        eq(rooms.eventId, talks.eventId),
+        eq(rooms.id, talks.roomId),
+      )).where(and(
+        eq(talkSpeakers.eventId, eventId),
+        inArray(talkSpeakers.speakerId, speakerIds),
+      )).orderBy(asc(talks.startsAt), asc(talks.title), asc(talks.id))),
+      latestPublishedSchedule(eventId),
+      latestScheduleAcknowledgments(eventId, speakerIds),
+    ], { concurrency: 1 });
+    const publishedTalkIds = new Set(publication?.talks.map(({ id: talkId }) => talkId) ?? []);
+    return sessionRows.map((row) => {
+      const startsAt = millis(row.startsAt);
+      const isPublished = publication !== null && publishedTalkIds.has(row.id) && row.status === "confirmed" && startsAt !== null;
+      const recorded = acknowledgments.get(scheduleAcknowledgmentId(row.id, row.speakerId));
+      const stillCurrent = recorded !== undefined && isPublished &&
+        recorded.startsAt === startsAt &&
+        recorded.durationMin === row.durationMin &&
+        recorded.roomId === row.roomId;
+      return {
+        speakerId: row.speakerId,
+        session: {
+          id: row.id,
+          title: row.title,
+          startsAt,
+          durationMin: row.durationMin,
+          status: row.status,
+          version: row.version,
+          roomName: row.roomName,
+          publicationRevision: isPublished ? publication.revision : null,
+          scheduleAcknowledgment: isPublished ? {
+            status: recorded === undefined ? "pending" : stillCurrent ? recorded.response : "stale",
+            note: recorded?.note ?? null,
+            respondedAt: recorded?.respondedAt ?? null,
+            respondedPublicationRevision: recorded?.publicationRevision ?? null,
+          } : null,
+        },
+      };
+    });
+  });
+
 const currentTasks = (eventId: string, speakerId: string) => Effect.gen(function* () {
   const { db } = yield* Db;
   const [allDefinitions, assignments, completions, speaker, pendingBio] = yield* Effect.all([
@@ -1169,25 +1312,7 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
       .from(speakerContacts)
       .where(and(eq(speakerContacts.eventId, input.eventId), inArray(speakerContacts.speakerId, speakerIds)))
       .orderBy(desc(speakerContacts.contactedAt), desc(speakerContacts.id))),
-    speakerIds.length === 0 ? Effect.succeed([] as readonly {
-      readonly speakerId: string;
-      readonly id: string;
-      readonly title: string;
-      readonly startsAt: Date | null;
-      readonly durationMin: number;
-      readonly status: "draft" | "confirmed" | "cancelled";
-    }[]) : database(() => db.select({
-      speakerId: talkSpeakers.speakerId,
-      id: talks.id,
-      title: talks.title,
-      startsAt: talks.startsAt,
-      durationMin: talks.durationMin,
-      status: talks.status,
-    }).from(talkSpeakers).innerJoin(talks, and(
-      eq(talks.eventId, talkSpeakers.eventId),
-      eq(talks.id, talkSpeakers.talkId),
-    )).where(and(eq(talkSpeakers.eventId, input.eventId), inArray(talkSpeakers.speakerId, speakerIds)))
-      .orderBy(asc(talks.startsAt), asc(talks.title))),
+    loadPublishedSpeakerSessions(input.eventId, speakerIds),
   ]);
   const onboardingFormIds = definitions.flatMap((task) => task.kind === "form" && task.formId !== null ? [task.formId] : []);
   const storedPrivateFieldRows = speakerIds.length === 0 || onboardingFormIds.length === 0
@@ -1289,13 +1414,7 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
       provisioningVersion: accepted?.provisioning.version ?? 0,
       provisioningStatus: accepted?.provisioning.status ?? "manual",
       provisionedAt: accepted ? millis(accepted.provisioning.provisionedAt) : null,
-      sessions: sessionRows.filter((session) => session.speakerId === speaker.id).map((session) => ({
-        id: session.id,
-        title: session.title,
-        startsAt: millis(session.startsAt),
-        durationMin: session.durationMin,
-        status: session.status,
-      })),
+      sessions: sessionRows.filter((session) => session.speakerId === speaker.id).map(({ session }) => session),
       privateFields: privateFieldRows
         .filter((field) => {
           const taskApplies = speakerDefinitions.some((task) => task.kind === "form" && task.formId === field.formId);
@@ -1316,9 +1435,14 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
     };
   });
   directoryItems.sort((left, right) => {
+    const scheduleAttention = (item: SpeakerDirectoryItem) => item.sessions.reduce((rank, session) => {
+      const status = session.scheduleAcknowledgment?.status;
+      return Math.max(rank, status === "conflict" ? 2 : status === "pending" || status === "stale" ? 1 : 0);
+    }, 0);
     const attention = (item: SpeakerDirectoryItem) => item.readiness.missingItems.length > 0 ? 1 : 0;
     const due = (item: SpeakerDirectoryItem) => item.readiness.missingItems.find((missing) => missing.overdue)?.dueAt ?? Number.MAX_SAFE_INTEGER;
-    return attention(right) - attention(left)
+    return scheduleAttention(right) - scheduleAttention(left)
+      || attention(right) - attention(left)
       || right.readiness.overdueCount - left.readiness.overdueCount
       || due(left) - due(right)
       || right.readiness.missingItems.length - left.readiness.missingItems.length
@@ -1972,7 +2096,7 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
   const sessionConfirmed = acceptance
     ? yield* loadSessionConfirmation(event.id, acceptance.submission.id, acceptance.submission.version)
     : false;
-  const [resources, uploaded, pendingRows] = yield* Effect.all([
+  const [resources, uploaded, pendingRows, sessionRows] = yield* Effect.all([
     database(() => db.select().from(pages).where(and(eq(pages.eventId, event.id), inArray(pages.audience, ["speakers", "public"]))).orderBy(asc(pages.order), asc(pages.id))),
     database(() => db.select().from(assets).where(and(
       eq(assets.eventId, event.id), eq(assets.speakerId, speaker.id), eq(assets.current, true),
@@ -1989,6 +2113,7 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
         eq(airtablePendingEdits.entityId, speaker.id),
         eq(airtablePendingEdits.status, "pending"),
       ))),
+    loadPublishedSpeakerSessions(event.id, [speaker.id]),
   ], { concurrency: 1 });
   const { head } = yield* Files;
   const commentRows = uploaded.length === 0 ? [] : yield* database(() => db.select({ comment: assetComments, authorName: users.name }).from(assetComments)
@@ -2030,6 +2155,7 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
         confirmationStatus: sessionConfirmed ? "confirmed" : "awaiting_confirmation",
       }
       : null,
+    sessions: sessionRows.map(({ session }) => session),
     provisioningStatus: "provisioned",
     tasks: progress.taskViews,
     resources: resources.map(resourceView),
@@ -2299,6 +2425,212 @@ export const respondToAcceptedSession = (
   if (withdrawn.length === 0) {
     yield* database(() => db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, idempotency.id)));
     return yield* Effect.fail(new Conflict({ message: "Accepted session changed; reload before responding" }));
+  }
+  return result;
+});
+
+export const respondToPublishedSchedule = (
+  input: RespondToPublishedScheduleInput,
+): Effect.Effect<RespondToPublishedScheduleOutput, AppError, Db | CurrentUser> => Effect.gen(function* () {
+  const event = yield* resolveEvent(input.eventId);
+  const actor = yield* selfPrincipal();
+  const { db } = yield* Db;
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const replay = yield* findReplay(event.id, "portal.respondToPublishedSchedule", actor.userId, keyHash, requestHash);
+  if (replay !== null) return yield* decodeReplay(RespondToPublishedScheduleOutputSchema, replay);
+  const current = yield* selfSpeaker(event.id);
+  const [talk] = yield* database(() => db.select({
+    id: talks.id,
+    title: talks.title,
+    startsAt: talks.startsAt,
+    durationMin: talks.durationMin,
+    roomId: talks.roomId,
+    status: talks.status,
+    version: talks.version,
+  }).from(talks).innerJoin(talkSpeakers, and(
+    eq(talkSpeakers.eventId, talks.eventId),
+    eq(talkSpeakers.talkId, talks.id),
+    eq(talkSpeakers.speakerId, current.speaker.id),
+  )).where(and(
+    eq(talks.eventId, event.id),
+    eq(talks.id, input.talkId),
+  )).limit(1));
+  if (!talk) {
+    return yield* Effect.fail(new Forbidden({ reason: "Only a scheduled speaker can respond to this session time" }));
+  }
+  const publication = yield* latestPublishedSchedule(event.id);
+  if (
+    publication === null ||
+    publication.revision !== input.expectedPublicationRevision ||
+    !publication.talks.some(({ id: talkId }) => talkId === talk.id)
+  ) {
+    return yield* Effect.fail(new Conflict({ message: "Published schedule changed; reload before responding" }));
+  }
+  if (talk.version !== input.expectedTalkVersion || talk.status !== "confirmed" || talk.startsAt === null) {
+    return yield* Effect.fail(new Conflict({ message: "Session time changed; reload before responding" }));
+  }
+  const note = input.response === "conflict" ? input.note?.trim() || null : null;
+  const aggregateId = scheduleAcknowledgmentId(talk.id, current.speaker.id);
+  const [latestVersion] = yield* database(() => db.select({
+    version: domainChanges.aggregateVersion,
+  }).from(domainChanges).where(and(
+    eq(domainChanges.eventId, event.id),
+    eq(domainChanges.aggregateType, SCHEDULE_ACKNOWLEDGMENT_AGGREGATE),
+    eq(domainChanges.aggregateId, aggregateId),
+    eq(domainChanges.eventType, SCHEDULE_ACKNOWLEDGMENT_VERSION_CLAIM),
+  )).orderBy(desc(domainChanges.aggregateVersion)).limit(1));
+  const aggregateVersion = (latestVersion?.version ?? 0) + 1;
+  const respondedAt = now();
+  const record: RecordedScheduleAcknowledgment = {
+    talkId: talk.id,
+    speakerId: current.speaker.id,
+    response: input.response,
+    publicationRevision: publication.revision,
+    talkVersion: talk.version,
+    startsAt: talk.startsAt.getTime(),
+    durationMin: talk.durationMin,
+    roomId: talk.roomId,
+    note,
+    respondedAt: respondedAt.getTime(),
+  };
+  const result: RespondToPublishedScheduleOutput = {
+    eventId: event.id,
+    talkId: talk.id,
+    speakerId: current.speaker.id,
+    response: input.response,
+    publicationRevision: publication.revision,
+    talkVersion: talk.version,
+    respondedAt: respondedAt.getTime(),
+  };
+  const idempotency = idempotencyInsert(
+    event.id,
+    "portal.respondToPublishedSchedule",
+    actor.userId,
+    keyHash,
+    requestHash,
+    respondedAt,
+  );
+  const requestId = id("portal_request");
+  const publicationGuard = sql`exists (
+    select 1
+    from domain_changes as current_schedule_publication,
+      json_each(current_schedule_publication.payload, '$.talks') as published_talk
+    where current_schedule_publication.event_id = ${event.id}
+      and current_schedule_publication.aggregate_type = 'agenda-publication'
+      and current_schedule_publication.aggregate_id = ${event.id}
+      and current_schedule_publication.aggregate_version = ${input.expectedPublicationRevision}
+      and current_schedule_publication.event_type = 'agenda/published'
+      and json_extract(published_talk.value, '$.id') = ${talk.id}
+      and not exists (
+        select 1
+        from domain_changes as newer_schedule_publication
+        where newer_schedule_publication.event_id = ${event.id}
+          and newer_schedule_publication.aggregate_type = 'agenda-publication'
+          and newer_schedule_publication.aggregate_id = ${event.id}
+          and newer_schedule_publication.event_type = 'agenda/published'
+          and newer_schedule_publication.aggregate_version > ${input.expectedPublicationRevision}
+      )
+  )`;
+  const guard = and(
+    eq(talks.eventId, event.id),
+    eq(talks.id, talk.id),
+    eq(talks.version, input.expectedTalkVersion),
+    eq(talks.status, "confirmed"),
+    isNotNull(talks.startsAt),
+    sql`exists (
+      select 1 from talk_speakers as schedule_speaker
+      where schedule_speaker.event_id = ${event.id}
+        and schedule_speaker.talk_id = ${talk.id}
+        and schedule_speaker.speaker_id = ${current.speaker.id}
+    )`,
+    publicationGuard,
+  );
+  const versionClaim = writeChange(
+    event.id,
+    SCHEDULE_ACKNOWLEDGMENT_AGGREGATE,
+    aggregateId,
+    aggregateVersion,
+    SCHEDULE_ACKNOWLEDGMENT_VERSION_CLAIM,
+    { version: aggregateVersion },
+    actor,
+    respondedAt,
+    requestId,
+    idempotency.id,
+  );
+  const responseEvent = input.response === "acknowledged" ? SCHEDULE_ACKNOWLEDGED_EVENT : SCHEDULE_CONFLICT_EVENT;
+  const responseChange = writeChange(
+    event.id,
+    SCHEDULE_ACKNOWLEDGMENT_AGGREGATE,
+    aggregateId,
+    aggregateVersion,
+    responseEvent,
+    record,
+    actor,
+    respondedAt,
+    requestId,
+    idempotency.id,
+  );
+  const audit = {
+    id: id("audit"),
+    eventId: event.id,
+    requestId,
+    actorUserId: actor.actorUserId,
+    actorApiKeyId: actor.actorApiKeyId,
+    action: responseEvent,
+    resourceType: "talk",
+    resourceId: talk.id,
+    before: null,
+    after: record,
+    metadata: { speakerId: current.speaker.id, publicationRevision: publication.revision },
+    occurredAt: respondedAt,
+  } satisfies typeof auditLog.$inferInsert;
+  const committed = yield* database(() => db.batch([
+    db.insert(idempotencyRecords).values(idempotency),
+    db.insert(domainChanges).select(
+      db.select(changeSelection(versionClaim)).from(talks).where(guard),
+    ),
+    db.insert(domainChanges).select(
+      db.select(changeSelection(responseChange)).from(talks).where(guard),
+    ).returning({ id: domainChanges.id }),
+    db.insert(auditLog).select(
+      db.select(auditSelection(audit)).from(talks).where(guard),
+    ),
+    db.update(idempotencyRecords).set({
+      status: "completed",
+      responseStatus: 200,
+      responseBody: result,
+      completedAt: respondedAt,
+    }).where(and(
+      eq(idempotencyRecords.id, idempotency.id),
+      sql`exists (select 1 from domain_changes where id = ${responseChange.id})`,
+    )),
+  ])).pipe(Effect.either);
+  if (committed._tag === "Left") {
+    if (
+      committed.left.detail?.includes("idempotency_key_unique") === true ||
+      committed.left.detail?.includes("UNIQUE constraint failed: idempotency_records") === true
+    ) {
+      const racedReplay = yield* findReplay(
+        event.id,
+        "portal.respondToPublishedSchedule",
+        actor.userId,
+        keyHash,
+        requestHash,
+      );
+      if (racedReplay !== null) return yield* decodeReplay(RespondToPublishedScheduleOutputSchema, racedReplay);
+    }
+    if (
+      committed.left.detail?.includes("domain_changes_aggregate_version_unique") === true ||
+      committed.left.detail?.includes("UNIQUE constraint failed: domain_changes.event_id, domain_changes.aggregate_type, domain_changes.aggregate_id, domain_changes.aggregate_version, domain_changes.event_type") === true
+    ) {
+      return yield* Effect.fail(new Conflict({ message: "Schedule response changed; reload before responding" }));
+    }
+    return yield* Effect.fail(committed.left);
+  }
+  const inserted = committed.right[2] as readonly { readonly id: string }[];
+  if (inserted.length === 0) {
+    yield* database(() => db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, idempotency.id)));
+    return yield* Effect.fail(new Conflict({ message: "Published schedule changed; reload before responding" }));
   }
   return result;
 });

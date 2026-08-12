@@ -22,6 +22,7 @@ import {
   speakerProfiles,
   submissionSpeakers,
   submissions,
+  talks,
   taskCompletions,
   taskAssignments,
   tasks,
@@ -65,6 +66,7 @@ import {
   restoreContentVersion,
   reviewSpeakerProfile,
   respondToAcceptedSession,
+  respondToPublishedSchedule,
   downloadContent,
   sendSpeakerMessages,
   enqueueAutomatedDueTaskReminders,
@@ -251,6 +253,55 @@ const publishSpeakerGallery = async (eventId: string, speakerIds: readonly strin
   });
 };
 
+const publishAgendaForSpeaker = async ({
+  eventId,
+  eventSlug,
+  talkId,
+  startsAt,
+  revision = 1,
+}: {
+  readonly eventId: string;
+  readonly eventSlug: string;
+  readonly talkId: string;
+  readonly startsAt: number;
+  readonly revision?: number;
+}) => {
+  const occurredAt = new Date();
+  await drizzle(env.DB).insert(domainChanges).values({
+    id: `agenda-publication-${eventId}-${revision}`,
+    eventId,
+    aggregateType: "agenda-publication",
+    aggregateId: eventId,
+    aggregateVersion: revision,
+    eventType: "agenda/published",
+    audiences: [{ kind: "public" }],
+    payload: {
+      eventId,
+      eventName: "Portal schedule event",
+      eventSlug,
+      timezone: "UTC",
+      location: "Demo Hall",
+      revision,
+      publishedAt: occurredAt.getTime(),
+      talks: [{
+        id: talkId,
+        title: "Accepted talk",
+        description: null,
+        track: null,
+        room: "Main stage",
+        startsAt,
+        durationMin: 30,
+        speakerNames: ["Exact speaker"],
+      }],
+    },
+    actorUserId: owner.userId,
+    actorApiKeyId: null,
+    requestId: `agenda-publication-${eventId}-${revision}`,
+    idempotencyRecordId: null,
+    occurredAt,
+  });
+};
+
 beforeAll(async () => {
   if (!("TEST_MIGRATIONS" in env)) throw new Error("TEST_MIGRATIONS test binding is unavailable");
   await applyD1Migrations(env.DB, [...(env as TestEnv).TEST_MIGRATIONS]);
@@ -278,6 +329,12 @@ describe("portal service", () => {
     expect(operations.find(({ id }) => id === "portal.respondToAcceptedSession")).toMatchObject({
       authorize: { kind: "browser-session" },
       rest: { method: "post", path: "/events/:eventId/portal/sessions/:submissionId/respond" },
+      idempotency: "required",
+      concurrency: "required",
+    });
+    expect(operations.find(({ id }) => id === "portal.respondToPublishedSchedule")).toMatchObject({
+      authorize: { kind: "browser-session" },
+      rest: { method: "post", path: "/events/:eventId/portal/schedule/:talkId/respond" },
       idempotency: "required",
       concurrency: "required",
     });
@@ -752,6 +809,132 @@ describe("portal service", () => {
       eq(domainChanges.aggregateId, setup.submissionId),
       eq(domainChanges.eventType, "portal.session.confirmed"),
     ))).toHaveLength(1);
+  });
+
+  it("binds speaker schedule responses to published session facts and marks moved talks stale", async () => {
+    const setup = await fixture();
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const roomId = `schedule-room-${setup.eventId}`;
+    const talkId = `schedule-talk-${setup.eventId}`;
+    const scheduledAt = Date.UTC(2027, 4, 11, 18, 30);
+    await env.DB.batch([
+      env.DB.prepare("insert into rooms (id, event_id, name, version, created_at, updated_at) values (?, ?, 'Main stage', 1, ?, ?)").bind(roomId, setup.eventId, scheduledAt, scheduledAt),
+      env.DB.prepare("insert into talks (id, event_id, submission_id, title, room_id, starts_at, duration_min, status, version, created_at, updated_at) values (?, ?, ?, 'Accepted talk', ?, ?, 30, 'confirmed', 1, ?, ?)").bind(talkId, setup.eventId, setup.submissionId, roomId, scheduledAt, scheduledAt, scheduledAt),
+      env.DB.prepare("insert into talk_speakers (id, event_id, talk_id, speaker_id, created_at) values (?, ?, ?, ?, ?)").bind(`schedule-talk-speaker-${setup.eventId}`, setup.eventId, talkId, setup.speakerId, scheduledAt),
+    ]);
+    await publishAgendaForSpeaker({
+      eventId: setup.eventId,
+      eventSlug: setup.eventSlug,
+      talkId,
+      startsAt: scheduledAt,
+    });
+
+    const pending = await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug }));
+    expect(pending.sessions).toEqual([expect.objectContaining({
+      id: talkId,
+      startsAt: scheduledAt,
+      roomName: "Main stage",
+      publicationRevision: 1,
+      scheduleAcknowledgment: {
+        status: "pending",
+        note: null,
+        respondedAt: null,
+        respondedPublicationRevision: null,
+      },
+    })]);
+
+    const conflictInput = {
+      eventId: setup.eventSlug,
+      talkId,
+      expectedTalkVersion: 1,
+      expectedPublicationRevision: 1,
+      response: "conflict",
+      note: "I land after this session starts.",
+      idempotencyKey: `schedule-conflict-${setup.eventId}`,
+    } as const;
+    await expectFailure(otherUser, respondToPublishedSchedule(conflictInput), "Forbidden");
+    await expectFailure(speakerUser, respondToPublishedSchedule({ ...conflictInput, expectedTalkVersion: 2 }), "Conflict");
+    const conflict = await runAs(speakerUser, respondToPublishedSchedule(conflictInput));
+    expect(conflict).toMatchObject({
+      eventId: setup.eventId,
+      talkId,
+      speakerId: setup.speakerId,
+      response: "conflict",
+      publicationRevision: 1,
+      talkVersion: 1,
+    });
+    await expect(runAs(speakerUser, respondToPublishedSchedule(conflictInput))).resolves.toEqual(conflict);
+    expect((await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }))).sessions[0]?.scheduleAcknowledgment)
+      .toMatchObject({ status: "conflict", note: "I land after this session starts.", respondedPublicationRevision: 1 });
+    expect((await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }))).speakers[0]?.sessions[0]?.scheduleAcknowledgment)
+      .toMatchObject({ status: "conflict", note: "I land after this session starts." });
+
+    const movedAt = scheduledAt + 3_600_000;
+    const db = drizzle(env.DB);
+    await db.update(talks).set({ startsAt: new Date(movedAt), version: 2, updatedAt: new Date() }).where(and(
+      eq(talks.eventId, setup.eventId),
+      eq(talks.id, talkId),
+    ));
+    expect((await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }))).sessions[0]).toMatchObject({
+      startsAt: movedAt,
+      version: 2,
+      scheduleAcknowledgment: {
+        status: "stale",
+        note: "I land after this session starts.",
+        respondedPublicationRevision: 1,
+      },
+    });
+    await expectFailure(speakerUser, respondToPublishedSchedule({
+      ...conflictInput,
+      response: "acknowledged",
+      note: null,
+      idempotencyKey: `schedule-stale-${setup.eventId}`,
+    }), "Conflict");
+
+    const acknowledged = await runAs(speakerUser, respondToPublishedSchedule({
+      ...conflictInput,
+      expectedTalkVersion: 2,
+      response: "acknowledged",
+      note: null,
+      idempotencyKey: `schedule-acknowledged-${setup.eventId}`,
+    }));
+    expect(acknowledged).toMatchObject({ response: "acknowledged", talkVersion: 2 });
+    expect((await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }))).sessions[0]?.scheduleAcknowledgment)
+      .toMatchObject({ status: "acknowledged", note: null });
+    const raced = await Promise.all([
+      runEither(speakerUser, respondToPublishedSchedule({
+        ...conflictInput,
+        expectedTalkVersion: 2,
+        response: "acknowledged",
+        note: null,
+        idempotencyKey: `schedule-race-ack-${setup.eventId}`,
+      })),
+      runEither(speakerUser, respondToPublishedSchedule({
+        ...conflictInput,
+        expectedTalkVersion: 2,
+        response: "conflict",
+        note: "A new travel conflict appeared.",
+        idempotencyKey: `schedule-race-conflict-${setup.eventId}`,
+      })),
+    ]);
+    expect(raced.filter(({ _tag }) => _tag === "Right")).toHaveLength(1);
+    expect(raced.filter(({ _tag }) => _tag === "Left")).toEqual([
+      expect.objectContaining({ left: expect.objectContaining({ _tag: "Conflict" }) }),
+    ]);
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, setup.eventId),
+      eq(domainChanges.aggregateType, "schedule-acknowledgment"),
+      inArray(domainChanges.eventType, ["portal.schedule.acknowledged", "portal.schedule.conflict-reported"]),
+    ))).toHaveLength(3);
+    expect(await db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, setup.eventId),
+      inArray(auditLog.action, ["portal.schedule.acknowledged", "portal.schedule.conflict-reported"]),
+    ))).toHaveLength(3);
   });
 
   it("withdraws atomically, revokes provisioning, and clears every linked agenda slot", async () => {

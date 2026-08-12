@@ -22,6 +22,7 @@ import {
   SendSpeakerMessagesOutput,
   SpeakerProfile,
   RespondToAcceptedSessionOutput,
+  RespondToPublishedScheduleOutput,
   type AddContentCommentInput,
   type CreateManagedSpeakerInput,
   type CreateResourceInput,
@@ -43,6 +44,7 @@ import {
   type ProvisionSpeakerInput,
   type RestoreContentVersionInput,
   type RespondToAcceptedSessionInput,
+  type RespondToPublishedScheduleInput,
   type ReviewSpeakerProfileInput,
   type SendSpeakerMessagesInput,
   type SubmitProfileReviewInput,
@@ -191,6 +193,15 @@ export function respondToAcceptedSession(eventSlug: string, input: RespondToAcce
     method: "POST",
     body,
     schema: RespondToAcceptedSessionOutput,
+  });
+}
+
+export function respondToPublishedSchedule(eventSlug: string, input: RespondToPublishedScheduleInput) {
+  const body = requestBody(input, "eventId", "talkId");
+  return apiFetch(`${api}/events/${segment(eventSlug)}/portal/schedule/${segment(input.talkId)}/respond`, {
+    method: "POST",
+    body,
+    schema: RespondToPublishedScheduleOutput,
   });
 }
 

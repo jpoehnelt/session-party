@@ -30,6 +30,7 @@ import {
   logSpeakerContact,
   getTaskDefinitions,
   provisionSpeaker,
+  respondToPublishedSchedule,
   setSpeakerTaskCompletion,
   submitSpeakerTaskForm,
   updateResource,
@@ -137,6 +138,7 @@ const snapshot: PortalSnapshot = {
   event,
   speaker: profile,
   submission: { id: "submission-stage", title: "The calm show call", category: "Operations", version: 2, confirmationStatus: "awaiting_confirmation" },
+  sessions: [],
   provisioningStatus: "provisioned",
   tasks: [{
     ...task,
@@ -374,6 +376,43 @@ describe("portal API loading", () => {
     );
   });
 
+  it("posts a revision-bound published schedule response through the speaker-only endpoint", async () => {
+    const response = {
+      eventId: event.id,
+      talkId: "talk-published",
+      speakerId: profile.id,
+      response: "conflict" as const,
+      publicationRevision: 4,
+      talkVersion: 7,
+      respondedAt: 1_786_000_000_000,
+    };
+    const fetchMock = vi.fn(async () => ok(response));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(respondToPublishedSchedule(event.slug, {
+      eventId: event.id,
+      talkId: response.talkId,
+      expectedTalkVersion: 7,
+      expectedPublicationRevision: 4,
+      response: "conflict",
+      note: "My flight arrives later.",
+      idempotencyKey: "schedule-response-browser-session",
+    })).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/events/${event.slug}/portal/schedule/${response.talkId}/respond`,
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          expectedTalkVersion: 7,
+          expectedPublicationRevision: 4,
+          response: "conflict",
+          note: "My flight arrives later.",
+          idempotencyKey: "schedule-response-browser-session",
+        }),
+      }),
+    );
+  });
+
   it("resolves organizer event slug before loading authoritative directory and task DTOs", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -553,6 +592,40 @@ describe("speaker portal content", () => {
     expect(markup).toContain("Attendance confirmed");
     expect(markup).not.toContain("Confirm this session");
     expect(markup).toContain("Withdraw session");
+  });
+
+  it("renders the published time and requires a separate schedule acknowledgment", () => {
+    const markup = renderToStaticMarkup(createElement(SpeakerPortalContent, {
+      snapshot: {
+        ...snapshot,
+        sessions: [{
+          id: "talk-published",
+          title: "The calm show call",
+          startsAt: Date.UTC(2027, 4, 11, 18, 30),
+          durationMin: 30,
+          status: "confirmed",
+          version: 7,
+          roomName: "Main stage",
+          publicationRevision: 4,
+          scheduleAcknowledgment: {
+            status: "pending",
+            note: null,
+            respondedAt: null,
+            respondedPublicationRevision: null,
+          },
+        }],
+      },
+      onSaveProfile: noop,
+      onToggleTask: noop,
+      onRespondToSchedule: noop,
+      onUpload: noop,
+      onSubmitTaskForm: succeeds,
+    }));
+    expect(markup).toContain("Published schedule");
+    expect(markup).toContain("Main stage");
+    expect(markup).toContain("Response needed");
+    expect(markup).toContain("Acknowledge schedule");
+    expect(markup).toContain("Report a conflict");
   });
 
   it("renders the persisted uploaded headshot ahead of a stale profile URL", () => {
@@ -892,6 +965,43 @@ describe("organizer content and workflows", () => {
     expect(markup).toContain("Replace headshot");
     expect(markup).toContain("Edit profile");
     expect(markup).toContain("Inspect Dana Operations");
+  });
+
+  it("surfaces published schedule conflicts in the organizer readiness inspector", () => {
+    const conflictedDirectory: SpeakerDirectory = {
+      ...directory,
+      speakers: [{
+        ...directory.speakers[0]!,
+        sessions: [{
+          id: "talk-conflict",
+          title: "The calm show call",
+          startsAt: Date.UTC(2027, 4, 11, 18, 30),
+          durationMin: 30,
+          status: "confirmed",
+          version: 3,
+          roomName: "Main stage",
+          publicationRevision: 2,
+          scheduleAcknowledgment: {
+            status: "conflict",
+            note: "My flight arrives later.",
+            respondedAt: Date.UTC(2027, 4, 1),
+            respondedPublicationRevision: 2,
+          },
+        }],
+      }],
+    };
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null,
+      createElement(OrganizerSpeakersContent, {
+        directory: conflictedDirectory,
+        onProvision: noop,
+        onVisibility: noop,
+      }),
+    ));
+    expect(markup).toContain("Schedule conflicts");
+    expect(markup).toContain("Conflict reported");
+    expect(markup).toContain("My flight arrives later.");
+    expect(filterSpeakerDirectory(conflictedDirectory.speakers, "", "needs_attention")).toHaveLength(1);
+    expect(filterSpeakerDirectory(conflictedDirectory.speakers, "", "ready")).toHaveLength(0);
   });
 
   it("filters a large speaker directory by search text and operational state", () => {
