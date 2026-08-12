@@ -32,28 +32,8 @@ ALTER TABLE `assets` ADD `supersedes_asset_id` text;--> statement-breakpoint
 ALTER TABLE `assets` ADD `restored_from_asset_id` text;--> statement-breakpoint
 ALTER TABLE `assets` ADD `current` integer DEFAULT true NOT NULL;--> statement-breakpoint
 CREATE INDEX `assets_speaker_purpose` ON `assets` (`event_id`,`speaker_id`,`purpose`,`current`);--> statement-breakpoint
-CREATE TABLE `__new_review_rounds` (
-	`id` text PRIMARY KEY NOT NULL,
-	`event_id` text NOT NULL,
-	`name` text NOT NULL,
-	`order` integer NOT NULL,
-	`status` text DEFAULT 'pending' NOT NULL,
-	`starts_at` integer,
-	`ends_at` integer,
-	`blind` integer DEFAULT false NOT NULL,
-	`rubric` text,
-	`version` integer DEFAULT 1 NOT NULL,
-	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL,
-	FOREIGN KEY (`event_id`) REFERENCES `events`(`id`) ON UPDATE cascade ON DELETE cascade,
-	CONSTRAINT "review_rounds_date_order" CHECK("__new_review_rounds"."starts_at" is null or "__new_review_rounds"."ends_at" is null or "__new_review_rounds"."ends_at" > "__new_review_rounds"."starts_at"),
-	CONSTRAINT "review_rounds_version_positive" CHECK("__new_review_rounds"."version" > 0)
-);
---> statement-breakpoint
-INSERT INTO `__new_review_rounds`("id", "event_id", "name", "order", "status", "starts_at", "ends_at", "blind", "rubric", "version", "created_at", "updated_at") SELECT "id", "event_id", "name", "order", "status", NULL, NULL, 0, "rubric", "version", "created_at", "updated_at" FROM `review_rounds`;--> statement-breakpoint
-DROP TABLE `review_rounds`;--> statement-breakpoint
-ALTER TABLE `__new_review_rounds` RENAME TO `review_rounds`;--> statement-breakpoint
-CREATE UNIQUE INDEX `review_rounds_event_id_unique` ON `review_rounds` (`event_id`,`id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `review_rounds_event_order_unique` ON `review_rounds` (`event_id`,`order`);--> statement-breakpoint
+ALTER TABLE `review_rounds` ADD `starts_at` integer;--> statement-breakpoint
+ALTER TABLE `review_rounds` ADD `ends_at` integer CONSTRAINT "review_rounds_date_order" CHECK(`starts_at` is null or `ends_at` is null or `ends_at` > `starts_at`);--> statement-breakpoint
+ALTER TABLE `review_rounds` ADD `blind` integer DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE `speakers` ADD `workflow_status` text DEFAULT 'Invited' NOT NULL;--> statement-breakpoint
 ALTER TABLE `tasks` ADD `target_mode` text DEFAULT 'all' NOT NULL;

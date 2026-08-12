@@ -52,17 +52,9 @@
       "workers_dev": true,
       "preview_urls": false,
       "observability": { "enabled": true },
-      "triggers": { "crons": ["* * * * *"] },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          // Hackathon previews deliberately share production data. PR CI never migrates it.
-          "database_name": "session-party",
-          "database_id": "2cb93013-05e8-48bc-865d-f99a0a0096da",
-          "migrations_dir": "migrations"
-        }
-      ],
-      "r2_buckets": [{ "binding": "FILES", "bucket_name": "session-party-files" }],
+      // PR previews are UI-only until isolated preview storage is provisioned.
+      // Keep this explicit because triggers are inherited from the top-level config.
+      "triggers": { "crons": [] },
       "durable_objects": {
         "bindings": [
           { "name": "EVENT_ROOM", "class_name": "EventRoom" },
