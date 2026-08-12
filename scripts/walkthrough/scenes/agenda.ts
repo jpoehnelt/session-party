@@ -6,13 +6,14 @@ export const agendaScene: Scene = {
   title: "Conflict-aware agenda building",
   narration: "Accepted proposals enter the agenda without retyping. Organizers place sessions across days, rooms, and tracks; named conflict validation protects the plan, and publication enforces a clean schedule.",
   shortSeconds: 9,
-  async run({ page, baseUrl, eventSlug, titleCard, spotlight, clearSpotlight, scrollBy, pause }) {
+  async run({ page, baseUrl, eventSlug, titleCard, spotlight, clearSpotlight, clearTechnicalOverlay, scrollBy, pause }) {
     await loginAs(page, baseUrl, "organizer", `/e/${eventSlug}/agenda`);
     await page.goto(`${baseUrl}/e/${eventSlug}/agenda`, { waitUntil: "networkidle" });
     await titleCard("Agenda builder", "Multi-day placement with named room and speaker conflict checks.", [
-      "Replace scheduling SaaS → agenda.createTalk + placement ops",
-      "Normalized speaker identity conflict graph",
-      "D1 draft → immutable publication revision",
+      "Replaces|Scheduling board and conflict-checking SaaS",
+      "Ingest|agenda.createTalk carries accepted proposal identity and track",
+      "Concurrency|Optimistic talk versions; D1 is the private draft authority",
+      "Conflicts|Normalized speaker identity plus room/time overlap graph",
     ]);
     await spotlight("h1", "Private agenda");
     await pause(1_600);
@@ -25,6 +26,7 @@ export const agendaScene: Scene = {
     if (await conflict.count()) await spotlight("text=/00.*conflict/i", "Clear to publish");
     await pause(2_000);
     await clearSpotlight();
+    await clearTechnicalOverlay();
     await scrollBy(500);
     await pause(3_000);
   },

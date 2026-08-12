@@ -2,18 +2,20 @@ import type { Locator, Page } from "playwright";
 
 const overlayCss = `
   [data-walkthrough-layer]{position:fixed;inset:0;z-index:2147483647;pointer-events:none;font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-  [data-walkthrough-cursor]{position:absolute;width:32px;height:32px;border:4px solid #caff4a;border-radius:50%;box-shadow:0 0 0 3px #171714,0 4px 18px #0008;transform:translate(-50%,-50%);left:50%;top:50%;transition:left .28s ease,top .28s ease}
-  [data-walkthrough-callout]{display:none;position:absolute;border:4px solid #7857ff;box-shadow:0 0 0 4px #fff,8px 8px 0 #171714;transition:all .28s ease}
-  [data-walkthrough-callout]::after{content:attr(data-label);position:absolute;left:-4px;top:-38px;background:#171714;color:#fff;padding:6px 10px;font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
+  [data-walkthrough-cursor]{position:absolute;width:34px;height:34px;border:5px solid #00e5ff;background:#fff;border-radius:50%;box-shadow:0 0 0 3px #071820,0 0 24px #00e5ff;transform:translate(-50%,-50%);left:50%;top:50%;transition:left .28s ease,top .28s ease}
+  [data-walkthrough-callout]{display:none;position:absolute;border:5px solid #00e5ff;box-shadow:0 0 0 4px #fff,0 0 0 9999px #06121999,9px 9px 0 #071820;transition:all .28s ease}
+  [data-walkthrough-callout]::after{content:attr(data-label);position:absolute;left:-5px;top:-42px;background:#00e5ff;color:#061219;border:3px solid #fff;padding:7px 11px;font:950 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;box-shadow:4px 4px 0 #071820}
   [data-walkthrough-callout][data-side=right]::after{left:auto;right:-4px}
   [data-walkthrough-title]{display:none;position:absolute;left:50%;top:50%;width:min(760px,80vw);transform:translate(-50%,-50%);background:#fffdf7;border:5px solid #171714;box-shadow:14px 14px 0 #7857ff;padding:34px 42px;text-align:left}
   [data-walkthrough-title] strong{display:block;font-size:48px;line-height:1;font-weight:950;letter-spacing:-.055em;color:#171714}
   [data-walkthrough-title] span{display:block;margin-top:16px;font-size:22px;line-height:1.35;font-weight:700;color:#4f4a40}
-  [data-walkthrough-tech]{display:none;position:absolute;right:30px;top:30px;width:min(570px,42vw);background:#171714;color:#fff;border:4px solid #caff4a;box-shadow:10px 10px 0 #7857ff;padding:22px 24px}
-  [data-walkthrough-tech] b{display:block;color:#caff4a;font-size:13px;font-weight:950;letter-spacing:.16em;text-transform:uppercase;margin-bottom:12px}
-  [data-walkthrough-tech] ul{display:grid;gap:9px;margin:0;padding:0;list-style:none}
-  [data-walkthrough-tech] li{font:800 17px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;color:#fff}
-  [data-walkthrough-tech] li::before{content:'→';color:#caff4a;margin-right:10px}
+  [data-walkthrough-tech]{display:none;position:absolute;right:28px;top:28px;width:min(660px,46vw);background:#061219f2;color:#fff;border:4px solid #00e5ff;box-shadow:0 0 0 4px #fff,12px 12px 0 #071820;padding:20px 22px}
+  [data-walkthrough-tech] b{display:block;color:#00e5ff;font:950 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.16em;text-transform:uppercase;margin-bottom:14px}
+  [data-walkthrough-tech] ul{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+  [data-walkthrough-tech] li{display:grid;grid-template-columns:8.5rem minmax(0,1fr);gap:12px;border-top:1px solid #ffffff33;padding-top:9px;font:750 15px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#fff}
+  [data-walkthrough-tech] li:first-child{border-top:0;padding-top:0}
+  [data-walkthrough-tech] em{color:#00e5ff;font-style:normal;font-weight:950;letter-spacing:.07em;text-transform:uppercase}
+  [data-walkthrough-tech] span{color:#fff}
 `;
 
 export async function installPresentationLayer(page: Page) {
@@ -21,7 +23,7 @@ export async function installPresentationLayer(page: Page) {
     if ((globalThis as any).document.querySelector("[data-walkthrough-layer]")) return;
     const layer = (globalThis as any).document.createElement("div");
     layer.dataset.walkthroughLayer = "true";
-    layer.innerHTML = "<div data-walkthrough-cursor></div><div data-walkthrough-callout></div><div data-walkthrough-title><strong></strong><span></span></div><aside data-walkthrough-tech><b>Killing the SaaS layer · open primitives</b><ul></ul></aside>";
+    layer.innerHTML = "<div data-walkthrough-cursor></div><div data-walkthrough-callout></div><div data-walkthrough-title><strong></strong><span></span></div><aside data-walkthrough-tech><b>Technical trace · replacing SaaS with owned primitives</b><ul></ul></aside>";
     (globalThis as any).document.documentElement.append(layer);
     const style = (globalThis as any).document.createElement("style");
     style.dataset.walkthroughStyle = "true";
@@ -38,7 +40,7 @@ export async function titleCard(page: Page, title: string, subtitle: string, tec
     card.querySelector("span")!.textContent = subtitle;
     card.style.display = "block";
   }, { title, subtitle });
-  await page.waitForTimeout(2_200);
+  await page.waitForTimeout(1_250);
   await page.evaluate(() => {
     const card = (globalThis as any).document.querySelector("[data-walkthrough-title]");
     if (card) card.style.display = "none";
@@ -49,17 +51,25 @@ export async function titleCard(page: Page, title: string, subtitle: string, tec
       const list = panel.querySelector("ul")!;
       list.replaceChildren(...items.map((item: string) => {
         const row = (globalThis as any).document.createElement("li");
-        row.textContent = item;
+        const [label, ...rest] = item.split("|");
+        const key = (globalThis as any).document.createElement("em");
+        key.textContent = label ?? "Trace";
+        const value = (globalThis as any).document.createElement("span");
+        value.textContent = rest.join("|") || item;
+        row.append(key, value);
         return row;
       }));
       panel.style.display = "block";
     }, technicalDetails);
-    await page.waitForTimeout(3_200);
-    await page.evaluate(() => {
-      const panel = (globalThis as any).document.querySelector("[data-walkthrough-tech]");
-      if (panel) panel.style.display = "none";
-    });
+    await page.waitForTimeout(500);
   }
+}
+
+export async function clearTechnicalOverlay(page: Page) {
+  await page.evaluate(() => {
+    const panel = (globalThis as any).document.querySelector("[data-walkthrough-tech]");
+    if (panel) panel.style.display = "none";
+  });
 }
 
 async function boxFor(locator: Locator) {
