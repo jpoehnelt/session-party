@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Select, Textarea } from "@/ui";
 import {
-  acceptSubmissionRequest,
   appendReviewCommentRequest,
   assignReviewerRequest,
   recuseAssignmentRequest,
   removeAssignmentRequest,
-  rejectSubmissionRequest,
   revokeAcceptanceRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
+  stageDecisionRequest,
 } from "../routes/mutations";
 import type {
   CriterionScore,
@@ -55,6 +54,7 @@ export interface SubmissionDecisionKeys {
   readonly lifecycleIdentity: string;
   readonly acceptance: string;
   readonly rejection: string;
+  readonly clearance: string;
   readonly revocation: string;
 }
 
@@ -77,6 +77,7 @@ export const decisionKeysForSubmission = (
         lifecycleIdentity,
         acceptance: `review-accept-${crypto.randomUUID()}`,
         rejection: `review-reject-${crypto.randomUUID()}`,
+        clearance: `review-clear-${crypto.randomUUID()}`,
         revocation: `review-revoke-${crypto.randomUUID()}`,
       };
 
@@ -179,7 +180,7 @@ export function SubmissionReviewPane({
   const [threadBody, setThreadBody] = useState("");
   const [recusalReason, setRecusalReason] = useState("");
   const [confirmedAiSuggestionId, setConfirmedAiSuggestionId] = useState<string>();
-  const [pendingOperation, setPendingOperation] = useState<"assign" | "remove" | "recuse" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject">();
+  const [pendingOperation, setPendingOperation] = useState<"assign" | "remove" | "recuse" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject" | "clear">();
   const [mutationError, setMutationError] = useState<string>();
   const decisionKeysRef = useRef<SubmissionDecisionKeys | undefined>(undefined);
   const decisionKeys = decisionKeysForSubmission(
@@ -323,9 +324,10 @@ export function SubmissionReviewPane({
 
   const acceptSubmission = () => {
     if (!organizer || submission.acceptance || submission.status === "rejected" || !primarySpeaker) return;
-    void runMutation("accept", () => acceptSubmissionRequest({
+    void runMutation("accept", () => stageDecisionRequest({
       eventId,
       submissionId: submission.id,
+      decision: "accepted",
       expectedVersion: submission.version,
       idempotencyKey: decisionKeys.acceptance,
       requestId: operationRequestId("review-accept"),
@@ -334,12 +336,25 @@ export function SubmissionReviewPane({
 
   const rejectSubmission = () => {
     if (!organizer || submission.acceptance || submission.status === "rejected") return;
-    void runMutation("reject", () => rejectSubmissionRequest({
+    void runMutation("reject", () => stageDecisionRequest({
       eventId,
       submissionId: submission.id,
+      decision: "rejected",
       expectedVersion: submission.version,
       idempotencyKey: decisionKeys.rejection,
       requestId: operationRequestId("review-reject"),
+    }));
+  };
+
+  const clearStagedDecision = () => {
+    if (!organizer || !submission.pendingDecision || submission.acceptance || submission.status === "rejected") return;
+    void runMutation("clear", () => stageDecisionRequest({
+      eventId,
+      submissionId: submission.id,
+      decision: null,
+      expectedVersion: submission.version,
+      idempotencyKey: decisionKeys.clearance,
+      requestId: operationRequestId("review-clear-decision"),
     }));
   };
 
@@ -665,6 +680,42 @@ export function SubmissionReviewPane({
             </div>
           )}
         </Card>
+      ) : submission.pendingDecision ? (
+        <Card className="[&>header]:bg-production-sky [&>header_h3]:text-ink" title="Staged decision">
+          <Badge tone={submission.pendingDecision === "accepted" ? "success" : "danger"}>
+            {submission.pendingDecision === "accepted" ? "Accept" : "Reject"} · private
+          </Badge>
+          <p className="mt-2 text-sm text-ink-secondary">
+            This decision is visible only to organizers until it is explicitly released with the decision queue.
+          </p>
+          {organizer && (
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button
+                disabled={!primarySpeaker || pendingOperation !== undefined || submission.pendingDecision === "accepted"}
+                loading={pendingOperation === "accept"}
+                onClick={acceptSubmission}
+              >
+                Change to accept
+              </Button>
+              <Button
+                variant="danger"
+                disabled={pendingOperation !== undefined || submission.pendingDecision === "rejected"}
+                loading={pendingOperation === "reject"}
+                onClick={rejectSubmission}
+              >
+                Change to reject
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={pendingOperation !== undefined}
+                loading={pendingOperation === "clear"}
+                onClick={clearStagedDecision}
+              >
+                Remove staged decision
+              </Button>
+            </div>
+          )}
+        </Card>
       ) : submission.status === "rejected" ? (
         <Card title="Proposal decision">
           <Badge tone="danger">Rejected</Badge>
@@ -673,9 +724,9 @@ export function SubmissionReviewPane({
       ) : organizer ? (
         <Card className="[&>header]:bg-production-lime [&>header_h3]:text-ink" title="Acceptance decision">
           <p className="text-sm text-ink-secondary">
-            Accepting records this exact proposal version and requests portal provisioning for {primarySpeaker?.displayName ?? "the primary speaker"}.
+            Stage an accept or reject decision privately. Speakers and submitters see no change until an organizer releases the decision queue.
           </p>
-          <p className="mt-2 text-sm text-ink-secondary">Accepting or rejecting updates the proposal dashboard only. No email is sent.</p>
+          <p className="mt-2 text-sm text-ink-secondary">Staging does not provision a speaker, alter the proposal dashboard, or send email.</p>
           {!primarySpeaker && <p role="alert" className="mt-2 text-sm text-danger">A primary speaker is required before acceptance.</p>}
           <div className="mt-4 flex flex-wrap gap-3">
             <Button
@@ -683,7 +734,7 @@ export function SubmissionReviewPane({
               loading={pendingOperation === "accept"}
               onClick={acceptSubmission}
             >
-              Accept &amp; provision primary speaker
+              Stage acceptance
             </Button>
             <Button
               variant="danger"
@@ -691,7 +742,7 @@ export function SubmissionReviewPane({
               loading={pendingOperation === "reject"}
               onClick={rejectSubmission}
             >
-              Reject proposal
+              Stage rejection
             </Button>
           </div>
         </Card>

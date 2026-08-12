@@ -15,6 +15,7 @@ import { compareReviewQueue } from "../ordering";
 import {
   bulkAssignReviewersRequest,
   exportReviewResultsRequest,
+  releaseDecisionsRequest,
   sendReviewRemindersRequest,
 } from "./mutations";
 
@@ -483,16 +484,27 @@ export function ReviewWorkbenchContent({
   const [selectedReviewerIds, setSelectedReviewerIds] = useState<ReadonlySet<string>>(new Set());
   const [assignmentStrategy, setAssignmentStrategy] = useState<"all" | "balanced">("balanced");
   const [reviewsPerSubmission, setReviewsPerSubmission] = useState(1);
-  const [bulkPending, setBulkPending] = useState<"assign" | "remind" | "export">();
+  const [bulkPending, setBulkPending] = useState<"assign" | "remind" | "export" | "release">();
   const [bulkMessage, setBulkMessage] = useState<string>();
+  const [releaseMessage, setReleaseMessage] = useState<string>();
+  const [selectedDecisionIds, setSelectedDecisionIds] = useState<ReadonlySet<string>>(new Set());
   const bulkKey = useRef(`review-bulk-${crypto.randomUUID()}`);
   const reminderKey = useRef(`review-reminders-${crypto.randomUUID()}`);
+  const releaseKey = useRef(`review-release-${crypto.randomUUID()}`);
   const searchRef = useRef<HTMLInputElement>(null);
   const detailRef = useRef<HTMLElement>(null);
   const queueButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const pendingSelectionRef = useRef<string | undefined>(undefined);
 
   const queue = workbench.queue;
+  const stagedDecisions = useMemo(
+    () => queue.filter((submission) => submission.pendingDecision !== null && submission.pendingDecision !== undefined),
+    [queue],
+  );
+  const selectedStagedDecisions = useMemo(
+    () => stagedDecisions.filter((submission) => selectedDecisionIds.has(submission.id)),
+    [selectedDecisionIds, stagedDecisions],
+  );
   const authoritativeSelectedId = workbench.selected?.id;
   const selected = isDetailLoading ? null : workbench.selected ?? null;
   const loadedRound = workbench.selected?.round
@@ -504,6 +516,14 @@ export function ReviewWorkbenchContent({
     () => [...new Set(queue.flatMap((submission) => submission.category ? [submission.category] : []))].sort(),
     [queue],
   );
+
+  useEffect(() => {
+    const available = new Set(stagedDecisions.map((submission) => submission.id));
+    setSelectedDecisionIds((current) => {
+      const next = new Set([...current].filter((submissionId) => available.has(submissionId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [stagedDecisions]);
   const visibleQueue = useMemo(
     () => queue
       .filter((submission) => {
@@ -649,6 +669,44 @@ export function ReviewWorkbenchContent({
     });
   };
 
+  const releaseSelectedDecisions = () => {
+    if (selectedStagedDecisions.length === 0) return;
+    const acceptedCount = selectedStagedDecisions.filter((submission) => submission.pendingDecision === "accepted").length;
+    const rejectedCount = selectedStagedDecisions.length - acceptedCount;
+    const authorized = window.confirm(
+      `Release ${selectedStagedDecisions.length} staged decision${selectedStagedDecisions.length === 1 ? "" : "s"} now?\n\n`
+      + `${acceptedCount} accepted · ${rejectedCount} rejected\n`
+      + "Submitters will immediately see the final status. Accepted speakers will enter provisioning.\n\n"
+      + "No email is sent automatically. The released cohorts become available in Communications for a separately reviewed send.",
+    );
+    if (!authorized) return;
+    void (async () => {
+      setBulkPending("release");
+      setReleaseMessage(undefined);
+      try {
+      const decisions = selectedStagedDecisions.map((submission) => ({
+        submissionId: submission.id,
+        expectedVersion: submission.version,
+        expectedDecision: submission.pendingDecision!,
+      }));
+      const result = await releaseDecisionsRequest({
+        eventId: workbench.eventId,
+        decisions: decisions as [typeof decisions[number], ...typeof decisions[number][]],
+        idempotencyKey: releaseKey.current,
+        requestId: `review-release-${crypto.randomUUID()}`,
+      });
+      releaseKey.current = `review-release-${crypto.randomUUID()}`;
+      setSelectedDecisionIds(new Set());
+        setReleaseMessage(`${result.releasedCount} decisions released: ${result.acceptedCount} accepted and ${result.rejectedCount} rejected. No email was sent; the cohorts are ready in Communications.`);
+        await onMutationCommitted();
+      } catch (cause) {
+        setReleaseMessage(cause instanceof Error ? cause.message : "The selected decisions could not be released. No decisions were changed.");
+      } finally {
+        setBulkPending(undefined);
+      }
+    })();
+  };
+
   const exportCsv = () => {
     if (!loadedRound) return;
     void runBulk("export", async () => {
@@ -734,6 +792,76 @@ export function ReviewWorkbenchContent({
           />
           {workbench.progress ? <ReviewProgressPanel progress={workbench.progress} eventSlug={eventSlug} /> : null}
           <ReviewerInvitations eventId={workbench.eventId} />
+          <Card className="[&>header]:bg-production-lime [&>header_h3]:text-ink" title="Staged decisions in this queue">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-black">
+                  {stagedDecisions.length} private decision{stagedDecisions.length === 1 ? "" : "s"}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-ink-secondary">
+                  Select the exact proposals to release. Submitters see no decision before release; email remains a separate Communications action.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={stagedDecisions.length === 0 || bulkPending !== undefined}
+                  onClick={() => setSelectedDecisionIds(new Set(stagedDecisions.map((submission) => submission.id)))}
+                >
+                  Select all staged
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={selectedDecisionIds.size === 0 || bulkPending !== undefined}
+                  onClick={() => setSelectedDecisionIds(new Set())}
+                >
+                  Clear selection
+                </Button>
+              </div>
+            </div>
+            {stagedDecisions.length === 0 ? (
+              <p className="mt-4 border-2 border-dashed border-line-strong p-4 text-sm text-ink-faint">No private decisions are waiting for release in this queue.</p>
+            ) : (
+              <ul className="mt-4 divide-y-2 divide-line-strong border-2 border-line-strong bg-surface" aria-label="Staged decision release queue">
+                {stagedDecisions.map((submission) => (
+                  <li key={submission.id} className="grid gap-2 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                    <Checkbox
+                      checked={selectedDecisionIds.has(submission.id)}
+                      disabled={bulkPending !== undefined}
+                      onChange={(event) => setSelectedDecisionIds((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(submission.id); else next.delete(submission.id);
+                        return next;
+                      })}
+                      label={submission.title}
+                      description={`Version ${submission.version} · still ${statusLabel[submission.status]}`}
+                    />
+                    <Badge tone={submission.pendingDecision === "accepted" ? "success" : "danger"}>
+                      {submission.pendingDecision === "accepted" ? "Accept" : "Reject"} · private
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Button
+                disabled={selectedStagedDecisions.length === 0 || bulkPending !== undefined}
+                loading={bulkPending === "release"}
+                onClick={releaseSelectedDecisions}
+              >
+                Release {selectedStagedDecisions.length} decision{selectedStagedDecisions.length === 1 ? "" : "s"}
+              </Button>
+              {eventSlug ? (
+                <Button variant="secondary" onClick={() => window.location.assign(`/e/${encodeURIComponent(eventSlug)}/comms`)}>
+                  Open Communications
+                </Button>
+              ) : null}
+            </div>
+            {bulkPending === "release" ? <p role="status" className="mt-3 text-xs font-bold">Releasing the exact selected batch…</p> : null}
+            {releaseMessage ? <p role="status" className="mt-3 border-2 border-line-strong bg-surface px-3 py-2 text-xs font-bold shadow-[2px_2px_0_#171714]">{releaseMessage}</p> : null}
+          </Card>
         </section>
       )}
 

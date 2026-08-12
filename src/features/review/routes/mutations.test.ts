@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  acceptSubmissionRequest,
   advanceReviewRoundRequest,
   appendReviewCommentRequest,
   assignReviewerRequest,
   createReviewRoundRequest,
-  rejectSubmissionRequest,
+  releaseDecisionsRequest,
   recuseAssignmentRequest,
   removeAssignmentRequest,
   revokeAcceptanceRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
+  stageDecisionRequest,
 } from "./mutations";
 
 const jsonResponse = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), {
@@ -20,6 +20,62 @@ const jsonResponse = (payload: unknown, status = 200) => new Response(JSON.strin
 afterEach(() => vi.unstubAllGlobals());
 
 describe("review mutation client", () => {
+  it("stages and clears private decisions at the decision endpoint", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ submissionId: "submission_one", submissionVersion: 4, pendingDecision: "accepted", idempotent: false }))
+      .mockResolvedValueOnce(jsonResponse({ submissionId: "submission_one", submissionVersion: 5, pendingDecision: null, idempotent: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await stageDecisionRequest({
+      eventId: "event_one", submissionId: "submission_one", decision: "accepted", expectedVersion: 3,
+      idempotencyKey: "stage-decision-accept", requestId: "request-stage-accept",
+    });
+    await stageDecisionRequest({
+      eventId: "event_one", submissionId: "submission_one", decision: null, expectedVersion: 4,
+      idempotencyKey: "stage-decision-clear", requestId: "request-stage-clear",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/events/event_one/review/submissions/submission_one/decision", {
+      method: "PUT",
+      headers: { "idempotency-key": "stage-decision-accept", "x-request-id": "request-stage-accept", "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: "accepted", expectedVersion: 3 }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/events/event_one/review/submissions/submission_one/decision", {
+      method: "PUT",
+      headers: { "idempotency-key": "stage-decision-clear", "x-request-id": "request-stage-clear", "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: null, expectedVersion: 4 }),
+    });
+  });
+
+  it("posts an explicit versioned decision batch to the release endpoint", async () => {
+    const output = {
+      releaseId: "decision_release_one",
+      releasedCount: 2,
+      acceptedCount: 1,
+      rejectedCount: 1,
+      submissionIds: ["submission_one", "submission_two"],
+      idempotent: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(output));
+    vi.stubGlobal("fetch", fetchMock);
+    const decisions = [
+      { submissionId: "submission_one", expectedVersion: 4, expectedDecision: "accepted" as const },
+      { submissionId: "submission_two", expectedVersion: 7, expectedDecision: "rejected" as const },
+    ] as const;
+
+    await expect(releaseDecisionsRequest({
+      eventId: "event_one",
+      decisions,
+      idempotencyKey: "release-decision-batch-one",
+      requestId: "request-release-one",
+    })).resolves.toEqual(output);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/events/event_one/review/decisions/release", {
+      method: "POST",
+      headers: { "idempotency-key": "release-decision-batch-one", "x-request-id": "request-release-one", "Content-Type": "application/json" },
+      body: JSON.stringify({ decisions }),
+    });
+  });
+
   it("deletes one assignment with version and idempotency evidence", async () => {
     const output = {
       assignmentId: "assignment_stale",
@@ -167,7 +223,7 @@ describe("review mutation client", () => {
     });
   });
 
-  it("maps assignment, scoring, AI, and decisions to their exact REST locations", async () => {
+  it("maps assignment, scoring, AI, and acceptance revocation to their exact REST locations", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         assignment: {
@@ -208,22 +264,6 @@ describe("review mutation client", () => {
         submissionStatus: "in_review",
       }, 201))
       .mockResolvedValueOnce(jsonResponse({
-        acceptanceEventId: "acceptance_1",
-        provisioningId: "provisioning_1",
-        submissionId: "submission_one",
-        primarySpeakerId: "speaker_1",
-        submissionVersion: 4,
-        status: "accepted",
-        provisioningStatus: "pending",
-        idempotent: false,
-      }))
-      .mockResolvedValueOnce(jsonResponse({
-        submissionId: "submission_two",
-        submissionVersion: 5,
-        status: "rejected",
-        idempotent: false,
-      }))
-      .mockResolvedValueOnce(jsonResponse({
         revocationEventId: "acceptance_revoked_1",
         submissionId: "submission_one",
         submissionVersion: 5,
@@ -257,20 +297,6 @@ describe("review mutation client", () => {
       submissionId: "submission_one",
       idempotencyKey: "ai-suggestion-key-1",
       requestId: "request-ai",
-    });
-    await acceptSubmissionRequest({
-      eventId: "event_one",
-      submissionId: "submission_one",
-      expectedVersion: 3,
-      idempotencyKey: "acceptance-key-1",
-      requestId: "request-accept",
-    });
-    await rejectSubmissionRequest({
-      eventId: "event_one",
-      submissionId: "submission_two",
-      expectedVersion: 4,
-      idempotencyKey: "rejection-key-2",
-      requestId: "request-reject",
     });
     await revokeAcceptanceRequest({
       eventId: "event_one",
@@ -306,24 +332,6 @@ describe("review mutation client", () => {
       body: undefined,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/v1/events/event_one/review/submissions/submission_one/acceptance", {
-      method: "POST",
-      headers: {
-        "x-request-id": "request-accept",
-        "idempotency-key": "acceptance-key-1",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ expectedVersion: 3 }),
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/v1/events/event_one/review/submissions/submission_two/rejection", {
-      method: "POST",
-      headers: {
-        "x-request-id": "request-reject",
-        "idempotency-key": "rejection-key-2",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ expectedVersion: 4 }),
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(6, "/api/v1/events/event_one/review/submissions/submission_one/acceptance", {
       method: "DELETE",
       headers: {
         "x-request-id": "request-revoke",

@@ -375,6 +375,8 @@ export const submissions = sqliteTable(
     title: text("title").notNull(),
     category: text("category"),
     status: text("status", { enum: ["submitted", "in_review", "accepted", "rejected", "waitlist", "withdrawn"] }).notNull().default("submitted"),
+    /** Organizer decision held privately until an explicit release. */
+    pendingDecision: text("pending_decision", { enum: ["accepted", "rejected"] }),
     submittedAt: integer("submitted_at", { mode: "timestamp_ms" }).notNull(),
     acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
     version: version(),
@@ -394,6 +396,8 @@ export const submissions = sqliteTable(
       name: "submissions_form_version_fk",
     }).onDelete("restrict").onUpdate("cascade"),
     check("submissions_version_positive", sql`${t.version} > 0`),
+    check("submissions_pending_decision", sql`${t.pendingDecision} is null or ${t.pendingDecision} in ('accepted', 'rejected')`),
+    check("submissions_pending_decision_state", sql`${t.pendingDecision} is null or ${t.status} in ('submitted', 'in_review', 'waitlist')`),
     check("submissions_acceptance_state", sql`(${t.status} = 'accepted' and ${t.acceptedAt} is not null) or (${t.status} <> 'accepted')`),
   ],
 );

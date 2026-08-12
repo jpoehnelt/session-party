@@ -21,6 +21,7 @@ type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
   readonly MIGRATION_DB: D1Database;
   readonly REVIEW_MIGRATION_DB: D1Database;
+  readonly DECISION_MIGRATION_DB: D1Database;
 };
 
 type MigrationShape = D1Migration & {
@@ -695,6 +696,40 @@ describe("baseline migration parity", () => {
     await db.prepare("UPDATE review_assignments SET status = 'recused', recusal_reason = 'Conflict', recused_at = ?, version = 2, updated_at = ? WHERE id = 'recusal-assignment-old'").bind(now + 1, now + 1).run();
     await db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-new', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 2, now + 2).run();
     await expect(db.prepare("INSERT INTO review_assignments (id, event_id, round_id, submission_id, reviewer_user_id, status, version, created_at, updated_at) VALUES ('recusal-assignment-duplicate', 'recusal-event', 'recusal-round', 'recusal-submission', 'recusal-user', 'assigned', 1, ?, ?)").bind(now + 3, now + 3).run()).rejects.toThrow(/review_assignments/);
+    await assertDatabaseIntegrity(db);
+  });
+
+  it("adds private staged decisions without rebuilding or exposing impossible final states", async () => {
+    const migrations = testMigrations();
+    const db = (env as TestEnv).DECISION_MIGRATION_DB;
+    expect(migrations).toHaveLength(19);
+    await applyOneByOne(db, migrations.slice(0, 18));
+    const now = 1_700_000_000_000;
+    await db.batch([
+      db.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('decision-event', 'decision-event', 'Decision Event', 'UTC', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO forms (id, event_id, kind, name, status, version, created_at, updated_at) VALUES ('decision-form', 'decision-event', 'cfp', 'Decision CFP', 'closed', 1, ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO form_versions (id, event_id, form_id, version_number, name, published_at, created_at) VALUES ('decision-form-v1', 'decision-event', 'decision-form', 1, 'Decision CFP', ?, ?)").bind(now, now),
+      db.prepare("INSERT INTO submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, version, created_at, updated_at) VALUES ('decision-submission', 'decision-event', 'decision-form', 'decision-form-v1', 'Private staged proposal', 'submitted', ?, 7, ?, ?)").bind(now, now, now),
+    ]);
+    expect((await db.prepare("PRAGMA table_info(submissions)").all<{ name: string }>()).results.map(({ name }) => name))
+      .not.toContain("pending_decision");
+
+    await applyOneByOne(db, migrations.slice(18));
+    expect(await db.prepare("SELECT id, status, pending_decision, version FROM submissions WHERE id = 'decision-submission'").first()).toEqual({
+      id: "decision-submission",
+      status: "submitted",
+      pending_decision: null,
+      version: 7,
+    });
+    await db.prepare("UPDATE submissions SET pending_decision = 'accepted', version = 8 WHERE id = 'decision-submission'").run();
+    await expect(db.prepare("UPDATE submissions SET pending_decision = 'maybe' WHERE id = 'decision-submission'").run()).rejects.toThrow();
+    await expect(db.prepare("UPDATE submissions SET status = 'accepted', accepted_at = ? WHERE id = 'decision-submission'").bind(now + 1).run()).rejects.toThrow();
+    expect(await db.prepare("SELECT status, pending_decision, version FROM submissions WHERE id = 'decision-submission'").first()).toEqual({
+      status: "submitted",
+      pending_decision: "accepted",
+      version: 8,
+    });
+    await db.prepare("UPDATE submissions SET status = 'accepted', pending_decision = NULL, accepted_at = ?, version = 9 WHERE id = 'decision-submission'").bind(now + 1).run();
     await assertDatabaseIntegrity(db);
   });
 

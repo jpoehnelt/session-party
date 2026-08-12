@@ -1,7 +1,6 @@
 import { ApiError, decodeApiResponse } from "@/client/api";
 import { Schema } from "effect";
 import {
-  AcceptSubmissionOutput,
   AdvanceReviewRoundOutput,
   AppendReviewCommentOutput,
   AssignReviewerOutput,
@@ -9,14 +8,15 @@ import {
   CreateReviewRoundOutput,
   ExportReviewResultsOutput,
   RequestAiSuggestionOutput,
-  RejectSubmissionOutput,
+  ReleaseDecisionsOutput,
   RecuseAssignmentOutput,
   RemoveAssignmentOutput,
   RevokeAcceptanceOutput,
   SaveScoreOutput,
+  StageDecisionInput,
+  StageDecisionOutput,
   SendReviewRemindersOutput,
   UpdateReviewRoundOutput,
-  type AcceptSubmissionInput,
   type AdvanceReviewRoundInput,
   type AppendReviewCommentInput,
   type AssignReviewerInput,
@@ -24,7 +24,7 @@ import {
   type CreateReviewRoundInput,
   type ExportReviewResultsInput,
   type RequestAiSuggestionInput,
-  type RejectSubmissionInput,
+  type ReleaseDecisionsInput,
   type RecuseAssignmentInput,
   type RemoveAssignmentInput,
   type RevokeAcceptanceInput,
@@ -250,17 +250,6 @@ export function requestAiSuggestionRequest(input: RequestAiSuggestionInput) {
   });
 }
 
-export function acceptSubmissionRequest(input: AcceptSubmissionInput) {
-  return mutation({
-    path: `/api/v1/events/${segment(input.eventId)}/review/submissions/${segment(input.submissionId)}/acceptance`,
-    method: "POST",
-    requestId: input.requestId,
-    idempotencyKey: input.idempotencyKey,
-    body: { expectedVersion: input.expectedVersion },
-    schema: AcceptSubmissionOutput,
-  });
-}
-
 export function revokeAcceptanceRequest(input: RevokeAcceptanceInput) {
   return mutation({
     path: `/api/v1/events/${segment(input.eventId)}/review/submissions/${segment(input.submissionId)}/acceptance`,
@@ -272,13 +261,24 @@ export function revokeAcceptanceRequest(input: RevokeAcceptanceInput) {
   });
 }
 
-export function rejectSubmissionRequest(input: RejectSubmissionInput) {
+export function releaseDecisionsRequest(input: ReleaseDecisionsInput) {
   return mutation({
-    path: `/api/v1/events/${segment(input.eventId)}/review/submissions/${segment(input.submissionId)}/rejection`,
+    path: `/api/v1/events/${segment(input.eventId)}/review/decisions/release`,
     method: "POST",
     requestId: input.requestId,
     idempotencyKey: input.idempotencyKey,
-    body: { expectedVersion: input.expectedVersion },
-    schema: RejectSubmissionOutput,
+    body: { decisions: input.decisions },
+    schema: ReleaseDecisionsOutput,
+  });
+}
+
+export function stageDecisionRequest(input: StageDecisionInput) {
+  return mutation({
+    path: `/api/v1/events/${segment(input.eventId)}/review/submissions/${segment(input.submissionId)}/decision`,
+    method: "PUT",
+    requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
+    body: { decision: input.decision, expectedVersion: input.expectedVersion },
+    schema: StageDecisionOutput,
   });
 }

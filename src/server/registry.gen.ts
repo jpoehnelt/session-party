@@ -1475,25 +1475,6 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
   {
     "input": {
       "body": [
-        "expectedVersion"
-      ],
-      "headers": {
-        "idempotencyKey": "idempotency-key",
-        "requestId": "x-request-id"
-      },
-      "path": [
-        "eventId",
-        "submissionId"
-      ]
-    },
-    "method": "post",
-    "operationId": "review.acceptSubmission",
-    "path": "/events/:eventId/review/submissions/:submissionId/acceptance",
-    "successStatus": 200
-  },
-  {
-    "input": {
-      "body": [
         "expectedVersion",
         "nextRoundId",
         "expectedNextVersion"
@@ -1653,20 +1634,19 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
   {
     "input": {
       "body": [
-        "expectedVersion"
+        "decisions"
       ],
       "headers": {
         "idempotencyKey": "idempotency-key",
         "requestId": "x-request-id"
       },
       "path": [
-        "eventId",
-        "submissionId"
+        "eventId"
       ]
     },
     "method": "post",
-    "operationId": "review.rejectSubmission",
-    "path": "/events/:eventId/review/submissions/:submissionId/rejection",
+    "operationId": "review.releaseDecisions",
+    "path": "/events/:eventId/review/decisions/release",
     "successStatus": 200
   },
   {
@@ -1765,6 +1745,26 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
     "operationId": "review.sendReminders",
     "path": "/events/:eventId/review/rounds/:roundId/reminders",
     "successStatus": 202
+  },
+  {
+    "input": {
+      "body": [
+        "decision",
+        "expectedVersion"
+      ],
+      "headers": {
+        "idempotencyKey": "idempotency-key",
+        "requestId": "x-request-id"
+      },
+      "path": [
+        "eventId",
+        "submissionId"
+      ]
+    },
+    "method": "put",
+    "operationId": "review.stageDecision",
+    "path": "/events/:eventId/review/submissions/:submissionId/decision",
+    "successStatus": 200
   },
   {
     "input": {
@@ -19199,6 +19199,20 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "title": "maxLength(128)",
                 "type": "string"
               },
+              "pendingDecision": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "accepted",
+                      "rejected"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "reviewState": {
                 "enum": [
                   "unassigned",
@@ -19942,6 +19956,20 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                   "pattern": "^[A-Za-z0-9_-]+$",
                   "title": "maxLength(128)",
                   "type": "string"
+                },
+                "pendingDecision": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "accepted",
+                        "rejected"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "recusals": {
                   "items": {
@@ -49250,6 +49278,20 @@ export const openApi = {
                             "title": "maxLength(128)",
                             "type": "string"
                           },
+                          "pendingDecision": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "accepted",
+                                  "rejected"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "reviewState": {
                             "enum": [
                               "unassigned",
@@ -49993,6 +50035,20 @@ export const openApi = {
                               "pattern": "^[A-Za-z0-9_-]+$",
                               "title": "maxLength(128)",
                               "type": "string"
+                            },
+                            "pendingDecision": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "accepted",
+                                    "rejected"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "recusals": {
                               "items": {
@@ -51359,6 +51415,200 @@ export const openApi = {
         "x-concurrency": "required",
         "x-emits": [
           "review.assignment.recused"
+        ],
+        "x-idempotency": "required",
+        "x-operation-kind": "command"
+      }
+    },
+    "/events/{eventId}/review/decisions/release": {
+      "post": {
+        "operationId": "review.releaseDecisions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "eventId",
+            "required": true,
+            "schema": {
+              "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "maxLength(128)",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "description": "a string at most 256 character(s) long",
+              "maxLength": 256,
+              "minLength": 8,
+              "title": "maxLength(256)",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-request-id",
+            "required": true,
+            "schema": {
+              "description": "a string at most 128 character(s) long",
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "maxLength(128)",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "decisions": {
+                    "description": "an array of at most 100 item(s)",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "expectedDecision": {
+                          "enum": [
+                            "accepted",
+                            "rejected"
+                          ],
+                          "type": "string"
+                        },
+                        "expectedVersion": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a positive number",
+                          "exclusiveMinimum": 0,
+                          "title": "positive"
+                        },
+                        "submissionId": {
+                          "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9_-]+$",
+                          "title": "maxLength(128)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "submissionId",
+                        "expectedVersion",
+                        "expectedDecision"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "title": "maxItems(100)",
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "decisions"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "Int": {
+                      "description": "an integer",
+                      "title": "int",
+                      "type": "integer"
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "additionalProperties": false,
+                  "properties": {
+                    "acceptedCount": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative"
+                    },
+                    "idempotent": {
+                      "type": "boolean"
+                    },
+                    "rejectedCount": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative"
+                    },
+                    "releaseId": {
+                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9_-]+$",
+                      "title": "maxLength(128)",
+                      "type": "string"
+                    },
+                    "releasedCount": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative"
+                    },
+                    "submissionIds": {
+                      "items": {
+                        "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_-]+$",
+                        "title": "maxLength(128)",
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "releaseId",
+                    "releasedCount",
+                    "acceptedCount",
+                    "rejectedCount",
+                    "submissionIds",
+                    "idempotent"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful operation"
+          }
+        },
+        "summary": "Atomically release an explicit batch of staged submission decisions",
+        "x-authorization": {
+          "apiKey": {
+            "kind": "deny"
+          },
+          "browser": {
+            "kind": "event-member",
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          },
+          "eventId": "eventId",
+          "kind": "event"
+        },
+        "x-concurrency": "required",
+        "x-emits": [
+          "review.decisions.released",
+          "review.submission.accepted",
+          "review.submission.rejected",
+          "speaker.provisioning.requested"
         ],
         "x-idempotency": "required",
         "x-operation-kind": "command"
@@ -53996,191 +54246,6 @@ export const openApi = {
         ],
         "x-idempotency": "required",
         "x-operation-kind": "command"
-      },
-      "post": {
-        "operationId": "review.acceptSubmission",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "eventId",
-            "required": true,
-            "schema": {
-              "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "maxLength(128)",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "submissionId",
-            "required": true,
-            "schema": {
-              "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "maxLength(128)",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "idempotency-key",
-            "required": true,
-            "schema": {
-              "description": "a string at most 256 character(s) long",
-              "maxLength": 256,
-              "minLength": 8,
-              "title": "maxLength(256)",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-request-id",
-            "required": true,
-            "schema": {
-              "description": "a string at most 128 character(s) long",
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "maxLength(128)",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "expectedVersion": {
-                    "$ref": "#/$defs/Int",
-                    "description": "a positive number",
-                    "exclusiveMinimum": 0,
-                    "title": "positive"
-                  }
-                },
-                "required": [
-                  "expectedVersion"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$defs": {
-                    "Int": {
-                      "description": "an integer",
-                      "title": "int",
-                      "type": "integer"
-                    }
-                  },
-                  "$schema": "https://json-schema.org/draft/2020-12/schema",
-                  "additionalProperties": false,
-                  "properties": {
-                    "acceptanceEventId": {
-                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                      "maxLength": 128,
-                      "minLength": 1,
-                      "pattern": "^[A-Za-z0-9_-]+$",
-                      "title": "maxLength(128)",
-                      "type": "string"
-                    },
-                    "idempotent": {
-                      "type": "boolean"
-                    },
-                    "primarySpeakerId": {
-                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                      "maxLength": 128,
-                      "minLength": 1,
-                      "pattern": "^[A-Za-z0-9_-]+$",
-                      "title": "maxLength(128)",
-                      "type": "string"
-                    },
-                    "provisioningId": {
-                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                      "maxLength": 128,
-                      "minLength": 1,
-                      "pattern": "^[A-Za-z0-9_-]+$",
-                      "title": "maxLength(128)",
-                      "type": "string"
-                    },
-                    "provisioningStatus": {
-                      "enum": [
-                        "pending"
-                      ],
-                      "type": "string"
-                    },
-                    "status": {
-                      "enum": [
-                        "accepted"
-                      ],
-                      "type": "string"
-                    },
-                    "submissionId": {
-                      "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                      "maxLength": 128,
-                      "minLength": 1,
-                      "pattern": "^[A-Za-z0-9_-]+$",
-                      "title": "maxLength(128)",
-                      "type": "string"
-                    },
-                    "submissionVersion": {
-                      "$ref": "#/$defs/Int",
-                      "description": "a positive number",
-                      "exclusiveMinimum": 0,
-                      "title": "positive"
-                    }
-                  },
-                  "required": [
-                    "acceptanceEventId",
-                    "provisioningId",
-                    "submissionId",
-                    "primarySpeakerId",
-                    "submissionVersion",
-                    "status",
-                    "provisioningStatus",
-                    "idempotent"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful operation"
-          }
-        },
-        "summary": "Accept a submission and request primary-speaker provisioning",
-        "x-authorization": {
-          "apiKey": {
-            "kind": "deny"
-          },
-          "browser": {
-            "kind": "event-member",
-            "roles": [
-              "owner",
-              "admin"
-            ]
-          },
-          "eventId": "eventId",
-          "kind": "event"
-        },
-        "x-concurrency": "required",
-        "x-emits": [
-          "review.submission.accepted",
-          "speaker.provisioning.requested"
-        ],
-        "x-idempotency": "required",
-        "x-operation-kind": "command"
       }
     },
     "/events/{eventId}/review/submissions/{submissionId}/comments": {
@@ -54357,9 +54422,9 @@ export const openApi = {
         "x-operation-kind": "command"
       }
     },
-    "/events/{eventId}/review/submissions/{submissionId}/rejection": {
-      "post": {
-        "operationId": "review.rejectSubmission",
+    "/events/{eventId}/review/submissions/{submissionId}/decision": {
+      "put": {
+        "operationId": "review.stageDecision",
         "parameters": [
           {
             "in": "path",
@@ -54418,6 +54483,20 @@ export const openApi = {
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "decision": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "accepted",
+                          "rejected"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "expectedVersion": {
                     "$ref": "#/$defs/Int",
                     "description": "a positive number",
@@ -54426,6 +54505,7 @@ export const openApi = {
                   }
                 },
                 "required": [
+                  "decision",
                   "expectedVersion"
                 ],
                 "type": "object"
@@ -54452,11 +54532,19 @@ export const openApi = {
                     "idempotent": {
                       "type": "boolean"
                     },
-                    "status": {
-                      "enum": [
-                        "rejected"
-                      ],
-                      "type": "string"
+                    "pendingDecision": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "accepted",
+                            "rejected"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "submissionId": {
                       "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
@@ -54476,7 +54564,7 @@ export const openApi = {
                   "required": [
                     "submissionId",
                     "submissionVersion",
-                    "status",
+                    "pendingDecision",
                     "idempotent"
                   ],
                   "type": "object"
@@ -54486,7 +54574,7 @@ export const openApi = {
             "description": "Successful operation"
           }
         },
-        "summary": "Reject a submission at its current version",
+        "summary": "Stage a private submission decision for later release",
         "x-authorization": {
           "apiKey": {
             "kind": "deny"
@@ -54503,7 +54591,7 @@ export const openApi = {
         },
         "x-concurrency": "required",
         "x-emits": [
-          "review.submission.rejected"
+          "review.decision.staged"
         ],
         "x-idempotency": "required",
         "x-operation-kind": "command"
@@ -61585,11 +61673,6 @@ export const ownershipManifest = {
       "source": "src/features/publication/operations.ts"
     },
     {
-      "operationId": "review.acceptSubmission",
-      "owner": "review",
-      "source": "src/features/review/operations.ts"
-    },
-    {
       "operationId": "review.advanceRound",
       "owner": "review",
       "source": "src/features/review/operations.ts"
@@ -61630,7 +61713,7 @@ export const ownershipManifest = {
       "source": "src/features/review/operations.ts"
     },
     {
-      "operationId": "review.rejectSubmission",
+      "operationId": "review.releaseDecisions",
       "owner": "review",
       "source": "src/features/review/operations.ts"
     },
@@ -61656,6 +61739,11 @@ export const ownershipManifest = {
     },
     {
       "operationId": "review.sendReminders",
+      "owner": "review",
+      "source": "src/features/review/operations.ts"
+    },
+    {
+      "operationId": "review.stageDecision",
       "owner": "review",
       "source": "src/features/review/operations.ts"
     },
@@ -62212,11 +62300,6 @@ export const ownershipManifest = {
     },
     {
       "method": "post",
-      "operationId": "review.acceptSubmission",
-      "path": "/events/:eventId/review/submissions/:submissionId/acceptance"
-    },
-    {
-      "method": "post",
       "operationId": "review.advanceRound",
       "path": "/events/:eventId/review/rounds/:roundId/advance"
     },
@@ -62257,8 +62340,8 @@ export const ownershipManifest = {
     },
     {
       "method": "post",
-      "operationId": "review.rejectSubmission",
-      "path": "/events/:eventId/review/submissions/:submissionId/rejection"
+      "operationId": "review.releaseDecisions",
+      "path": "/events/:eventId/review/decisions/release"
     },
     {
       "method": "delete",
@@ -62284,6 +62367,11 @@ export const ownershipManifest = {
       "method": "post",
       "operationId": "review.sendReminders",
       "path": "/events/:eventId/review/rounds/:roundId/reminders"
+    },
+    {
+      "method": "put",
+      "operationId": "review.stageDecision",
+      "path": "/events/:eventId/review/submissions/:submissionId/decision"
     },
     {
       "method": "put",

@@ -1,8 +1,6 @@
 import type { AnyOperationDef } from "contracts/operation";
 import { eventAuthorization } from "contracts/principal";
 import {
-  AcceptSubmissionInput,
-  AcceptSubmissionOutput,
   AdvanceReviewRoundInput,
   AdvanceReviewRoundOutput,
   AppendReviewCommentInput,
@@ -18,8 +16,8 @@ import {
   GetWorkbenchInput,
   RequestAiSuggestionInput,
   RequestAiSuggestionOutput,
-  RejectSubmissionInput,
-  RejectSubmissionOutput,
+  ReleaseDecisionsInput,
+  ReleaseDecisionsOutput,
   RecuseAssignmentInput,
   RecuseAssignmentOutput,
   RemoveAssignmentInput,
@@ -29,13 +27,14 @@ import {
   ReviewWorkbench,
   SaveScoreInput,
   SaveScoreOutput,
+  StageDecisionInput,
+  StageDecisionOutput,
   SendReviewRemindersInput,
   SendReviewRemindersOutput,
   UpdateReviewRoundInput,
   UpdateReviewRoundOutput,
 } from "./schema";
 import {
-  acceptSubmission,
   advanceReviewRound,
   appendReviewComment,
   assignReviewer,
@@ -44,11 +43,12 @@ import {
   exportReviewResults,
   getWorkbench,
   requestAiSuggestion,
-  rejectSubmission,
+  releaseDecisions,
   recuseAssignment,
   removeAssignment,
   revokeAcceptance,
   saveScore,
+  stageDecision,
   sendReviewReminders,
   updateReviewRound,
 } from "./service";
@@ -92,29 +92,6 @@ const humanCommentWrite = eventAuthorization(
   { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
   { kind: "deny" },
 );
-
-const acceptSubmissionOperation = {
-  id: "review.acceptSubmission",
-  kind: "command",
-  input: AcceptSubmissionInput,
-  output: AcceptSubmissionOutput,
-  authorize: acceptanceWrite,
-  invoke: acceptSubmission,
-  rest: {
-    method: "post",
-    path: "/events/:eventId/review/submissions/:submissionId/acceptance",
-    input: {
-      path: ["eventId", "submissionId"],
-      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
-      body: ["expectedVersion"],
-    },
-    summary: "Accept a submission and request primary-speaker provisioning",
-    successStatus: 200,
-  },
-  idempotency: "required",
-  concurrency: "required",
-  emits: ["review.submission.accepted", "speaker.provisioning.requested"],
-} as const satisfies AnyOperationDef;
 
 const advanceRoundOperation = {
   id: "review.advanceRound",
@@ -327,27 +304,27 @@ const requestAiSuggestionOperation = {
   emits: ["review.aiSuggestion.created"],
 } as const satisfies AnyOperationDef;
 
-const rejectSubmissionOperation = {
-  id: "review.rejectSubmission",
+const releaseDecisionsOperation = {
+  id: "review.releaseDecisions",
   kind: "command",
-  input: RejectSubmissionInput,
-  output: RejectSubmissionOutput,
+  input: ReleaseDecisionsInput,
+  output: ReleaseDecisionsOutput,
   authorize: acceptanceWrite,
-  invoke: rejectSubmission,
+  invoke: releaseDecisions,
   rest: {
     method: "post",
-    path: "/events/:eventId/review/submissions/:submissionId/rejection",
+    path: "/events/:eventId/review/decisions/release",
     input: {
-      path: ["eventId", "submissionId"],
+      path: ["eventId"],
       headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
-      body: ["expectedVersion"],
+      body: ["decisions"],
     },
-    summary: "Reject a submission at its current version",
+    summary: "Atomically release an explicit batch of staged submission decisions",
     successStatus: 200,
   },
   idempotency: "required",
   concurrency: "required",
-  emits: ["review.submission.rejected"],
+  emits: ["review.decisions.released", "review.submission.accepted", "review.submission.rejected", "speaker.provisioning.requested"],
 } as const satisfies AnyOperationDef;
 
 const removeAssignmentOperation = {
@@ -472,6 +449,29 @@ const sendReviewRemindersOperation = {
   emits: ["review.reminders.enqueued"],
 } as const satisfies AnyOperationDef;
 
+const stageDecisionOperation = {
+  id: "review.stageDecision",
+  kind: "command",
+  input: StageDecisionInput,
+  output: StageDecisionOutput,
+  authorize: organizerHumanWrite,
+  invoke: stageDecision,
+  rest: {
+    method: "put",
+    path: "/events/:eventId/review/submissions/:submissionId/decision",
+    input: {
+      path: ["eventId", "submissionId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["decision", "expectedVersion"],
+    },
+    summary: "Stage a private submission decision for later release",
+    successStatus: 200,
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.decision.staged"],
+} as const satisfies AnyOperationDef;
+
 const updateReviewRoundOperation = {
   id: "review.updateRound",
   kind: "command",
@@ -501,7 +501,6 @@ const updateReviewRoundOperation = {
 
 /** Bytewise operation-id order; registry generation must preserve this sequence. */
 export const operations = [
-  acceptSubmissionOperation,
   advanceRoundOperation,
   appendCommentOperation,
   assignReviewerOperation,
@@ -510,11 +509,12 @@ export const operations = [
   exportReviewResultsOperation,
   getWorkbenchOperation,
   recuseAssignmentOperation,
-  rejectSubmissionOperation,
+  releaseDecisionsOperation,
   removeAssignmentOperation,
   requestAiSuggestionOperation,
   revokeAcceptanceOperation,
   saveScoreOperation,
   sendReviewRemindersOperation,
+  stageDecisionOperation,
   updateReviewRoundOperation,
 ] as const satisfies readonly AnyOperationDef[];
