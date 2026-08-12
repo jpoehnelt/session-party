@@ -139,16 +139,17 @@ Review these values in the deployment form:
 | Setting | Value |
 |---|---|
 | `APP_URL` | The final origin, for example `https://events.example.com` |
-| `INITIAL_ADMIN_EMAIL` | Your email address; this closes public registration |
+| `INITIAL_ADMIN_EMAIL` | Your email address; required to bootstrap a closed installation |
 | `MAIL_FROM` | A sender on the onboarded domain, for example `Session Party <welcome@example.com>` |
 | `POSTHOG_KEY` / `POSTHOG_HOST` | Optional analytics settings. Leave both blank to send no product analytics. |
+| `REGISTRATION_MODE` | `closed` for self-hosting (recommended), or `open` for an intentional multi-tenant service |
 | `SESSION_SECRET` | A unique value generated with `openssl rand -hex 32` |
 | `INTERNAL_SERVICE_SECRET` | Optional dedicated Worker-to-Durable-Object bearer generated with `openssl rand -hex 32`; until provisioned, a one-way domain-separated token is derived from `SESSION_SECRET` so the session key is never transmitted |
 | `TURNSTILE_SITE_KEY` | The widget's site key |
 | `TURNSTILE_SECRET` | The widget's secret key |
 | `TURNSTILE_HOSTNAMES` | The final hostname, for example `events.example.com` |
 
-Keep `INITIAL_ADMIN_EMAIL` set for a private installation. That address can sign in and create the first event; reviewer invitations and managed-speaker onboarding remain available without opening public registration. Leaving it blank preserves open registration for a hosted, multi-tenant service.
+Registration fails closed unless `REGISTRATION_MODE` is exactly `closed` or `open`. In closed mode, keep `INITIAL_ADMIN_EMAIL` set so that address can create the first account and event. Existing accounts, pending reviewer invitations, and managed-speaker onboarding can still sign in without opening public registration. Open mode is always identified by a prominent warning in the application.
 
 ### Connect the domain
 
@@ -157,7 +158,9 @@ After the first deployment:
 1. Open **Workers & Pages** in Cloudflare and select the new Worker.
 2. Go to **Settings → Domains & Routes → Add → Custom Domain**.
 3. Enter the exact hostname used by `APP_URL` and `TURNSTILE_HOSTNAMES`.
-4. Open the hostname, sign in with `INITIAL_ADMIN_EMAIL`, and create the first event.
+4. Open the hostname and sign in with `INITIAL_ADMIN_EMAIL`.
+5. Open `/setup` and run the installation checks for the domain, D1 migrations, R2, Durable Objects, email, Turnstile, and initial-admin access.
+6. Use **Send test login email**, confirm delivery, then create the first event.
 
 Cloudflare creates the DNS record and certificate. Remove any existing CNAME for that hostname before attaching it.
 

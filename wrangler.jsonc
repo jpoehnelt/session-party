@@ -37,8 +37,10 @@
   "send_email": [{ "name": "EMAIL" }],
   "vars": {
     "APP_URL": "https://sessionparty.com",
-    // Set this to the self-hosted owner email to disable open registration.
+    // Set this to the self-hosted owner email to bootstrap closed registration.
     "INITIAL_ADMIN_EMAIL": "",
+    // Keep closed for self-hosting. Change to open only for an intentional multi-tenant service.
+    "REGISTRATION_MODE": "closed",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
     // Optional public project settings. Analytics remains disabled while either value is blank.
     "POSTHOG_KEY": "",
@@ -72,6 +74,7 @@
         "PREVIEW_MODE": "1",
         "APP_URL": "https://preview.invalid",
         "INITIAL_ADMIN_EMAIL": "",
+        "REGISTRATION_MODE": "closed",
         "MAIL_FROM": "Session Party Preview <welcome@sessionparty.com>",
         "POSTHOG_KEY": "",
         "POSTHOG_HOST": "",

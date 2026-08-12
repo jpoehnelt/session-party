@@ -119,6 +119,9 @@
       "POSTHOG_HOST": {
         "description": "Optional HTTPS PostHog origin, such as `https://us.i.posthog.com`. Analytics activates only when this and `POSTHOG_KEY` are both set."
       },
+      "REGISTRATION_MODE": {
+        "description": "Choose `closed` for self-hosting (recommended) or `open` only for an intentional multi-tenant service. Missing or invalid values fail closed."
+      },
       "SESSION_SECRET": {
         "description": "Generate a unique signing secret with `openssl rand -hex 32`. Rotating it signs every user out."
       },

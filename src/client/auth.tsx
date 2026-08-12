@@ -2,6 +2,7 @@ import { type ChangeEvent, type FormEvent, useState } from "react";
 import { useLocation } from "react-router";
 import { Button, Card, Input } from "@/ui";
 import { apiFetch } from "./api";
+import { RegistrationWarning } from "./registration";
 import { validReturnTo } from "./return-to";
 
 const demoPersonas = [
@@ -92,6 +93,7 @@ export default function LoginPage() {
         </div>
         <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Account access</p>
         <h1 className="mt-2 text-4xl font-black tracking-[-0.055em]">Back to Session Party.</h1>
+        <div className="mt-5"><RegistrationWarning /></div>
         <section className="mt-6 border-2 border-line-strong bg-production-sky p-4" aria-labelledby="demo-access-heading">
           <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Hackathon demo access</p>
           <h2 id="demo-access-heading" className="mt-1 text-xl font-black tracking-[-0.035em]">Choose a role</h2>

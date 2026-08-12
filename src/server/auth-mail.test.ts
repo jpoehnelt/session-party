@@ -343,6 +343,19 @@ describe("hackathon demo authentication", () => {
 });
 
 describe("durable magic-link authentication", () => {
+  it("publishes only the effective registration posture", async () => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/config");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      registration: {
+        configured: true,
+        mode: "open",
+        open: true,
+        initialAdminConfigured: false,
+      },
+    });
+  });
+
   it("closes self-hosted registration while preserving bootstrap and invited users", async () => {
     const initialAdminEmail = `self-host-owner-${crypto.randomUUID()}@example.com`;
     const unknownEmail = `self-host-unknown-${crypto.randomUUID()}@example.com`;
@@ -390,9 +403,9 @@ describe("durable magic-link authentication", () => {
 
     const closedEnv = new Proxy(env, {
       get(target, property, receiver) {
-        return property === "INITIAL_ADMIN_EMAIL"
-          ? `  ${initialAdminEmail.toUpperCase()}  `
-          : Reflect.get(target, property, receiver);
+        if (property === "INITIAL_ADMIN_EMAIL") return `  ${initialAdminEmail.toUpperCase()}  `;
+        if (property === "REGISTRATION_MODE") return "closed";
+        return Reflect.get(target, property, receiver);
       },
     }) as Env;
     const request = (email: string) => worker.fetch(

@@ -20,6 +20,7 @@ import {
 } from "./registry.gen";
 import { internalServiceToken, isExplicitLocalEnvironment, sessionSecret } from "./services";
 import { publicRuntimeConfig } from "./runtime-config";
+import setup from "./setup";
 
 type JsonRpcId = string | number;
 type JsonRpcRequest = {
@@ -230,6 +231,7 @@ app.route("/", publicationFeeds);
 app.route("/", publicHeadshots);
 app.route(`${API}/auth`, auth);
 app.get(`${API}/runtime-config`, (c) => c.json(publicRuntimeConfig(c.env)));
+app.route(`${API}/setup`, setup);
 for (const registration of restRegistrations) {
   const operation = operationById[registration.operationId];
   if (!operation) throw new Error(`Unregistered operation: ${registration.operationId}`);

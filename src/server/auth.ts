@@ -14,6 +14,7 @@ import {
   mailFrom,
   sessionSecret,
 } from "./services";
+import { mayCreateAccount, registrationPolicy } from "./registration";
 
 type AppHono = { Bindings: Env };
 
@@ -239,12 +240,8 @@ const displayName = (email: string, name: string | null | undefined): string =>
  * installation. Existing users still sign in normally, including accounts an
  * owner creates through the event-member invitation flow.
  */
-const mayCreateUser = (env: Env, email: string): boolean => {
-  const configured = typeof env.INITIAL_ADMIN_EMAIL === "string"
-    ? env.INITIAL_ADMIN_EMAIL.trim().toLowerCase()
-    : "";
-  return configured.length === 0 || email === configured;
-};
+const mayCreateUser = (env: Env, email: string): boolean =>
+  mayCreateAccount(registrationPolicy(env), email);
 
 const hasInvitationOrManagedSpeaker = async (
   env: Env,
@@ -567,6 +564,18 @@ export const sessionUser = (c: Context<AppHono>): Promise<Principal | null> =>
   userFromRequest(c.req.raw, c.env);
 
 const auth = new Hono<AppHono>();
+
+auth.get("/config", (c) => {
+  const policy = registrationPolicy(c.env);
+  return c.json({
+    registration: {
+      configured: policy.configured,
+      mode: policy.mode,
+      open: policy.configured && policy.mode === "open",
+      initialAdminConfigured: policy.initialAdminEmail !== null,
+    },
+  });
+});
 
 /**
  * The public hackathon deployment is also the evaluator's demo tenant. These
