@@ -7,6 +7,7 @@ import PublicSubmitPage, {
   layout,
   path as publicPath,
   postPublicSubmission,
+  requestSubmitterAccount,
   draftStorageKey,
   requiredAnswerErrors,
   restoreDraftAnswers,
@@ -287,7 +288,26 @@ describe("public submit route", () => {
     );
     expect(markup).toContain("Submission received");
     expect(markup).toContain("submission-created");
+    expect(markup).toContain("Create your submitter account");
+    expect(markup).toContain("Submitter email");
+    expect(markup).toContain("Create account");
     expect(markup).not.toContain("Submit proposal");
+  });
+
+  it("requests a magic link that creates the submitter account and returns to the proposal dashboard", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestSubmitterAccount(" Priya@Example.com ", "architecture-summit");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/auth/request-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "priya@example.com",
+        returnTo: "/portal/events/architecture-summit/submissions",
+      }),
+    });
   });
 
   it("hides checkbox-dependent fields until the box is actually checked", () => {
