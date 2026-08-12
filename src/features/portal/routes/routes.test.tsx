@@ -509,6 +509,12 @@ describe("speaker portal content", () => {
     expect(markup).toContain("Save profile");
     expect(markup).toContain('<fieldset class="space-y-5">');
     expect(markup).toContain("headshots up to 10 MiB, slides up to 100 MiB, and documents up to 25 MiB");
+    expect(markup).toContain("0 of 1 tasks complete");
+    expect(markup.match(/tasks complete/g)).toHaveLength(1);
+    expect(markup).toContain("Next tasks");
+    expect(markup).not.toContain("Cues complete");
+    expect(markup).not.toContain("Cues remaining");
+    expect(markup).not.toContain("0 of 1 complete");
   });
 
   it("offers an explicit checklist-task selector when multiple upload requests share a purpose", () => {

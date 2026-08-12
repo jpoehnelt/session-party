@@ -71,6 +71,7 @@ export interface ProgressChecklistProps {
   items: readonly ProgressChecklistItem[];
   onToggle?: (id: string, completed: boolean) => void;
   readOnly?: boolean;
+  showProgress?: boolean;
   className?: string;
 }
 
@@ -78,6 +79,7 @@ export function ProgressChecklist({
   items,
   onToggle,
   readOnly = false,
+  showProgress = true,
   className,
 }: ProgressChecklistProps) {
   const headingId = useId();
@@ -86,7 +88,9 @@ export function ProgressChecklist({
     <section className={cx("space-y-3", className)} aria-labelledby={headingId}>
       <div className="flex items-center justify-between gap-3">
         <h3 id={headingId} className="text-xs font-black uppercase tracking-[0.1em] text-ink">Tasks</h3>
-        <span className="border-2 border-line-strong bg-production-lime px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-ink">{completed} of {items.length} complete</span>
+        {showProgress && (
+          <span className="border-2 border-line-strong bg-production-lime px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-ink">{completed} of {items.length} complete</span>
+        )}
       </div>
       <div className="space-y-3">
         {items.map((item) => (
