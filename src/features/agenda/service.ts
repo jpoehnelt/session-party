@@ -414,9 +414,11 @@ export const detectAgendaConflicts = (
   existing: readonly AgendaTalk[],
   roomNames: ReadonlyMap<string, string> = new Map(),
   speakerNames: ReadonlyMap<string, string> = new Map(),
+  speakerIdentities: ReadonlyMap<string, string> = new Map(),
 ): readonly AgendaConflict[] => {
   if (candidate.status === "cancelled" || candidate.startsAt === null) return [];
   const conflicts: AgendaConflict[] = [];
+  const identityFor = (speakerId: string) => speakerIdentities.get(speakerId) ?? `speaker:${speakerId}`;
   for (const other of existing) {
     if (
       other.id === candidate.id ||
@@ -436,10 +438,18 @@ export const detectAgendaConflicts = (
       });
     }
 
+    const otherSpeakerIdsByIdentity = new Map(
+      other.speakerIds.map((speakerId) => [identityFor(speakerId), speakerId] as const),
+    );
+    const reportedIdentities = new Set<string>();
     for (const speakerId of candidate.speakerIds) {
-      if (!other.speakerIds.includes(speakerId)) continue;
+      const identity = identityFor(speakerId);
+      if (!otherSpeakerIdsByIdentity.has(identity) || reportedIdentities.has(identity)) continue;
+      reportedIdentities.add(identity);
       const speakerName = speakerNames.get(speakerId) ??
-        candidate.speakerNames[candidate.speakerIds.indexOf(speakerId)] ?? "This speaker";
+        candidate.speakerNames[candidate.speakerIds.indexOf(speakerId)] ??
+        speakerNames.get(otherSpeakerIdsByIdentity.get(identity)!) ??
+        "This speaker";
       conflicts.push({
         kind: "speaker_overlap",
         talkIds: [other.id, candidate.id],
@@ -454,20 +464,60 @@ export const detectAgendaConflicts = (
   );
 };
 
+const loadSpeakerConflictContext = (
+  eventId: string,
+): Effect.Effect<{
+  readonly names: ReadonlyMap<string, string>;
+  readonly identities: ReadonlyMap<string, string>;
+}, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const rows = yield* database(() => db
+      .select({
+        id: speakers.id,
+        name: speakers.displayName,
+        userId: speakers.userId,
+        profileUserId: speakerProfiles.userId,
+        emailUserId: sql<string | null>`(
+          select ${users.id}
+          from ${users}
+          where ${speakers.contactEmail} is not null
+            and lower(trim(${users.email})) = lower(trim(${speakers.contactEmail}))
+          order by ${users.id}
+          limit 1
+        )`,
+      })
+      .from(speakers)
+      .leftJoin(speakerProfiles, eq(speakerProfiles.id, speakers.profileSourceId))
+      .where(eq(speakers.eventId, eventId)));
+    return {
+      names: new Map(rows.map((row) => [row.id, row.name] as const)),
+      identities: new Map(rows.map((row) => {
+        const stableUserId = row.userId ?? row.profileUserId ?? row.emailUserId;
+        return [row.id, stableUserId === null ? `speaker:${row.id}` : `user:${stableUserId}`] as const;
+      })),
+    };
+  });
+
 const loadConflicts = (
   eventId: string,
   agendaTalks?: readonly AgendaTalk[],
 ): Effect.Effect<readonly AgendaConflict[], AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const [allTalks, roomRows, speakerRows] = yield* Effect.all([
+    const [allTalks, roomRows, speakerContext] = yield* Effect.all([
       agendaTalks ? Effect.succeed(agendaTalks) : loadTalkRows(eventId),
       database(() => db.select({ id: rooms.id, name: rooms.name }).from(rooms).where(eq(rooms.eventId, eventId))),
-      database(() => db.select({ id: speakers.id, name: speakers.displayName }).from(speakers).where(eq(speakers.eventId, eventId))),
+      loadSpeakerConflictContext(eventId),
     ]);
     const roomNames = new Map(roomRows.map((row) => [row.id, row.name] as const));
-    const speakerNames = new Map(speakerRows.map((row) => [row.id, row.name] as const));
-    return allTalks.flatMap((talk, index) => detectAgendaConflicts(talk, allTalks.slice(0, index), roomNames, speakerNames));
+    return allTalks.flatMap((talk, index) => detectAgendaConflicts(
+      talk,
+      allTalks.slice(0, index),
+      roomNames,
+      speakerContext.names,
+      speakerContext.identities,
+    ));
   });
 
 const decodePublishedAgenda = (payload: unknown): Effect.Effect<PublishedAgenda, External> =>
@@ -1449,10 +1499,11 @@ export const autoPlaceTalk = (
     const prepared = yield* prepareIdempotency("agenda.autoPlaceTalk", input);
     if (!("requestId" in prepared)) return prepared as AgendaMutationResult;
     const { db } = yield* Db;
-    const [event, roomRows, existing] = yield* Effect.all([
+    const [event, roomRows, existing, speakerContext] = yield* Effect.all([
       getEvent(input.eventId),
       database(() => db.select().from(rooms).where(eq(rooms.eventId, input.eventId)).orderBy(asc(rooms.order), asc(rooms.name), asc(rooms.id))),
       loadTalkRows(input.eventId),
+      loadSpeakerConflictContext(input.eventId),
     ]);
     const before = existing.find(({ id }) => id === input.talkId);
     if (!before) return yield* Effect.fail(new NotFound({ entity: "talk", id: input.talkId }));
@@ -1483,7 +1534,13 @@ export const autoPlaceTalk = (
           startsAt,
           status: "confirmed",
         };
-        if (detectAgendaConflicts(candidate, scheduled).length === 0) {
+        if (detectAgendaConflicts(
+          candidate,
+          scheduled,
+          new Map(),
+          speakerContext.names,
+          speakerContext.identities,
+        ).length === 0) {
           placement = { roomId: room.id, startsAt };
           break;
         }
