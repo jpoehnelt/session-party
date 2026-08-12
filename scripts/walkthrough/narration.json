@@ -9,20 +9,20 @@
     "notes": "Lead with organizer value. Let important UI state remain visible for at least two seconds after each action. Do not narrate routine navigation."
   },
   "full": {
-    "targetDurationSeconds": 416,
+    "targetDurationSeconds": 410,
     "scenes": [
       {
         "id": "intro",
-        "title": "Kill six SaaS products",
+        "title": "One connected event workflow",
         "startSeconds": 0,
-        "durationSeconds": 11,
+        "durationSeconds": 5,
         "role": "all roles",
         "visuals": [
           "Flip through the CFP builder and anonymous submission form",
           "Cut through blind review, speaker portal, agenda, and PartyServer live desk",
           "End on publication and the stable anonymous embed"
         ],
-        "narration": "Kill six event-operations SaaS products with one open-source Cloudflare application: intake, review, speakers, scheduling, live control, publication, and embeds."
+        "narration": "Fifty views, one connected event workflow."
       },
       {
         "id": "workspace",
@@ -146,20 +146,20 @@
     ]
   },
   "short": {
-    "targetDurationSeconds": 82,
+    "targetDurationSeconds": 80,
     "scenes": [
       {
         "id": "short_hook",
         "title": "One source of truth",
         "startSeconds": 0,
-        "durationSeconds": 10,
+        "durationSeconds": 8,
         "sourceScenes": ["intro", "workspace"],
         "narration": "Session Party takes an event from call for proposals to a live public program in one open-source workspace."
       },
       {
         "id": "short_intake_review",
         "title": "Collect and decide",
-        "startSeconds": 10,
+        "startSeconds": 8,
         "durationSeconds": 20,
         "sourceScenes": ["cfp", "review"],
         "narration": "Structured CFP fields and conditional routing produce clean proposal data. Assigned reviewers score against a rubric, discuss evidence, and remain in control of clearly labeled AI suggestions. Hackathon demo verification is disabled for automated replay and can be re-enabled for production."
@@ -167,7 +167,7 @@
       {
         "id": "short_speaker",
         "title": "Onboard speakers",
-        "startSeconds": 30,
+        "startSeconds": 28,
         "durationSeconds": 17,
         "sourceScenes": ["speaker_portal"],
         "narration": "After acceptance, the speaker sees the session, tasks, logistics, profile, and uploads in one portal. The saved headshot persists after reload and appears on the organizer's matching record."
@@ -175,7 +175,7 @@
       {
         "id": "short_agenda",
         "title": "Build and run the program",
-        "startSeconds": 47,
+        "startSeconds": 45,
         "durationSeconds": 20,
         "sourceScenes": ["agenda", "live_show"],
         "narration": "The accepted proposal becomes a schedulable talk without retyping. A PartyServer Durable Object coordinates the live session state, timer, holds, and reconnects in real time."
@@ -183,7 +183,7 @@
       {
         "id": "short_publish",
         "title": "Publish everywhere",
-        "startSeconds": 67,
+        "startSeconds": 65,
         "durationSeconds": 15,
         "sourceScenes": ["publication", "widgets_and_close"],
         "narration": "One immutable release powers the mobile schedule, speaker gallery, stable embeds, feeds, and calendar exports. That is the whole event workflow—connected, auditable, and portable."
