@@ -5,11 +5,11 @@ export const publicProgramScene: Scene = {
   title: "A calm audience experience",
   narration: "Attendees browse sessions, speakers, agenda, schedule, and gallery without an account. Search, filters, personal schedules, speaker photos, and calendar export all use the same published source of truth.",
   shortSeconds: 10,
-  async run({ page, baseUrl, eventSlug, titleCard, spotlight, clearSpotlight, pause }) {
-    await page.goto(`${baseUrl}/embed/${eventSlug}/embed_p4AlHKPU3DCwFg9m5sgx_`, { waitUntil: "networkidle" });
-    if (await page.getByText(/Embed unavailable/i).count()) {
-      await page.goto(`${baseUrl}/event/${eventSlug}/sessions`, { waitUntil: "networkidle" });
-    }
+  async run({ page, baseUrl, eventSlug, state, titleCard, spotlight, clearSpotlight, pause }) {
+    const embedPath = state.get("publicEmbedPath");
+    if (!embedPath) throw new Error("The publication scene did not provide a current public embed path");
+    await page.goto(new URL(embedPath, baseUrl).toString(), { waitUntil: "networkidle" });
+    if (await page.getByText(/Embed unavailable/i).count()) throw new Error("The discovered public embed is unavailable");
     await titleCard("Stable widgets and public pages", "Embed once, refresh in place, and give every attendee a calm public program.", [
       "Replace widget SaaS → stable embed + live revision lookup",
       "Anonymous public routes with CORS + ETag feeds",

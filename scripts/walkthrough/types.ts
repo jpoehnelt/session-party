@@ -11,6 +11,7 @@ export type WalkthroughOptions = {
 
 export type SceneContext = WalkthroughOptions & {
   readonly page: Page;
+  readonly state: Map<string, string>;
   readonly pause: (milliseconds: number) => Promise<void>;
   readonly titleCard: (title: string, subtitle: string, technicalDetails?: readonly string[]) => Promise<void>;
   readonly spotlight: (selector: string, label?: string) => Promise<void>;

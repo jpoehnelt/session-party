@@ -32,6 +32,7 @@ const targetDurationByScene = new Map(authoredNarration.full.scenes.map((scene) 
 const narrationByScene = new Map(authoredNarration.full.scenes.map((scene) => [scene.id, scene.narration]));
 const browser = await chromium.launch({ headless: !headed });
 const recorded: RecordedScene[] = [];
+const state = new Map<string, string>();
 
 try {
   const fromIndex = from ? scenes.findIndex((scene) => scene.id === from) : 0;
@@ -56,6 +57,7 @@ try {
     try {
       await scene.run({
         page,
+        state,
         baseUrl,
         eventSlug,
         outputDir,
@@ -108,7 +110,8 @@ try {
 }
 
 const manifestPath = resolve(outputDir, "manifest.json");
-const previous = only
+const partialRun = Boolean(only || from);
+const previous = partialRun
   ? await readFile(manifestPath, "utf8").then((value) => JSON.parse(value) as { readonly scenes?: readonly RecordedScene[] }).catch(() => null)
   : null;
 const mergedRecorded = previous?.scenes
