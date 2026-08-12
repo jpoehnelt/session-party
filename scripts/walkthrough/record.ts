@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { chromium } from "playwright";
-import { clearSpotlight, scrollBy, spotlight, titleCard } from "./presentation";
+import { clearSpotlight, clearTechnicalOverlay, scrollBy, spotlight, titleCard } from "./presentation";
 import { scenes } from "./scenes";
 import type { RecordedScene } from "./types";
 
@@ -64,6 +64,7 @@ try {
         headed,
         pause: (milliseconds) => page.waitForTimeout(milliseconds),
         titleCard: (title, subtitle, technicalDetails) => titleCard(page, title, subtitle, technicalDetails),
+        clearTechnicalOverlay: () => clearTechnicalOverlay(page),
         spotlight: (selector, label) => spotlight(page, selector, label),
         clearSpotlight: () => clearSpotlight(page),
         scrollBy: (pixels) => scrollBy(page, pixels),

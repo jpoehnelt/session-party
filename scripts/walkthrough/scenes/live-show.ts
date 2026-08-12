@@ -6,15 +6,16 @@ export const liveShowScene: Scene = {
   title: "Real-time show control",
   narration: "The live desk is coordinated by a per-event PartyServer Durable Object. Show state, timers, holds, and room-targeted cues update in real time; reconnects refresh the canonical agenda while the Durable Object preserves the active run of show.",
   shortSeconds: 10,
-  async run({ page, baseUrl, eventSlug, titleCard, spotlight, clearSpotlight, pause }) {
+  async run({ page, baseUrl, eventSlug, titleCard, spotlight, clearSpotlight, clearTechnicalOverlay, pause }) {
     await loginAs(page, baseUrl, "organizer", `/e/${eventSlug}/agenda`);
     await page.goto(`${baseUrl}/e/${eventSlug}/agenda`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Open live show" }).click();
     await page.getByText("Live show control", { exact: true }).waitFor({ state: "visible" });
     await titleCard("PartyServer live desk", "A per-event Durable Object coordinates cues, timers, holds, and reconnect-safe show state.", [
-      "Replace live-ops SaaS → React desk + PartySocket",
-      "EventRoom PartyServer Durable Object",
-      "Authoritative show state → broadcast + reconnect",
+      "Replaces|Live show-control and cue-bus SaaS",
+      "Wire|PartySocket sends show/control; clients receive show/state",
+      "Actor|EventRoom PartyServer Durable Object — one authority per event",
+      "State|talkId, status, timestamps, holdMs, actor, and monotonic revision",
     ]);
 
     const reset = page.getByRole("button", { name: "Reset" });
@@ -49,6 +50,7 @@ export const liveShowScene: Scene = {
     await spotlight("text=running", "Persisted after reconnect");
     await pause(2_500);
     await clearSpotlight();
+    await clearTechnicalOverlay();
     const resetAfterReload = page.getByRole("button", { name: "Reset" });
     if (await resetAfterReload.isEnabled().catch(() => false)) await resetAfterReload.click();
     await pause(2_000);

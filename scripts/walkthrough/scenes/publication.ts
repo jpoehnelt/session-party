@@ -6,13 +6,14 @@ export const publicationScene: Scene = {
   title: "Publish once, distribute everywhere",
   narration: "Publishing creates an immutable audience revision. Organizers can refresh stable live widgets, configure embeds, and distribute the same privacy-filtered program as HTML, JSON, XML, and iCalendar.",
   shortSeconds: 9,
-  async run({ page, baseUrl, eventSlug, state, titleCard, spotlight, clearSpotlight, scrollBy, pause }) {
+  async run({ page, baseUrl, eventSlug, state, titleCard, spotlight, clearSpotlight, clearTechnicalOverlay, scrollBy, pause }) {
     await loginAs(page, baseUrl, "organizer", `/e/${eventSlug}/publication`);
     await page.goto(`${baseUrl}/e/${eventSlug}/publication`, { waitUntil: "networkidle" });
     await titleCard("Publication", "Immutable revisions, stable embeds, and standards-based schedule feeds.", [
-      "Replace publishing SaaS → immutable audience revision",
-      "Privacy-filtered public projection",
-      "HTML + JSON + XML + iCalendar endpoints",
+      "Replaces|Publishing, embed, and feed-distribution SaaS",
+      "Write|agenda.publish → immutable privacy-filtered audience revision",
+      "Embeds|Versioned definition resolves the current enabled stable URL",
+      "Feeds|HTML, JSON, XML, and iCalendar with CORS and ETag",
     ]);
     await spotlight("h1", "Audience revision");
     await pause(1_500);
@@ -27,6 +28,7 @@ export const publicationScene: Scene = {
     if (await formats.count()) await spotlight("text=Output formats", "HTML · JSON · XML · iCal");
     await pause(2_600);
     await clearSpotlight();
+    await clearTechnicalOverlay();
 
     let enabled = page.getByRole("listitem").filter({ hasText: /· Enabled/i }).first();
     if (!(await enabled.count())) {

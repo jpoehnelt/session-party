@@ -9,25 +9,25 @@
     "notes": "Lead with organizer value. Let important UI state remain visible for at least two seconds after each action. Do not narrate routine navigation."
   },
   "full": {
-    "targetDurationSeconds": 425,
+    "targetDurationSeconds": 418,
     "scenes": [
       {
         "id": "intro",
-        "title": "One connected event workflow",
+        "title": "Kill six SaaS products",
         "startSeconds": 0,
-        "durationSeconds": 25,
-        "role": "anonymous",
+        "durationSeconds": 11,
+        "role": "all roles",
         "visuals": [
-          "Open on the public schedule at desktop width",
-          "Pan through a populated schedule, then the public speaker gallery",
-          "End on the Session Party wordmark"
+          "Flip through the CFP builder and anonymous submission form",
+          "Cut through blind review, speaker portal, agenda, and PartyServer live desk",
+          "End on publication and the stable anonymous embed"
         ],
-        "narration": "The hackathon thesis is simple: kill the event-operations SaaS stack without losing the workflow. Session Party replaces the disconnected form builder, review tool, speaker portal, scheduling system, live desk, and widget vendor with one open-source Cloudflare application. We will follow one event record through the product while the overlays expose the primitives underneath."
+        "narration": "Kill six event-operations SaaS products with one open-source Cloudflare application: intake, review, speakers, scheduling, live control, publication, and embeds."
       },
       {
         "id": "workspace",
         "title": "The organizer's operational home",
-        "startSeconds": 25,
+        "startSeconds": 11,
         "durationSeconds": 35,
         "role": "organizer",
         "visuals": [
@@ -41,7 +41,7 @@
       {
         "id": "cfp",
         "title": "Structured proposal intake",
-        "startSeconds": 60,
+        "startSeconds": 46,
         "durationSeconds": 60,
         "role": "organizer and anonymous submitter",
         "visuals": [
@@ -56,7 +56,7 @@
       {
         "id": "review",
         "title": "Committee review with human control",
-        "startSeconds": 120,
+        "startSeconds": 106,
         "durationSeconds": 65,
         "role": "reviewer and organizer",
         "visuals": [
@@ -71,7 +71,7 @@
       {
         "id": "speaker_portal",
         "title": "A reusable speaker portal",
-        "startSeconds": 185,
+        "startSeconds": 171,
         "durationSeconds": 65,
         "role": "speaker",
         "visuals": [
@@ -87,7 +87,7 @@
       {
         "id": "agenda",
         "title": "Acceptance becomes a schedulable talk",
-        "startSeconds": 250,
+        "startSeconds": 236,
         "durationSeconds": 65,
         "role": "organizer",
         "visuals": [
@@ -103,7 +103,7 @@
       {
         "id": "live_show",
         "title": "PartyServer Durable Object live control",
-        "startSeconds": 315,
+        "startSeconds": 301,
         "durationSeconds": 55,
         "role": "organizer",
         "visuals": [
@@ -119,7 +119,7 @@
       {
         "id": "publication",
         "title": "Publish once, serve every audience",
-        "startSeconds": 370,
+        "startSeconds": 356,
         "durationSeconds": 40,
         "role": "organizer and anonymous",
         "visuals": [
@@ -133,7 +133,7 @@
       {
         "id": "widgets_and_close",
         "title": "A portable, open-source result",
-        "startSeconds": 410,
+        "startSeconds": 396,
         "durationSeconds": 15,
         "role": "organizer and anonymous",
         "visuals": [
