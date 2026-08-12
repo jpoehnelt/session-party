@@ -316,17 +316,21 @@ function SubmissionPipeline({
       ) : (
         <div
           className="space-y-4"
-          role="img"
           aria-label={`Submission pipeline: ${submissionStages.map((status) => `${stagePresentation[status].label} ${counts[status]}`).join(", ")}`}
         >
           {submissionStages.map((status) => {
             const stage = stagePresentation[status];
             const count = counts[status];
             return (
-              <div key={status}>
+              <Link
+                aria-label={`${stage.label}: ${count}. Open the review workbench filtered to ${stage.label.toLocaleLowerCase()}.`}
+                className="group block rounded-control outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+                key={status}
+                to={`/e/${eventSlug}/review?status=${encodeURIComponent(status)}`}
+              >
                 <div className="mb-1.5 flex items-center justify-between gap-4 text-xs font-black uppercase tracking-[0.08em]">
-                  <span>{stage.label}</span>
-                  <span>{count}</span>
+                  <span className="underline-offset-4 group-hover:underline">{stage.label}</span>
+                  <span className="transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none">{count} →</span>
                 </div>
                 <div className="h-3 overflow-hidden border-2 border-line-strong bg-surface-muted">
                   <div
@@ -335,7 +339,7 @@ function SubmissionPipeline({
                     style={{ width: `${(count / total) * 100}%` }}
                   />
                 </div>
-              </div>
+              </Link>
             );
           })}
         </div>
@@ -384,9 +388,23 @@ function ScheduleHealth({
               <div aria-hidden="true" className="h-full bg-production-lime" style={{ width: `${progress}%` }} />
             </div>
           </div>
-          <ScheduleRow label="Needs placement" value={needsPlacement} attention={needsPlacement > 0} />
-          <ScheduleRow label="Conflicts" value={agenda.warnings.conflictCount} attention={agenda.warnings.conflictCount > 0} />
-          <ScheduleRow label="Published sessions" value={agenda.publication.talkCount} />
+          <ScheduleRow
+            label="Needs placement"
+            value={needsPlacement}
+            attention={needsPlacement > 0}
+            to={`/e/${eventSlug}/agenda?view=list&filter=needs-placement`}
+          />
+          <ScheduleRow
+            label="Conflicts"
+            value={agenda.warnings.conflictCount}
+            attention={agenda.warnings.conflictCount > 0}
+            to={`/e/${eventSlug}/agenda?view=list&filter=conflicts`}
+          />
+          <ScheduleRow
+            label="Published sessions"
+            value={agenda.publication.talkCount}
+            to={`/e/${eventSlug}/agenda?view=list&filter=published`}
+          />
           {needsPlacement === 0 && agenda.warnings.conflictCount === 0 ? (
             <Alert tone="success" role="status">
               <AlertTitle>Schedule is clear</AlertTitle>
@@ -403,16 +421,25 @@ function ScheduleRow({
   label,
   value,
   attention = false,
+  to,
 }: {
   readonly label: string;
   readonly value: number;
   readonly attention?: boolean;
+  readonly to: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-t-2 border-line pt-3">
-      <span className="text-sm font-semibold text-ink-secondary">{label}</span>
-      <Badge tone={attention ? "warning" : "neutral"}>{value}</Badge>
-    </div>
+    <Link
+      aria-label={`${label}: ${value}. Open the filtered agenda.`}
+      className="group flex items-center justify-between gap-4 border-t-2 border-line pt-3 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+      to={to}
+    >
+      <span className="text-sm font-semibold text-ink-secondary underline-offset-4 group-hover:text-ink group-hover:underline">{label}</span>
+      <span className="flex items-center gap-2">
+        <Badge tone={attention ? "warning" : "neutral"}>{value}</Badge>
+        <span aria-hidden="true" className="text-sm font-black transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none">→</span>
+      </span>
+    </Link>
   );
 }
 
