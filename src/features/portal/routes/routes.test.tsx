@@ -226,6 +226,7 @@ const directory: SpeakerDirectory = {
     provisioningVersion: 2,
     provisionedAt: null,
     sessions: [],
+    privateFields: [],
     readiness: snapshot.readiness,
     latestContact: null,
   }],

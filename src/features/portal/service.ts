@@ -85,6 +85,7 @@ import {
   type SetTaskCompletionInput,
   type SpeakerDirectory,
   type SpeakerDirectoryItem,
+  SpeakerPrivateFieldValue as SpeakerPrivateFieldValueSchema,
   type SpeakerProfile,
   type SubmitProfileReviewInput,
   type UpdateProfileInput,
@@ -978,7 +979,7 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
       .orderBy(asc(talks.startsAt), asc(talks.title))),
   ]);
   const onboardingFormIds = definitions.flatMap((task) => task.kind === "form" && task.formId !== null ? [task.formId] : []);
-  const privateFieldRows = speakerIds.length === 0 || onboardingFormIds.length === 0
+  const storedPrivateFieldRows = speakerIds.length === 0 || onboardingFormIds.length === 0
     ? []
     : yield* database(() => db.select({
       speakerId: submissionSpeakers.speakerId,
@@ -1017,6 +1018,15 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
         eq(forms.kind, "task"),
       ))
       .orderBy(desc(submissions.submittedAt), desc(submissions.id), asc(formVersionFields.order)));
+  const privateFieldRows = yield* Effect.forEach(storedPrivateFieldRows, (row) =>
+    Schema.decodeUnknown(SpeakerPrivateFieldValueSchema)(row.value).pipe(
+      Effect.map((value) => ({ ...row, value })),
+      Effect.mapError((error) => new External({
+        service: "database",
+        detail: `Invalid private speaker field ${row.fieldId}: ${String(error)}`,
+      })),
+    ),
+  );
   const latestPrivateSubmissionBySpeakerForm = new Map<string, string>();
   for (const row of privateFieldRows) {
     const key = `${row.speakerId}\0${row.formId}`;
