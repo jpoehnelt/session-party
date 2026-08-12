@@ -49,7 +49,7 @@ describe("availableEventNavItems", () => {
       "Content",
       "Agenda",
       "Communications",
-      "Publication",
+      "Publish & embed",
       "Exports",
       "Integrations",
       "Settings",
