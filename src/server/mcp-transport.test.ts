@@ -102,6 +102,7 @@ describe("MCP transport", () => {
     const tools = listed.rpc.result?.tools as readonly { readonly name: string }[];
     expect(tools.map(({ name }) => name)).toEqual([
       "agenda_list",
+      "agenda_list_talk_content_history",
       "get_event",
       "list_events",
     ]);

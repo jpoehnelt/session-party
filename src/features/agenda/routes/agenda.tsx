@@ -34,12 +34,14 @@ import {
   AgendaSnapshot,
   PublishedAgenda,
   RoomMutationResult,
+  TalkContentHistory,
   TrackMutationResult,
   type AgendaTalk,
   type AgendaView,
   type BacklogProposal,
   type RealtimeIntentState,
   type Room,
+  type TalkContentRevision,
   type Track,
 } from "../schema";
 
@@ -294,6 +296,8 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [agenda, setAgenda] = useState<AgendaSnapshot | null | undefined>(undefined);
   const [refresh, setRefresh] = useState<RefreshState>({ status: "idle", message: null });
   const [selectedTalkId, setSelectedTalkId] = useState<string | null>(null);
+  const [contentHistory, setContentHistory] = useState<TalkContentHistory>([]);
+  const [contentHistoryLoading, setContentHistoryLoading] = useState(false);
   const [intent, setIntent] = useState<RealtimeIntentState>(idleIntent);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -313,6 +317,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [showCues, setShowCues] = useState<readonly ShowCue[]>([]);
   const [showOpen, setShowOpen] = useState(false);
   const agendaRequest = useRef(0);
+  const contentHistoryRequest = useRef(0);
   const viewRef = useRef(view);
   viewRef.current = view;
   const mounted = useRef(true);
@@ -321,6 +326,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     apiFetch<AgendaSnapshot>(
       `/api/v1/events/${encodeURIComponent(event.id)}/agenda?view=${encodeURIComponent(nextView)}`,
       { schema: AgendaSnapshot },
+    ), [event.id]);
+
+  const fetchContentHistory = useCallback((talkId: string) =>
+    apiFetch<TalkContentHistory>(
+      `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks/${encodeURIComponent(talkId)}/content-history`,
+      { schema: TalkContentHistory },
     ), [event.id]);
 
   const refreshAgenda = useCallback(async (nextView: AgendaView): Promise<AgendaSnapshot | null> => {
@@ -360,6 +371,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     return () => {
       mounted.current = false;
       agendaRequest.current += 1;
+      contentHistoryRequest.current += 1;
     };
   }, []);
 
@@ -463,6 +475,26 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     () => agenda?.talks.find(({ id }) => id === selectedTalkId) ?? null,
     [agenda, selectedTalkId],
   );
+
+  useEffect(() => {
+    const request = ++contentHistoryRequest.current;
+    if (selectedTalkId === null) {
+      setContentHistory([]);
+      setContentHistoryLoading(false);
+      return;
+    }
+    setContentHistoryLoading(true);
+    void fetchContentHistory(selectedTalkId).then((history) => {
+      if (!mounted.current || request !== contentHistoryRequest.current) return;
+      setContentHistory(history);
+      setContentHistoryLoading(false);
+    }).catch((error) => {
+      if (!mounted.current || request !== contentHistoryRequest.current) return;
+      setContentHistory([]);
+      setContentHistoryLoading(false);
+      toast(error instanceof Error ? error.message : "Could not load session content history", { tone: "danger" });
+    });
+  }, [fetchContentHistory, selectedTalkId]);
   const talkDirty = useMemo(() => selectedTalk !== null && (
     form.title !== selectedTalk.title
     || form.description !== (selectedTalk.description ?? "")
@@ -691,8 +723,44 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       selectTalk(result.talk);
       toast("Session title and abstract updated", { tone: "success" });
       await refreshAfterCommit();
+      try {
+        setContentHistory(await fetchContentHistory(result.talk.id));
+      } catch (historyError) {
+        toast(historyError instanceof Error ? historyError.message : "Could not refresh session content history", { tone: "danger" });
+      }
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not update session content", { tone: "danger" });
+      await refreshAfterStaleFailure(error);
+    }
+  };
+
+  const restoreTalkContent = async (revision: TalkContentRevision) => {
+    if (!selectedTalk) return;
+    const clientId = clientIntentId();
+    try {
+      const result = await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
+        `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks/${encodeURIComponent(selectedTalk.id)}/content`,
+        {
+          method: "PATCH",
+          body: {
+            title: revision.title,
+            description: revision.description,
+            expectedVersion: selectedTalk.version,
+            idempotencyKey: idempotencyKey("restore-talk-content"),
+          },
+          schema: AgendaMutationResult,
+        },
+      ));
+      selectTalk(result.talk);
+      toast(`Session content restored from ${new Date(revision.occurredAt).toLocaleString()}`, { tone: "success" });
+      await refreshAfterCommit();
+      try {
+        setContentHistory(await fetchContentHistory(result.talk.id));
+      } catch (historyError) {
+        toast(historyError instanceof Error ? historyError.message : "Could not refresh session content history", { tone: "danger" });
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not restore session content", { tone: "danger" });
       await refreshAfterStaleFailure(error);
     }
   };
@@ -1198,6 +1266,52 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
               <Button type="button" variant="secondary" disabled={mutationsDisabled} onClick={() => void saveTalkContent()}>
                 Save session content
               </Button>
+              <div className="border-t-2 border-line-strong pt-3" aria-label="Session content history">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-black text-ink">Version history</h4>
+                    <p className="text-xs text-ink-secondary">Every saved title and abstract revision is attributed and restorable.</p>
+                  </div>
+                  <Badge tone="neutral">{contentHistory.length} revisions</Badge>
+                </div>
+                {contentHistoryLoading ? (
+                  <p className="mt-3 text-xs font-semibold text-ink-secondary">Loading history…</p>
+                ) : contentHistory.length === 0 ? (
+                  <p className="mt-3 text-xs font-semibold text-ink-secondary">No saved content revisions yet.</p>
+                ) : (
+                  <ol className="mt-3 space-y-2">
+                    {contentHistory.map((revision) => {
+                      const current = revision.title === selectedTalk.title
+                        && revision.description === selectedTalk.description;
+                      return (
+                        <li key={revision.id} className="border-2 border-line-strong bg-surface p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-black text-ink">{revision.title}</p>
+                              <p className="mt-1 text-[11px] font-semibold text-ink-secondary">
+                                {revision.editorName} · {new Date(revision.occurredAt).toLocaleString()} · v{revision.version}
+                              </p>
+                            </div>
+                            {current ? (
+                              <Badge tone="success">Current</Badge>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                disabled={mutationsDisabled}
+                                onClick={() => void restoreTalkContent(revision)}
+                              >
+                                Restore
+                              </Button>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+              </div>
             </section>
             <div className="flex items-center justify-between gap-3 border-2 border-line-strong bg-production-yellow p-4">
               <div>

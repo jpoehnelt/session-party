@@ -42,6 +42,19 @@ export const AgendaTalk = Schema.Struct({
 });
 export type AgendaTalk = typeof AgendaTalk.Type;
 
+export const TalkContentRevision = Schema.Struct({
+  id: EntityId,
+  title: Schema.String,
+  description: Schema.Union(Schema.String, Schema.Null),
+  version: Schema.Int.pipe(Schema.positive()),
+  editorName: Schema.String,
+  occurredAt: UnixTimestampMs,
+});
+export type TalkContentRevision = typeof TalkContentRevision.Type;
+
+export const TalkContentHistory = Schema.Array(TalkContentRevision);
+export type TalkContentHistory = typeof TalkContentHistory.Type;
+
 export const BacklogProposal = Schema.Struct({
   submissionId: EntityId,
   title: Schema.String,
@@ -105,6 +118,12 @@ export const ListAgendaInput = Schema.Struct({
   view: Schema.optionalWith(AgendaView, { default: () => "day" as const }),
 });
 export type ListAgendaInput = typeof ListAgendaInput.Type;
+
+export const ListTalkContentHistoryInput = Schema.Struct({
+  eventId: EntityId,
+  talkId: EntityId,
+});
+export type ListTalkContentHistoryInput = typeof ListTalkContentHistoryInput.Type;
 
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(200));
 const DurationMinutes = Schema.Int.pipe(Schema.between(5, 480));

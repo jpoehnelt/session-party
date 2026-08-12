@@ -57,6 +57,7 @@ import {
   getAgendaDeliveryProjection,
   getPublishedAgenda,
   listAgenda,
+  listTalkContentHistory,
   moveTalk,
   publishAgenda,
   scheduleTalk,
@@ -895,6 +896,53 @@ describe("agenda service", () => {
     expect(stored).toMatchObject({ title: "Effects at global scale", version: 3 });
     expect(change?.payload).toMatchObject({ action: "content_updated" });
     expect(audit?.action).toBe("agenda.talk_content_updated");
+  });
+
+  it("lists durable attributed content revisions that can be restored", async () => {
+    const seeded = await seedAgenda("content-history", { scheduled: true });
+    const first = await runAs(seeded.user, updateTalkContent({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: "Effects at global scale",
+      description: "The first organizer revision.",
+      expectedVersion: 2,
+      idempotencyKey: "content-history-first-0001",
+    }));
+    const second = await runAs(seeded.user, updateTalkContent({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: first.talk.title,
+      description: "The first organizer revision. A second sentence.",
+      expectedVersion: first.talk.version,
+      idempotencyKey: "content-history-second-0001",
+    }));
+
+    const history = await runAs(seeded.user, listTalkContentHistory({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+    }));
+    expect(history).toHaveLength(2);
+    expect(history.map((revision) => revision.description)).toEqual([
+      "The first organizer revision. A second sentence.",
+      "The first organizer revision.",
+    ]);
+    expect(history.every((revision) => revision.editorName === "Agenda Owner")).toBe(true);
+    expect(history.every((revision) => Number.isFinite(revision.occurredAt))).toBe(true);
+    expect(history[0]!.occurredAt).toBeGreaterThanOrEqual(history[1]!.occurredAt);
+
+    const restored = await runAs(seeded.user, updateTalkContent({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+      title: history[1]!.title,
+      description: history[1]!.description,
+      expectedVersion: second.talk.version,
+      idempotencyKey: "content-history-restore-0001",
+    }));
+    expect(restored.talk.description).toBe("The first organizer revision.");
+    await expect(runAs(seeded.user, listTalkContentHistory({
+      eventId: seeded.eventId,
+      talkId: seeded.talkA,
+    }))).resolves.toHaveLength(3);
   });
 
   it("keeps Airtable-authoritative talk content as a pending overlay", async () => {
