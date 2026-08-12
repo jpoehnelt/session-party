@@ -1,14 +1,8 @@
 import { Schema } from "effect";
-import { Hono } from "hono";
 import { PublishedAgenda } from "@/features/agenda/schema";
 import { EmbedDefinition, EmbedDefinitions, type CreateEmbedInput, type UpdateEmbedInput } from "./schema";
 
-declare global {
-  interface Env {}
-}
-
 const api = "/api/v1";
-const app = new Hono<{ Bindings: Env }>();
 
 export class PublicationApiError extends Error {
   readonly name = "PublicationApiError";
@@ -117,5 +111,3 @@ function responseMessage(response: Response): Promise<string> {
     return response.statusText || `Request failed with status ${response.status}`;
   });
 }
-
-export default app;

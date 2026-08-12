@@ -14,7 +14,6 @@ import { AirtableRateLimiter } from "./sync/AirtableRateLimiter";
 import { AirtableSyncLane } from "./sync/AirtableSyncLane";
 import { enqueueAutomatedDueTaskReminders } from "@/features/portal/service";
 import {
-  apiRouters,
   mcpTools,
   operationById,
   restRegistrations,
@@ -242,7 +241,6 @@ for (const registration of restRegistrations) {
     ),
   );
 }
-for (const router of apiRouters) app.route(API, router);
 app.post("/__local/smoke", async (c) => {
   if (!isExplicitLocalEnvironment(c.env)) return c.notFound();
   if (c.req.header("x-local-smoke-secret") !== sessionSecret(c.env)) {

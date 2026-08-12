@@ -23,7 +23,7 @@ Open-source Sessionboard replacement (Cloudflare Workers + Effect + PartyServer 
 
 - Server code is **Effect v3**: validate all external input with `effect/Schema` (`contracts/types.ts`), fail with tagged errors from `contracts/errors.ts` only, obtain capabilities via services from `src/server/services.ts`. Copy patterns from the canonical slice `src/features/events/` — do not invent Effect idioms.
 - Client code is plain React 19 + react-router + Tailwind 4. Import UI exclusively from `@/ui` — never write one-off styled primitives or new global CSS.
-- Slice layout: `service.ts` (Effect domain logic) → thin `api.ts` (Hono router, default export) + `tools.ts` (`export const tools: ToolDef[]`) + optional `party.ts` (realtime handlers) + `routes/*.tsx` (client pages) + `components/`.
+- Slice layout: `service.ts` (Effect domain logic) → `operations.ts` (`OperationDef` metadata for REST/MCP/Party) + optional intent schemas + `routes/*.tsx` (client pages) + `components/`. The retired slice-root `api.ts`/`tools.ts`/handler registry convention must not be reintroduced.
 - Paths: `@/*` → `src/*`, `contracts/*` → `contracts/*`. API mounts under `/api/v1` per `contracts/routes.ts`.
 - No new dependencies without integrator approval. No formatters/linters/full test suite in slice work.
 
