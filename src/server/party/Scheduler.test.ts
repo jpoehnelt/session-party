@@ -229,6 +229,7 @@ describe("Scheduler durable delivery recovery", () => {
       env,
       { waitUntil(promise: Promise<unknown>) { waits.push(promise); } } as unknown as ExecutionContext,
     );
+    expect(waits).toHaveLength(2);
     await Promise.all(waits);
     expect(await runInDurableObject(
       canonical,

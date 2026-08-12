@@ -369,8 +369,8 @@ export default {
   scheduled(controller, env, ctx) {
     ctx.waitUntil(recoverMailScheduler(env));
     const runAt = new Date(controller.scheduledTime);
-    if (runAt.getUTCHours() === 14 && runAt.getUTCMinutes() === 0) {
-      ctx.waitUntil(runAutomatedDueReminderCron(env, runAt));
-    }
+    // The delivery key is date-scoped, so every-minute discovery is cheap to retry
+    // and still queues at most one automated reminder per speaker per UTC day.
+    ctx.waitUntil(runAutomatedDueReminderCron(env, runAt));
   },
 } satisfies ExportedHandler<Env>;
