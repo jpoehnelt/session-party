@@ -53,6 +53,7 @@ import {
   assignReviewer,
   bulkAssignReviewers,
   createReviewRound,
+  demoAiSuggestionJson,
   exportReviewResults,
   getWorkbench,
   recuseAssignment,
@@ -63,6 +64,17 @@ import {
   sendReviewReminders,
   updateReviewRound,
 } from "./service";
+
+it("builds a substantive deterministic AI suggestion for the disposable demo event", () => {
+  const parsed = JSON.parse(demoAiSuggestionJson("Taming 40-Minute CI", ["originality", "relevance"])) as {
+    scores: Record<string, number>;
+    comment: string;
+  };
+  expect(parsed.scores).toEqual({ originality: 4, relevance: 4 });
+  expect(parsed.comment).toContain("CI build performance");
+  expect(parsed.comment).toContain("monorepos");
+  expect(parsed.comment).toContain("Human confirmation");
+});
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
 
@@ -231,6 +243,11 @@ beforeAll(async () => {
       type: "textarea", label: "Proposal summary", semanticKey: "submissionAbstract", required: true, createdAt,
     },
     {
+      id: "field_format", eventId: fixtureEventId, formVersionId: "form_version_01", order: 2,
+      type: "select", label: "Session format", required: true,
+      options: ["Conference talk (30 min)", "Workshop (120 min)"], createdAt,
+    },
+    {
       id: "field_task_notes", eventId: fixtureEventId, formVersionId: "form_version_task", order: 1,
       type: "textarea", label: "Logistics notes", required: true, createdAt,
     },
@@ -282,6 +299,16 @@ beforeAll(async () => {
     updatedAt: createdAt,
   }));
   for (const seed of answerSeeds) await db.insert(submissionAnswers).values(seed);
+  await db.insert(submissionAnswers).values({
+    id: "answer_format_05",
+    eventId: fixtureEventId,
+    submissionId: "submission_05",
+    formVersionId: "form_version_01",
+    formVersionFieldId: "field_format",
+    value: "Workshop (120 min)",
+    createdAt,
+    updatedAt: createdAt,
+  });
   await db.insert(submissionAnswers).values({
     id: "answer_task_form",
     eventId: fixtureEventId,
@@ -771,6 +798,9 @@ describe("review and acceptance slice", () => {
     ]);
     expect(reviewerView.selected?.speakers).toEqual([
       expect.objectContaining({ displayName: "Jordan Lee", role: "Session moderator" }),
+    ]);
+    expect(reviewerView.selected?.answers).toEqual([
+      { label: "Session format", value: "Workshop (120 min)" },
     ]);
     const assignedToMe = await runAs(reviewer, getWorkbench({
       eventId: fixtureEventId,

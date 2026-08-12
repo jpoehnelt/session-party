@@ -56,5 +56,13 @@ describe("review queue ordering", () => {
       "submission_lower",
       "submission_unscored",
     ]);
+    expect(queue.sort((left, right) => compareReviewQueue("decision_asc", left, right)).map(({ id }) => id)).toEqual([
+      "submission_lower",
+      "submission_fewer",
+      "submission_a",
+      "submission_b",
+      "submission_newer",
+      "submission_unscored",
+    ]);
   });
 });

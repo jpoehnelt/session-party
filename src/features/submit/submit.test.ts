@@ -1441,22 +1441,14 @@ describe("organizer submission privacy and listing", () => {
       if (result._tag === "Left") expect(result.left).toMatchObject({ _tag: "Forbidden" });
     }
   });
-  it("lets reviewers list only their assigned submissions", async () => {
-    const page = await runAs(reviewer, listSubmissions({
+  it("keeps reviewers out of the organizer submissions queue", async () => {
+    const result = await runAs(reviewer, listSubmissions({
       eventId: EVENT_ID,
       page: 1,
       pageSize: 25,
-    }));
-    expect(page.pagination).toEqual({ page: 1, pageSize: 25, total: 1, pageCount: 1 });
-    expect(page.categories).toEqual(["seed-category"]);
-    expect(page.results.map((submission) => submission.id)).toEqual(["submission-seeded-accepted"]);
-    expect(page.results[0]).toMatchObject({
-      title: "Seeded accepted proposal",
-      status: "accepted",
-      primarySpeakerName: "Seeded Speaker",
-    });
-    expect("answers" in page.results[0]!).toBe(false);
-    expect("speakerEmail" in page.results[0]!).toBe(false);
+    }).pipe(Effect.either));
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") expect(result.left).toMatchObject({ _tag: "Forbidden" });
   });
 
 

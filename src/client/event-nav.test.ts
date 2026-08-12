@@ -54,5 +54,8 @@ describe("availableEventNavItems", () => {
       "Integrations",
       "Settings",
     ]);
+    expect(availableEventNavItems(routes, "reviewer").map(({ label }) => label)).toEqual([
+      "Review",
+    ]);
   });
 });

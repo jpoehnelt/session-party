@@ -12,7 +12,6 @@ import {
   idempotencyRecords,
   mailDeliveries,
   mailDeliverySnapshots,
-  reviewAssignments,
   speakerProvisioning,
   speakers,
   submissionAnswers,
@@ -53,7 +52,7 @@ import {
 
 const COMMAND_TTL_MS = 24 * 60 * 60 * 1_000;
 const organizerReadAuthorization = eventAuthorization(
-  { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
+  { kind: "event-member", roles: ["owner", "admin"] },
   { kind: "api-key", scopes: ["submissions:read"] },
 );
 
@@ -1348,7 +1347,7 @@ export const createTaskSubmission = (
   });
 
 type QueueViewer = {
-  readonly role: "owner" | "admin" | "reviewer";
+  readonly role: "owner" | "admin";
   readonly userId: string;
 };
 
@@ -1371,6 +1370,9 @@ const authorizeQueueViewer = (
     if (!membership) {
       return yield* Effect.fail(new Forbidden({ reason: "Event membership required" }));
     }
+    if (membership.role === "reviewer") {
+      return yield* Effect.fail(new Forbidden({ reason: "Organizer membership required" }));
+    }
     return { role: membership.role, userId: principal.userId };
   });
 
@@ -1378,21 +1380,9 @@ export const listSubmissions = (
   input: ListSubmissionsInput,
 ): Effect.Effect<SubmissionPage, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
-    const viewer = yield* authorizeQueueViewer(input.eventId);
+    yield* authorizeQueueViewer(input.eventId);
     const { db } = yield* Db;
     const accessFilters = [eq(submissions.eventId, input.eventId)];
-    if (viewer.role === "reviewer") {
-      accessFilters.push(exists(
-        db
-          .select({ id: reviewAssignments.id })
-          .from(reviewAssignments)
-          .where(and(
-            eq(reviewAssignments.eventId, input.eventId),
-            eq(reviewAssignments.reviewerUserId, viewer.userId),
-            eq(reviewAssignments.submissionId, submissions.id),
-          )),
-      ));
-    }
     const filters = [...accessFilters];
     if (input.status) filters.push(eq(submissions.status, input.status));
     if (input.formId) filters.push(eq(submissions.formId, input.formId));

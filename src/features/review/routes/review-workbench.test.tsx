@@ -92,6 +92,7 @@ const workbench: ReviewWorkbench = {
     averageScore: null,
     abstract: "Returned by the review API.",
     speakers: [{ id: "speaker_ada", displayName: "Ada Rivera", isPrimary: true, role: "Primary presenter" }],
+    answers: [{ label: "Session format", value: "Workshop (120 min)" }],
     round: {
       id: "round_active",
       name: "Main review",
@@ -302,6 +303,10 @@ describe("review workbench route", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/events/event_summit/review?pageSize=100", expect.any(Object));
     expect(markup).toContain("Authoritative proposal");
     expect(markup).toContain("Returned by the review API.");
+    expect(markup).toContain("Proposal responses");
+    expect(markup).toContain("Session format");
+    expect(markup).toContain("Workshop (120 min)");
+    expect(markup).toContain("Ada Rivera</a> (Primary presenter)");
     expect(markup).toContain("Review rounds");
     expect(markup).toContain("Create round");
     expect(markup).toContain("Version 3");

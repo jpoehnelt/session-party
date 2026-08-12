@@ -789,7 +789,7 @@ export function ReviewWorkbenchContent({
             <option value="all">All proposals</option><option value="mine">Assigned to me</option><option value="assigned">Any assignment</option><option value="unassigned">No assignment</option>
           </Select>
           <Select label="Order" value={order} onChange={(event) => setOrder(event.target.value as typeof order)}>
-            <option value="coverage">Coverage · fewest reviews</option><option value="decision">Decision · highest score</option>
+            <option value="coverage">Coverage · fewest reviews</option><option value="decision">Decision · highest score</option><option value="decision_asc">Decision · lowest score</option>
           </Select>
         </section>
       )}
@@ -800,7 +800,9 @@ export function ReviewWorkbenchContent({
             <p className="mb-3 border-b-2 border-line-strong pb-3 text-[10px] font-bold uppercase tracking-[0.06em] leading-5 text-ink-faint">
               {order === "coverage"
                 ? "Coverage: fewest human reviews first; ties use oldest submission, then stable ID."
-                : "Decision: highest average human score first; ties use review count, oldest submission, then stable ID."}
+                : order === "decision"
+                  ? "Decision: highest average human score first; ties use review count, oldest submission, then stable ID."
+                  : "Decision: lowest average human score first; ties use review count, oldest submission, then stable ID."}
             </p>
           )}
           {queue.length === 0 ? (

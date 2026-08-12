@@ -23,8 +23,9 @@ export const compareReviewQueue = (
 
   if (left.averageScore === null && right.averageScore !== null) return 1;
   if (left.averageScore !== null && right.averageScore === null) return -1;
-  return (right.averageScore ?? 0) - (left.averageScore ?? 0)
-    || right.completedReviewCount - left.completedReviewCount
+  const direction = order === "decision_asc" ? 1 : -1;
+  return direction * ((left.averageScore ?? 0) - (right.averageScore ?? 0))
+    || direction * (left.completedReviewCount - right.completedReviewCount)
     || left.submittedAt - right.submittedAt
     || compareStableIdentity(left, right);
 };

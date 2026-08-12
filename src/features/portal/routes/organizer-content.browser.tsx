@@ -104,6 +104,7 @@ describe("organizer content library rendered interactions", () => {
 
   it("shows session and version metadata and confirms a latest-only multi-file ZIP", async () => {
     const onDownloadZip = vi.fn(async (_assets: readonly ContentAsset[]) => undefined);
+    const onRemind = vi.fn(async (_speakerIds: readonly string[]) => undefined);
     await act(async () => root.render(
       <OrganizerContentLibrary
         library={library}
@@ -111,6 +112,8 @@ describe("organizer content library rendered interactions", () => {
         onRestore={() => undefined}
         onDownload={() => undefined}
         onDownloadZip={onDownloadZip}
+        reminderSpeakerIds={["speaker-priya", "speaker-marcus"]}
+        onRemind={onRemind}
       />,
     ));
 
@@ -128,6 +131,8 @@ describe("organizer content library rendered interactions", () => {
     await vi.waitFor(() => expect(onDownloadZip).toHaveBeenCalledOnce());
     expect(onDownloadZip.mock.calls[0]?.[0].map((asset) => asset.id)).toEqual(["river-current", "jamie-current"]);
     expect(container.textContent).toContain("ZIP download started for 2 latest files.");
+    await act(async () => userEvent.click(byButton("Remind 2 with outstanding tasks")!));
+    await vi.waitFor(() => expect(onRemind).toHaveBeenCalledWith(["speaker-priya", "speaker-marcus"]));
   });
 
   it("preserves rejected comments, resets accepted comments, and reports ZIP failure", async () => {
