@@ -21,6 +21,18 @@ import {
 } from "./registry.gen";
 import { internalServiceToken, isExplicitLocalEnvironment, sessionSecret } from "./services";
 import { publicRuntimeConfig } from "./runtime-config";
+import type { PublishedAgenda } from "@/features/agenda/schema";
+import type { PublicSpeakerGallery } from "@/features/portal/schema";
+import {
+  canonicalPublicUrl,
+  embeddedProgramMetadata,
+  isSpeakerSurface,
+  jsonLdScript,
+  publicProgramMetadata,
+  unavailablePublicMetadata,
+  type PublicPageData,
+  type PublicPageMetadata,
+} from "./public-metadata";
 
 type JsonRpcId = string | number;
 type JsonRpcRequest = {
@@ -286,23 +298,60 @@ const fetchMcp = async (request: Request, env: Env, ctx: ExecutionContext<unknow
   return mcp.fetch(request, env, ctx);
 };
 
-const publicSurfaceLabels: Readonly<Record<string, string>> = {
-  sessions: "Sessions",
-  speakers: "Speakers",
-  agenda: "Agenda",
-  schedule: "Schedule itinerary",
-  gallery: "Speaker gallery",
+const imageMetadataSelectors = [
+  'meta[property="og:image"]',
+  'meta[property="og:image:width"]',
+  'meta[property="og:image:height"]',
+  'meta[property="og:image:alt"]',
+  'meta[name="twitter:image"]',
+] as const;
+
+const rewritePublicMetadata = (shell: Response, metadata: PublicPageMetadata): Response => {
+  let rewriter = new HTMLRewriter()
+    .on("title", { element(element) { element.setInnerContent(metadata.title); } })
+    .on('meta[name="description"]', { element(element) { element.setAttribute("content", metadata.description); } })
+    .on('meta[name="robots"]', { element(element) { element.remove(); } })
+    .on('meta[property="og:type"]', { element(element) { element.setAttribute("content", "website"); } })
+    .on('meta[property="og:title"]', { element(element) { element.setAttribute("content", metadata.title); } })
+    .on('meta[property="og:description"]', { element(element) { element.setAttribute("content", metadata.description); } })
+    .on('meta[property="og:url"]', { element(element) { element.setAttribute("content", metadata.canonicalUrl); } })
+    .on('meta[name="twitter:card"]', { element(element) { element.setAttribute("content", "summary"); } })
+    .on('meta[name="twitter:title"]', { element(element) { element.setAttribute("content", metadata.title); } })
+    .on('meta[name="twitter:description"]', { element(element) { element.setAttribute("content", metadata.description); } })
+    .on('link[rel="canonical"]', { element(element) { element.setAttribute("href", metadata.canonicalUrl); } })
+    .on("head", {
+      element(element) {
+        element.append(
+          `<meta name="robots" content="${metadata.robots}">` +
+          '<meta property="og:site_name" content="Session Party">' +
+          '<meta property="og:locale" content="en_US">' +
+          jsonLdScript(metadata),
+          { html: true },
+        );
+      },
+    });
+  for (const selector of imageMetadataSelectors) {
+    rewriter = rewriter.on(selector, { element(element) { element.remove(); } });
+  }
+  return rewriter.transform(shell);
 };
 
-export function publicProgramMetadata(pathname: string, eventName: string, canonicalUrl: string) {
-  const surface = pathname.split("/").filter(Boolean).at(2) ?? "sessions";
-  const label = publicSurfaceLabels[surface] ?? "Sessions";
-  return {
-    title: `${label} — ${eventName} — Session Party`,
-    description: `${eventName} ${label.toLowerCase()}: the current published event program.`,
-    canonicalUrl,
-  };
-}
+const fetchPublicPageData = async (
+  url: URL,
+  slug: string,
+  env: Env,
+): Promise<{ readonly response: Response; readonly data: PublicPageData | null }> => {
+  const speakers = isSpeakerSurface(url.pathname);
+  const endpoint = speakers
+    ? `${API}/public/events/${encodeURIComponent(slug)}/speakers`
+    : `${API}/public/events/${encodeURIComponent(slug)}/agenda/published`;
+  const response = await app.fetch(new Request(`${url.origin}${endpoint}`), env);
+  if (!response.ok) return { response, data: null };
+  const data = speakers
+    ? { gallery: await response.json<PublicSpeakerGallery>() }
+    : { agenda: await response.json<PublishedAgenda>() };
+  return { response, data };
+};
 
 async function fetchPublicProgram(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -312,34 +361,44 @@ async function fetchPublicProgram(request: Request, env: Env): Promise<Response>
     ? assets.fetch(assetRequest)
     : app.fetch(assetRequest, env);
   if (!slug) return fetchAsset(request);
-  const agendaResponse = await app.fetch(
-    new Request(`${url.origin}${API}/public/events/${encodeURIComponent(slug)}/agenda/published`),
-    env,
-  );
-  if (!agendaResponse.ok) return fetchAsset(request);
-  const agenda = await agendaResponse.json<{ eventName?: unknown }>();
-  if (typeof agenda.eventName !== "string") return fetchAsset(request);
   const canonicalUrl = `${url.origin}${url.pathname}`;
-  const metadata = publicProgramMetadata(url.pathname, agenda.eventName, canonicalUrl);
+  const loaded = await fetchPublicPageData(url, slug, env);
+  const metadata = loaded.data
+    ? publicProgramMetadata(url.pathname, loaded.data, canonicalUrl)
+    : unavailablePublicMetadata(url.pathname, canonicalUrl);
   // Workers Static Assets canonicalizes `/index.html` to `/`. Request the
   // canonical shell directly so the metadata response remains a 200 instead
   // of forwarding that redirect to public-program visitors and crawlers.
   const shell = await fetchAsset(new Request(`${url.origin}/`, request));
-  return new HTMLRewriter()
-    .on("title", { element(element) { element.setInnerContent(metadata.title); } })
-    .on('meta[name="description"]', { element(element) { element.setAttribute("content", metadata.description); } })
-    .on('meta[property="og:title"]', { element(element) { element.setAttribute("content", metadata.title); } })
-    .on('meta[property="og:description"]', { element(element) { element.setAttribute("content", metadata.description); } })
-    .on('meta[property="og:url"]', { element(element) { element.setAttribute("content", metadata.canonicalUrl); } })
-    .on('meta[name="twitter:title"]', { element(element) { element.setAttribute("content", metadata.title); } })
-    .on('meta[name="twitter:description"]', { element(element) { element.setAttribute("content", metadata.description); } })
-    .on('link[rel="canonical"]', { element(element) { element.setAttribute("href", metadata.canonicalUrl); } })
-    .transform(shell);
+  const rewritten = rewritePublicMetadata(shell, metadata);
+  return loaded.data
+    ? rewritten
+    : new Response(rewritten.body, {
+        headers: rewritten.headers,
+        status: loaded.response.status,
+        statusText: loaded.response.statusText,
+      });
 }
 
 async function fetchEmbedShell(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const [, slug, surface] = url.pathname.split("/").filter(Boolean);
   const assets = Reflect.get(env, "ASSETS") as Fetcher | undefined;
-  const response = assets ? await assets.fetch(request) : await app.fetch(request, env);
+  const fetchAsset = (assetRequest: Request) => assets
+    ? assets.fetch(assetRequest)
+    : app.fetch(assetRequest, env);
+  const shell = await fetchAsset(new Request(`${url.origin}/`, request));
+  const knownSurface = surface === "schedule" || surface === "speakers";
+  const loaded = slug && knownSurface
+    ? await fetchPublicPageData(url, slug, env)
+    : null;
+  const canonicalUrl = canonicalPublicUrl(url);
+  const metadata = loaded?.data
+    ? publicProgramMetadata(url.pathname, loaded.data, canonicalUrl)
+    : loaded
+      ? unavailablePublicMetadata(url.pathname, canonicalUrl)
+      : embeddedProgramMetadata(canonicalUrl);
+  const response = rewritePublicMetadata(shell, metadata);
   const headers = new Headers(response.headers);
   const contentSecurityPolicy = (headers.get("Content-Security-Policy") ?? "")
     .split(";")
@@ -348,7 +407,11 @@ async function fetchEmbedShell(request: Request, env: Env): Promise<Response> {
   headers.set("Content-Security-Policy", [...contentSecurityPolicy, "frame-ancestors *"].join("; "));
   headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   headers.delete("X-Frame-Options");
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return new Response(response.body, {
+    status: loaded && !loaded.data ? loaded.response.status : response.status,
+    statusText: loaded && !loaded.data ? loaded.response.statusText : response.statusText,
+    headers,
+  });
 }
 
 export const recoverMailScheduler = async (env: Env): Promise<void> => {
