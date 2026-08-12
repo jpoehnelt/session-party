@@ -13,6 +13,11 @@ export const generatedClientRoutes = [
     load: () => import("../features/comms/routes/comms"),
   },
   {
+    path: "/speaker-directory",
+    contentWidth: "wide",
+    load: () => import("../features/directory/routes/speakers"),
+  },
+  {
     path: "/e/:eventSlug",
     contentWidth: "compact",
     load: () => import("../features/events/routes/event-overview"),

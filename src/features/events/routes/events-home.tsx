@@ -409,7 +409,10 @@ export function RoleAwareHome({
           </p>
           <div className="mt-5 flex flex-wrap gap-3">
             {organizerAccess.some(({ staff }) => staff) ? (
-              <Link className={workspaceLinkClass} to="/staff">Manage install staff →</Link>
+              <>
+                <Link className={workspaceLinkClass} to="/speaker-directory">Open speaker directory →</Link>
+                <Link className={workspaceLinkClass} to="/staff">Manage install staff →</Link>
+              </>
             ) : null}
             {organizerAccess.map(({ event }) => (
               <Link className={workspaceLinkClass} key={event.id} to={`/e/${event.slug}/dashboard`}>
