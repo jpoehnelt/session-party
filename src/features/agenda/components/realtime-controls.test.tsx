@@ -2,9 +2,14 @@ import { renderToStaticMarkup } from "react-dom/server.edge";
 import { describe, expect, it, vi } from "vitest";
 import { backlogAgendaFixture, deterministicAgendaIds, FIXED_NOW, scheduledAgendaFixture } from "../fixtures";
 import { AgendaBoard } from "./AgendaBoard";
-import { LiveShowControl } from "./LiveShowControl";
+import { LiveShowControl, showControlTalkSelection } from "./LiveShowControl";
 
 describe("agenda realtime controls", () => {
+  it("clears the selected session when show state resets", () => {
+    expect(showControlTalkSelection(deterministicAgendaIds.talkA)).toBe(deterministicAgendaIds.talkA);
+    expect(showControlTalkSelection(null)).toBe("");
+  });
+
   it("links backlog proposals to review while preserving talk creation", () => {
     const onCreateTalk = vi.fn();
     const html = renderToStaticMarkup(

@@ -38,6 +38,8 @@ const formatDuration = (milliseconds: number) => {
   return `${milliseconds < 0 ? "+" : ""}${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 };
 
+export const showControlTalkSelection = (currentTalkId: string | null) => currentTalkId ?? "";
+
 export function LiveShowControl({
   agenda,
   state,
@@ -49,7 +51,7 @@ export function LiveShowControl({
   onSurfaceChange,
 }: LiveShowControlProps) {
   const [now, setNow] = useState(Date.now());
-  const [selectedTalkId, setSelectedTalkId] = useState(state.currentTalkId ?? "");
+  const [selectedTalkId, setSelectedTalkId] = useState(showControlTalkSelection(state.currentTalkId));
   const [screen, setScreen] = useState("control");
   const [target, setTarget] = useState("crew");
   const [customCue, setCustomCue] = useState("");
@@ -59,7 +61,7 @@ export function LiveShowControl({
     return () => window.clearInterval(interval);
   }, []);
   useEffect(() => {
-    if (state.currentTalkId) setSelectedTalkId(state.currentTalkId);
+    setSelectedTalkId(showControlTalkSelection(state.currentTalkId));
   }, [state.currentTalkId]);
   useEffect(() => {
     onSurfaceChange(screen === "control" ? "show:control" : `show:room:${screen}`);
