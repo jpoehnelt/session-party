@@ -88,9 +88,13 @@ jobs:
           retention-days: 14
 
   qa-tests:
-    name: Full browser QA
+    name: Full browser QA (${{ matrix.project }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [desktop-chromium, mobile-chromium, desktop-firefox, desktop-webkit]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -101,15 +105,23 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Install QA browsers
-        run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - name: Install QA browser
+        env:
+          QA_PROJECT: ${{ matrix.project }}
+        run: |
+          case "${QA_PROJECT}" in
+            desktop-chromium|mobile-chromium) browser=chromium ;;
+            desktop-firefox) browser=firefox ;;
+            desktop-webkit) browser=webkit ;;
+          esac
+          pnpm exec playwright install --with-deps "${browser}"
       - name: Run full QA suite
-        run: pnpm test:qa
+        run: pnpm test:qa --project=${{ matrix.project }}
       - name: Upload QA report and failure evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa-results-${{ github.sha }}
+          name: qa-results-${{ matrix.project }}-${{ github.sha }}
           path: |
             playwright-report-qa/
             test-results/qa/
