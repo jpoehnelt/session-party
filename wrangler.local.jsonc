@@ -5,6 +5,7 @@
   "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/mcp", "/parties/*", "/event/*", "/events/*", "/embed/*", "/__local/*"]
   },
