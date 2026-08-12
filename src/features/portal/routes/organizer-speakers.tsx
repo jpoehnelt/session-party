@@ -96,7 +96,14 @@ function ReadinessMeter({ item, compact = false }: { readonly item: SpeakerDirec
           {item.readiness.tasksDone}/{item.readiness.tasksTotal}
         </span>
       </div>
-      <div className="mt-2 h-2 overflow-hidden border border-[#171714] bg-[#ece8dc]" aria-label={`${percent}% of speaker tasks complete`}>
+      <div
+        className="mt-2 h-2 overflow-hidden border border-[#171714] bg-[#ece8dc]"
+        role="progressbar"
+        aria-label="Speaker tasks complete"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+      >
         <div
           className={`h-full ${item.readiness.state === "ready" ? "bg-success" : item.readiness.overdueCount > 0 ? "bg-danger" : "bg-accent"}`}
           style={{ width: `${percent}%` }}
