@@ -799,6 +799,153 @@ describe("agenda service", () => {
     )).limit(1)).resolves.toEqual([{ trackId: configuredTrackId }]);
   });
 
+  it("reuses a provisioned canonical speaker account for a newer accepted duplicate-email proposal", async () => {
+    const seeded = await seedAgenda("canonical-email", { duplicateStableSpeaker: "accountEmail" });
+    const now = new Date(FIXED_NOW);
+    const canonicalEmail = "canonical-email-speaker-user@example.com";
+    const emailFieldId = "canonical-email-field-speaker-email";
+    const trackFieldId = "canonical-email-field-track";
+    const platformTrackId = "canonical-email-track-platform-infra";
+    const coPresenterId = "canonical-email-speaker-co-presenter";
+    const acceptanceB = "canonical-email-acceptance-b";
+    await seeded.db.batch([
+      seeded.db.update(speakers).set({
+        contactEmail: "stale-duplicate@example.com",
+        updatedAt: now,
+      }).where(and(eq(speakers.eventId, seeded.eventId), eq(speakers.id, seeded.speakerB))),
+      seeded.db.update(acceptanceEvents).set({
+        occurredAt: new Date(FIXED_NOW - 43_200_000),
+      }).where(and(eq(acceptanceEvents.eventId, seeded.eventId), eq(acceptanceEvents.id, acceptanceB))),
+      seeded.db.update(speakerProvisioning).set({
+        status: "pending",
+        provisionedAt: null,
+        updatedAt: now,
+      }).where(and(
+        eq(speakerProvisioning.eventId, seeded.eventId),
+        eq(speakerProvisioning.acceptanceEventId, acceptanceB),
+      )),
+      seeded.db.insert(formVersionFields).values([
+        {
+          id: emailFieldId,
+          eventId: seeded.eventId,
+          formVersionId: seeded.formVersionId,
+          order: 2,
+          type: "email",
+          label: "Speaker email",
+          semanticKey: "speakerEmail",
+          required: true,
+          createdAt: now,
+        },
+        {
+          id: trackFieldId,
+          eventId: seeded.eventId,
+          formVersionId: seeded.formVersionId,
+          order: 3,
+          type: "radio",
+          label: "Best-fit track",
+          semanticKey: null,
+          required: true,
+          options: ["Platform & Infra"],
+          routing: { "Platform & Infra": "platform-infra" },
+          createdAt: now,
+        },
+      ]),
+      seeded.db.insert(submissionAnswers).values([
+        {
+          id: "canonical-email-answer-speaker-email",
+          eventId: seeded.eventId,
+          submissionId: seeded.submissionB,
+          formVersionId: seeded.formVersionId,
+          formVersionFieldId: emailFieldId,
+          value: `  ${canonicalEmail.toUpperCase()}  `,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "canonical-email-answer-track",
+          eventId: seeded.eventId,
+          submissionId: seeded.submissionB,
+          formVersionId: seeded.formVersionId,
+          formVersionFieldId: trackFieldId,
+          value: "Platform & Infra",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]),
+      seeded.db.insert(tracks).values({
+        id: platformTrackId,
+        eventId: seeded.eventId,
+        name: "Platform & Infra",
+        order: 1,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      seeded.db.insert(speakers).values({
+        id: coPresenterId,
+        eventId: seeded.eventId,
+        displayName: "Marcus Okafor",
+        visible: true,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      seeded.db.insert(submissionSpeakers).values({
+        id: "canonical-email-submission-speaker-co-presenter",
+        eventId: seeded.eventId,
+        submissionId: seeded.submissionB,
+        speakerId: coPresenterId,
+        isPrimary: false,
+        roleLabel: "Co-presenter",
+        createdAt: now,
+      }),
+    ]);
+
+    const agenda = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }));
+    expect(agenda.backlog.find(({ submissionId }) => submissionId === seeded.submissionB)).toMatchObject({
+      acceptanceEventId: acceptanceB,
+      primarySpeakerId: seeded.speakerA,
+      primarySpeakerName: "Ada Rivera",
+      category: "Platform & Infra",
+    });
+
+    const createInput = {
+      eventId: seeded.eventId,
+      submissionId: seeded.submissionB,
+      trackId: null,
+      roomId: null,
+      startsAt: null,
+      durationMin: 30,
+      idempotencyKey: "canonical-email-create-0001",
+    } as const;
+    const created = await runAs(seeded.user, createTalk(createInput));
+    const replayed = await runAs(seeded.user, createTalk(createInput));
+    expect(created.talk).toMatchObject({
+      submissionId: seeded.submissionB,
+      trackId: platformTrackId,
+      speakerIds: [seeded.speakerA, coPresenterId],
+      speakerNames: ["Ada Rivera", "Marcus Okafor"],
+    });
+    expect(created.talk.speakerIds).not.toContain(seeded.speakerB);
+    expect(replayed).toMatchObject({ replayed: true, changeId: created.changeId, auditId: created.auditId });
+    await expect(seeded.db.select({
+      submissionId: talks.submissionId,
+      trackId: talks.trackId,
+    }).from(talks).where(and(
+      eq(talks.eventId, seeded.eventId),
+      eq(talks.id, created.talk.id),
+    )).limit(1)).resolves.toEqual([{ submissionId: seeded.submissionB, trackId: platformTrackId }]);
+    const persistedSpeakers = await seeded.db.select({ speakerId: talkSpeakers.speakerId })
+      .from(talkSpeakers)
+      .where(and(eq(talkSpeakers.eventId, seeded.eventId), eq(talkSpeakers.talkId, created.talk.id)));
+    expect(persistedSpeakers.map(({ speakerId }) => speakerId).sort()).toEqual(
+      [seeded.speakerA, coPresenterId].sort(),
+    );
+    await expect(seeded.db.select({ id: auditLog.id }).from(auditLog).where(and(
+      eq(auditLog.eventId, seeded.eventId),
+      eq(auditLog.action, "agenda.talk_created"),
+      eq(auditLog.resourceId, created.talk.id),
+    ))).resolves.toHaveLength(1);
+  });
+
   it("retries when a mutation lands between projection and version reads", async () => {
     const seeded = await seedAgenda("snapshot-race", { scheduled: true });
     const barrier = snapshotBarrier();
