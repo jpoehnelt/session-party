@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { clientRoutes } from "contracts/routes";
-import { brandAssetUrl, useBrand } from "@/features/branding/components/client";
+import { brandAssetUrl, brandInitials, useBrand } from "@/features/branding/components/client";
 
 export const path = "/";
 export const layout = "bare";
@@ -98,7 +98,7 @@ function Brand({ inverse = false }: { inverse?: boolean }) {
           inverse ? "border-white bg-white text-[#171714]" : "border-[#171714] bg-[#caff4a] text-[#171714]"
         }`}
       >
-        {brand.name.slice(0, 2).toUpperCase()}
+        {brandInitials(brand.name)}
       </span>}
       <span className="text-base font-black tracking-[-0.03em]">{brand.name}</span>
     </Link>

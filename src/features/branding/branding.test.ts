@@ -14,7 +14,7 @@ import {
   updateInstallationBrand,
   uploadBrandAsset,
 } from "./service";
-import { deriveBrandColors } from "./colors";
+import { brandInitials, deriveBrandColors } from "./colors";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
 type Requirements = Authorizer | CurrentUser | Db | Files;
@@ -80,6 +80,12 @@ describe("runtime branding", () => {
     for (const primary of ["#1264a3", "#ffd34e", "#171714", "#f3efe3"]) {
       expect(deriveBrandColors(primary).contrast).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it("derives recognizable fallback marks from organization names", () => {
+    expect(brandInitials("Session Party")).toBe("SP");
+    expect(brandInitials("Northstar")).toBe("NO");
+    expect(brandInitials("  ")).toBe("SP");
   });
 
   it("returns an accessible public fallback before setup", async () => {

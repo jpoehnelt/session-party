@@ -3,7 +3,7 @@ import { useLocation } from "react-router";
 import { Button, Card, Input } from "@/ui";
 import { apiFetch } from "./api";
 import { validReturnTo } from "./return-to";
-import { brandAssetUrl, useBrand } from "@/features/branding/components/client";
+import { brandAssetUrl, brandInitials, useBrand } from "@/features/branding/components/client";
 
 const demoPersonas = [
   { persona: "organizer", name: "Jordan Alvarez", email: "sbek-organizer@example.com" },
@@ -89,7 +89,7 @@ export default function LoginPage() {
     <main className="production-grid flex min-h-screen items-center justify-center bg-canvas px-6 py-12">
       <Card className="w-full max-w-lg">
         <div className="mb-6 flex items-center gap-3 border-b-2 border-line-strong pb-5">
-          {brand.logoAssetId ? <img className="max-h-12 max-w-40 object-contain" src={brandAssetUrl(brand.logoAssetId)!} alt="" /> : <span className="grid size-11 place-items-center rounded-control border-2 border-line-strong bg-accent text-xs font-black text-on-accent shadow-button">{brand.name.slice(0, 2).toUpperCase()}</span>}
+          {brand.logoAssetId ? <img className="max-h-12 max-w-40 object-contain" src={brandAssetUrl(brand.logoAssetId)!} alt="" /> : <span className="grid size-11 place-items-center rounded-control border-2 border-line-strong bg-accent text-xs font-black text-on-accent shadow-button">{brandInitials(brand.name)}</span>}
           <p className="text-sm font-black tracking-[-0.02em] text-ink">{brand.name}</p>
         </div>
         <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Account access</p>

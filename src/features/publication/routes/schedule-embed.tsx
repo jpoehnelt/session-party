@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useParams, useSearchParams } from "react-router";
 import type { PublishedAgenda } from "@/features/agenda/schema";
 import { Button, PageHeader, Skeleton } from "@/ui";
+import { brandInitials } from "@/features/branding/components/client";
 import { PublishedSchedule } from "../components/PublishedSchedule";
 import { getPublicSchedule, PublicationApiError } from "../api";
 import {
@@ -52,7 +53,7 @@ function ScheduleMasthead({ label, design, brandName = "Event program" }: { read
         <span className={`grid size-9 place-items-center bg-accent text-[10px] font-black tracking-[-0.04em] text-on-accent ${
           design.aesthetic === "bold" ? "border-2 border-on-accent" : design.aesthetic === "minimal" ? "rounded-full" : "border border-line-strong"
         }`}>
-          {brandName.slice(0, 2).toUpperCase()}
+          {brandInitials(brandName)}
         </span>
         <div>
           <p className="text-sm font-black tracking-[-0.025em]">{brandName}</p>

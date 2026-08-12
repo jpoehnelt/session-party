@@ -23,7 +23,7 @@ import {
   renderPublishedCalendar,
 } from "../feeds";
 import { publicEventSpeakerPath, publicSessionPath } from "../links";
-import { brandAssetUrl, useEventBrand } from "@/features/branding/components/client";
+import { brandAssetUrl, brandInitials, useEventBrand } from "@/features/branding/components/client";
 
 export type PublicProgramSurface =
   | "sessions"
@@ -841,7 +841,7 @@ export function PublicProgram({
                 to={`/event/${agenda.eventSlug}/sessions`}
                 aria-label={`${agenda.eventName} public program home`}
               >
-                {eventBrand?.effectiveLogoAssetId ? <img className="max-h-10 max-w-32 object-contain" src={brandAssetUrl(eventBrand.effectiveLogoAssetId)!} alt="" /> : agenda.eventName.slice(0, 2).toUpperCase()}
+                {eventBrand?.effectiveLogoAssetId ? <img className="max-h-10 max-w-32 object-contain" src={brandAssetUrl(eventBrand.effectiveLogoAssetId)!} alt="" /> : brandInitials(agenda.eventName)}
               </Link>
               <div className="min-w-0">
                 <Link className="block truncate text-xl font-black tracking-[-0.035em] text-on-ink underline-offset-4 hover:underline sm:text-2xl" to={`/event/${agenda.eventSlug}/sessions`}>{agenda.eventName}</Link>

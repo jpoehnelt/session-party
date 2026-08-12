@@ -3,7 +3,7 @@ import { apiFetch } from "@/client/api";
 import { EventBrand, InstallationBrand, type EventBrand as EventBrandValue, type InstallationBrand as InstallationBrandValue } from "../schema";
 import { deriveBrandColors } from "../colors";
 
-export { deriveBrandColors } from "../colors";
+export { brandInitials, deriveBrandColors } from "../colors";
 
 export const FALLBACK_BRAND: InstallationBrandValue = {
   configured: false,

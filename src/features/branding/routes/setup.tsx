@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
 import { Button, Card, Dropzone, EmptyState, Input, Select, Spinner } from "@/ui";
-import { applyBrandTheme, brandAssetUrl, deriveBrandColors, useBrand } from "../components/client";
+import { applyBrandTheme, brandAssetUrl, brandInitials, deriveBrandColors, useBrand } from "../components/client";
 import {
   BrandAsset,
   InstallationBrandAdmin,
@@ -55,7 +55,7 @@ function BrandPreview({ brand }: { readonly brand: BrandAdmin }) {
           <img className="max-h-10 max-w-32 object-contain" src={brandAssetUrl(brand.logoAssetId)!} alt="" />
         ) : (
           <span className="grid size-10 place-items-center rounded-control border-2 border-on-accent bg-accent text-xs font-black text-on-accent">
-            {brand.name.slice(0, 2).toUpperCase() || "SP"}
+            {brandInitials(brand.name)}
           </span>
         )}
         <strong>{brand.name || "Your organization"}</strong>

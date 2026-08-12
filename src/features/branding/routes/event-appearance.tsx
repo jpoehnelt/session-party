@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router";
 import { apiFetch } from "@/client/api";
 import { Button, Card, Checkbox, Dropzone, EmptyState, Input, PageHeader, Skeleton, toast } from "@/ui";
-import { brandAssetUrl, deriveBrandColors } from "../components/client";
+import { brandAssetUrl, brandInitials, deriveBrandColors } from "../components/client";
 import { BrandAsset, EventBrand, type BrandAssetKind, type EventBrand as EventBrandValue } from "../schema";
 
 export const path = "/e/:eventSlug/appearance";
@@ -128,7 +128,7 @@ export default function EventAppearancePage() {
             {brand.bannerAssetId && !brand.inheritInstallationBrand ? <img className="aspect-[3/1] w-full object-cover" src={brandAssetUrl(brand.bannerAssetId)!} alt="Event banner preview" /> : null}
             <div className="p-5">
               <div className="flex items-center gap-3">
-                {previewLogo ? <img className="max-h-12 max-w-36 object-contain" src={brandAssetUrl(previewLogo)!} alt="" /> : <span className="grid size-12 place-items-center rounded-control border-2 border-line-strong font-black" style={{ background: colors.accent, color: colors.foreground }}>{brand.publicName.slice(0, 2).toUpperCase()}</span>}
+                {previewLogo ? <img className="max-h-12 max-w-36 object-contain" src={brandAssetUrl(previewLogo)!} alt="" /> : <span className="grid size-12 place-items-center rounded-control border-2 border-line-strong font-black" style={{ background: colors.accent, color: colors.foreground }}>{brandInitials(brand.publicName)}</span>}
                 <h2 className="text-2xl font-black tracking-[-0.04em]">{brand.publicName}</h2>
               </div>
               <button className="mt-6 min-h-10 rounded-control border-2 border-line-strong px-4 text-sm font-black uppercase" style={{ background: colors.accent, color: colors.foreground }} type="button">Submit a proposal</button>
@@ -142,4 +142,3 @@ export default function EventAppearancePage() {
     </form>
   );
 }
-

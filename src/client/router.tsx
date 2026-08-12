@@ -17,6 +17,7 @@ import LoginPage from "./auth";
 import {
   applyBrandTheme,
   applyEventBrand,
+  brandInitials,
   brandAssetUrl,
   fetchEventBrand,
   useBrand,
@@ -81,7 +82,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
         <img className="max-h-10 max-w-28 object-contain" src={brandAssetUrl(installationBrand.logoAssetId)!} alt="" />
       ) : (
         <span className="grid size-9 place-items-center rounded-control border-2 border-on-accent bg-accent text-[10px] font-black tracking-[-0.04em] text-on-accent shadow-button">
-          {installationBrand.name.slice(0, 2).toUpperCase()}
+          {brandInitials(installationBrand.name)}
         </span>
       )}
       <span className="min-w-0 truncate font-black tracking-[-0.035em]">{installationBrand.name}</span>
