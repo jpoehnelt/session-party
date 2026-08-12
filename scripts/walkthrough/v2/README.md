@@ -9,7 +9,7 @@ pnpm walkthrough:v2:record -- --shot=review-workbench
 pnpm walkthrough:v2:assemble
 ```
 
-The full run writes to `artifacts/walkthrough-v2/` and does not overwrite the original walkthrough. Each retained shot shows one action, its registered operation or realtime message, and the state guarantee demonstrated on screen. Setup footage remains available under `raw/` for diagnosis but never enters the assembled video.
+The full run writes to `artifacts/walkthrough-v2/` and does not overwrite the original walkthrough. Each retained shot shows one action, its registered operation or realtime message, and the state guarantee demonstrated on screen. Setup footage remains available under `raw/` for diagnosis but never enters the assembled video. A failing shot is skipped after saving its diagnostics, the remaining shots still record, and the run exits non-zero listing the shots to retry with `--shot=<id>`; retried shots replace their manifest entries without discarding the others.
 
 Pacing constraints:
 

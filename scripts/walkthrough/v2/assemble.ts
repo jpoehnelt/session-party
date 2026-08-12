@@ -1,12 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { arg, ensureTools } from "../shared";
 import type { RecordedShot } from "./types";
 
-const arg = (name: string, fallback: string) => {
-  const prefix = `--${name}=`;
-  return process.argv.find((value) => value.startsWith(prefix))?.slice(prefix.length) ?? fallback;
-};
+ensureTools(["ffmpeg", "ffprobe"]);
 const outputDir = resolve(arg("output", "artifacts/walkthrough-v2"));
 const normalizedDir = resolve(outputDir, "normalized");
 await mkdir(normalizedDir, { recursive: true });
@@ -14,6 +12,7 @@ await mkdir(normalizedDir, { recursive: true });
 const manifest = JSON.parse(await readFile(resolve(outputDir, "manifest.json"), "utf8")) as {
   readonly shots: readonly RecordedShot[];
 };
+if (!manifest.shots.length) throw new Error(`manifest.json in ${outputDir} contains no shots; run pnpm walkthrough:v2:record first`);
 
 function run(command: string, args: readonly string[]) {
   const commandArgs = command === "ffmpeg" ? ["-hide_banner", "-loglevel", "error", ...args] : args;
@@ -40,7 +39,6 @@ for (const shot of manifest.shots) {
 }
 
 const hookFrames = Array.from({ length: 50 }, (_, index) => manifest.shots[index % manifest.shots.length]!);
-if (hookFrames.length < 50) throw new Error(`Need at least 50 montage views, found ${hookFrames.length}`);
 const hookClips: string[] = [];
 for (const [index, shot] of hookFrames.entries()) {
   const still = resolve(normalizedDir, `hook-${String(index + 1).padStart(2, "0")}.png`);
