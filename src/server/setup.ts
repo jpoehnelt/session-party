@@ -1,7 +1,11 @@
 import { Hono } from "hono";
 import { sessionUser } from "./auth";
 import { eventCreationPolicy } from "./event-creation";
-import { isExplicitLocalEnvironment, isExplicitPreviewEnvironment, sessionSecret } from "./services";
+import {
+  internalServiceToken,
+  isExplicitLocalEnvironment,
+  isExplicitPreviewEnvironment,
+} from "./services";
 
 type AppHono = { Bindings: Env };
 type SetupStatus = "fail" | "pass" | "warn";
@@ -66,15 +70,15 @@ const r2Check = async (env: Env): Promise<SetupCheck> => {
   }
 };
 
-const healthRequest = (env: Env): RequestInit => ({
+const healthRequest = async (env: Env): Promise<RequestInit> => ({
   method: "POST",
-  headers: { "x-session-party-internal": sessionSecret(env) },
+  headers: { "x-session-party-internal": await internalServiceToken(env) },
   signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
 });
 
 const durableObjectsCheck = async (env: Env): Promise<SetupCheck> => {
   try {
-    const request = healthRequest(env);
+    const request = await healthRequest(env);
     const [eventRoom, scheduler] = await Promise.all([
       env.EVENT_ROOM.get(env.EVENT_ROOM.idFromName("setup-health")).fetch(
         "https://event-room/health",
