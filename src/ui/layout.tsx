@@ -23,7 +23,7 @@ export function AppShell({ sidebar, sidebarClassName, topbar, contentWidth = "st
     <div className="min-h-dvh bg-canvas text-ink lg:grid lg:h-dvh lg:grid-cols-[16.5rem_minmax(0,1fr)] lg:overflow-hidden">
       <aside
         className={cx(
-          "border-b-2 border-line-strong bg-ink text-on-accent lg:sticky lg:top-0 lg:h-dvh lg:overflow-y-auto lg:border-b-0 lg:border-r-2",
+          "border-b-2 border-line-strong bg-ink text-on-ink lg:sticky lg:top-0 lg:h-dvh lg:overflow-y-auto lg:border-b-0 lg:border-r-2",
           sidebarClassName,
         )}
       >

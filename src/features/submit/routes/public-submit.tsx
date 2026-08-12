@@ -548,7 +548,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
       <PublicSubmitShell>
         <main className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-20 lg:px-8">
           <section className="border-[3px] border-line-strong bg-surface shadow-[10px_10px_0_#171714]" aria-labelledby="submission-received-title">
-            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
+            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-ink">
               <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/65">Intake confirmation</span>
               <span className="size-3 bg-production-lime" aria-hidden="true" />
             </div>
@@ -601,7 +601,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                 ) : null}
               </section>
               <Link
-                className="mt-7 inline-flex min-h-12 items-center justify-center border-2 border-line-strong bg-ink px-5 text-xs font-black uppercase tracking-[0.1em] text-on-accent shadow-[5px_5px_0_#7857ff] transition-transform hover:-translate-y-0.5"
+                className="mt-7 inline-flex min-h-12 items-center justify-center border-2 border-line-strong bg-ink px-5 text-xs font-black uppercase tracking-[0.1em] text-on-ink shadow-[5px_5px_0_#7857ff] transition-transform hover:-translate-y-0.5"
                 to={`/portal/events/${form.event.slug}/submissions`}
               >
                 Manage your proposals →
@@ -670,7 +670,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
             </Alert>
           )}
           <form className="border-[3px] border-line-strong bg-surface shadow-[10px_10px_0_#171714]" noValidate onSubmit={handleSubmit}>
-            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
+            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-ink">
               <div className="flex items-center gap-2">
                 <span className={`size-2.5 ${accepting ? "bg-production-lime" : "bg-production-yellow"}`} aria-hidden="true" />
                 <span className="text-[10px] font-black uppercase tracking-[0.16em]">Proposal intake</span>

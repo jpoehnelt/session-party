@@ -92,7 +92,7 @@ export function PublicSpeakerEmbedContent({
                   <span
                     className={`absolute right-0 top-0 px-2.5 py-1.5 text-[9px] font-black uppercase tracking-[0.12em] ${
                       design.aesthetic === "bold"
-                        ? index % 3 === 0 ? "bg-production-coral text-on-accent" : index % 3 === 1 ? "bg-production-sky" : "bg-production-lime"
+                        ? index % 3 === 0 ? "bg-production-coral text-on-accent" : index % 3 === 1 ? "bg-production-sky text-[#171714]" : "bg-production-lime text-[#171714]"
                         : design.aesthetic === "minimal" ? "rounded-bl-lg bg-accent-soft text-accent-deep" : "border-b border-l border-line-strong bg-transparent text-accent-deep"
                     }`}
                   >

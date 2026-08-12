@@ -275,7 +275,7 @@ export default function PublicationPage() {
           </Card>
 
           <section
-            className={`border-2 border-line-strong p-4 shadow-[5px_5px_0_#171714] ${hasConflicts ? "bg-production-coral" : "bg-ink text-on-accent"}`}
+            className={`border-2 border-line-strong p-4 shadow-[5px_5px_0_#171714] ${hasConflicts ? "bg-production-coral" : "bg-ink text-on-ink"}`}
             aria-live="polite"
           >
             <p className={`text-[10px] font-black uppercase tracking-[0.16em] ${hasConflicts ? "text-ink" : "text-production-lime"}`}>
@@ -294,7 +294,7 @@ export default function PublicationPage() {
         </div>
 
         <Card className="min-w-0 rounded-none [&>div]:p-4 [&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink sm:[&>div]:p-5" title="Audience preview / live revision">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink px-4 py-3 text-on-ink">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.16em] text-production-sky">Public output</p>
               <p className="mt-1 text-sm font-black">{status.eventName}</p>

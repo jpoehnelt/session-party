@@ -72,7 +72,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
       ? []
       : availableEventNavItems(registeredEventNavItems.map(({ path }) => path), memberRole);
   const navClassName = mobile
-    ? "flex h-full flex-col gap-5 bg-ink p-1 text-on-accent"
+    ? "flex h-full flex-col gap-5 bg-ink p-1 text-on-ink"
     : "flex h-full flex-col gap-6 p-5";
 
   const brand = (
@@ -91,7 +91,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
   if (!eventSlug) {
     return (
       <nav className={navClassName} aria-label="Main navigation">
-        <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-accent`} to="/" onClick={onNavigate}>
+        <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-ink`} to="/" onClick={onNavigate}>
           {brand}
         </Link>
         <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} border-2 border-on-accent bg-accent px-3 py-2.5 text-xs font-black uppercase tracking-[0.1em] text-on-accent shadow-button`} to="/events?choose=1" onClick={onNavigate}>
@@ -107,7 +107,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
   const eventPath = `/e/${eventSlug}`;
   return (
     <nav className={navClassName} aria-label="Event navigation">
-      <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-accent`} to="/" onClick={onNavigate}>
+      <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-ink`} to="/" onClick={onNavigate}>
         {brand}
       </Link>
       <Link

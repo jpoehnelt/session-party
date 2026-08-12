@@ -75,6 +75,7 @@ export function applyBrandTheme(
     setVariable("--color-ink-faint", "#aaa394");
     setVariable("--color-line", "#4f4a40");
     setVariable("--color-line-strong", "#fffdf7");
+    setVariable("--color-on-ink", "#171714");
   } else {
     setVariable("--color-canvas", "#f3efe3");
     setVariable("--color-surface", "#fffdf7");
@@ -84,6 +85,7 @@ export function applyBrandTheme(
     setVariable("--color-ink-faint", "#665f52");
     setVariable("--color-line", "#cfc7b8");
     setVariable("--color-line-strong", "#171714");
+    setVariable("--color-on-ink", "#fffdf7");
   }
   if ("faviconAssetId" in brand) setFavicon(brand.faviconAssetId ?? null);
   document.documentElement.dataset.brandReady = "true";

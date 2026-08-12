@@ -274,7 +274,7 @@ export default function SubmissionsPage({ initialEvent, initialPage, initialForm
         </Card>
       ) : (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink px-4 py-3 text-on-ink">
             <p className="text-[10px] font-black uppercase tracking-[0.15em]">Current intake</p>
             <p className="text-[10px] font-black uppercase tracking-[0.12em] text-white/55">
               Page {page.pagination.page} · newest first

@@ -50,7 +50,7 @@ function BrandPreview({ brand }: { readonly brand: BrandAdmin }) {
   const colors = deriveBrandColors(brand.primaryColor);
   return (
     <div className="overflow-hidden rounded-card border-2 border-line-strong bg-canvas shadow-card">
-      <div className="flex items-center gap-3 bg-ink px-5 py-4 text-on-accent">
+      <div className="flex items-center gap-3 bg-ink px-5 py-4 text-on-ink">
         {brand.logoAssetId ? (
           <img className="max-h-10 max-w-32 object-contain" src={brandAssetUrl(brand.logoAssetId)!} alt="" />
         ) : (

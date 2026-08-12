@@ -832,7 +832,7 @@ export function PublicProgram({
 
   return (
     <main id="main-content" tabIndex={-1} className="production-grid min-h-dvh bg-canvas text-ink">
-      <header className="border-b-2 border-line-strong bg-ink text-on-accent">
+      <header className="border-b-2 border-line-strong bg-ink text-on-ink">
         <div className="mx-auto max-w-7xl px-4 pt-5 sm:px-6 sm:pt-6 lg:px-8">
           <div className="flex flex-wrap items-center justify-between gap-5 pb-5">
             <div className="flex min-w-0 items-center gap-4">
@@ -844,7 +844,7 @@ export function PublicProgram({
                 {eventBrand?.effectiveLogoAssetId ? <img className="max-h-10 max-w-32 object-contain" src={brandAssetUrl(eventBrand.effectiveLogoAssetId)!} alt="" /> : agenda.eventName.slice(0, 2).toUpperCase()}
               </Link>
               <div className="min-w-0">
-                <Link className="block truncate text-xl font-black tracking-[-0.035em] text-on-accent underline-offset-4 hover:underline sm:text-2xl" to={`/event/${agenda.eventSlug}/sessions`}>{agenda.eventName}</Link>
+                <Link className="block truncate text-xl font-black tracking-[-0.035em] text-on-ink underline-offset-4 hover:underline sm:text-2xl" to={`/event/${agenda.eventSlug}/sessions`}>{agenda.eventName}</Link>
                 <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/55">{agenda.location ?? "Online"} · {agenda.timezone}</p>
               </div>
             </div>
@@ -895,7 +895,7 @@ export function PublicProgram({
         {surface === "schedule" ? <ScheduleSurface agenda={agenda} gallery={gallery} /> : null}
         {!detail.sessionId && !detail.speakerId && surface === "gallery" ? <SpeakersSurface agenda={agenda} gallery={gallery} mode="gallery" /> : null}
       </div>
-      <footer className="mt-4 border-t-2 border-line-strong bg-ink text-on-accent">
+      <footer className="mt-4 border-t-2 border-line-strong bg-ink text-on-ink">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
           <p className="text-[10px] font-black uppercase tracking-[0.16em] text-production-sky">{agenda.eventName} · Public program feed</p>
           <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-white/60">Schedule revision {agenda.revision} · Published {publishedAt}</p>

@@ -420,11 +420,11 @@ function IntegrationsWorkspace({
       <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(#b9b1a1_1px,transparent_1px),linear-gradient(90deg,#b9b1a1_1px,transparent_1px)] [background-size:44px_44px]" aria-hidden="true" />
 
       <div className="relative">
-        <header className="grid gap-5 border-[3px] border-line-strong bg-ink px-5 py-6 text-on-accent shadow-[8px_8px_0_#7857ff] sm:px-7 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+        <header className="grid gap-5 border-[3px] border-line-strong bg-ink px-5 py-6 text-on-ink shadow-[8px_8px_0_#7857ff] sm:px-7 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <div>
             <p className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-production-lime">External feeds / patch bay</p>
             <h1 className="text-4xl font-black leading-[0.88] tracking-[-0.055em] sm:text-6xl">Integrations</h1>
-            <p className="mt-4 max-w-2xl text-sm font-semibold leading-relaxed text-on-accent/70 sm:text-[15px]">
+            <p className="mt-4 max-w-2xl text-sm font-semibold leading-relaxed text-on-ink/70 sm:text-[15px]">
               Bring external event data into the same production board without losing delivery truth.
             </p>
           </div>
@@ -583,7 +583,7 @@ function IntegrationsWorkspace({
 
               <div className={`grid gap-3 border-2 border-line-strong p-3 shadow-[4px_4px_0_#171714] sm:grid-cols-[auto_1fr] sm:items-center ${canRun ? "bg-production-lime" : "bg-surface-muted"}`}>
                 <AlertDialog>
-                  <AlertDialogTrigger asChild><Button className="rounded-none bg-ink text-on-accent" loading={running} disabled={!canRun}>Import now</Button></AlertDialogTrigger>
+                  <AlertDialogTrigger asChild><Button className="rounded-none bg-ink text-on-ink" loading={running} disabled={!canRun}>Import now</Button></AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Import the {capability.toLowerCase()} Accelevents feed?</AlertDialogTitle>

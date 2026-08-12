@@ -140,7 +140,7 @@ export function ScheduleList({
     <ol className={cx("divide-y-2 divide-line-strong rounded-card border-2 border-line-strong bg-surface shadow-card", className)}>
       {ordered.map((talk) => (
         <li key={talk.id} className={`grid gap-0 ${visible.has("time") ? "sm:grid-cols-[10rem_minmax(0,1fr)]" : "grid-cols-1"}`}>
-          {visible.has("time") && <div className="min-w-0 border-b-2 border-line-strong bg-ink px-4 py-4 text-on-accent sm:border-b-0 sm:border-r-2">
+          {visible.has("time") && <div className="min-w-0 border-b-2 border-line-strong bg-ink px-4 py-4 text-on-ink sm:border-b-0 sm:border-r-2">
             <time dateTime={talk.startsAt} className="text-sm font-black uppercase text-production-lime">{formatTime(talk.startsAt, timezone)}</time>
             <p className="mt-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/55 [overflow-wrap:anywhere]">{talk.durationMin} min · {timezone}</p>
           </div>}

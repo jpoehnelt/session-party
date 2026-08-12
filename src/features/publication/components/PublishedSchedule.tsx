@@ -180,7 +180,7 @@ export function PublishedSchedule({
         </div>
         <div className={`flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3 lg:min-w-52 lg:flex-col lg:items-start lg:justify-center ${
           aesthetic === "bold"
-            ? "border-t-2 border-line-strong bg-ink text-on-accent lg:border-l-2 lg:border-t-0"
+            ? "border-t-2 border-line-strong bg-ink text-on-ink lg:border-l-2 lg:border-t-0"
             : "border-t border-line bg-surface-muted text-ink lg:border-l lg:border-t-0"
         }`}>
           <p className={`text-[10px] font-black uppercase tracking-[0.16em] ${aesthetic === "bold" ? "text-production-sky" : "text-accent-deep"}`}>Audience clock</p>

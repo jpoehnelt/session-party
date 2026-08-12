@@ -43,7 +43,7 @@ function ScheduleMasthead({ label, design, brandName = "Event program" }: { read
   return (
     <header className={`mb-8 flex flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-5 ${
       design.aesthetic === "bold"
-        ? "border-2 border-line-strong bg-ink text-on-accent shadow-[5px_5px_0_var(--color-accent)]"
+        ? "border-2 border-line-strong bg-ink text-on-ink shadow-[5px_5px_0_var(--color-accent)]"
         : design.aesthetic === "minimal"
           ? "rounded-xl border border-line bg-surface text-ink shadow-none"
           : "border-y border-line-strong bg-transparent text-ink shadow-none"
@@ -210,7 +210,7 @@ function ScheduleEmbedBody({
       </section>
 
       <footer className={`mt-12 flex flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-5 ${
-        design.aesthetic === "bold" ? "border-2 border-line-strong bg-ink text-on-accent" : "border-t border-line-strong bg-transparent text-ink"
+        design.aesthetic === "bold" ? "border-2 border-line-strong bg-ink text-on-ink" : "border-t border-line-strong bg-transparent text-ink"
       }`}>
         <p className={`text-[10px] font-black uppercase tracking-[0.14em] ${design.aesthetic === "bold" ? "text-white/55" : "text-ink-secondary"}`}>{agenda.eventName} · Audience feed</p>
         <p className={`text-[10px] font-bold uppercase tracking-[0.1em] ${design.aesthetic === "bold" ? "text-white/70" : "text-ink-secondary"}`}>

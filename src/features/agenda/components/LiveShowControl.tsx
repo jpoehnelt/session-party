@@ -112,7 +112,7 @@ export function LiveShowControl({
 
   return (
     <div className="space-y-6">
-      <section className="border-2 border-line-strong bg-ink p-5 text-on-accent shadow-[7px_7px_0_#7857ff]">
+      <section className="border-2 border-line-strong bg-ink p-5 text-on-ink shadow-[7px_7px_0_#7857ff]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-production-lime">Live show control</p>
@@ -120,7 +120,7 @@ export function LiveShowControl({
           </div>
           <div className="flex items-center gap-2">
             <Badge tone={statusTone}>{state.status}</Badge>
-            <span className="text-xs font-bold text-on-accent/60">Cue r{state.revision}</span>
+            <span className="text-xs font-bold text-on-ink/60">Cue r{state.revision}</span>
           </div>
         </div>
         <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_14rem]">
