@@ -58,6 +58,7 @@ describe("agenda organizer route", () => {
       scheduledAgendaFixture.snapshot.eventId,
       proposal,
       true,
+      scheduledAgendaFixture.snapshot.tracks,
     )).resolves.toEqual(placed);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -68,6 +69,7 @@ describe("agenda organizer route", () => {
     expect(createRequest).toMatchObject({ method: "POST", credentials: "include" });
     expect(JSON.parse(String(createRequest?.body))).toMatchObject({
       submissionId: proposal.submissionId,
+      trackId: scheduledAgendaFixture.snapshot.tracks[0]!.id,
       roomId: null,
       startsAt: null,
       durationMin: 30,
@@ -81,5 +83,51 @@ describe("agenda organizer route", () => {
     expect(placementRequest).toMatchObject({ method: "POST", credentials: "include" });
     expect(JSON.parse(String(placementRequest?.body))).toMatchObject({ expectedVersion: draft.talk.version });
     expect(JSON.parse(String(placementRequest?.body)).idempotencyKey).toMatch(/^auto-place-talk-/);
+  });
+
+  it("hands an accepted proposal to its corresponding track instead of the first track", async () => {
+    const proposal = {
+      ...acceptedProposalFixtures[0],
+      title: "Taming agents in production",
+      category: " Platform & Infra ",
+    };
+    const tracks = [
+      { id: "track-developer-tools", name: "Developer tools", color: null, order: 0, version: 1 },
+      { id: "track-platform-infra", name: "platform & infra", color: null, order: 1, version: 1 },
+    ];
+    const created: AgendaMutationResult = {
+      talk: {
+        ...scheduledAgendaFixture.snapshot.talks[0]!,
+        id: "talk-platform-infra",
+        submissionId: proposal.submissionId,
+        title: proposal.title,
+        trackId: tracks[1]!.id,
+        roomId: null,
+        startsAt: null,
+        status: "draft",
+        version: 1,
+      },
+      conflicts: [],
+      changeId: "change-platform-infra",
+      auditId: "audit-platform-infra",
+      replayed: false,
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(created), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createAcceptedAgendaTalk(
+      scheduledAgendaFixture.snapshot.eventId,
+      proposal,
+      false,
+      tracks,
+    )).resolves.toEqual(created);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, createRequest] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse(String(createRequest?.body))).toMatchObject({
+      submissionId: proposal.submissionId,
+      trackId: "track-platform-infra",
+    });
   });
 });

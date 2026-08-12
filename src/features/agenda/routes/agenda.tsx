@@ -89,14 +89,19 @@ export async function createAcceptedAgendaTalk(
   eventId: string,
   proposal: BacklogProposal,
   autoSchedule: boolean,
+  tracks: readonly Track[] = [],
 ): Promise<AgendaMutationResult> {
+  const category = proposal.category?.trim().toLocaleLowerCase() ?? null;
+  const matchingTrack = category === null
+    ? undefined
+    : tracks.find((track) => track.name.trim().toLocaleLowerCase() === category);
   const created = await apiFetch<AgendaMutationResult>(
     `/api/v1/events/${encodeURIComponent(eventId)}/agenda/talks`,
     {
       method: "POST",
       body: {
         submissionId: proposal.submissionId,
-        trackId: null,
+        trackId: matchingTrack?.id ?? null,
         roomId: null,
         startsAt: null,
         durationMin: 30,
@@ -615,7 +620,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     try {
       const result = await runMutation(
         clientId,
-        () => createAcceptedAgendaTalk(event.id, proposal, autoSchedule),
+        () => createAcceptedAgendaTalk(event.id, proposal, autoSchedule, agenda?.tracks),
       );
       selectTalk(result.talk);
       toast(autoSchedule ? "Accepted session created and auto-scheduled" : "Talk created", { tone: "success" });
