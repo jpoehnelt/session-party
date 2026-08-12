@@ -25,6 +25,7 @@ import { getPublishedAgenda, publishAgenda } from "@/features/agenda/service";
 import { getPublicSpeakers } from "@/features/portal/service";
 import { AppLayer, type Authorizer, CurrentUser, Db } from "@/server/services";
 import { filterPublishedAgenda } from "./embed-content";
+import { stableEmbedPath } from "./links";
 import { createEmbed, getPublicEmbed, listEmbeds, updateEmbed } from "./service";
 
 interface TestEnv extends Cloudflare.Env {
@@ -421,6 +422,56 @@ describe("publication boundary", () => {
     expect(await Effect.runPromise(getPublicSpeakers({ eventSlug: seeded.eventSlug }).pipe(
       Effect.provide(AppLayer(env)),
     ))).toEqual(publishedGallery);
+  });
+
+  it("refreshes live widget content without changing its saved URL or settings", async () => {
+    const seeded = await seedPublication("refresh-live-widgets");
+    const embed = await runAs(seeded.owner, createEmbed({
+      eventId: seeded.eventId,
+      name: "Conference schedule",
+      widget: "schedule",
+      preset: "agenda",
+      aesthetic: "minimal",
+      accent: "#005A9C",
+      trackId: seeded.trackId,
+      track: "Systems",
+      fields: ["title", "time", "room", "track"],
+      enabled: true,
+    }));
+    const embedPath = stableEmbedPath(embed);
+
+    await runAs(seeded.owner, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 0,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publication-widget-refresh-0001",
+    }));
+    await seeded.db.update(talks).set({
+      title: "Effects at scale — live update",
+      version: 2,
+      updatedAt: new Date(FIXED_NOW + 1_000),
+    }).where(eq(talks.id, seeded.confirmedTalkId));
+
+    const refreshed = await runAs(seeded.owner, publishAgenda({
+      eventId: seeded.eventId,
+      expectedRevision: 1,
+      expectedWorkspaceVersion: 0,
+      expectedEventVersion: 1,
+      idempotencyKey: "publication-widget-refresh-0002",
+    }));
+    const savedEmbed = await Effect.runPromise(getPublicEmbed({
+      eventSlug: seeded.eventSlug,
+      embedId: embed.id,
+    }).pipe(Effect.provide(AppLayer(env))));
+
+    expect(refreshed).toMatchObject({
+      revision: 2,
+      talks: [expect.objectContaining({ title: "Effects at scale — live update" })],
+    });
+    expect(await runAs(seeded.owner, getPublishedAgenda({ eventSlug: seeded.eventSlug }))).toEqual(refreshed);
+    expect(savedEmbed).toEqual(embed);
+    expect(stableEmbedPath(savedEmbed)).toBe(embedPath);
   });
 
   it("serves basic HTML, JSON, XML, subscribable ICS, and per-session ICS from the same published revision", async () => {

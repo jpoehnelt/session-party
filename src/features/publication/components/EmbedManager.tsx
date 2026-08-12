@@ -15,6 +15,7 @@ import {
   publishedScheduleJsonPath,
   publishedScheduleXmlPath,
 } from "../feeds";
+import { stableEmbedCode, stableEmbedPath } from "../links";
 import type { EmbedDefinition, EmbedPreset, EmbedWidget } from "../schema";
 
 const PRESETS: Readonly<Record<EmbedWidget, readonly { readonly value: EmbedPreset; readonly label: string; readonly fields: readonly string[] }[]>> = {
@@ -29,12 +30,7 @@ const PRESETS: Readonly<Record<EmbedWidget, readonly { readonly value: EmbedPres
   ],
 };
 
-export function stableEmbedPath(definition: Pick<EmbedDefinition, "eventSlug" | "id">): string {
-  return `/embed/${encodeURIComponent(definition.eventSlug)}/${encodeURIComponent(definition.id)}`;
-}
-export function stableEmbedCode(definition: Pick<EmbedDefinition, "eventSlug" | "id" | "name">, origin: string): string {
-  return `<iframe title="${definition.name.replaceAll("&", "&amp;").replaceAll('"', "&quot;")}" src="${origin}${stableEmbedPath(definition)}" style="width:100%;min-height:720px;border:0" loading="lazy"></iframe>`;
-}
+export { stableEmbedCode, stableEmbedPath } from "../links";
 
 export function configuredScheduleFeedPath(
   path: string,
