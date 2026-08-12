@@ -522,7 +522,8 @@ test("direct speaker creation validates, resets, preserves a rejected draft, and
   const createdEmail = `qa-direct-${suffix}@sessionparty.local`;
 
   await openOwnerPage(context, page, runtimeBaseURL, "/speakers");
-  const form = page.getByRole("button", { name: "Add speaker" }).locator("xpath=ancestor::form");
+  await page.locator("summary").filter({ hasText: "Add or import speakers" }).click();
+  const form = page.getByLabel("Display name").locator("xpath=ancestor::form");
   const name = form.getByLabel("Display name");
   const email = form.getByLabel("Contact email");
   const status = form.getByLabel("Workflow status");
@@ -574,10 +575,11 @@ test("direct speaker creation validates, resets, preserves a rejected draft, and
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("searchbox", { name: "Search speakers" }).fill(createdEmail);
-  const createdRow = page.getByRole("row").filter({ hasText: createdName });
-  await expect(createdRow).toHaveCount(1);
-  await expect(createdRow).toContainText("Direct");
-  await expect(createdRow).toContainText("Principal QA Engineer");
+  const createdSpeaker = page.getByRole("button", { name: `Inspect ${createdName}` });
+  await expect(createdSpeaker).toHaveCount(1);
+  await expect(createdSpeaker).toContainText("Principal QA Engineer");
+  await createdSpeaker.click();
+  await expect(page.getByRole("complementary", { name: "Speaker readiness inspector" })).toContainText("Direct");
 });
 
 test("speaker editor exposes only managed profiles and preserves a stale writer until recovery", async ({ context, page, request, baseURL }, testInfo) => {
@@ -624,19 +626,27 @@ test("speaker editor exposes only managed profiles and preserves a stale writer 
   const editor = async (target: Page) => {
     const search = target.getByRole("searchbox", { name: "Search speakers" });
     await search.fill("dana.operations@sessionparty.local");
-    const row = target.locator("tbody tr").filter({ hasText: "Dana Operations" });
-    await expect(row).toHaveCount(1);
-    await row.getByText("Edit profile", { exact: true }).click();
-    return row;
+    const speaker = target.getByRole("button", { name: "Inspect Dana Operations" });
+    await expect(speaker).toHaveCount(1);
+    await speaker.click();
+    const inspector = target.getByRole("complementary", { name: "Speaker readiness inspector" });
+    const editor = inspector.locator("details").filter({ hasText: "Edit profile" });
+    if (!(await editor.evaluate((element) => element.hasAttribute("open")))) {
+      await editor.locator("summary").click();
+    }
+    return editor.locator("form");
   };
 
   try {
     const search = page.getByRole("searchbox", { name: "Search speakers" });
     await search.fill("Priya Raman");
-    const acceptedRow = page.locator("tbody tr").filter({ hasText: "Priya Raman" }).filter({ hasText: "Provisioned" });
-    await expect(acceptedRow).toHaveCount(1);
-    await expect(acceptedRow.getByText("Edit profile", { exact: true })).toHaveCount(0);
-    await expect(acceptedRow).toContainText("Profile details are managed by this accepted speaker in their portal.");
+    const acceptedSpeaker = page.getByRole("button", { name: "Inspect Priya Raman" }).filter({ hasText: "Principal AI Engineer" });
+    await expect(acceptedSpeaker).toHaveCount(1);
+    await acceptedSpeaker.click();
+    const inspector = page.getByRole("complementary", { name: "Speaker readiness inspector" });
+    await expect(inspector).toContainText("Provisioned");
+    await expect(inspector.getByText("Edit profile", { exact: true })).toHaveCount(0);
+    await expect(inspector).toContainText("Profile details are managed by this accepted speaker in their portal.");
 
     const row = await editor(page);
     const peerRow = await editor(peer);

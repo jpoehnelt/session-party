@@ -605,7 +605,7 @@ export function OrganizerSpeakersContent({
                     {onUpdate && focusedSpeaker.source === "manual" ? (
                       <details className="mt-3 border-2 border-[#171714] bg-white">
                         <summary className="cursor-pointer px-3 py-2 text-xs font-black uppercase tracking-[0.08em]">Edit profile</summary>
-                        <form className="space-y-3 border-t-2 border-[#171714] p-3" onSubmit={(event) => { event.preventDefault(); onUpdate(focusedSpeaker, event.currentTarget); }}>
+                        <form key={focusedSpeaker.speaker.id} className="space-y-3 border-t-2 border-[#171714] p-3" onSubmit={(event) => { event.preventDefault(); onUpdate(focusedSpeaker, event.currentTarget); }}>
                           <Input name="displayName" label="Name" defaultValue={focusedSpeaker.speaker.displayName} required />
                           <Input name="contactEmail" type="email" label="Contact email" defaultValue={focusedSpeaker.speaker.contactEmail ?? ""} required />
                           <Input name="title" label="Title" defaultValue={focusedSpeaker.speaker.title ?? ""} />
