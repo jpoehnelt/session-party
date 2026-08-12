@@ -100,6 +100,14 @@ export type PortalResource = typeof PortalResource.Type;
 export const PortalResources = Schema.Array(PortalResource);
 export type PortalResources = typeof PortalResources.Type;
 
+export const ContentComment = Schema.Struct({
+  id: EntityId,
+  authorName: NonEmptyText,
+  body: NonEmptyText,
+  createdAt: Timestamp,
+});
+export type ContentComment = typeof ContentComment.Type;
+
 export const PortalAsset = Schema.Struct({
   id: EntityId,
   eventId: EntityId,
@@ -108,6 +116,7 @@ export const PortalAsset = Schema.Struct({
   size: Schema.Int.pipe(Schema.nonNegative()),
   purpose: Schema.Literal("headshot", "slides", "document"),
   version: Schema.Int.pipe(Schema.positive()),
+  comments: Schema.optional(Schema.Array(ContentComment)),
 });
 export type PortalAsset = typeof PortalAsset.Type;
 
@@ -181,6 +190,15 @@ export const ReadinessSummary = Schema.Struct({
   overdueCount: Schema.Int.pipe(Schema.nonNegative()),
   clearestBlocker: Schema.NullOr(Schema.String),
   recommendedNextAction: Schema.NullOr(Schema.String),
+  taskItems: Schema.optional(Schema.Array(Schema.Struct({
+    id: EntityId,
+    name: Schema.String,
+    kind: PortalTaskKind,
+    dueAt: Schema.NullOr(Timestamp),
+    completed: Schema.Boolean,
+    completedAt: Schema.NullOr(Timestamp),
+    overdue: Schema.Boolean,
+  }))),
 });
 export type ReadinessSummary = typeof ReadinessSummary.Type;
 
@@ -453,14 +471,6 @@ export const SendSpeakerMessagesOutput = Schema.Struct({
   idempotent: Schema.Boolean,
 });
 export type SendSpeakerMessagesOutput = typeof SendSpeakerMessagesOutput.Type;
-
-export const ContentComment = Schema.Struct({
-  id: EntityId,
-  authorName: NonEmptyText,
-  body: NonEmptyText,
-  createdAt: Timestamp,
-});
-export type ContentComment = typeof ContentComment.Type;
 
 export const ContentAsset = Schema.Struct({
   ...PortalAsset.fields,

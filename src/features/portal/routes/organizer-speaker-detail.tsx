@@ -43,7 +43,18 @@ export default function OrganizerSpeakerDetailRoute() {
         <div className="space-y-5">
           <Card title="Readiness">
             <p className="mb-4 text-sm font-medium text-ink-secondary">{item.readiness.tasksDone} of {item.readiness.tasksTotal} tasks complete</p>
-            <ProgressChecklist items={item.readiness.missingItems.map((missing) => ({ id: missing.id, label: missing.name, completed: false }))} />
+            <ProgressChecklist items={(item.readiness.taskItems ?? item.readiness.missingItems.map((missing) => ({
+              ...missing,
+              completed: false,
+              completedAt: null,
+            }))).map((task) => ({
+              id: task.id,
+              label: task.name,
+              completed: task.completed,
+              description: task.dueAt === null
+                ? "No due date"
+                : `${task.completed ? "Was due" : task.overdue ? "Overdue" : "Due"} ${new Date(task.dueAt).toLocaleDateString()}`,
+            }))} />
           </Card>
           <Card title="Sessions">
             {item.sessions.length === 0 ? <p className="text-sm text-ink-secondary">No session linked.</p> : <ul className="space-y-3">{item.sessions.map((session) => <li key={session.id}><a className="font-bold underline decoration-2 underline-offset-3 hover:text-accent-deep" href={organizerAgendaTalkPath(eventSlug, session.id)}>{session.title}</a><p className="text-xs text-ink-faint">{session.status}</p></li>)}</ul>}

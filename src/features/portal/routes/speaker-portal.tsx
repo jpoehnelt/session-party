@@ -36,6 +36,7 @@ import {
 } from "../schema";
 import {
   claimSpeakerAccount,
+  addContentComment,
   getSpeakerTaskForm,
   getSpeakerPortal,
   importReusableProfile,
@@ -246,6 +247,12 @@ export default function SpeakerPortalRoute() {
           )
         }
         onUpload={(input) => mutate("Upload", () => uploadSpeakerAsset(eventSlug, input))}
+        onAddComment={(assetId, body) => mutate("Comment", () => addContentComment(snapshot.event.id, {
+          eventId: snapshot.event.id,
+          assetId,
+          body,
+          idempotencyKey: crypto.randomUUID(),
+        }))}
         onSubmitTaskForm={submitTaskForm}
       />
       <Toaster />
@@ -306,6 +313,7 @@ export interface SpeakerPortalContentProps {
   readonly onSubmitProfileReview?: () => void;
   readonly onToggleTask: (task: PortalTask, completed: boolean) => void;
   readonly onUpload: (input: UploadPortalAssetInput) => void;
+  readonly onAddComment?: (assetId: string, body: string) => void;
   readonly onSubmitTaskForm: (
     task: PortalTask,
     answers: readonly SubmissionAnswer[],
@@ -322,6 +330,7 @@ export function SpeakerPortalContent({
   onSubmitProfileReview = () => undefined,
   onToggleTask,
   onUpload,
+  onAddComment = () => undefined,
   onSubmitTaskForm,
 }: SpeakerPortalContentProps) {
   const [activeFormTaskId, setActiveFormTaskId] = useState<string | null>(null);
@@ -399,6 +408,7 @@ export function SpeakerPortalContent({
             tasks={snapshot.tasks}
             loading={busyAction === "Upload"}
             onUpload={onUpload}
+            onAddComment={onAddComment}
           />
           <ResourceList resources={snapshot.resources} />
         </div>
@@ -453,7 +463,7 @@ export function SpeakerPortalContent({
                   items={snapshot.tasks.map((task) => ({
                     id: task.id,
                     label: task.name,
-                    description: task.prerequisite.message ?? task.description ?? undefined,
+                    description: [task.prerequisite.message ?? task.description, taskMeta(task, snapshot.assets)].filter(Boolean).join(" · ") || undefined,
                     completed: task.completed,
                     disabled: busyAction !== null || (!task.completed && !task.prerequisite.satisfied),
                   }))}
@@ -676,6 +686,7 @@ function UploadWorkspace({
   tasks,
   loading,
   onUpload,
+  onAddComment,
 }: {
   readonly eventId: string;
   readonly speaker: SpeakerProfile;
@@ -683,6 +694,7 @@ function UploadWorkspace({
   readonly tasks: readonly PortalTask[];
   readonly loading: boolean;
   readonly onUpload: (input: UploadPortalAssetInput) => void;
+  readonly onAddComment: (assetId: string, body: string) => void;
 }) {
   const [purpose, setPurpose] = useState<UploadPortalAssetInput["purpose"]>("slides");
   const [selectedUploadTaskId, setSelectedUploadTaskId] = useState("");
@@ -762,15 +774,61 @@ function UploadWorkspace({
         <EmptyState title="No files uploaded" description="Your uploaded headshots, slides, and documents will be listed here." />
       ) : (
         <ul className="divide-y-2 divide-[#171714] border-2 border-[#171714] bg-[#f3efe3]">
-          {assets.map((asset) => (
-            <li key={asset.id} className="flex items-center justify-between gap-4 px-3 py-3 text-sm">
-              <span className="min-w-0 truncate font-bold text-[#171714]">{asset.filename}</span>
-              <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.08em] text-[#665f52]">{asset.purpose} · {Math.ceil(asset.size / 1024)} KB</span>
+          {assets.map((asset) => <SpeakerAssetThread key={asset.id} asset={asset} loading={loading} onAddComment={onAddComment} />)}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function taskMeta(task: PortalTask, assets: PortalSnapshot["assets"]): string {
+  const parts: string[] = [];
+  if (task.dueAt !== null) parts.push(`Due ${new Date(task.dueAt).toLocaleDateString()}`);
+  const assetId = task.completionData && typeof task.completionData.assetId === "string" ? task.completionData.assetId : null;
+  const uploaded = assetId ? assets.find((asset) => asset.id === assetId) : undefined;
+  if (uploaded) parts.push(`Uploaded: ${uploaded.filename}`);
+  return parts.join(" · ");
+}
+
+function SpeakerAssetThread({
+  asset,
+  loading,
+  onAddComment,
+}: {
+  readonly asset: PortalSnapshot["assets"][number];
+  readonly loading: boolean;
+  readonly onAddComment: (assetId: string, body: string) => void;
+}) {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = String(new FormData(form).get("body") ?? "").trim();
+    if (!body) return;
+    onAddComment(asset.id, body);
+    form.reset();
+  };
+  return (
+    <li className="space-y-3 px-3 py-3 text-sm">
+      <div className="flex items-center justify-between gap-4">
+        <span className="min-w-0 truncate font-bold text-[#171714]">{asset.filename}</span>
+        <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.08em] text-[#665f52]">{asset.purpose} · {Math.ceil(asset.size / 1024)} KB</span>
+      </div>
+      {(asset.comments ?? []).length > 0 && (
+        <ul className="space-y-2 border-l-2 border-[#171714] pl-3" aria-label={`Comments for ${asset.filename}`}>
+          {(asset.comments ?? []).map((comment) => (
+            <li key={comment.id}>
+              <p className="font-bold text-[#171714]">{comment.authorName}</p>
+              <p className="whitespace-pre-line text-[#4f4a40]">{comment.body}</p>
+              <p className="text-[10px] text-[#665f52]">{new Date(comment.createdAt).toLocaleString()}</p>
             </li>
           ))}
         </ul>
       )}
-    </section>
+      <form className="flex items-end gap-2" onSubmit={submit}>
+        <Textarea className="min-w-0 flex-1" name="body" label={`Add comment to ${asset.filename}`} rows={2} required />
+        <Button className={productionButtonClass} type="submit" size="sm" disabled={loading}>Add comment</Button>
+      </form>
+    </li>
   );
 }
 
