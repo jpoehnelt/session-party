@@ -24,10 +24,7 @@ import {
   localTestPublicSubmissionAbuse,
   PublicSubmissionAbuse,
   PublicSubmissionRequest,
-  TURNSTILE_ALWAYS_PASS_SECRET_KEY,
   TURNSTILE_DEMO_EVENT_ID,
-  TURNSTILE_TEST_ACTION,
-  TURNSTILE_TEST_HOSTNAME,
   TURNSTILE_TOKEN_MAX_LENGTH,
   type PublicSubmissionAbuseAttempt,
 } from "@/features/submit/abuse";
@@ -234,9 +231,9 @@ export const turnstileVerificationPolicy = (
   return demoVerification
     ? {
         demoVerification: true,
-        secret: TURNSTILE_ALWAYS_PASS_SECRET_KEY,
-        acceptedAction: TURNSTILE_TEST_ACTION,
-        acceptedHostnames: new Set([TURNSTILE_TEST_HOSTNAME]),
+        secret: null,
+        acceptedAction: null,
+        acceptedHostnames: new Set<string>(),
         configured: true,
       } as const
     : {
@@ -252,6 +249,19 @@ export const turnstileVerificationPolicy = (
       } as const;
 };
 
+export const turnstileVerificationAccepted = (
+  policy: ReturnType<typeof turnstileVerificationPolicy>,
+  verification: Readonly<Record<string, unknown>>,
+) => {
+  if (policy.demoVerification) return true;
+  if (verification.success !== true) return false;
+  const hostname = typeof verification.hostname === "string"
+    ? verification.hostname.toLowerCase()
+    : "";
+  return verification.action === policy.acceptedAction
+    && policy.acceptedHostnames.has(hostname);
+};
+
 const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
   if (usesFakeExternalServices(env)) return localTestPublicSubmissionAbuse;
 
@@ -262,25 +272,28 @@ const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
     authorize: (attempt: PublicSubmissionAbuseAttempt) =>
       Effect.gen(function* () {
         const policy = turnstileVerificationPolicy(env, attempt.eventId);
-        if (!policy.configured || !policy.secret) {
+        if (!policy.configured || (!policy.demoVerification && !policy.secret)) {
           return yield* Effect.fail(new External({
             service: "turnstile",
             detail: "Human verification is not configured",
           }));
         }
-        const secret = policy.secret;
         if (
-          !attempt.turnstileToken
-          || attempt.turnstileToken.length > TURNSTILE_TOKEN_MAX_LENGTH
-          || !attempt.normalizedEmail
+          !attempt.normalizedEmail
           || !attempt.remoteIp
+          || (!policy.demoVerification && (
+            !attempt.turnstileToken
+            || attempt.turnstileToken.length > TURNSTILE_TOKEN_MAX_LENGTH
+          ))
         ) {
           return yield* Effect.fail(new Validation({
             message: "Human verification could not be completed. Please try again.",
           }));
         }
 
-        const verification = yield* Effect.tryPromise({
+        if (!policy.demoVerification) {
+          const secret = policy.secret as string;
+          const verification = yield* Effect.tryPromise({
           try: async () => {
             const body = new URLSearchParams({
               secret,
@@ -307,18 +320,12 @@ const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
             service: "turnstile",
             detail: error instanceof Error ? error.message : String(error),
           }),
-        });
-        const hostname = typeof verification.hostname === "string"
-          ? verification.hostname.toLowerCase()
-          : "";
-        if (
-          verification.success !== true
-          || verification.action !== policy.acceptedAction
-          || !policy.acceptedHostnames.has(hostname)
-        ) {
-          return yield* Effect.fail(new Validation({
-            message: "Human verification could not be completed. Please try again.",
-          }));
+          });
+          if (!turnstileVerificationAccepted(policy, verification)) {
+            return yield* Effect.fail(new Validation({
+              message: "Human verification could not be completed. Please try again.",
+            }));
+          }
         }
 
         const [sourceHash, recipientHash] = yield* Effect.tryPromise({

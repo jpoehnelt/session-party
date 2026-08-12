@@ -63,7 +63,7 @@ const publicForm: PublicSubmissionForm = {
       },
     ],
   },
-  turnstileSiteKey: "1x00000000000000000000AA",
+  turnstileSiteKey: "session-party-demo-disabled",
 };
 
 const organizerPage: SubmissionPage = {
@@ -106,7 +106,7 @@ describe("public submit route", () => {
     expect(markup).toContain("Accounts are not required");
     expect(markup).toContain("Add co-speaker");
     expect(markup).toContain("Demo verification");
-    expect(markup).toContain("Verification is still checked by Cloudflare");
+    expect(markup).toContain("does not require a verification challenge");
     expect(markup).not.toContain("AppShell");
   });
 

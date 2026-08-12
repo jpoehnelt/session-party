@@ -4,12 +4,9 @@ import { Context, Effect } from "effect";
 /** Cloudflare Siteverify rejects tokens over this documented maximum. */
 export const TURNSTILE_TOKEN_MAX_LENGTH = 2_048;
 
-/**
- * The disposable production demo event deliberately uses Cloudflare's
- * published always-pass test credentials. Every other event continues to use
- * the configured live widget and secret.
- */
+/** The disposable hackathon event bypasses Turnstile but retains durable rate limits. */
 export const TURNSTILE_DEMO_EVENT_ID = "demo-event";
+export const TURNSTILE_DEMO_DISABLED_SITE_KEY = "session-party-demo-disabled";
 export const TURNSTILE_ALWAYS_PASS_SITE_KEY = "1x00000000000000000000AA";
 export const TURNSTILE_ALWAYS_PASS_SECRET_KEY = "1x0000000000000000000000000000000AA";
 export const TURNSTILE_TEST_ACTION = "test";
@@ -19,7 +16,7 @@ export const turnstileSiteKeyForEvent = (
   eventId: string,
   configuredSiteKey: string | null,
 ): string | null => eventId === TURNSTILE_DEMO_EVENT_ID
-  ? TURNSTILE_ALWAYS_PASS_SITE_KEY
+  ? TURNSTILE_DEMO_DISABLED_SITE_KEY
   : configuredSiteKey;
 
 export type PublicSubmissionAbuseAttempt = {

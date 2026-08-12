@@ -110,13 +110,8 @@ describe("public submission draft lifecycle", () => {
     expect(document.querySelector("#public-submit-field-title")?.getAttribute("aria-invalid")).toBe("true");
   });
 
-  it("uses the published Turnstile test key only for a deterministic demo round-trip", async () => {
-    const turnstileRender = vi.fn((_container: HTMLElement, options: {
-      readonly callback: (token: string) => void;
-    }) => {
-      options.callback("XXXX.DUMMY.TOKEN.XXXX");
-      return "demo-widget";
-    });
+  it("bypasses Turnstile only for a deterministic demo round-trip", async () => {
+    const turnstileRender = vi.fn(() => "unexpected-widget");
     window.turnstile = {
       render: turnstileRender,
       reset: vi.fn(),
@@ -128,17 +123,11 @@ describe("public submission draft lifecycle", () => {
       submittedAt: Date.UTC(2026, 7, 11, 18),
     }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await renderForm({ ...fixture, turnstileSiteKey: "1x00000000000000000000AA" });
+    await renderForm({ ...fixture, turnstileSiteKey: "session-party-demo-disabled" });
 
-    expect(container.textContent).toContain("Demo verification");
-    expect(container.textContent).toContain("Verification is still checked by Cloudflare");
-    expect(turnstileRender).toHaveBeenCalledWith(
-      expect.any(HTMLElement),
-      expect.objectContaining({
-        sitekey: "1x00000000000000000000AA",
-        action: "cfp-submit",
-      }),
-    );
+    expect(container.textContent).toContain("Demo verification disabled");
+    expect(container.textContent).toContain("does not require a verification challenge");
+    expect(turnstileRender).not.toHaveBeenCalled();
     const title = document.querySelector<HTMLInputElement>("#public-submit-field-title");
     await act(async () => userEvent.fill(title!, "Automation without a bypass"));
     const submit = [...document.querySelectorAll<HTMLButtonElement>("button")]
@@ -150,7 +139,7 @@ describe("public submission draft lifecycle", () => {
       "/api/v1/public/events/architecture-summit/forms/form-public/submissions",
       expect.objectContaining({
         method: "POST",
-        body: expect.stringContaining('"turnstileToken":"XXXX.DUMMY.TOKEN.XXXX"'),
+        body: expect.stringContaining('"turnstileToken":"demo-verification-disabled"'),
       }),
     );
   });
