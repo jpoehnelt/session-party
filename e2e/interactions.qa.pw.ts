@@ -2110,9 +2110,9 @@ test("public CFP supports conditional fields, co-speaker controls, validation, a
   await expect(coSpeaker).toHaveCount(0);
 
   await page.getByRole("button", { name: "Save draft" }).click();
-  await expect(page.getByRole("status")).toContainText("Draft saved");
+  await expect(page.getByRole("status").filter({ hasText: "Draft saved" })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("status")).toContainText("Draft restored");
+  await expect(page.getByRole("status").filter({ hasText: "Draft restored" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Session title" })).toHaveValue("QA conditional draft — 東京");
   await expect(page.getByRole("textbox", { name: "Workshop exercise plan" })).toHaveValue("Build, test, and explain the result.");
 
