@@ -6,12 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpeakerDirectory } from "../schema";
 
 const apiMocks = vi.hoisted(() => ({
+  downloadContent: vi.fn(),
   getSpeakerDirectory: vi.fn(),
   sendSpeakerMessages: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
   createManagedSpeaker: vi.fn(),
+  downloadContent: apiMocks.downloadContent,
   getSpeakerDirectory: apiMocks.getSpeakerDirectory,
   importSpeakersCsv: vi.fn(),
   provisionSpeaker: vi.fn(),
@@ -123,6 +125,7 @@ describe("organizer bulk speaker reminders", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
+    apiMocks.downloadContent.mockReset();
     apiMocks.getSpeakerDirectory.mockReset().mockResolvedValue(directory);
     apiMocks.sendSpeakerMessages.mockReset().mockResolvedValue({ queuedCount: 2, skippedCount: 0, idempotent: false });
   });
@@ -159,5 +162,44 @@ describe("organizer bulk speaker reminders", () => {
       kind: "reminder",
     });
     await vi.waitFor(() => expect(document.body.textContent).toContain("Reminders queued"));
+  });
+
+  it("renders an uploaded headshot in the roster and readiness inspector", async () => {
+    const directoryWithHeadshot: SpeakerDirectory = {
+      ...directory,
+      speakers: directory.speakers.map((item, index) => index === 0
+        ? {
+            ...item,
+            speaker: {
+              ...item.speaker,
+              headshotAssetId: "asset-ada-headshot",
+              headshotUrl: "https://images.example.com/stale-ada.png",
+            },
+          }
+        : item),
+    };
+    apiMocks.getSpeakerDirectory.mockResolvedValue(directoryWithHeadshot);
+    apiMocks.downloadContent.mockResolvedValue({
+      asset: { contentType: "image/png" },
+      contentBase64: "aGVhZHNob3Q=",
+    });
+
+    await act(async () => root.render(
+      <MemoryRouter initialEntries={["/e/reminder-summit/speakers"]}>
+        <Routes>
+          <Route path="/e/:eventSlug/speakers" element={<OrganizerSpeakersRoute />} />
+        </Routes>
+      </MemoryRouter>,
+    ));
+
+    await vi.waitFor(() => {
+      const headshots = [...container.querySelectorAll<HTMLImageElement>('img[alt="Ada Rivera"]')];
+      expect(headshots).toHaveLength(2);
+      expect(headshots.every((image) => image.src === "data:image/png;base64,aGVhZHNob3Q=")).toBe(true);
+    });
+    expect(apiMocks.downloadContent).toHaveBeenCalledWith(event.id, {
+      eventId: event.id,
+      assetId: "asset-ada-headshot",
+    });
   });
 });
