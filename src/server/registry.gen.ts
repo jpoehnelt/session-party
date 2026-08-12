@@ -22640,6 +22640,60 @@ export const openApi = {
                             "title": "maxLength(128)",
                             "type": "string"
                           },
+                          "participants": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "displayName": {
+                                  "type": "string"
+                                },
+                                "isPrimary": {
+                                  "type": "boolean"
+                                },
+                                "organization": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "roleLabel": {
+                                  "type": "string"
+                                },
+                                "speakerId": {
+                                  "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9_-]+$",
+                                  "title": "maxLength(128)",
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "speakerId",
+                                "displayName",
+                                "roleLabel",
+                                "isPrimary",
+                                "title",
+                                "organization"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
                           "status": {
                             "enum": [
                               "submitted",
@@ -22833,6 +22887,60 @@ export const openApi = {
                           "pattern": "^[A-Za-z0-9_-]+$",
                           "title": "maxLength(128)",
                           "type": "string"
+                        },
+                        "participants": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "displayName": {
+                                "type": "string"
+                              },
+                              "isPrimary": {
+                                "type": "boolean"
+                              },
+                              "organization": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "roleLabel": {
+                                "type": "string"
+                              },
+                              "speakerId": {
+                                "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9_-]+$",
+                                "title": "maxLength(128)",
+                                "type": "string"
+                              },
+                              "title": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "speakerId",
+                              "displayName",
+                              "roleLabel",
+                              "isPrimary",
+                              "title",
+                              "organization"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
                         },
                         "status": {
                           "enum": [
