@@ -18,7 +18,7 @@ import {
   operationById,
   restRegistrations,
 } from "./registry.gen";
-import { isExplicitLocalEnvironment, sessionSecret } from "./services";
+import { internalServiceToken, isExplicitLocalEnvironment, sessionSecret } from "./services";
 import { publicRuntimeConfig } from "./runtime-config";
 
 type JsonRpcId = string | number;
@@ -261,7 +261,7 @@ app.post("/__local/smoke", async (c) => {
   const schedulerId = c.env.SCHEDULER.idFromName("mail");
   const scheduler = await c.env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
     method: "POST",
-    headers: { "x-session-party-internal": sessionSecret(c.env) },
+    headers: { "x-session-party-internal": await internalServiceToken(c.env) },
   });
   return c.json({
     mode: "local-fake",
@@ -353,7 +353,7 @@ export const recoverMailScheduler = async (env: Env): Promise<void> => {
   const schedulerId = env.SCHEDULER.idFromName(MAIL_SCHEDULER_NAME);
   const response = await env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
     method: "POST",
-    headers: { "x-session-party-internal": sessionSecret(env) },
+    headers: { "x-session-party-internal": await internalServiceToken(env) },
   });
   if (!response.ok) {
     throw new Error(`Mail scheduler recovery failed with status ${response.status}`);

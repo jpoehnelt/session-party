@@ -9,6 +9,7 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { nanoid } from "nanoid";
 import {
+  internalServiceToken,
   isExplicitLocalEnvironment,
   mailFrom,
   sessionSecret,
@@ -57,6 +58,8 @@ const DEMO_DESTINATIONS: Readonly<Record<DemoPersona, string>> = {
 const BODY_TOO_LARGE = Symbol("BODY_TOO_LARGE");
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const MAX_ACTIVE_DEMO_SESSIONS_PER_PERSONA = 20;
+const HOST_SESSION_COOKIE = "__Host-sp_session";
+const LEGACY_SESSION_COOKIE = "sp_session";
 
 const RETURN_TO_ORIGIN = "https://return-to.invalid";
 const validatedReturnTo = (returnTo: string | undefined): string => {
@@ -70,12 +73,12 @@ const validatedReturnTo = (returnTo: string | undefined): string => {
   }
 };
 
-const readBoundedJson = async (request: Request): Promise<unknown | typeof BODY_TOO_LARGE> => {
+const readBoundedText = async (request: Request): Promise<string | typeof BODY_TOO_LARGE> => {
   const declaredLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_LINK_BODY_BYTES) {
     return BODY_TOO_LARGE;
   }
-  if (!request.body) return null;
+  if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -95,7 +98,17 @@ const readBoundedJson = async (request: Request): Promise<unknown | typeof BODY_
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body));
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body);
+};
+
+const readBoundedJson = async (request: Request): Promise<unknown | typeof BODY_TOO_LARGE> => {
+  const body = await readBoundedText(request);
+  return body === BODY_TOO_LARGE ? body : JSON.parse(body);
+};
+
+const readBoundedForm = async (request: Request): Promise<URLSearchParams | typeof BODY_TOO_LARGE> => {
+  const body = await readBoundedText(request);
+  return body === BODY_TOO_LARGE ? body : new URLSearchParams(body);
 };
 
 const requestIdFor = (c: Context<AppHono>): string => {
@@ -141,7 +154,7 @@ const notifyScheduler = async (env: Env, requestId: string): Promise<void> => {
     const schedulerId = env.SCHEDULER.idFromName("mail");
     const response = await env.SCHEDULER.get(schedulerId).fetch("https://scheduler/poke", {
       method: "POST",
-      headers: { "x-session-party-internal": sessionSecret(env) },
+      headers: { "x-session-party-internal": await internalServiceToken(env) },
     });
     if (!response.ok) throw new Error("Scheduler rejected enqueue notification");
   } catch {
@@ -172,7 +185,7 @@ const authorizeRequestLink = async (
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-session-party-internal": sessionSecret(env),
+          "x-session-party-internal": await internalServiceToken(env),
         },
         body: JSON.stringify({ sourceHash, recipientHash }),
       },
@@ -203,7 +216,7 @@ const authorizeDemoLogin = async (
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-session-party-internal": sessionSecret(env),
+          "x-session-party-internal": await internalServiceToken(env),
         },
         body: JSON.stringify({ sourceHash }),
       },
@@ -260,21 +273,26 @@ const bearerFromRequest = (request: Request): string | null => {
 };
 
 const sessionFromRequest = (request: Request): string | null => {
-  const encoded = /(?:^|;\s*)sp_session=([^;]+)/.exec(request.headers.get("Cookie") ?? "")?.[1];
-  if (!encoded || encoded.length > 512) return null;
-  try {
-    const token = decodeURIComponent(encoded);
-    return token.length > 0 && token.length <= 512 ? token : null;
-  } catch {
-    return null;
+  const cookie = request.headers.get("Cookie") ?? "";
+  for (const name of [HOST_SESSION_COOKIE, LEGACY_SESSION_COOKIE]) {
+    const encoded = new RegExp(`(?:^|;\\s*)${name}=([^;]+)`).exec(cookie)?.[1];
+    if (!encoded || encoded.length > 512) continue;
+    try {
+      const token = decodeURIComponent(encoded);
+      if (token.length > 0 && token.length <= 512) return token;
+    } catch {
+      // Ignore a malformed candidate and allow the transition cookie fallback.
+    }
   }
+  return null;
 };
 
 const setBrowserSessionCookie = (c: Context<AppHono>, session: string): void => {
-  setCookie(c, "sp_session", session, {
+  const local = isExplicitLocalEnvironment(c.env);
+  setCookie(c, local ? LEGACY_SESSION_COOKIE : HOST_SESSION_COOKIE, session, {
     httpOnly: true,
     sameSite: "Lax",
-    secure: !isExplicitLocalEnvironment(c.env),
+    secure: !local,
     path: "/",
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
@@ -647,10 +665,9 @@ auth.post("/request-link", async (c) => {
     const deliveryId = nanoid();
     const deliveryIdempotencyKey = `auth-magic-link:${tokenId}`;
     const link = new URL("/api/v1/auth/verify", c.env.APP_URL);
-    link.searchParams.set("token", token);
-    link.searchParams.set("returnTo", returnTo);
+    link.hash = new URLSearchParams({ token, returnTo }).toString();
     const renderedHtml =
-      `<p>Use this link to sign in. It expires in 15 minutes.</p><p><a href="${link.toString()}">Sign in to Session Party</a></p>`;
+      `<p>Use this link to sign in. It expires in 15 minutes.</p><p><a href="${link.toString()}" rel="noreferrer">Sign in to Session Party</a></p>`;
     const renderedText = `Sign in to Session Party: ${link.toString()}\n\nThis link expires in 15 minutes.`;
     const statements: D1PreparedStatement[] = [];
 
@@ -708,15 +725,12 @@ auth.post("/request-link", async (c) => {
   return c.json({ ok: true }, 202);
 });
 
-auth.get("/verify", async (c) => {
-  const requestId = requestIdFor(c);
-  try {
-    const token = c.req.query("token");
-    const returnTo = validatedReturnTo(c.req.query("returnTo"));
-    if (!token || token.length > 512) {
-      return errorResponse(c, new Validation({ message: "Missing token" }), requestId);
-    }
-
+const consumeMagicLink = async (
+  c: Context<AppHono>,
+  token: string,
+  returnTo: string,
+  requestId: string,
+): Promise<Response> => {
     const nowMs = Date.now();
     const tokenHash = await hashBearerMaterial(c.env, token);
     const session = nanoid(48);
@@ -752,6 +766,58 @@ auth.get("/verify", async (c) => {
 
     setBrowserSessionCookie(c, session);
     return c.redirect(returnTo);
+};
+
+const magicLinkExchangePage = (c: Context<AppHono>): Response => {
+  const nonce = nanoid();
+  c.header("Cache-Control", "no-store");
+  c.header("Referrer-Policy", "no-referrer");
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header(
+    "Content-Security-Policy",
+    `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
+  );
+  return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Signing in…</title></head><body><p>Signing you in…</p><script nonce="${nonce}">const p=new URLSearchParams(location.hash.slice(1));history.replaceState(null,"",location.pathname);const t=p.get("token");if(!t){document.body.textContent="This sign-in link is incomplete.";}else{const f=document.createElement("form");f.method="post";f.action=location.pathname;for(const [n,v] of [["token",t],["returnTo",p.get("returnTo")||"/"]]){const i=document.createElement("input");i.type="hidden";i.name=n;i.value=v;f.append(i);}document.body.append(f);f.submit();}</script></body></html>`);
+};
+
+auth.get("/verify", async (c) => {
+  const requestId = requestIdFor(c);
+  try {
+    // Query-token support keeps already-sent links valid during the transition.
+    const token = c.req.query("token");
+    if (!token) return magicLinkExchangePage(c);
+    if (token.length > 512) {
+      return errorResponse(c, new Validation({ message: "Invalid token" }), requestId);
+    }
+    return await consumeMagicLink(
+      c,
+      token,
+      validatedReturnTo(c.req.query("returnTo")),
+      requestId,
+    );
+  } catch (error) {
+    return unexpectedResponse(c, "authentication", error, requestId);
+  }
+});
+
+auth.post("/verify", async (c) => {
+  const requestId = requestIdFor(c);
+  try {
+    if (!c.req.header("content-type")?.toLowerCase().startsWith("application/x-www-form-urlencoded")) {
+      return errorResponse(c, new Validation({ message: "Invalid sign-in exchange" }), requestId);
+    }
+    const form = await readBoundedForm(c.req.raw).catch(() => null);
+    const params = form && form !== BODY_TOO_LARGE ? form : null;
+    const token = params?.get("token");
+    if (!token || token.length > 512) {
+      return errorResponse(c, new Validation({ message: "Invalid token" }), requestId);
+    }
+    return await consumeMagicLink(
+      c,
+      token,
+      validatedReturnTo(params?.get("returnTo") ?? undefined),
+      requestId,
+    );
   } catch (error) {
     return unexpectedResponse(c, "authentication", error, requestId);
   }
@@ -760,7 +826,7 @@ auth.get("/verify", async (c) => {
 auth.post("/logout", async (c) => {
   const requestId = requestIdFor(c);
   try {
-    const token = getCookie(c, "sp_session");
+    const token = getCookie(c, HOST_SESSION_COOKIE) ?? getCookie(c, LEGACY_SESSION_COOKIE);
     if (token && token.length <= 512) {
       const tokenHash = await hashBearerMaterial(c.env, token);
       await drizzle(c.env.DB)
@@ -774,7 +840,8 @@ auth.post("/logout", async (c) => {
           ),
         );
     }
-    deleteCookie(c, "sp_session", { path: "/" });
+    deleteCookie(c, HOST_SESSION_COOKIE, { path: "/", secure: true });
+    deleteCookie(c, LEGACY_SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
   } catch (error) {
     return unexpectedResponse(c, "authentication", error, requestId);

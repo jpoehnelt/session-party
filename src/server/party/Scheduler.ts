@@ -6,7 +6,7 @@ import {
 import { DurableObject } from "cloudflare:workers";
 import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import { sendMail, sessionSecret } from "../services";
+import { internalServiceToken, sendMail } from "../services";
 
 const INTERVAL_MS = 60_000;
 const LEASE_MS = 5 * 60_000;
@@ -208,7 +208,7 @@ export class Scheduler extends DurableObject<Env> {
     if (request.method !== "POST") return new Response("Not found", { status: 404 });
     let secret: string;
     try {
-      secret = sessionSecret(this.env);
+      secret = await internalServiceToken(this.env);
     } catch {
       return new Response("Scheduler unavailable", { status: 503 });
     }

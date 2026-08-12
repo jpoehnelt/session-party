@@ -13,6 +13,7 @@ import { hashBearerMaterial } from "./auth";
 import worker from "./index";
 import {
   AppLayer,
+  internalServiceToken,
   isExplicitLocalEnvironment,
   isExplicitPreviewEnvironment,
   mailFrom,
@@ -48,6 +49,7 @@ const nonLocalAuthEnv = new Proxy(env, {
   get(target, property, receiver) {
     if (property === "LOCAL_MODE") return undefined;
     if (property === "SESSION_SECRET") return "explicit-local-only-session-secret-v1";
+    if (property === "INTERNAL_SERVICE_SECRET") return "explicit-local-only-internal-service-token-v1";
     if (property === "MAIL_FROM") return "Session Party <welcome@sessionparty.com>";
     if (property === "EMAIL") return { send: async () => ({ messageId: "test-email-id" }) };
     return Reflect.get(target, property, receiver);
@@ -83,13 +85,23 @@ const requestLinkBody = (
     body,
   });
 
-const magicLinkFor = async (email: string): Promise<string> => {
+const rawMagicLinkFor = async (email: string): Promise<string> => {
   const row = await env.DB.prepare(
     "SELECT s.rendered_text FROM mail_delivery_snapshots s WHERE s.recipient_email = ? ORDER BY s.created_at DESC LIMIT 1",
   ).bind(email).first<{ rendered_text: string }>();
   const url = row?.rendered_text.match(/https?:\/\/\S+/)?.[0];
   if (!url) throw new Error("Magic-link snapshot is missing its server-only URL");
   return url;
+};
+
+// Existing token-consumption tests exercise the legacy query transition path.
+// The fragment exchange itself has focused coverage below.
+const magicLinkFor = async (email: string): Promise<string> => {
+  const link = new URL(await rawMagicLinkFor(email));
+  const fragment = new URLSearchParams(link.hash.slice(1));
+  link.hash = "";
+  link.search = fragment.toString();
+  return link.toString();
 };
 
 beforeAll(async () => {
@@ -466,6 +478,37 @@ describe("durable magic-link authentication", () => {
       ics_content: null,
     });
     expect(snapshot?.idempotency_key).toBe(`auth-magic-link:${snapshot?.token_id}`);
+  });
+  it("keeps new magic-link bearer material in the fragment and exchanges it through a no-store form post", async () => {
+    const email = `fragment-link-${crypto.randomUUID()}@example.com`;
+    const returnTo = "/events?from=magic#ready";
+    expect((await requestLink(email, undefined, undefined, returnTo)).status).toBe(202);
+
+    const rawLink = new URL(await rawMagicLinkFor(email));
+    const fragment = new URLSearchParams(rawLink.hash.slice(1));
+    expect(rawLink.search).toBe("");
+    expect(fragment.get("token")).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(fragment.get("returnTo")).toBe(returnTo);
+
+    rawLink.hash = "";
+    const bridge = await SELF.fetch(rawLink);
+    expect(bridge.status).toBe(200);
+    expect(bridge.headers.get("cache-control")).toBe("no-store");
+    expect(bridge.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(bridge.headers.get("content-security-policy")).toContain("form-action 'self'");
+
+    const exchanged = await SELF.fetch(rawLink, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        token: fragment.get("token") ?? "",
+        returnTo: fragment.get("returnTo") ?? "/",
+      }),
+    });
+    expect(exchanged.status).toBe(302);
+    expect(exchanged.headers.get("location")).toBe(returnTo);
+    expect(exchanged.headers.get("set-cookie")).toContain("sp_session=");
   });
   it("issues a durable local magic link without touching Scheduler", async () => {
     const email = `local-scheduler-${crypto.randomUUID()}@example.com`;
@@ -857,6 +900,7 @@ describe("durable magic-link authentication", () => {
     };
     expect(isExplicitLocalEnvironment(localEnv)).toBe(true);
     expect(sessionSecret(localEnv)).toBe("explicit-local-only-session-secret-v1");
+    expect(await internalServiceToken(localEnv)).toBe("explicit-local-only-internal-service-token-v1");
     expect(mailFrom(localEnv)).toBe("Session Party <welcome@sessionparty.com>");
     expect((await sendMail(localEnv, {
       fromEmail: mailFrom(localEnv),
@@ -877,6 +921,8 @@ describe("durable magic-link authentication", () => {
     expect(isExplicitPreviewEnvironment(previewEnv)).toBe(true);
     expect(isExplicitLocalEnvironment(previewEnv)).toBe(false);
     expect(sessionSecret(previewEnv)).toBe("preview-session-secret");
+    expect(await internalServiceToken(previewEnv)).toMatch(/^[a-f0-9]{64}$/);
+    expect(await internalServiceToken(previewEnv)).not.toBe(sessionSecret(previewEnv));
     expect(mailFrom(previewEnv)).toBe("Session Party <welcome@sessionparty.com>");
     expect((await sendMail(previewEnv, {
       fromEmail: mailFrom(previewEnv),
@@ -1009,9 +1055,11 @@ describe("durable magic-link authentication", () => {
     const productionEnv = Object.assign(Object.create(env), {
       LOCAL_MODE: undefined,
       SESSION_SECRET: "production-cookie-test-secret",
+      INTERNAL_SERVICE_SECRET: "production-internal-service-test-secret",
       EMAIL: { send: async () => ({ messageId: "production-test" }) },
       MAIL_FROM: "Session Party <mail@example.com>",
     }) as Env;
+    expect(await internalServiceToken(productionEnv)).toBe("production-internal-service-test-secret");
     const rawToken = "production-secure-cookie-token";
     const now = Date.now();
     const tokenHash = await hashBearerMaterial(productionEnv, rawToken);
@@ -1030,6 +1078,8 @@ describe("durable magic-link authentication", () => {
       verifyContext,
     );
     expect(verified.status).toBe(302);
+    expect(verified.headers.get("set-cookie")).toMatch(/^__Host-sp_session=/);
     expect(verified.headers.get("set-cookie")).toContain("Secure");
+    expect(verified.headers.get("set-cookie")).toContain("Path=/");
   });
 });

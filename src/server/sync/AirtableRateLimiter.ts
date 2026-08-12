@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { AirtableAdapterService } from "../airtable";
 import { AirtableAdapterError } from "../airtable";
-import { sessionSecret } from "../services";
+import { internalServiceToken } from "../services";
 
 const NEXT_SLOT_KEY = "airtable-pat-next-slot";
 const GLOBAL_LIMITER_NAME = "airtable-pat-global";
@@ -15,7 +15,7 @@ export class AirtableRateLimiter extends DurableObject<Env> {
     }
     let secret: string;
     try {
-      secret = sessionSecret(this.env);
+      secret = await internalServiceToken(this.env);
     } catch {
       return new Response("Airtable rate limiter unavailable", { status: 503 });
     }
@@ -39,7 +39,7 @@ const acquireGlobalSlot = async (env: Env): Promise<void> => {
   const id = env.AIRTABLE_RATE_LIMITER.idFromName(GLOBAL_LIMITER_NAME);
   const response = await env.AIRTABLE_RATE_LIMITER.get(id).fetch("https://airtable-rate-limiter/acquire", {
     method: "POST",
-    headers: { "x-session-party-internal": sessionSecret(env) },
+    headers: { "x-session-party-internal": await internalServiceToken(env) },
   });
   if (!response.ok) {
     throw new AirtableAdapterError({

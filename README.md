@@ -143,6 +143,7 @@ Review these values in the deployment form:
 | `MAIL_FROM` | A sender on the onboarded domain, for example `Session Party <welcome@example.com>` |
 | `POSTHOG_KEY` / `POSTHOG_HOST` | Optional analytics settings. Leave both blank to send no product analytics. |
 | `SESSION_SECRET` | A unique value generated with `openssl rand -hex 32` |
+| `INTERNAL_SERVICE_SECRET` | Optional dedicated Worker-to-Durable-Object bearer generated with `openssl rand -hex 32`; until provisioned, a one-way domain-separated token is derived from `SESSION_SECRET` so the session key is never transmitted |
 | `TURNSTILE_SITE_KEY` | The widget's site key |
 | `TURNSTILE_SECRET` | The widget's secret key |
 | `TURNSTILE_HOSTNAMES` | The final hostname, for example `events.example.com` |
@@ -215,7 +216,7 @@ Feature modules own their domain logic and declare their routes and transports. 
 
 Self-hosting requires a Cloudflare account and project-owned D1, R2, Durable Object, Workers AI, Turnstile, and Email Sending resources. The deploy button provisions the supported resources and rewrites their binding identifiers in the copied repository.
 
-Production requires `SESSION_SECRET` and `TURNSTILE_SECRET`. Live Accelevents and Airtable integrations additionally use `ACCELEVENTS_API_TOKEN` and `AIRTABLE_PAT`; those provider secrets are never accepted from the browser.
+Production requires `SESSION_SECRET` and `TURNSTILE_SECRET`. Set `INTERNAL_SERVICE_SECRET` for independently rotatable internal authorization; deployments without it safely derive a separate internal token from `SESSION_SECRET`. Live Accelevents and Airtable integrations additionally use `ACCELEVENTS_API_TOKEN` and `AIRTABLE_PAT`; those provider secrets are never accepted from the browser.
 
 Product analytics are off by default for self-hosted installations. Set both `POSTHOG_KEY` and `POSTHOG_HOST` only if the installation owner explicitly wants PostHog collection; partial or invalid settings keep analytics disabled.
 
