@@ -10,6 +10,7 @@ screenshots-pages/
 playwright-report/
 playwright-report-qa/
 test-results/
+artifacts/walkthrough/
 .rubric/
 vitest-rubric.json
 .wrangler/

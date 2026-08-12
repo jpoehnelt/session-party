@@ -38,6 +38,8 @@
     "visual:stories:compare": "node tools/visual-regression/render-config.mjs storybook && reg-suit run -c .regconfig.storybook.json",
     "visual:pages:capture": "playwright test --config playwright.config.ts",
     "visual:pages:compare": "node tools/visual-regression/render-config.mjs pages && reg-suit run -c .regconfig.pages.json",
+    "walkthrough:record": "tsx scripts/walkthrough/record.ts && tsx scripts/walkthrough/assemble.ts",
+    "walkthrough:assemble": "tsx scripts/walkthrough/assemble.ts",
     "test:migrations": "vitest run src/server/migration-parity.test.ts",
     "smoke:local": "tsx scripts/local-smoke.ts",
     "test": "pnpm test:worker",
