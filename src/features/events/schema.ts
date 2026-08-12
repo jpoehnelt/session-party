@@ -46,6 +46,7 @@ export type EventOutput = typeof EventOutput.Type;
 export const EventAccess = Schema.Struct({
   event: EventOutput,
   memberRole: Schema.NullOr(EventRole),
+  staff: Schema.Boolean,
   speakerPortal: Schema.Boolean,
 });
 export type EventAccess = typeof EventAccess.Type;

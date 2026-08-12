@@ -9,6 +9,7 @@ import {
   AddEventMemberOutput,
   CreateEventApiKeyOutput,
   EventApiKey,
+  EventAccess,
   EventMember,
   EventOutput,
   RemoveEventMemberOutput,
@@ -62,6 +63,11 @@ export async function fetchCurrentUserId(): Promise<string> {
   const userId = response.user?.userId ?? response.userId;
   if (!userId) throw new Error("The current session did not identify its user");
   return userId;
+}
+
+async function fetchCurrentStaffAccess(eventId: string): Promise<boolean> {
+  const access = await apiFetch("/api/v1/me/events", { schema: Schema.Array(EventAccess) });
+  return access.some((item) => item.event.id === eventId && item.staff);
 }
 
 export function canManageMember(
@@ -604,6 +610,7 @@ export function EventSettingsForm({
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [members, setMembers] = useState<readonly EventMemberRecord[] | null>(null);
   const [actorUserId, setActorUserId] = useState<string | null>(null);
+  const [actorStaff, setActorStaff] = useState(false);
   const [memberEmail, setMemberEmail] = useState("");
   const [memberRole, setMemberRole] = useState<EventMemberRecord["role"]>("reviewer");
   const [memberError, setMemberError] = useState<string | null>(null);
@@ -613,13 +620,15 @@ export function EventSettingsForm({
 
   const refreshMembers = () => {
     setMembers(null);
-    void Promise.all([fetchEventMembers(event.id), fetchCurrentUserId()]).then(([nextMembers, userId]) => {
+    void Promise.all([fetchEventMembers(event.id), fetchCurrentUserId(), fetchCurrentStaffAccess(event.id)]).then(([nextMembers, userId, staff]) => {
       setActorUserId(userId);
+      setActorStaff(staff);
       setMembers(nextMembers);
     }).catch((error) => {
       const message = error instanceof Error ? error.message : "Could not load event members";
       setMemberError(message);
       setActorUserId(null);
+      setActorStaff(false);
       setMembers([]);
     });
   };
@@ -716,7 +725,7 @@ export function EventSettingsForm({
     }
   };
 
-  const actorRole = members?.find((member) => member.userId === actorUserId)?.role ?? null;
+  const actorRole = actorStaff ? "owner" : members?.find((member) => member.userId === actorUserId)?.role ?? null;
   const ownerCount = members?.filter((member) => member.role === "owner").length ?? 0;
 
   return (

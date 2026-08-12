@@ -108,11 +108,13 @@ beforeAll(async () => {
   const revokedReaderKey = await hashBearerMaterial(env, "room-revoked-reader-key");
   const submissionsKey = await hashBearerMaterial(env, "room-submissions-key");
   const writerKey = await hashBearerMaterial(env, "room-writer-key");
+  const staffSession = await hashBearerMaterial(env, "room-staff-session");
   await env.DB.batch([
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-owner', 'room-owner@example.com', 'Room Owner', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-reviewer', 'room-reviewer@example.com', 'Room Reviewer', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-demoted', 'room-demoted@example.com', 'Room Demoted', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-expired', 'room-expired@example.com', 'Room Expired', 1, ?, ?)").bind(now, now),
+    env.DB.prepare("INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES ('room-staff', 'room-staff@example.com', 'Room Staff', 1, ?, ?)").bind(now, now),
     env.DB.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES (?, 'room-authority', 'Room Authority', 'UTC', 1, ?, ?)").bind(EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES (?, 'room-operation', 'Room Operation', 'UTC', 1, ?, ?)").bind(OPERATION_EVENT_ID, now, now),
     env.DB.prepare("INSERT INTO talks (id, event_id, submission_id, title, description, track_id, room_id, starts_at, duration_min, status, version, created_at, updated_at) VALUES ('room-live-talk', ?, NULL, 'Realtime keynote', NULL, NULL, NULL, ?, 30, 'confirmed', 1, ?, ?)").bind(EVENT_ID, now + 3_600_000, now, now),
@@ -125,6 +127,8 @@ beforeAll(async () => {
     env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-reviewer-session-id', ?, 'room-reviewer', 'session', ?, NULL, ?)").bind(reviewerSession, expiresAt, now),
     env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-demoted-session-id', ?, 'room-demoted', 'session', ?, NULL, ?)").bind(demotedSession, expiresAt, now),
     env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-expired-session-id', ?, 'room-expired', 'session', ?, NULL, ?)").bind(expiredSession, expiresAt, now),
+    env.DB.prepare("INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at) VALUES ('room-staff-session-id', ?, 'room-staff', 'session', ?, NULL, ?)").bind(staffSession, expiresAt, now),
+    env.DB.prepare("INSERT INTO install_grants (id, user_id, role, granted_by_user_id, granted_at, version, created_at, updated_at) VALUES ('room-staff-grant', 'room-staff', 'staff', 'room-staff', ?, 1, ?, ?)").bind(now, now, now),
     env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-agenda-key-id', ?, 'Agenda Reader', ?, '[\"agenda:read\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, agendaKey, expiresAt, now, now),
     env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-submissions-key-id', ?, 'Submissions Reader', ?, '[\"submissions:read\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, submissionsKey, expiresAt, now, now),
     env.DB.prepare("INSERT INTO api_keys (id, event_id, name, key_hash, scopes, expires_at, revoked_at, created_by, version, created_at, updated_at) VALUES ('room-writer-key-id', ?, 'Agenda Writer', ?, '[\"agenda:write\"]', ?, NULL, 'room-owner', 1, ?, ?)").bind(EVENT_ID, writerKey, expiresAt, now, now),
@@ -236,6 +240,24 @@ describe("EventRoom live authorization", () => {
         slug: "room-operation",
       },
     });
+  }, 30_000);
+
+  it("admits staff to every event and applies grant revocation on the next Party policy check", async () => {
+    const staffSocket = await connect({ cookie: "room-staff-session" }, OPERATION_EVENT_ID);
+    const result = waitForType(staffSocket, "room/result");
+    staffSocket.send(JSON.stringify({ t: "events/get", requestId: "staff-event-from-room" }));
+    expect(await result).toMatchObject({
+      t: "room/result",
+      operationId: "events.get",
+      result: { id: OPERATION_EVENT_ID },
+    });
+
+    await env.DB.prepare(
+      "UPDATE install_grants SET revoked_by_user_id = 'room-staff', revoked_at = ?, version = version + 1, updated_at = ? WHERE id = 'room-staff-grant'",
+    ).bind(Date.now(), Date.now()).run();
+    const closed = new Promise<CloseEvent>((resolve) => staffSocket.addEventListener("close", resolve, { once: true }));
+    staffSocket.send(JSON.stringify({ t: "events/get", requestId: "staff-revoked-from-room" }));
+    expect((await closed).code).toBe(4403);
   }, 30_000);
 
   it("coordinates agenda soft locks and ghost previews across clients", async () => {

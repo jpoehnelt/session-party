@@ -186,6 +186,7 @@ describe("events service", () => {
     await expect(runAs(owner, listEventAccess())).resolves.toEqual([{
       event: created,
       memberRole: "owner",
+      staff: false,
       speakerPortal: false,
     }]);
     await expect(runAs(owner, getEvent(created.id))).resolves.toEqual(created);

@@ -12,7 +12,8 @@ import {
   type ShowCueTarget,
   type ShowRunState,
 } from "contracts/protocol";
-import { apiKeys, authTokens, eventMembers, talks } from "contracts/schema";
+import { apiKeys, authTokens, talks } from "contracts/schema";
+import * as dbSchema from "contracts/schema";
 import { Server, type Connection, type ConnectionContext, type WSMessage } from "partyserver";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
@@ -20,7 +21,7 @@ import { Schema } from "effect";
 import { runTransportOperation } from "../adapt";
 import { userFromRequest } from "../auth";
 import { operationById, partyIntents } from "../registry.gen";
-import { internalServiceToken } from "../services";
+import { loadEffectiveEventRole, internalServiceToken } from "../services";
 
 const MAX_MESSAGE_BYTES = 32 * 1024;
 const MAX_MESSAGES_PER_MINUTE = 120;
@@ -259,6 +260,7 @@ const PublicFailureWire = Schema.Struct({
     "NotFound",
     "Unauthenticated",
     "Forbidden",
+    "OpenRegistrationStaffUnavailable",
     "Validation",
     "Conflict",
     "External",
@@ -550,31 +552,20 @@ export class EventRoom extends Server<Env> {
       return principal.eventId === this.name ? apiKeyAuthorization(principal) : null;
     }
 
-    const db = drizzle(this.env.DB);
-    const [membership] = await db
-      .select({ role: eventMembers.role })
-      .from(eventMembers)
-      .where(and(eq(eventMembers.eventId, this.name), eq(eventMembers.userId, principal.userId)))
-      .limit(1);
-    return membership ? browserAuthorization(principal, membership.role) : null;
+    const db = drizzle(this.env.DB, { schema: dbSchema });
+    const role = await loadEffectiveEventRole(db, principal.userId, this.name);
+    return role ? browserAuthorization(principal, role) : null;
   }
 
   private async revalidateAuthorization(
     state: EventRoomConnectionState,
   ): Promise<EventRoomConnectionState | null> {
-    const db = drizzle(this.env.DB);
+    const db = drizzle(this.env.DB, { schema: dbSchema });
     const now = new Date();
     if (state.authorization.kind === "browser-session") {
       const [row] = await db
-        .select({ role: eventMembers.role, expiresAt: authTokens.expiresAt })
+        .select({ expiresAt: authTokens.expiresAt })
         .from(authTokens)
-        .innerJoin(
-          eventMembers,
-          and(
-            eq(eventMembers.eventId, this.name),
-            eq(eventMembers.userId, authTokens.userId),
-          ),
-        )
         .where(and(
           eq(authTokens.id, state.authorization.credentialId),
           eq(authTokens.userId, state.user.userId),
@@ -584,6 +575,8 @@ export class EventRoom extends Server<Env> {
         ))
         .limit(1);
       if (!row) return null;
+      const role = await loadEffectiveEventRole(db, state.user.userId, this.name);
+      if (!role) return null;
       const principal: Extract<Principal, { kind: "browser-session" }> = {
         kind: "browser-session",
         userId: state.user.userId,
@@ -592,7 +585,7 @@ export class EventRoom extends Server<Env> {
         sessionId: state.authorization.credentialId,
         expiresAt: row.expiresAt.getTime(),
       };
-      return { ...state, authorization: browserAuthorization(principal, row.role) };
+      return { ...state, authorization: browserAuthorization(principal, role) };
     }
 
     const [row] = await db

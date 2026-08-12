@@ -72,7 +72,7 @@ export function prioritizeEvents(events: readonly EventSummary[], now = new Date
 export function eventAccessDestinations(access: EventAccessSummary) {
   const base = `/e/${access.event.slug}`;
   return [
-    ...(access.memberRole === "owner" || access.memberRole === "admin"
+    ...(access.staff || access.memberRole === "owner" || access.memberRole === "admin"
       ? [{ label: "Organizer dashboard", role: "Organizer", to: `${base}/dashboard` }]
       : []),
     ...(access.memberRole === "reviewer"
@@ -94,7 +94,7 @@ export function accessModes(
   const modes = new Set<AccessMode>();
   if (hasReusableProfile) modes.add("speaker");
   for (const item of access) {
-    if (item.memberRole === "owner" || item.memberRole === "admin") modes.add("organizer");
+    if (item.staff || item.memberRole === "owner" || item.memberRole === "admin") modes.add("organizer");
     if (item.memberRole === "reviewer") modes.add("reviewer");
     if (item.speakerPortal) modes.add("speaker");
   }
@@ -111,7 +111,7 @@ export function automaticHomeDestination(
   const mode = modes[0]!;
   if (mode === "speaker") return "/speaker/profile";
   const candidates = access.filter((item) => mode === "organizer"
-    ? item.memberRole === "owner" || item.memberRole === "admin"
+    ? item.staff || item.memberRole === "owner" || item.memberRole === "admin"
     : item.memberRole === "reviewer");
   const [event] = prioritizeEvents(candidates.map((item) => item.event), now);
   if (!event) return null;
@@ -210,7 +210,7 @@ export function EventsWorkspace({ access, now = new Date() }: { access: readonly
   const setupPercent = `${Math.round((setup.complete / 5) * 100)}%`;
   const featuredBase = `/e/${featured.slug}`;
   const featuredDestinations = eventAccessDestinations(featuredAccess);
-  const featuredOrganizer = featuredAccess.memberRole === "owner" || featuredAccess.memberRole === "admin";
+  const featuredOrganizer = featuredAccess.staff || featuredAccess.memberRole === "owner" || featuredAccess.memberRole === "admin";
 
   return (
     <div className="space-y-10">
@@ -379,7 +379,7 @@ export function RoleAwareHome({
   readonly hasReusableProfile?: boolean;
   readonly onCreateEvent: () => void;
 }) {
-  const organizerAccess = access.filter(({ memberRole }) => memberRole === "owner" || memberRole === "admin");
+  const organizerAccess = access.filter(({ staff, memberRole }) => staff || memberRole === "owner" || memberRole === "admin");
   const reviewerAccess = access.filter(({ memberRole }) => memberRole === "reviewer");
   const speakerAccess = access.filter(({ speakerPortal }) => speakerPortal);
   const modes = accessModes(access, hasReusableProfile);
@@ -408,6 +408,9 @@ export function RoleAwareHome({
             Open an event control room for a program you organize.
           </p>
           <div className="mt-5 flex flex-wrap gap-3">
+            {organizerAccess.some(({ staff }) => staff) ? (
+              <Link className={workspaceLinkClass} to="/staff">Manage install staff →</Link>
+            ) : null}
             {organizerAccess.map(({ event }) => (
               <Link className={workspaceLinkClass} key={event.id} to={`/e/${event.slug}/dashboard`}>
                 {event.name} dashboard →

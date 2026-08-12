@@ -5,7 +5,7 @@
  * WS messages) with these via Schema.decodeUnknown.
  */
 import { Schema as S } from "effect";
-export { ApiScope, ApiScopes } from "./principal";
+export { ApiScope, ApiScopes, InstallRole } from "./principal";
 
 // ---------- common persisted values ----------
 

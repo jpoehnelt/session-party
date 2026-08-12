@@ -128,7 +128,7 @@ export type ServerMessage =
   | {
       t: "room/error";
       message: string;
-      error?: "NotFound" | "Unauthenticated" | "Forbidden" | "Validation" | "Conflict" | "External";
+      error?: "NotFound" | "Unauthenticated" | "Forbidden" | "OpenRegistrationStaffUnavailable" | "Validation" | "Conflict" | "External";
       requestId?: string;
       replyTo?: string;
     }
@@ -180,6 +180,7 @@ const PublicErrorTag = Schema.Literal(
   "NotFound",
   "Unauthenticated",
   "Forbidden",
+  "OpenRegistrationStaffUnavailable",
   "Validation",
   "Conflict",
   "External",

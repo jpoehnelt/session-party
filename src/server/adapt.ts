@@ -18,6 +18,7 @@ import {
   CurrentUser,
   Db,
   Files,
+  InstallationConfig,
   Mail,
   MailQueue,
   Rooms,
@@ -51,6 +52,7 @@ export type RuntimeServices =
   | Rooms
   | AiService
   | CurrentUser
+  | InstallationConfig
   | Authorizer
   | PublicSubmissionAbuse
   | PublicSubmissionRequest;

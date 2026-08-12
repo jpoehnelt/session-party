@@ -14,7 +14,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
-import type { ApiScope, EventRole } from "./types";
+import type { ApiScope, EventRole, InstallRole } from "./types";
 
 const id = () => text("id").primaryKey();
 const eventId = () => text("event_id").notNull();
@@ -77,6 +77,38 @@ export const speakerProfileChanges = sqliteTable(
     uniqueIndex("speaker_profile_changes_version_unique").on(t.profileId, t.profileVersion),
     index("speaker_profile_changes_actor").on(t.actorUserId, t.createdAt),
     check("speaker_profile_changes_version_positive", sql`${t.profileVersion} > 0`),
+  ],
+);
+
+/** Audited installation-level authority. Revocation closes a record; re-granting creates a new one. */
+export const installGrants = sqliteTable(
+  "install_grants",
+  {
+    id: id(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    role: text("role").$type<InstallRole>().notNull(),
+    grantedByUserId: text("granted_by_user_id").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    grantedAt: integer("granted_at", { mode: "timestamp_ms" }).notNull(),
+    revokedByUserId: text("revoked_by_user_id").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    grantKeyHash: text("grant_key_hash"),
+    grantRequestHash: text("grant_request_hash"),
+    revokeKeyHash: text("revoke_key_hash"),
+    revokeRequestHash: text("revoke_request_hash"),
+    version: version(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("install_grants_one_active_user_role").on(t.userId, t.role).where(sql`${t.revokedAt} is null`),
+    uniqueIndex("install_grants_grant_idempotency_unique").on(t.grantedByUserId, t.grantKeyHash).where(sql`${t.grantKeyHash} is not null`),
+    uniqueIndex("install_grants_revoke_idempotency_unique").on(t.revokedByUserId, t.revokeKeyHash).where(sql`${t.revokeKeyHash} is not null`),
+    index("install_grants_active_role").on(t.role, t.revokedAt, t.userId),
+    index("install_grants_history").on(t.userId, t.grantedAt),
+    check("install_grants_role_staff", sql`${t.role} = 'staff'`),
+    check("install_grants_version_positive", sql`${t.version} > 0`),
+    check("install_grants_revocation_pair", sql`(${t.revokedAt} is null) = (${t.revokedByUserId} is null)`),
+    check("install_grants_grant_replay_pair", sql`(${t.grantKeyHash} is null) = (${t.grantRequestHash} is null)`),
+    check("install_grants_revoke_replay_pair", sql`(${t.revokeKeyHash} is null) = (${t.revokeRequestHash} is null)`),
   ],
 );
 

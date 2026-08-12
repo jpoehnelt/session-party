@@ -32,7 +32,7 @@
   "vars": {
     "LOCAL_MODE": "1",
     "APP_URL": "http://127.0.0.1:5173",
-    "INITIAL_ADMIN_EMAIL": "",
+    "INITIAL_ADMIN_EMAIL": "sbek-organizer@example.com",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
     "POSTHOG_KEY": "",
     "POSTHOG_HOST": "",
