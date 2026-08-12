@@ -12052,6 +12052,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "size",
               "purpose",
               "version",
+              "comments",
               "speakerId",
               "speakerName",
               "speakerVersion",
@@ -12060,8 +12061,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "current",
               "supersedesAssetId",
               "restoredFromAssetId",
-              "uploadedAt",
-              "comments"
+              "uploadedAt"
             ],
             "type": "object"
           },
@@ -12560,6 +12560,76 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                       "ready"
                     ],
                     "type": "string"
+                  },
+                  "taskItems": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "completed": {
+                          "type": "boolean"
+                        },
+                        "completedAt": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/$defs/Int",
+                              "description": "a non-negative number",
+                              "minimum": 0,
+                              "title": "nonNegative"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "dueAt": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/$defs/Int",
+                              "description": "a non-negative number",
+                              "minimum": 0,
+                              "title": "nonNegative"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "id": {
+                          "description": "a string at most 255 character(s) long",
+                          "maxLength": 255,
+                          "minLength": 1,
+                          "title": "maxLength(255)",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "profile",
+                            "upload",
+                            "form",
+                            "link",
+                            "confirm"
+                          ],
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "overdue": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "kind",
+                        "dueAt",
+                        "completed",
+                        "completedAt",
+                        "overdue"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
                   },
                   "tasksDone": {
                     "$ref": "#/$defs/Int",
@@ -13379,6 +13449,76 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                       "ready"
                     ],
                     "type": "string"
+                  },
+                  "taskItems": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "completed": {
+                          "type": "boolean"
+                        },
+                        "completedAt": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/$defs/Int",
+                              "description": "a non-negative number",
+                              "minimum": 0,
+                              "title": "nonNegative"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "dueAt": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/$defs/Int",
+                              "description": "a non-negative number",
+                              "minimum": 0,
+                              "title": "nonNegative"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "id": {
+                          "description": "a string at most 255 character(s) long",
+                          "maxLength": 255,
+                          "minLength": 1,
+                          "title": "maxLength(255)",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "profile",
+                            "upload",
+                            "form",
+                            "link",
+                            "confirm"
+                          ],
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "overdue": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "kind",
+                        "dueAt",
+                        "completed",
+                        "completedAt",
+                        "overdue"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
                   },
                   "tasksDone": {
                     "$ref": "#/$defs/Int",
@@ -15207,6 +15347,76 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                       ],
                       "type": "string"
                     },
+                    "taskItems": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "completed": {
+                            "type": "boolean"
+                          },
+                          "completedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/Int",
+                                "description": "a non-negative number",
+                                "minimum": 0,
+                                "title": "nonNegative"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "dueAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/Int",
+                                "description": "a non-negative number",
+                                "minimum": 0,
+                                "title": "nonNegative"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "id": {
+                            "description": "a string at most 255 character(s) long",
+                            "maxLength": 255,
+                            "minLength": 1,
+                            "title": "maxLength(255)",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "profile",
+                              "upload",
+                              "form",
+                              "link",
+                              "confirm"
+                            ],
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "overdue": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "kind",
+                          "dueAt",
+                          "completed",
+                          "completedAt",
+                          "overdue"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "tasksDone": {
                       "$ref": "#/$defs/Int",
                       "description": "a non-negative number",
@@ -16113,6 +16323,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "size",
         "purpose",
         "version",
+        "comments",
         "speakerId",
         "speakerName",
         "speakerVersion",
@@ -16121,8 +16332,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "current",
         "supersedesAssetId",
         "restoredFromAssetId",
-        "uploadedAt",
-        "comments"
+        "uploadedAt"
       ],
       "type": "object"
     },
@@ -35822,6 +36032,48 @@ export const openApi = {
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "comments": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "authorName": {
+                                  "description": "a string at most 500 character(s) long",
+                                  "maxLength": 500,
+                                  "minLength": 1,
+                                  "title": "maxLength(500)",
+                                  "type": "string"
+                                },
+                                "body": {
+                                  "description": "a string at most 500 character(s) long",
+                                  "maxLength": 500,
+                                  "minLength": 1,
+                                  "title": "maxLength(500)",
+                                  "type": "string"
+                                },
+                                "createdAt": {
+                                  "$ref": "#/$defs/Int",
+                                  "description": "a non-negative number",
+                                  "minimum": 0,
+                                  "title": "nonNegative"
+                                },
+                                "id": {
+                                  "description": "a string at most 255 character(s) long",
+                                  "maxLength": 255,
+                                  "minLength": 1,
+                                  "title": "maxLength(255)",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "authorName",
+                                "body",
+                                "createdAt"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
                           "contentType": {
                             "type": "string"
                           },
@@ -36110,6 +36362,76 @@ export const openApi = {
                             "ready"
                           ],
                           "type": "string"
+                        },
+                        "taskItems": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "completed": {
+                                "type": "boolean"
+                              },
+                              "completedAt": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Int",
+                                    "description": "a non-negative number",
+                                    "minimum": 0,
+                                    "title": "nonNegative"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "dueAt": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Int",
+                                    "description": "a non-negative number",
+                                    "minimum": 0,
+                                    "title": "nonNegative"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "id": {
+                                "description": "a string at most 255 character(s) long",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "title": "maxLength(255)",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "profile",
+                                  "upload",
+                                  "form",
+                                  "link",
+                                  "confirm"
+                                ],
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "overdue": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "kind",
+                              "dueAt",
+                              "completed",
+                              "completedAt",
+                              "overdue"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
                         },
                         "tasksDone": {
                           "$ref": "#/$defs/Int",
@@ -36802,6 +37124,48 @@ export const openApi = {
                     "asset": {
                       "additionalProperties": false,
                       "properties": {
+                        "comments": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "authorName": {
+                                "description": "a string at most 500 character(s) long",
+                                "maxLength": 500,
+                                "minLength": 1,
+                                "title": "maxLength(500)",
+                                "type": "string"
+                              },
+                              "body": {
+                                "description": "a string at most 500 character(s) long",
+                                "maxLength": 500,
+                                "minLength": 1,
+                                "title": "maxLength(500)",
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "$ref": "#/$defs/Int",
+                                "description": "a non-negative number",
+                                "minimum": 0,
+                                "title": "nonNegative"
+                              },
+                              "id": {
+                                "description": "a string at most 255 character(s) long",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "title": "maxLength(255)",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "authorName",
+                              "body",
+                              "createdAt"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
                         "contentType": {
                           "type": "string"
                         },
@@ -36974,6 +37338,76 @@ export const openApi = {
                             "ready"
                           ],
                           "type": "string"
+                        },
+                        "taskItems": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "completed": {
+                                "type": "boolean"
+                              },
+                              "completedAt": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Int",
+                                    "description": "a non-negative number",
+                                    "minimum": 0,
+                                    "title": "nonNegative"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "dueAt": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Int",
+                                    "description": "a non-negative number",
+                                    "minimum": 0,
+                                    "title": "nonNegative"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "id": {
+                                "description": "a string at most 255 character(s) long",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "title": "maxLength(255)",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "profile",
+                                  "upload",
+                                  "form",
+                                  "link",
+                                  "confirm"
+                                ],
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "overdue": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "kind",
+                              "dueAt",
+                              "completed",
+                              "completedAt",
+                              "overdue"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
                         },
                         "tasksDone": {
                           "$ref": "#/$defs/Int",
@@ -37811,6 +38245,7 @@ export const openApi = {
                           "size",
                           "purpose",
                           "version",
+                          "comments",
                           "speakerId",
                           "speakerName",
                           "speakerVersion",
@@ -37819,8 +38254,7 @@ export const openApi = {
                           "current",
                           "supersedesAssetId",
                           "restoredFromAssetId",
-                          "uploadedAt",
-                          "comments"
+                          "uploadedAt"
                         ],
                         "type": "object"
                       },
@@ -38336,6 +38770,7 @@ export const openApi = {
                         "size",
                         "purpose",
                         "version",
+                        "comments",
                         "speakerId",
                         "speakerName",
                         "speakerVersion",
@@ -38344,8 +38779,7 @@ export const openApi = {
                         "current",
                         "supersedesAssetId",
                         "restoredFromAssetId",
-                        "uploadedAt",
-                        "comments"
+                        "uploadedAt"
                       ],
                       "type": "object"
                     },
@@ -38654,6 +39088,7 @@ export const openApi = {
                     "size",
                     "purpose",
                     "version",
+                    "comments",
                     "speakerId",
                     "speakerName",
                     "speakerVersion",
@@ -38662,8 +39097,7 @@ export const openApi = {
                     "current",
                     "supersedesAssetId",
                     "restoredFromAssetId",
-                    "uploadedAt",
-                    "comments"
+                    "uploadedAt"
                   ],
                   "type": "object"
                 }
@@ -39072,6 +39506,76 @@ export const openApi = {
                                   "ready"
                                 ],
                                 "type": "string"
+                              },
+                              "taskItems": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "completed": {
+                                      "type": "boolean"
+                                    },
+                                    "completedAt": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/Int",
+                                          "description": "a non-negative number",
+                                          "minimum": 0,
+                                          "title": "nonNegative"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "dueAt": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/Int",
+                                          "description": "a non-negative number",
+                                          "minimum": 0,
+                                          "title": "nonNegative"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "id": {
+                                      "description": "a string at most 255 character(s) long",
+                                      "maxLength": 255,
+                                      "minLength": 1,
+                                      "title": "maxLength(255)",
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "profile",
+                                        "upload",
+                                        "form",
+                                        "link",
+                                        "confirm"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "overdue": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "name",
+                                    "kind",
+                                    "dueAt",
+                                    "completed",
+                                    "completedAt",
+                                    "overdue"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
                               },
                               "tasksDone": {
                                 "$ref": "#/$defs/Int",
@@ -42100,6 +42604,76 @@ export const openApi = {
                                 ],
                                 "type": "string"
                               },
+                              "taskItems": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "completed": {
+                                      "type": "boolean"
+                                    },
+                                    "completedAt": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/Int",
+                                          "description": "a non-negative number",
+                                          "minimum": 0,
+                                          "title": "nonNegative"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "dueAt": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/Int",
+                                          "description": "a non-negative number",
+                                          "minimum": 0,
+                                          "title": "nonNegative"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "id": {
+                                      "description": "a string at most 255 character(s) long",
+                                      "maxLength": 255,
+                                      "minLength": 1,
+                                      "title": "maxLength(255)",
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "profile",
+                                        "upload",
+                                        "form",
+                                        "link",
+                                        "confirm"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "overdue": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "name",
+                                    "kind",
+                                    "dueAt",
+                                    "completed",
+                                    "completedAt",
+                                    "overdue"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              },
                               "tasksDone": {
                                 "$ref": "#/$defs/Int",
                                 "description": "a non-negative number",
@@ -44194,6 +44768,7 @@ export const openApi = {
                     "size",
                     "purpose",
                     "version",
+                    "comments",
                     "speakerId",
                     "speakerName",
                     "speakerVersion",
@@ -44202,8 +44777,7 @@ export const openApi = {
                     "current",
                     "supersedesAssetId",
                     "restoredFromAssetId",
-                    "uploadedAt",
-                    "comments"
+                    "uploadedAt"
                   ],
                   "type": "object"
                 }
@@ -44882,6 +45456,76 @@ export const openApi = {
                             "ready"
                           ],
                           "type": "string"
+                        },
+                        "taskItems": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "completed": {
+                                "type": "boolean"
+                              },
+                              "completedAt": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Int",
+                                    "description": "a non-negative number",
+                                    "minimum": 0,
+                                    "title": "nonNegative"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "dueAt": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Int",
+                                    "description": "a non-negative number",
+                                    "minimum": 0,
+                                    "title": "nonNegative"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "id": {
+                                "description": "a string at most 255 character(s) long",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "title": "maxLength(255)",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "profile",
+                                  "upload",
+                                  "form",
+                                  "link",
+                                  "confirm"
+                                ],
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "overdue": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "kind",
+                              "dueAt",
+                              "completed",
+                              "completedAt",
+                              "overdue"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
                         },
                         "tasksDone": {
                           "$ref": "#/$defs/Int",
