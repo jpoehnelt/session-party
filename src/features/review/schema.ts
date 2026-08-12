@@ -20,7 +20,7 @@ export type ReviewRoundStatus = typeof ReviewRoundStatus.Type;
 export const ReviewState = Schema.Literal("unassigned", "assigned", "in_progress", "complete");
 export type ReviewState = typeof ReviewState.Type;
 
-export const WorkbenchOrder = Schema.Literal("coverage", "decision");
+export const WorkbenchOrder = Schema.Literal("coverage", "decision", "decision_asc");
 export type WorkbenchOrder = typeof WorkbenchOrder.Type;
 
 export const ScoreValue = Schema.Int.pipe(Schema.between(1, 5));
@@ -247,6 +247,12 @@ export const SpeakerSummary = Schema.Struct({
 });
 export type SpeakerSummary = typeof SpeakerSummary.Type;
 
+export const SubmissionAnswerSummary = Schema.Struct({
+  label: NonEmptyText,
+  value: Schema.String.pipe(Schema.maxLength(20_000)),
+});
+export type SubmissionAnswerSummary = typeof SubmissionAnswerSummary.Type;
+
 export const AcceptanceSummary = Schema.Struct({
   acceptanceEventId: EntityId,
   submissionVersion: Schema.Int.pipe(Schema.positive()),
@@ -283,6 +289,7 @@ export const SubmissionReviewDetail = Schema.Struct({
   ...SubmissionReviewSummary.fields,
   abstract: Schema.String.pipe(Schema.maxLength(20_000)),
   speakers: Schema.Array(SpeakerSummary),
+  answers: Schema.optional(Schema.Array(SubmissionAnswerSummary)),
   round: Schema.NullOr(ReviewRound),
   assignments: Schema.Array(ReviewerAssignment),
   reviews: Schema.Array(HumanReview),

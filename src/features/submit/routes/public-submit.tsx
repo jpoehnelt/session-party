@@ -690,8 +690,11 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                         required
                         disabled={!accepting || submitting}
                         value={speaker.roleLabel}
-                        onChange={(event) => setCoSpeakers((current) => current.map((item, currentIndex) =>
-                          currentIndex === index ? { ...item, roleLabel: event.currentTarget.value } : item))}
+                        onChange={(event) => {
+                          const roleLabel = event.currentTarget.value;
+                          setCoSpeakers((current) => current.map((item, currentIndex) =>
+                            currentIndex === index ? { ...item, roleLabel } : item));
+                        }}
                       />
                       <Input
                         id={`co-speaker-${index}-title`}

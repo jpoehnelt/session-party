@@ -4,6 +4,8 @@ export interface EventNavItem {
   readonly segment: string;
 }
 
+export type EventNavRole = "owner" | "admin" | "reviewer" | null | undefined;
+
 const candidates: readonly EventNavItem[] = [
   { label: "Overview", path: "/e/:eventSlug", segment: "" },
   { label: "Forms", path: "/e/:eventSlug/forms", segment: "forms" },
@@ -22,7 +24,12 @@ const candidates: readonly EventNavItem[] = [
   { label: "Settings", path: "/e/:eventSlug/settings", segment: "settings" },
 ];
 
-export function availableEventNavItems(routePaths: Iterable<string>): readonly EventNavItem[] {
+export function availableEventNavItems(
+  routePaths: Iterable<string>,
+  role?: EventNavRole,
+): readonly EventNavItem[] {
   const registeredPaths = new Set(routePaths);
-  return candidates.filter(({ path }) => registeredPaths.has(path));
+  return candidates.filter(({ path, segment }) =>
+    registeredPaths.has(path) && (role !== "reviewer" || segment === "review")
+  );
 }

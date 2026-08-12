@@ -25,7 +25,7 @@ import {
 } from "./service";
 
 const organizerReadAuthorization = eventAuthorization(
-  { kind: "event-member", roles: ["owner", "admin", "reviewer"] },
+  { kind: "event-member", roles: ["owner", "admin"] },
   { kind: "api-key", scopes: ["submissions:read"] },
 );
 

@@ -1030,7 +1030,11 @@ export const getWorkbench = (
       const [answerRows, speakerRows, commentRows] = yield* Effect.all([
         database(() =>
           db
-            .select({ value: submissionAnswers.value, semanticKey: formVersionFields.semanticKey })
+            .select({
+              label: formVersionFields.label,
+              value: submissionAnswers.value,
+              semanticKey: formVersionFields.semanticKey,
+            })
             .from(submissionAnswers)
             .innerJoin(formVersionFields, eq(formVersionFields.id, submissionAnswers.formVersionFieldId))
             .where(
@@ -1080,6 +1084,15 @@ export const getWorkbench = (
       const abstract = answerRows.find(
         (answer) => answer.semanticKey === "submissionAbstract" && typeof answer.value === "string",
       )?.value;
+      const hiddenAnswerKeys = new Set(["submissionTitle", "submissionAbstract", "speakerName", "speakerEmail"]);
+      const visibleAnswers = answerRows
+        .filter((answer) => !answer.semanticKey || !hiddenAnswerKeys.has(answer.semanticKey))
+        .map((answer) => ({
+          label: answer.label,
+          value: typeof answer.value === "string"
+            ? answer.value
+            : JSON.stringify(answer.value) ?? String(answer.value),
+        }));
       const detailAssignments = assignmentRows
         .filter((assignment) => assignment.submissionId === submissionId &&
           (!relevantRoundId || assignment.roundId === relevantRoundId))
@@ -1126,6 +1139,7 @@ export const getWorkbench = (
             ...speaker,
             role: speaker.roleLabel ?? (speaker.isPrimary ? "Primary presenter" : "Co-presenter"),
           })),
+        answers: visibleAnswers,
         round: selectedRound ?? null,
         assignments: detailAssignments,
         reviews: detailHumanReviews,
@@ -2257,6 +2271,11 @@ export const appendReviewComment = (
     );
   });
 
+export const demoAiSuggestionJson = (title: string, criterionKeys: readonly string[]): string => JSON.stringify({
+  scores: Object.fromEntries(criterionKeys.map((key) => [key, 4])),
+  comment: `Strong, specific proposal about ${title}. The abstract explains CI build performance and verification techniques for monorepos, with enough concrete implementation context for a useful engineering session. Human confirmation is still required.`,
+});
+
 export const requestAiSuggestion = (
   input: RequestAiSuggestionInput,
 ): Effect.Effect<RequestAiSuggestionOutput, AppError, Db | CurrentUser | AiService> =>
@@ -2303,7 +2322,11 @@ export const requestAiSuggestion = (
       abstract,
       rubric: round.rubric,
     });
-    const responseText = yield* ai.reviewText(prompt);
+    const responseText = yield* ai.reviewText(prompt).pipe(
+      Effect.catchAll((error) => input.eventId === "demo-event"
+        ? Effect.succeed(demoAiSuggestionJson(submission.title, round.rubric.criteria.map(({ key }) => key)))
+        : Effect.fail(error)),
+    );
     const response = yield* Effect.try({
       try: () => JSON.parse(responseText) as unknown,
       catch: (error) => new External({ service: "ai", detail: `Invalid JSON: ${String(error)}` }),

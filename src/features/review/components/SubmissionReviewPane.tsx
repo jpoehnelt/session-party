@@ -354,7 +354,7 @@ export function SubmissionReviewPane({
                       {speaker.displayName}
                     </a>
                   ) : speaker.displayName}
-                  {speaker.isPrimary ? " (primary)" : ""}
+                  {` (${speaker.role})`}
                 </span>
               ))}
           </span>
@@ -369,6 +369,19 @@ export function SubmissionReviewPane({
       )}
 
       <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Proposal brief"><p className="max-w-4xl whitespace-pre-wrap text-sm font-medium leading-6 text-ink-secondary">{submission.abstract}</p></Card>
+
+      {(submission.answers ?? []).length > 0 && (
+        <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Proposal responses">
+          <dl className="grid gap-4 md:grid-cols-2" aria-label="Configured proposal responses">
+            {(submission.answers ?? []).map((answer, index) => (
+              <div key={`${answer.label}-${index}`} className="border-l-4 border-line-strong pl-3">
+                <dt className="text-[10px] font-black uppercase tracking-[0.06em] text-ink-faint">{answer.label}</dt>
+                <dd className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-6 text-ink-secondary">{answer.value || "—"}</dd>
+              </div>
+            ))}
+          </dl>
+        </Card>
+      )}
 
       <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Committee thread">
         <p className="text-sm leading-6 text-ink-secondary">

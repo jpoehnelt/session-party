@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useParams } from "react-router";
 import { Badge, Button, Card, Checkbox, Input, Select, Table, Toaster, toast } from "@/ui";
 import type { ContentAsset, ContentLibrary } from "../schema";
-import { addContentComment, downloadContent, getContentLibrary, restoreContentVersion } from "./api";
+import { addContentComment, downloadContent, getContentLibrary, getSpeakerDirectory, restoreContentVersion, sendSpeakerMessages } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
 import { ProductionHeader, ProductionSectionLabel, ProductionStats, productionTableClass } from "../components/production-ui";
 import { organizerAgendaTalkPath } from "@/features/agenda/links";
@@ -77,7 +77,10 @@ const saveBlob = (filename: string, bytes: Uint8Array, contentType: string) => {
 
 export default function OrganizerContentRoute() {
   const { eventSlug = "" } = useParams();
-  const [state, retry] = useRouteLoad(() => getContentLibrary(eventSlug), eventSlug);
+  const [state, retry] = useRouteLoad(async () => {
+    const [library, directory] = await Promise.all([getContentLibrary(eventSlug), getSpeakerDirectory(eventSlug)]);
+    return { library, directory };
+  }, eventSlug);
   const [busy, setBusy] = useState<string | null>(null);
   if (state.status === "loading") return <RouteLoading label="Loading speaker content" />;
   if (state.status === "error") return <RouteFailure message={state.message} onRetry={retry} />;
@@ -97,21 +100,37 @@ export default function OrganizerContentRoute() {
     }
   };
 
-  const fetchAsset = (asset: ContentAsset) => downloadContent(state.data.event.id, { eventId: state.data.event.id, assetId: asset.id });
+  const fetchAsset = (asset: ContentAsset) => downloadContent(state.data.library.event.id, { eventId: state.data.library.event.id, assetId: asset.id });
+  const outstandingSpeakerIds = state.data.directory.speakers
+    .filter(({ readiness }) => readiness.state !== "ready")
+    .map(({ speaker }) => speaker.id);
   return <>
     <OrganizerContentLibrary
-      library={state.data}
+      library={state.data.library}
       busy={busy}
-      onComment={(asset, body) => perform(asset.id, () => addContentComment(state.data.event.id, {
-        eventId: state.data.event.id, assetId: asset.id, body, idempotencyKey: crypto.randomUUID(),
+      reminderSpeakerIds={outstandingSpeakerIds}
+      onRemind={async (speakerIds) => {
+        if (!window.confirm(`Queue personalized outstanding-task reminders for ${speakerIds.length} speakers?`)) return false;
+        return perform("reminders", async () => {
+          const output = await sendSpeakerMessages(state.data.library.event.id, {
+            eventId: state.data.library.event.id,
+            speakerIds: speakerIds as [string, ...string[]],
+            kind: "reminder",
+            idempotencyKey: crypto.randomUUID(),
+          });
+          toast(`${output.queuedCount} reminders queued; ${output.skippedCount} skipped.`, { tone: "success" });
+        }, undefined, false);
+      }}
+      onComment={(asset, body) => perform(asset.id, () => addContentComment(state.data.library.event.id, {
+        eventId: state.data.library.event.id, assetId: asset.id, body, idempotencyKey: crypto.randomUUID(),
       }), "Comment added")}
       onRestore={(asset) => {
-        const current = state.data.assets.find((candidate) =>
+        const current = state.data.library.assets.find((candidate) =>
           candidate.speakerId === asset.speakerId && candidate.purpose === asset.purpose && candidate.current
         );
         if (!current) return Promise.resolve();
-        return perform(asset.id, () => restoreContentVersion(state.data.event.id, {
-          eventId: state.data.event.id,
+        return perform(asset.id, () => restoreContentVersion(state.data.library.event.id, {
+          eventId: state.data.library.event.id,
           assetId: asset.id,
           expectedCurrentAssetId: current.id,
           expectedCurrentVersion: current.version,
@@ -129,7 +148,7 @@ export default function OrganizerContentRoute() {
           name: `${safeFilename(output.asset.speakerName)}-${output.asset.purpose}-v${output.asset.version}-${safeFilename(output.asset.filename)}`,
           bytes: fromBase64(output.contentBase64),
         }));
-        saveBlob(`${safeFilename(state.data.event.name)}-speaker-content.zip`, buildStoredZip(files), "application/zip");
+        saveBlob(`${safeFilename(state.data.library.event.name)}-speaker-content.zip`, buildStoredZip(files), "application/zip");
       }, undefined, false)}
     />
     <Toaster />
@@ -143,6 +162,8 @@ export function OrganizerContentLibrary({
   onRestore,
   onDownload,
   onDownloadZip,
+  reminderSpeakerIds = [],
+  onRemind,
 }: {
   readonly library: ContentLibrary;
   readonly busy?: string | null;
@@ -150,6 +171,8 @@ export function OrganizerContentLibrary({
   readonly onRestore: (asset: ContentAsset) => boolean | void | Promise<boolean | void>;
   readonly onDownload: (asset: ContentAsset) => boolean | void | Promise<boolean | void>;
   readonly onDownloadZip: (assets: readonly ContentAsset[]) => boolean | void | Promise<boolean | void>;
+  readonly reminderSpeakerIds?: readonly string[];
+  readonly onRemind?: (speakerIds: readonly string[]) => boolean | void | Promise<boolean | void>;
 }) {
   const [query, setQuery] = useState("");
   const [purpose, setPurpose] = useState("all");
@@ -205,6 +228,7 @@ export function OrganizerContentLibrary({
           <Button disabled={selected.length === 0 || busy === "zip"} loading={busy === "zip"} onClick={() => void startZip()}>Download selected ZIP</Button>
           <Button variant="ghost" onClick={() => setSelectedIds(filtered.filter((asset) => asset.current).map((asset) => asset.id))}>Select current results</Button>
           <Button variant="ghost" onClick={() => setSelectedIds([])}>Clear</Button>
+          {onRemind ? <Button variant="secondary" disabled={reminderSpeakerIds.length === 0 || busy === "reminders"} loading={busy === "reminders"} onClick={() => void onRemind(reminderSpeakerIds)}>Remind {reminderSpeakerIds.length} with outstanding tasks</Button> : null}
         </div>
         {exportStatus ? <p className="mt-3 text-sm font-semibold" role="status">{exportStatus}</p> : null}
       </Card>

@@ -14,7 +14,7 @@ import {
   synchronizeAuthenticatedPrincipal,
 } from "./api";
 import LoginPage from "./auth";
-import { availableEventNavItems } from "./event-nav";
+import { availableEventNavItems, type EventNavRole } from "./event-nav";
 import {
   discoveredClientRouteModules,
   discoveredClientRoutePaths,
@@ -36,12 +36,33 @@ type SessionState =
   | { status: "signed-out" }
   | { status: "signed-in"; email: string };
 
-const navItems = availableEventNavItems(
+const registeredEventNavItems = availableEventNavItems(
   discoveredClientRouteModules.map(({ path }) => path),
 );
 
 function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) {
   const { eventSlug } = useParams();
+  const [memberRole, setMemberRole] = useState<EventNavRole>(undefined);
+  useEffect(() => {
+    if (!eventSlug) {
+      setMemberRole(undefined);
+      return;
+    }
+    let current = true;
+    void apiFetch<readonly { event: { slug: string }; memberRole: EventNavRole }[]>("/api/v1/me/events")
+      .then((access) => {
+        if (current) setMemberRole(access.find(({ event }) => event.slug === eventSlug)?.memberRole ?? null);
+      })
+      .catch(() => {
+        if (current) setMemberRole(null);
+      });
+    return () => { current = false; };
+  }, [eventSlug]);
+  const navItems = !eventSlug
+    ? registeredEventNavItems
+    : memberRole === undefined || memberRole === null
+      ? []
+      : availableEventNavItems(registeredEventNavItems.map(({ path }) => path), memberRole);
   const navClassName = mobile
     ? "flex h-full flex-col gap-5 bg-ink p-1 text-on-accent"
     : "flex h-full flex-col gap-6 p-5";

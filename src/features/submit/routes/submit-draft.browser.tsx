@@ -110,6 +110,17 @@ describe("public submission draft lifecycle", () => {
     expect(document.querySelector("#public-submit-field-title")?.getAttribute("aria-invalid")).toBe("true");
   });
 
+  it("keeps a changed co-speaker role across React state updates", async () => {
+    await renderForm();
+    const add = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Add co-speaker");
+    await act(async () => userEvent.click(add!));
+    const role = document.querySelector<HTMLInputElement>("#co-speaker-0-role");
+    await act(async () => userEvent.fill(role!, "Co-author"));
+    expect(document.querySelector<HTMLInputElement>("#co-speaker-0-role")?.value).toBe("Co-author");
+    expect(container.textContent).toContain("Co-speaker 1");
+  });
+
   it("bypasses Turnstile only for a deterministic demo round-trip", async () => {
     const turnstileRender = vi.fn(() => "unexpected-widget");
     window.turnstile = {

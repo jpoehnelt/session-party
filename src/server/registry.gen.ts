@@ -18142,7 +18142,8 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "order": {
           "enum": [
             "coverage",
-            "decision"
+            "decision",
+            "decision_asc"
           ],
           "type": "string"
         },
@@ -18226,7 +18227,8 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "order": {
           "enum": [
             "coverage",
-            "decision"
+            "decision",
+            "decision_asc"
           ],
           "type": "string"
         },
@@ -19034,6 +19036,32 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                       "version",
                       "createdAt",
                       "inputFields"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "answers": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "label": {
+                        "description": "a string at most 2000 character(s) long",
+                        "maxLength": 2000,
+                        "minLength": 1,
+                        "title": "maxLength(2000)",
+                        "type": "string"
+                      },
+                      "value": {
+                        "description": "a string at most 20000 character(s) long",
+                        "maxLength": 20000,
+                        "title": "maxLength(20000)",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "label",
+                      "value"
                     ],
                     "type": "object"
                   },
@@ -46750,7 +46778,8 @@ export const openApi = {
             "schema": {
               "enum": [
                 "coverage",
-                "decision"
+                "decision",
+                "decision_asc"
               ],
               "type": "string"
             }
@@ -46815,7 +46844,8 @@ export const openApi = {
                     "order": {
                       "enum": [
                         "coverage",
-                        "decision"
+                        "decision",
+                        "decision_asc"
                       ],
                       "type": "string"
                     },
@@ -47623,6 +47653,32 @@ export const openApi = {
                                   "version",
                                   "createdAt",
                                   "inputFields"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "answers": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "label": {
+                                    "description": "a string at most 2000 character(s) long",
+                                    "maxLength": 2000,
+                                    "minLength": 1,
+                                    "title": "maxLength(2000)",
+                                    "type": "string"
+                                  },
+                                  "value": {
+                                    "description": "a string at most 20000 character(s) long",
+                                    "maxLength": 20000,
+                                    "title": "maxLength(20000)",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "label",
+                                  "value"
                                 ],
                                 "type": "object"
                               },
@@ -52722,8 +52778,7 @@ export const openApi = {
             "kind": "event-member",
             "roles": [
               "owner",
-              "admin",
-              "reviewer"
+              "admin"
             ]
           },
           "eventId": "eventId",
