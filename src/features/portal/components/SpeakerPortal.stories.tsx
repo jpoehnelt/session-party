@@ -87,6 +87,7 @@ function makeSnapshot(completedCount: number): PortalSnapshot {
       title: "Reliable agents: from prototype to production",
       category: "AI Systems",
       version: 3,
+      confirmationStatus: "awaiting_confirmation",
     },
     provisioningStatus: "provisioned",
     tasks,

@@ -77,6 +77,7 @@ function speakerItem(
       title: index === 0 ? "Making complex systems feel calm" : `${displayName}: production patterns`,
       category: "Production",
       version: 2,
+      confirmationStatus: "awaiting_confirmation",
     },
     source: "accepted",
     acceptanceEventId: `acceptance-${index}`,

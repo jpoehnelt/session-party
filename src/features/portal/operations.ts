@@ -33,6 +33,8 @@ import {
   PublicSpeakerGallery,
   PublicSpeakersInput,
   RestoreContentVersionInput,
+  RespondToAcceptedSessionInput,
+  RespondToAcceptedSessionOutput,
   ReviewSpeakerProfileInput,
   SendSpeakerMessagesInput,
   SendSpeakerMessagesOutput,
@@ -72,6 +74,7 @@ import {
   listPortalTasks,
   logSpeakerContact,
   provisionSpeaker,
+  respondToAcceptedSession,
   restoreContentVersion,
   reviewSpeakerProfile,
   sendSpeakerMessages,
@@ -365,6 +368,19 @@ const getSnapshotOperation = {
   emits: [],
 } as const satisfies AnyOperationDef;
 
+const respondToAcceptedSessionOperation = {
+  id: "portal.respondToAcceptedSession",
+  kind: "command",
+  input: RespondToAcceptedSessionInput,
+  output: RespondToAcceptedSessionOutput,
+  authorize: browserSessionAuthorization,
+  invoke: respondToAcceptedSession,
+  rest: { method: "post", path: "/events/:eventId/portal/sessions/:submissionId/respond", input: { path: ["eventId", "submissionId"], body: ["expectedVersion", "action", "idempotencyKey"] }, summary: "Confirm or withdraw the signed-in speaker's accepted session", successStatus: 200 },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["portal.session.confirmed", "portal.session.withdrawn"],
+} as const satisfies AnyOperationDef;
+
 const listResourcesOperation = {
   id: "portal.listResources",
   kind: "query",
@@ -594,6 +610,7 @@ export const operations = [
   logSpeakerContactOperation,
   manageOnboardingOperation,
   provisionSpeakerOperation,
+  respondToAcceptedSessionOperation,
   restoreContentVersionOperation,
   reviewSpeakerProfileOperation,
   sendSpeakerMessagesOperation,

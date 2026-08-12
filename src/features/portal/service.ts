@@ -79,6 +79,9 @@ import {
   type PublicSpeakerGallery,
   type PublicSpeakersInput,
   type ReadinessSummary,
+  type RespondToAcceptedSessionInput,
+  type RespondToAcceptedSessionOutput,
+  RespondToAcceptedSessionOutput as RespondToAcceptedSessionOutputSchema,
   type ReviewSpeakerProfileInput,
   type LogSpeakerContactInput,
   type SpeakerContact,
@@ -666,6 +669,25 @@ const readiness = (
   };
 };
 
+const SESSION_CONFIRMATION_EVENT = "portal.session.confirmed";
+const isSessionConfirmationTask = (task: typeof tasks.$inferSelect): boolean =>
+  task.kind === "confirm" && /\b(session|attendance|participat(?:e|ion)|speaker invitation)\b/i.test(
+    `${task.name} ${task.description ?? ""}`,
+  );
+
+const loadSessionConfirmation = (eventId: string, submissionId: string, submissionVersion: number) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [confirmation] = yield* database(() => db.select({ id: domainChanges.id }).from(domainChanges).where(and(
+      eq(domainChanges.eventId, eventId),
+      eq(domainChanges.aggregateType, "submission"),
+      eq(domainChanges.aggregateId, submissionId),
+      eq(domainChanges.aggregateVersion, submissionVersion),
+      eq(domainChanges.eventType, SESSION_CONFIRMATION_EVENT),
+    )).limit(1));
+    return confirmation !== undefined;
+  });
+
 const currentTasks = (eventId: string, speakerId: string) => Effect.gen(function* () {
   const { db } = yield* Db;
   const [allDefinitions, assignments, completions, speaker, pendingBio] = yield* Effect.all([
@@ -821,6 +843,21 @@ const changeSelection = (change: PortalChange) => ({
   requestId: sql<string>`${change.requestId}`.as("request_id"),
   idempotencyRecordId: sql<string | null>`${change.idempotencyRecordId}`.as("idempotency_record_id"),
   occurredAt: sql<Date>`${change.occurredAt.getTime()}`.as("occurred_at"),
+});
+
+const auditSelection = (entry: typeof auditLog.$inferInsert) => ({
+  id: sql<string>`${entry.id}`.as("id"),
+  eventId: sql<string>`${entry.eventId}`.as("event_id"),
+  requestId: sql<string>`${entry.requestId}`.as("request_id"),
+  actorUserId: sql<string | null>`${entry.actorUserId ?? null}`.as("actor_user_id"),
+  actorApiKeyId: sql<string | null>`${entry.actorApiKeyId ?? null}`.as("actor_api_key_id"),
+  action: sql<string>`${entry.action}`.as("action"),
+  resourceType: sql<string>`${entry.resourceType}`.as("resource_type"),
+  resourceId: sql<string>`${entry.resourceId}`.as("resource_id"),
+  before: sql<unknown>`${JSON.stringify(entry.before ?? null)}`.as("before"),
+  after: sql<unknown>`${JSON.stringify(entry.after ?? null)}`.as("after"),
+  metadata: sql<unknown>`${JSON.stringify(entry.metadata ?? null)}`.as("metadata"),
+  occurredAt: sql<Date>`${entry.occurredAt instanceof Date ? entry.occurredAt.getTime() : entry.occurredAt}`.as("occurred_at"),
 });
 
 const validEmbedUrl = (value: string | null): boolean => {
@@ -1218,8 +1255,20 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
     taskIds.add(assignment.taskId);
     assignedTaskIdsBySpeaker.set(assignment.speakerId, taskIds);
   }
+  const confirmationRows = currentBySpeaker.size === 0 ? [] : yield* database(() => db.select({
+    submissionId: domainChanges.aggregateId,
+    submissionVersion: domainChanges.aggregateVersion,
+  }).from(domainChanges).where(and(
+    eq(domainChanges.eventId, input.eventId),
+    eq(domainChanges.aggregateType, "submission"),
+    eq(domainChanges.eventType, SESSION_CONFIRMATION_EVENT),
+  )));
+  const confirmedSubmissions = new Set(confirmationRows.map((row) => `${row.submissionId}\0${row.submissionVersion}`));
   const directoryItems = speakerRows.map((speaker): SpeakerDirectoryItem => {
     const accepted = currentBySpeaker.get(speaker.id);
+    const sessionConfirmed = accepted?.submission
+      ? confirmedSubmissions.has(`${accepted.submission.id}\0${accepted.submission.version}`)
+      : false;
     const latestContact = latestContactBySpeaker.has(speaker.id)
       ? contactView(latestContactBySpeaker.get(speaker.id)!)
       : null;
@@ -1227,7 +1276,13 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
     const speakerDefinitions = definitions.filter((task) => task.targetMode === "all" || assignedTaskIds.has(task.id));
     return {
       speaker: speakerView(speaker),
-      submission: accepted?.submission ? { id: accepted.submission.id, title: accepted.submission.title, category: accepted.submission.category, version: accepted.submission.version } : null,
+      submission: accepted?.submission ? {
+        id: accepted.submission.id,
+        title: accepted.submission.title,
+        category: accepted.submission.category,
+        version: accepted.submission.version,
+        confirmationStatus: sessionConfirmed ? "confirmed" : "awaiting_confirmation",
+      } : null,
       source: accepted ? "accepted" : "manual",
       acceptanceEventId: accepted?.acceptance.id ?? null,
       provisioningId: accepted?.provisioning.id ?? null,
@@ -1914,6 +1969,9 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
   const { speaker, acceptance } = yield* selfSpeaker(event.id);
   const { db } = yield* Db;
   const progress = yield* currentTasks(event.id, speaker.id);
+  const sessionConfirmed = acceptance
+    ? yield* loadSessionConfirmation(event.id, acceptance.submission.id, acceptance.submission.version)
+    : false;
   const [resources, uploaded, pendingRows] = yield* Effect.all([
     database(() => db.select().from(pages).where(and(eq(pages.eventId, event.id), inArray(pages.audience, ["speakers", "public"]))).orderBy(asc(pages.order), asc(pages.id))),
     database(() => db.select().from(assets).where(and(
@@ -1964,7 +2022,13 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
     event: eventView(event),
     speaker: speakerView(speaker, pending),
     submission: acceptance
-      ? { id: acceptance.submission.id, title: acceptance.submission.title, category: acceptance.submission.category, version: acceptance.submission.version }
+      ? {
+        id: acceptance.submission.id,
+        title: acceptance.submission.title,
+        category: acceptance.submission.category,
+        version: acceptance.submission.version,
+        confirmationStatus: sessionConfirmed ? "confirmed" : "awaiting_confirmation",
+      }
       : null,
     provisioningStatus: "provisioned",
     tasks: progress.taskViews,
@@ -1972,6 +2036,271 @@ export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.E
     assets: uploadedAssets,
     readiness: progress.readiness,
   };
+});
+
+export const respondToAcceptedSession = (
+  input: RespondToAcceptedSessionInput,
+): Effect.Effect<RespondToAcceptedSessionOutput, AppError, Db | CurrentUser> => Effect.gen(function* () {
+  const event = yield* resolveEvent(input.eventId);
+  const actor = yield* selfPrincipal();
+  const { db } = yield* Db;
+  const { keyHash, requestHash } = yield* commandHashes(input.idempotencyKey, input);
+  const replay = yield* findReplay(event.id, "portal.respondToAcceptedSession", actor.userId, keyHash, requestHash);
+  if (replay !== null) return yield* decodeReplay(RespondToAcceptedSessionOutputSchema, replay);
+  const current = yield* selfSpeaker(event.id);
+  if (!current.acceptance || current.acceptance.submission.id !== input.submissionId) {
+    return yield* Effect.fail(new Forbidden({ reason: "Only the primary speaker can respond to this accepted session" }));
+  }
+  const submission = current.acceptance.submission;
+  const provisioning = current.acceptance.provisioning;
+  const acceptance = current.acceptance.acceptance;
+  if (submission.version !== input.expectedVersion) {
+    return yield* Effect.fail(new Conflict({ message: "Accepted session changed; reload before responding" }));
+  }
+  if (submission.status !== "accepted") {
+    return yield* Effect.fail(new Conflict({ message: "This session is no longer awaiting a speaker response" }));
+  }
+
+  const affectedTalks = input.action === "withdraw"
+    ? yield* database(() => db.select({ id: talks.id }).from(talks).where(and(
+      eq(talks.eventId, event.id),
+      eq(talks.submissionId, submission.id),
+      inArray(talks.status, ["draft", "confirmed"]),
+    )).orderBy(asc(talks.id)))
+    : [];
+  const taskProgress = input.action === "confirm" ? yield* currentTasks(event.id, current.speaker.id) : null;
+  const pendingConfirmationTasks = taskProgress?.definitions.filter((task) =>
+    isSessionConfirmationTask(task) && !taskProgress.completions.some((completion) => completion.taskId === task.id)
+  ) ?? [];
+  const confirmationTaskVersions = yield* Effect.forEach(pendingConfirmationTasks, (task) =>
+    database(() => db.select({ version: domainChanges.aggregateVersion }).from(domainChanges).where(and(
+      eq(domainChanges.eventId, event.id),
+      eq(domainChanges.aggregateType, "taskCompletion"),
+      eq(domainChanges.aggregateId, `${task.id}:${current.speaker.id}`),
+      eq(domainChanges.eventType, "portal.task.completion.changed"),
+    )).orderBy(desc(domainChanges.aggregateVersion)).limit(1)).pipe(
+      Effect.map((rows) => ({ task, version: (rows[0]?.version ?? 0) + 1 })),
+    ),
+  );
+  const respondedAt = now();
+  const nextVersion = input.action === "withdraw" ? submission.version + 1 : submission.version;
+  const result: RespondToAcceptedSessionOutput = {
+    eventId: event.id,
+    submissionId: submission.id,
+    action: input.action,
+    status: input.action === "confirm" ? "confirmed" : "withdrawn",
+    submissionVersion: nextVersion,
+    clearedTalkIds: affectedTalks.map(({ id: talkId }) => talkId),
+  };
+  const idempotency = idempotencyInsert(
+    event.id,
+    "portal.respondToAcceptedSession",
+    actor.userId,
+    keyHash,
+    requestHash,
+    respondedAt,
+  );
+  const requestId = id("portal_request");
+  const guard = and(
+    eq(submissions.eventId, event.id),
+    eq(submissions.id, submission.id),
+    eq(submissions.status, "accepted"),
+    eq(submissions.version, input.expectedVersion),
+  );
+  const responseChange = writeChange(
+    event.id,
+    "submission",
+    submission.id,
+    nextVersion,
+    input.action === "confirm" ? SESSION_CONFIRMATION_EVENT : "portal.session.withdrawn",
+    {
+      submissionId: submission.id,
+      speakerId: current.speaker.id,
+      clearedTalkIds: result.clearedTalkIds,
+      completedTaskIds: pendingConfirmationTasks.map((task) => task.id),
+    },
+    actor,
+    respondedAt,
+    requestId,
+    idempotency.id,
+  );
+  const audit = {
+    id: id("audit"),
+    eventId: event.id,
+    requestId,
+    actorUserId: actor.actorUserId,
+    actorApiKeyId: actor.actorApiKeyId,
+    action: input.action === "confirm" ? "portal.session.confirmed" : "portal.session.withdrawn",
+    resourceType: "submission",
+    resourceId: submission.id,
+    before: { status: submission.status, version: submission.version },
+    after: result,
+    metadata: { speakerId: current.speaker.id, clearedTalkIds: result.clearedTalkIds },
+    occurredAt: respondedAt,
+  } satisfies typeof auditLog.$inferInsert;
+
+  if (input.action === "confirm") {
+    const completionStatements = confirmationTaskVersions.flatMap(({ task, version }) => {
+      const aggregateId = `${task.id}:${current.speaker.id}`;
+      const completion = {
+        id: id("task_completion"),
+        eventId: event.id,
+        taskId: task.id,
+        speakerId: current.speaker.id,
+        completedAt: respondedAt,
+        data: { source: "accepted-session-confirmation", submissionId: submission.id },
+        version,
+        createdAt: respondedAt,
+        updatedAt: respondedAt,
+      } satisfies typeof taskCompletions.$inferInsert;
+      return [
+        db.insert(taskCompletions).select(db.select({
+          id: sql<string>`${completion.id}`.as("id"),
+          eventId: sql<string>`${completion.eventId}`.as("event_id"),
+          taskId: sql<string>`${completion.taskId}`.as("task_id"),
+          speakerId: sql<string>`${completion.speakerId}`.as("speaker_id"),
+          completedAt: sql<Date>`${respondedAt.getTime()}`.as("completed_at"),
+          data: sql<unknown>`${JSON.stringify(completion.data)}`.as("data"),
+          version: sql<number>`${version}`.as("version"),
+          createdAt: sql<Date>`${respondedAt.getTime()}`.as("created_at"),
+          updatedAt: sql<Date>`${respondedAt.getTime()}`.as("updated_at"),
+        }).from(submissions).where(guard)),
+        db.insert(domainChanges).select(db.select(changeSelection(writeChange(
+          event.id,
+          "taskCompletion",
+          aggregateId,
+          version,
+          "taskCompletion.versionClaim",
+          { version },
+          actor,
+          respondedAt,
+          requestId,
+          idempotency.id,
+        ))).from(submissions).where(guard)),
+        db.insert(domainChanges).select(db.select(changeSelection(writeChange(
+          event.id,
+          "taskCompletion",
+          aggregateId,
+          version,
+          "portal.task.completion.changed",
+          { speakerId: current.speaker.id, taskId: task.id, completed: true, source: "accepted-session-confirmation" },
+          actor,
+          respondedAt,
+          requestId,
+          idempotency.id,
+        ))).from(submissions).where(guard)),
+      ];
+    });
+    const committed = yield* database(() => db.batch([
+      db.insert(idempotencyRecords).values(idempotency),
+      db.insert(domainChanges).select(
+        db.select(changeSelection(responseChange)).from(submissions).where(guard),
+      ).returning({ id: domainChanges.id }),
+      ...completionStatements,
+      db.insert(auditLog).select(
+        db.select(auditSelection(audit)).from(submissions).where(guard),
+      ),
+      db.update(idempotencyRecords).set({
+        status: "completed",
+        responseStatus: 200,
+        responseBody: result,
+        completedAt: respondedAt,
+      }).where(and(
+        eq(idempotencyRecords.id, idempotency.id),
+        sql`exists (select 1 from submissions as confirmed_submission where confirmed_submission.event_id = ${event.id} and confirmed_submission.id = ${submission.id} and confirmed_submission.status = 'accepted' and confirmed_submission.version = ${input.expectedVersion})`,
+      )),
+    ])).pipe(Effect.either);
+    if (committed._tag === "Left") {
+      const existingConfirmed = yield* loadSessionConfirmation(event.id, submission.id, submission.version);
+      if (existingConfirmed) return result;
+      return yield* Effect.fail(committed.left);
+    }
+    const inserted = committed.right[1] as readonly { readonly id: string }[];
+    if (inserted.length === 0) {
+      yield* database(() => db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, idempotency.id)));
+      return yield* Effect.fail(new Conflict({ message: "Accepted session changed; reload before responding" }));
+    }
+    return result;
+  }
+
+  const revokedAcceptanceId = id("acceptance");
+  const versionClaim = writeChange(
+    event.id,
+    "submission",
+    submission.id,
+    nextVersion,
+    "submission.versionClaim",
+    { version: nextVersion },
+    actor,
+    respondedAt,
+    requestId,
+    idempotency.id,
+  );
+  const stillAccepted = sql`exists (select 1 from submissions as withdrawing_submission where withdrawing_submission.event_id = ${event.id} and withdrawing_submission.id = ${submission.id} and withdrawing_submission.status = 'accepted' and withdrawing_submission.version = ${input.expectedVersion})`;
+  const committed = yield* database(() => db.batch([
+    db.insert(idempotencyRecords).values(idempotency),
+    db.insert(domainChanges).select(db.select(changeSelection(versionClaim)).from(submissions).where(guard)),
+    db.insert(domainChanges).select(db.select(changeSelection(responseChange)).from(submissions).where(guard)),
+    db.insert(acceptanceEvents).select(db.select({
+      id: sql<string>`${revokedAcceptanceId}`.as("id"),
+      eventId: sql<string>`${event.id}`.as("event_id"),
+      submissionId: sql<string>`${submission.id}`.as("submission_id"),
+      primarySubmissionSpeakerId: sql<string>`${acceptance.primarySubmissionSpeakerId}`.as("primary_submission_speaker_id"),
+      primarySpeakerId: sql<string>`${current.speaker.id}`.as("primary_speaker_id"),
+      primaryAssociationIsPrimary: sql<boolean>`1`.as("primary_association_is_primary"),
+      type: sql<"revoked">`'revoked'`.as("type"),
+      submissionVersion: sql<number>`${nextVersion}`.as("submission_version"),
+      actorUserId: sql<string>`${actor.userId}`.as("actor_user_id"),
+      occurredAt: sql<Date>`${respondedAt.getTime()}`.as("occurred_at"),
+    }).from(submissions).where(guard)),
+    db.update(speakerProvisioning).set({
+      status: "revoked",
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      version: provisioning.version + 1,
+      updatedAt: respondedAt,
+    }).where(and(
+      eq(speakerProvisioning.eventId, event.id),
+      eq(speakerProvisioning.id, provisioning.id),
+      eq(speakerProvisioning.version, provisioning.version),
+      stillAccepted,
+    )),
+    db.update(talks).set({
+      roomId: null,
+      startsAt: null,
+      status: "cancelled",
+      version: sql`${talks.version} + 1`,
+      updatedAt: respondedAt,
+    }).where(and(
+      eq(talks.eventId, event.id),
+      eq(talks.submissionId, submission.id),
+      inArray(talks.status, ["draft", "confirmed"]),
+      stillAccepted,
+    )),
+    db.insert(auditLog).select(db.select(auditSelection(audit)).from(submissions).where(guard)),
+    db.update(submissions).set({
+      status: "withdrawn",
+      acceptedAt: null,
+      version: nextVersion,
+      updatedAt: respondedAt,
+    }).where(guard).returning({ id: submissions.id }),
+    db.update(idempotencyRecords).set({
+      status: "completed",
+      responseStatus: 200,
+      responseBody: result,
+      completedAt: respondedAt,
+    }).where(and(
+      eq(idempotencyRecords.id, idempotency.id),
+      sql`exists (select 1 from submissions as withdrawn_submission where withdrawn_submission.event_id = ${event.id} and withdrawn_submission.id = ${submission.id} and withdrawn_submission.status = 'withdrawn' and withdrawn_submission.version = ${nextVersion})`,
+    )),
+  ] as never)).pipe(Effect.either);
+  if (committed._tag === "Left") return yield* Effect.fail(committed.left);
+  const withdrawn = committed.right[7] as readonly { readonly id: string }[];
+  if (withdrawn.length === 0) {
+    yield* database(() => db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, idempotency.id)));
+    return yield* Effect.fail(new Conflict({ message: "Accepted session changed; reload before responding" }));
+  }
+  return result;
 });
 
 export const updateSpeakerProfile = (input: UpdateProfileInput): Effect.Effect<SpeakerProfile, AppError, AirtableSync | Db | CurrentUser | Rooms> => Effect.gen(function* () {
