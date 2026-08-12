@@ -311,7 +311,7 @@ const requestAiSuggestionOperation = {
     path: "/events/:eventId/review/rounds/:roundId/submissions/:submissionId/ai-suggestions",
     input: {
       path: ["eventId", "roundId", "submissionId"],
-      headers: { requestId: "x-request-id" },
+      headers: { requestId: "x-request-id", idempotencyKey: "idempotency-key" },
       body: [],
     },
     summary: "Request a non-authoritative AI review suggestion",
@@ -322,7 +322,7 @@ const requestAiSuggestionOperation = {
     description: "Generate a labeled, non-authoritative suggestion from title, abstract, and rubric only; no status transition occurs.",
   },
   party: { intentType: "review/requestAiSuggestion" },
-  idempotency: "none",
+  idempotency: "required",
   concurrency: "none",
   emits: ["review.aiSuggestion.created"],
 } as const satisfies AnyOperationDef;

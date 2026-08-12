@@ -504,6 +504,7 @@ export const RequestAiSuggestionInput = Schema.Struct({
   eventId: EntityId,
   roundId: EntityId,
   submissionId: EntityId,
+  idempotencyKey: IdempotencyKey,
   requestId: RequestId,
 });
 export type RequestAiSuggestionInput = typeof RequestAiSuggestionInput.Type;

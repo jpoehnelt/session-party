@@ -50,7 +50,7 @@ import {
   RemoveAssignmentOutput,
   type RemoveAssignmentInput,
   type RequestAiSuggestionInput,
-  type RequestAiSuggestionOutput,
+  RequestAiSuggestionOutput,
   RejectSubmissionOutput,
   type RejectSubmissionInput,
   RevokeAcceptanceOutput,
@@ -2467,7 +2467,93 @@ export const requestAiSuggestion = (
     if (typeof abstract !== "string" || abstract.length === 0) {
       return yield* Effect.fail(new Validation({ message: "AI review requires the published Abstract answer" }));
     }
-    const ai = yield* AiService;
+    const principalId = roundCommandPrincipalId(viewer);
+    const operationId = `review.requestAiSuggestion:${input.roundId}:${input.submissionId}`;
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      roundId: input.roundId,
+      submissionId: input.submissionId,
+    }));
+    const readReplay = (): Effect.Effect<RequestAiSuggestionOutput | null, AppError> =>
+      Effect.gen(function* () {
+        const [record] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+          eq(idempotencyRecords.eventId, input.eventId),
+          eq(idempotencyRecords.operationId, operationId),
+          eq(idempotencyRecords.principalId, principalId),
+          eq(idempotencyRecords.keyHash, keyHash),
+        )).limit(1));
+        if (!record) return null;
+        if (record.requestHash !== requestHash) {
+          return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different AI suggestion request" }));
+        }
+        if (record.status !== "completed") {
+          return yield* Effect.fail(new Conflict({ message: "This AI suggestion request is already in progress or failed" }));
+        }
+        return yield* Schema.decodeUnknown(RequestAiSuggestionOutput)(record.responseBody).pipe(
+          Effect.mapError((error) => new External({ service: "database", detail: `Invalid AI suggestion replay: ${String(error)}` })),
+        );
+      });
+    const replay = yield* readReplay();
+    if (replay) return replay;
+
+    const claimedAt = now();
+    const claimedAtMs = claimedAt.getTime();
+    const claimId = id("idempotency");
+    const budgetId = id("idempotency");
+    const budgetOperationId = `review.requestAiSuggestion.rate:${input.roundId}:${input.submissionId}`;
+    const budgetKeyHash = yield* sha256(`fixed-window:${Math.floor(claimedAtMs / 60_000)}`);
+    const budgetRequestHash = yield* sha256(`${principalId}:${input.roundId}:${input.submissionId}`);
+    const claimReplay = yield* database(() => db.batch([
+      db.insert(idempotencyRecords).values({
+        id: budgetId,
+        eventId: input.eventId,
+        operationId: budgetOperationId,
+        principalId,
+        keyHash: budgetKeyHash,
+        requestHash: budgetRequestHash,
+        status: "completed",
+        responseStatus: 204,
+        responseBody: null,
+        expiresAt: new Date(claimedAtMs + 120_000),
+        completedAt: claimedAt,
+        createdAt: claimedAt,
+      }),
+      db.insert(idempotencyRecords).values({
+        id: claimId,
+        eventId: input.eventId,
+        operationId,
+        principalId,
+        keyHash,
+        requestHash,
+        status: "in_progress",
+        responseStatus: null,
+        responseBody: null,
+        expiresAt: new Date(claimedAtMs + 86_400_000),
+        completedAt: null,
+        createdAt: claimedAt,
+      }),
+    ])).pipe(
+      Effect.as(null as RequestAiSuggestionOutput | null),
+      Effect.catchAll((failure) => Effect.gen(function* () {
+        const concurrentReplay = yield* readReplay();
+        if (concurrentReplay) return concurrentReplay;
+        const [budget] = yield* database(() => db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(and(
+          eq(idempotencyRecords.eventId, input.eventId),
+          eq(idempotencyRecords.operationId, budgetOperationId),
+          eq(idempotencyRecords.principalId, principalId),
+          eq(idempotencyRecords.keyHash, budgetKeyHash),
+        )).limit(1));
+        if (budget) {
+          return yield* Effect.fail(new Conflict({ message: "AI suggestions are limited to one request per submission each minute" }));
+        }
+        return yield* Effect.fail(failure);
+      })),
+    );
+    if (claimReplay) return claimReplay;
+
+    return yield* Effect.gen(function* () {
+      const ai = yield* AiService;
     const prompt = JSON.stringify({
       instruction: "Return JSON only: {scores: Record<criterionKey, integer 1-5>, comment: string}. Do not decide acceptance.",
       title: submission.title,
@@ -2509,6 +2595,19 @@ export const requestAiSuggestion = (
       input.roundId,
       input.submissionId,
     );
+    const output: RequestAiSuggestionOutput = {
+      suggestion: {
+        id: suggestionId,
+        label: "AI suggestion — requires human confirmation",
+        score,
+        scores: scoreEntries,
+        comment: response.comment,
+        version: 1,
+        createdAt: createdAt.getTime(),
+        inputFields: ["title", "abstract", "rubric"],
+      },
+      submissionStatus: submission.status,
+    };
     yield* database(() =>
       db.batch([
         db.insert(reviews).values({ id: suggestionId, eventId: input.eventId, roundId: input.roundId, submissionId: input.submissionId, reviewerUserId: null, ai: true, score: persistedScore, scores: scoreRecord, comment: response.comment, version: 1, createdAt, updatedAt: createdAt }),
@@ -2525,21 +2624,26 @@ export const requestAiSuggestion = (
           action: "review.requestAiSuggestion", resourceType: "reviewAiSuggestion", resourceId: suggestionId,
           before: null, after: { submissionId: input.submissionId, roundId: input.roundId, inputFields: ["title", "abstract", "rubric"] }, occurredAt: createdAt,
         }),
+        db.update(idempotencyRecords).set({
+          status: "completed",
+          responseStatus: 201,
+          responseBody: output,
+          completedAt: createdAt,
+        }).where(and(eq(idempotencyRecords.id, claimId), eq(idempotencyRecords.status, "in_progress"))),
       ]),
     );
-    return {
-      suggestion: {
-        id: suggestionId,
-        label: "AI suggestion — requires human confirmation",
-        score,
-        scores: scoreEntries,
-        comment: response.comment,
-        version: 1,
-        createdAt: createdAt.getTime(),
-        inputFields: ["title", "abstract", "rubric"],
-      },
-      submissionStatus: submission.status,
-    };
+      return output;
+    }).pipe(
+      Effect.catchAll((failure) => {
+        const failedAt = now();
+        return database(() => db.update(idempotencyRecords).set({
+          status: "failed",
+          completedAt: failedAt,
+        }).where(and(eq(idempotencyRecords.id, claimId), eq(idempotencyRecords.status, "in_progress")))).pipe(
+          Effect.flatMap(() => Effect.fail(failure)),
+        );
+      }),
+    );
   });
 
 const sha256 = (value: string): Effect.Effect<string, External> =>

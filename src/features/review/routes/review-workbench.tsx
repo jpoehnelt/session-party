@@ -19,6 +19,20 @@ import {
 } from "./mutations";
 
 export const path = "/e/:eventSlug/review";
+
+const csvFormulaPrefix = /^[\u0000-\u0020]*[=+\-@]/u;
+const csvControlPrefix = /^[\t\r]/u;
+
+export const quoteReviewCsvCell = (value: unknown): string => {
+  const text = String(value ?? "");
+  const neutralized = csvFormulaPrefix.test(text) || csvControlPrefix.test(text)
+    ? `'${text}`
+    : text;
+  return `"${neutralized.replaceAll('"', '""')}"`;
+};
+
+export const serializeReviewCsvRows = (rows: readonly (readonly unknown[])[]): string =>
+  rows.map((row) => row.map(quoteReviewCsvCell).join(",")).join("\r\n");
 export const contentWidth = "canvas" as const;
 
 const EventIdentitySchema = Schema.Struct({
@@ -639,7 +653,6 @@ export function ReviewWorkbenchContent({
     if (!loadedRound) return;
     void runBulk("export", async () => {
       const result = await exportReviewResultsRequest({ eventId: workbench.eventId, roundId: loadedRound.id });
-      const quote = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
       const criterionLabels = result.round.rubric.criteria.map((criterion) => criterion.label);
       const header = ["Submission ID", "Title", "Category", "Status", "Reviewer", "Aggregate score", ...criterionLabels, "Comment", "Completed at"];
       const lines = result.rows.map((row) => {
@@ -656,7 +669,7 @@ export function ReviewWorkbenchContent({
           row.completedAt === null ? "" : new Date(row.completedAt).toISOString(),
         ];
       });
-      const csv = [header, ...lines].map((row) => row.map(quote).join(",")).join("\r\n");
+      const csv = serializeReviewCsvRows([header, ...lines]);
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
       const link = document.createElement("a");
       link.href = url;
