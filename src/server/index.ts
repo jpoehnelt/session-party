@@ -1,13 +1,12 @@
 import type { Principal } from "contracts/principal";
 import { API } from "contracts/routes";
 import { Hono } from "hono";
-import { Effect } from "effect";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
 import publicationFeeds from "@/features/publication/feed-api";
 import publicHeadshots from "@/features/portal/public-headshots";
 import auth, { apiKeyUserFromRequest, userFromRequest } from "./auth";
-import { runRestOperation, runTransportOperation } from "./adapt";
+import { runRestOperation, runScheduledEffect, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
 import { MAIL_SCHEDULER_NAME, Scheduler } from "./party/Scheduler";
 import { mcpToolsForPrincipal } from "./mcp";
@@ -19,7 +18,7 @@ import {
   operationById,
   restRegistrations,
 } from "./registry.gen";
-import { AppLayer, isExplicitLocalEnvironment, sessionSecret } from "./services";
+import { isExplicitLocalEnvironment, sessionSecret } from "./services";
 import { publicRuntimeConfig } from "./runtime-config";
 
 type JsonRpcId = string | number;
@@ -361,8 +360,12 @@ export const recoverMailScheduler = async (env: Env): Promise<void> => {
   }
 };
 
-export const runAutomatedDueReminderCron = (env: Env, runAt: Date): Promise<{ readonly queuedCount: number; readonly runDate: string }> =>
-  Effect.runPromise(enqueueAutomatedDueTaskReminders(runAt).pipe(Effect.provide(AppLayer(env))));
+export const runAutomatedDueReminderCron = (env: Env, runAt: Date): Promise<{ readonly queuedCount: number; readonly runDate: string } | undefined> =>
+  runScheduledEffect(
+    env,
+    "portal.enqueueAutomatedDueTaskReminders",
+    enqueueAutomatedDueTaskReminders(runAt),
+  );
 
 export { AirtableRateLimiter, AirtableSyncLane, EventRoom, Scheduler };
 export default {

@@ -11,6 +11,7 @@ import { sendMail, sessionSecret } from "../services";
 const INTERVAL_MS = 60_000;
 const LEASE_MS = 5 * 60_000;
 const MAX_BATCH = 100;
+export const MAIL_DISPATCH_CONCURRENCY = 5;
 const MAIL_SNAPSHOT_RETENTION_MS = 90 * 24 * 60 * 60_000;
 const AUTH_RATE_WINDOW_MS = 15 * 60_000;
 const AUTH_RATE_GLOBAL_LIMIT = 100;
@@ -85,6 +86,35 @@ export const reserveDispatchBudget = async (
     if (eventKey !== null) await transaction.put(eventKey, event + 1);
     return { ok: true };
   });
+};
+
+/** Run work in a small worker pool and wait for every started item to settle. */
+export const processWithBoundedConcurrency = async <A>(
+  values: readonly A[],
+  concurrency: number,
+  process: (value: A) => Promise<void>,
+): Promise<void> => {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError("concurrency must be a positive integer");
+  }
+  let cursor = 0;
+  let firstError: unknown;
+  const worker = async (): Promise<void> => {
+    while (firstError === undefined) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= values.length) return;
+      try {
+        await process(values[index]!);
+      } catch (error) {
+        firstError = error;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, () => worker()),
+  );
+  if (firstError !== undefined) throw firstError;
 };
 
 const purgeDispatchBudgets = async (
@@ -494,8 +524,8 @@ export class Scheduler extends DurableObject<Env> {
         )
         .limit(MAX_BATCH);
 
-      for (const delivery of due) {
-        if (delivery.html === null) continue;
+      await processWithBoundedConcurrency(due, MAIL_DISPATCH_CONCURRENCY, async (delivery) => {
+        if (delivery.html === null) return;
         if (delivery.supersededAt !== null && delivery.status !== "dispatching") {
           await db
             .update(mailDeliveries)
@@ -505,7 +535,7 @@ export class Scheduler extends DurableObject<Env> {
               inArray(mailDeliveries.status, ["pending", "retry", "claimed"]),
               isNotNull(mailDeliveries.supersededAt),
             ));
-          continue;
+          return;
         }
         const leaseOwner = crypto.randomUUID();
         const reclaim = delivery.status === "claimed" || delivery.status === "dispatching";
@@ -554,7 +584,7 @@ export class Scheduler extends DurableObject<Env> {
             )),
           ]);
           await redactAuthSnapshot(db, delivery.snapshotId, delivery.idempotencyKey, now);
-          continue;
+          return;
         }
         const [claim] = reclaim
           ? await db
@@ -615,7 +645,7 @@ export class Scheduler extends DurableObject<Env> {
               eq(mailDeliveries.status, "claimed"),
               isNotNull(mailDeliveries.supersededAt),
             ));
-          continue;
+          return;
         }
 
         const attemptId = crypto.randomUUID();
@@ -649,9 +679,9 @@ export class Scheduler extends DurableObject<Env> {
               storedReceiptAttempt.completedAt ?? now,
             );
           }
-          continue;
+          return;
         }
-        if (!reclaim && !await authorizeMailDispatch(db, delivery.id, leaseOwner)) continue;
+        if (!reclaim && !await authorizeMailDispatch(db, delivery.id, leaseOwner)) return;
         if (existingAttempt) {
           await db
             .update(mailDeliveryAttempts)
@@ -706,7 +736,7 @@ export class Scheduler extends DurableObject<Env> {
               eq(mailDeliveries.status, "dispatching"),
               eq(mailDeliveries.leaseOwner, leaseOwner),
             ));
-          continue;
+          return;
         }
 
 
@@ -799,7 +829,7 @@ export class Scheduler extends DurableObject<Env> {
             );
           }
         }
-      }
+      });
     } finally {
       if (mailSchedulerEnabled) {
         await this.ctx.storage.setAlarm(Date.now() + INTERVAL_MS);

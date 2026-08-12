@@ -4,10 +4,19 @@ import {
   runInDurableObject,
   type D1Migration,
 } from "cloudflare:test";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { External } from "contracts/errors";
+import { Effect } from "effect";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { runScheduledEffect } from "../adapt";
 import worker, { recoverMailScheduler } from "../index";
 import { sendMail, sessionSecret } from "../services";
-import { DEMO_RATE_SOURCE_LIMIT, MAIL_SCHEDULER_NAME, reserveDispatchBudget } from "./Scheduler";
+import {
+  DEMO_RATE_SOURCE_LIMIT,
+  MAIL_DISPATCH_CONCURRENCY,
+  MAIL_SCHEDULER_NAME,
+  processWithBoundedConcurrency,
+  reserveDispatchBudget,
+} from "./Scheduler";
 
 type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -64,6 +73,45 @@ afterAll(async () => {
 });
 
 describe("Scheduler durable delivery recovery", () => {
+  it("contains and redacts scheduled Effect failures at the adapter boundary", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(runScheduledEffect(
+        env,
+        "scheduler.testFailure",
+        Effect.fail(new External({ service: "test-service", detail: "expected failure" })),
+      )).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toMatchObject({
+        message: "Application scheduled task failed",
+        error: "External",
+        operation: "scheduler.testFailure",
+        service: "test-service",
+      });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("dispatches concurrently without exceeding the scheduler worker bound", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const completed: number[] = [];
+    await processWithBoundedConcurrency(
+      Array.from({ length: MAIL_DISPATCH_CONCURRENCY * 2 + 1 }, (_, index) => index),
+      MAIL_DISPATCH_CONCURRENCY,
+      async (value) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        completed.push(value);
+        active -= 1;
+      },
+    );
+    expect(maximumActive).toBe(MAIL_DISPATCH_CONCURRENCY);
+    expect(completed).toHaveLength(MAIL_DISPATCH_CONCURRENCY * 2 + 1);
+  });
+
   it("reclaims a crash-window send with stable correlation and durable evidence", async () => {
     const idempotencyKey = "auth-magic-link:crash-token";
     const payload = {
