@@ -482,9 +482,37 @@ interface AudienceRow {
   readonly email: string | null;
 }
 
-const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError, Db> =>
+const DECISION_RECIPIENT_SUFFIXES = [":accepted", ":rejected"] as const;
+
+/**
+ * Recipient keys are normally `<speakerId>:<decision>`, while older clients
+ * still send a bare speaker ID. Query both interpretations so the database
+ * only visits speakers named by the request without breaking that transition.
+ */
+export const audienceSpeakerCandidates = (recipientKeys: readonly string[]): readonly string[] =>
+  [...new Set(recipientKeys.flatMap((recipientKey) => {
+    const suffix = DECISION_RECIPIENT_SUFFIXES.find((candidate) => recipientKey.endsWith(candidate));
+    if (!suffix) return [recipientKey];
+    const speakerId = recipientKey.slice(0, -suffix.length);
+    return speakerId.length === 0 ? [recipientKey] : [recipientKey, speakerId];
+  }))];
+
+const loadSelectedAudience = (
+  eventId: string,
+  recipientKeys: readonly string[],
+): Effect.Effect<AudienceSnapshot, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
+    const speakerIds = audienceSpeakerCandidates(recipientKeys);
+    if (speakerIds.length === 0) {
+      return {
+        eventId,
+        recipients: [],
+        eligibleCount: 0,
+        dependency: "decidedApplicants" as const,
+        pagination: { page: 1, pageSize: 1, total: 0, pageCount: 0 },
+      };
+    }
     const rows: readonly AudienceRow[] = yield* database(() =>
       db.select({
         submissionId: submissions.id,
@@ -502,7 +530,13 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
         ))
         .innerJoin(speakers, and(eq(speakers.eventId, submissionSpeakers.eventId), eq(speakers.id, submissionSpeakers.speakerId)))
         .leftJoin(users, eq(users.id, speakers.userId))
-        .where(and(eq(submissions.eventId, eventId), inArray(submissions.status, ["accepted", "rejected"])))
+        .where(and(
+          eq(submissions.eventId, eventId),
+          inArray(submissions.status, ["accepted", "rejected"]),
+          // D1 caps bound parameters well below the 500-recipient command
+          // limit. A JSON table keeps this a single parameter at that bound.
+          sql`${speakers.id} in (select value from json_each(${JSON.stringify(speakerIds)}))`,
+        ))
         .orderBy(asc(submissions.submittedAt), asc(submissions.id), asc(speakers.id)),
     );
     const byDecisionRecipient = new Map<string, AudienceRecipient>();
@@ -904,12 +938,16 @@ export const previewCommunication = (
     yield* validateTemplate("Preview", input.subject, input.textBody, input.htmlBody);
     const queue = yield* MailQueue;
     const event = yield* eventIdentity(input.eventId);
-    const audience = yield* loadAudience(input.eventId);
+    const audience = input.recipientKey === null
+      ? null
+      : yield* loadSelectedAudience(input.eventId, [input.recipientKey]);
     const selected = input.recipientKey === null
       ? null
-      : audience.recipients.find((recipient) => recipient.recipientKey === input.recipientKey)
+      : audience!.recipients.find((recipient) => recipient.recipientKey === input.recipientKey)
         ?? (() => {
-          const legacyMatches = audience.recipients.filter((recipient) => recipient.speakerId === input.recipientKey);
+          const legacyMatches = audience!.recipients.filter(
+            (recipient) => recipient.speakerId === input.recipientKey,
+          );
           return legacyMatches.length === 1 ? legacyMatches[0]! : null;
         })();
     if (input.recipientKey !== null && (!selected || selected.email === null)) {
@@ -1010,7 +1048,7 @@ export const enqueueCommunication = (
       templateContent.htmlBody,
     );
     const event = yield* eventIdentity(input.eventId);
-    const audience = yield* loadAudience(input.eventId);
+    const audience = yield* loadSelectedAudience(input.eventId, uniqueRecipientKeys);
     const audienceByKey = new Map(audience.recipients.map((recipient) => [recipient.recipientKey, recipient]));
     const selected = uniqueRecipientKeys.map((recipientKey) => {
       const exact = audienceByKey.get(recipientKey);
