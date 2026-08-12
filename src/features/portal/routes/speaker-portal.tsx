@@ -874,7 +874,7 @@ export function ResourceList({ resources }: { readonly resources: readonly Porta
                   title={resource.title}
                   loading="lazy"
                   sandbox="allow-scripts allow-same-origin"
-                  referrerPolicy="no-referrer"
+                  referrerPolicy="strict-origin-when-cross-origin"
                   allow="fullscreen"
                 />
               )}
