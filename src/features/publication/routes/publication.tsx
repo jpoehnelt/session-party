@@ -30,6 +30,22 @@ import { getPublicSchedule } from "../api";
 
 export const path = "/e/:eventSlug/publication";
 export const contentWidth = "wide" as const;
+export const REFRESH_LIVE_WIDGETS_LABEL = "Refresh live widgets";
+
+export const refreshLiveWidgets = (status: AgendaSnapshot): Promise<PublishedAgenda> =>
+  apiFetch(
+    `/api/v1/events/${encodeURIComponent(status.eventId)}/agenda/publications`,
+    {
+      method: "POST",
+      body: {
+        expectedRevision: status.publication.revision,
+        expectedWorkspaceVersion: status.workspaceVersion,
+        expectedEventVersion: status.eventVersion,
+        idempotencyKey: `agenda-publication-${crypto.randomUUID()}`,
+      },
+      schema: PublishedAgenda,
+    },
+  );
 
 type PublicationLoadError =
   | { readonly kind: "unauthenticated" }
@@ -45,7 +61,7 @@ export default function PublicationPage() {
   const [status, setStatus] = useState<AgendaSnapshot | null | undefined>(undefined);
   const [published, setPublished] = useState<PublishedAgenda | null>(null);
   const [loadError, setLoadError] = useState<PublicationLoadError | null>(null);
-  const [publishing, setPublishing] = useState(false);
+  const [publicationAction, setPublicationAction] = useState<"publish" | "refresh" | null>(null);
   const [request, setRequest] = useState(0);
 
   useEffect(() => {
@@ -93,30 +109,30 @@ export default function PublicationPage() {
     };
   }, [eventSlug, request]);
 
-  const publish = async () => {
+  const publish = async (action: "publish" | "refresh") => {
     if (!status) return;
-    setPublishing(true);
+    setPublicationAction(action);
     try {
-      const projection = await apiFetch(
-        `/api/v1/events/${encodeURIComponent(status.eventId)}/agenda/publications`,
-        {
-          method: "POST",
-          body: {
-            expectedRevision: status.publication.revision,
-            expectedWorkspaceVersion: status.workspaceVersion,
-            expectedEventVersion: status.eventVersion,
-            idempotencyKey: `agenda-publication-${crypto.randomUUID()}`,
-          },
-          schema: PublishedAgenda,
-        },
-      );
+      const projection = await refreshLiveWidgets(status);
       setPublished(projection);
-      toast(`Schedule revision ${projection.revision} published`, { tone: "success" });
+      toast(
+        action === "refresh"
+          ? "Live widgets refreshed. Existing embed URLs and settings are unchanged."
+          : `Schedule revision ${projection.revision} published`,
+        { tone: "success" },
+      );
       setRequest((current) => current + 1);
     } catch (caught: unknown) {
-      toast(caught instanceof Error ? caught.message : "Could not publish the schedule", { tone: "danger" });
+      toast(
+        caught instanceof Error
+          ? caught.message
+          : action === "refresh"
+            ? "Could not refresh live widgets"
+            : "Could not publish the schedule",
+        { tone: "danger" },
+      );
     } finally {
-      setPublishing(false);
+      setPublicationAction(null);
     }
   };
 
@@ -192,8 +208,19 @@ export default function PublicationPage() {
         actions={<>
           <a className="inline-flex h-12 items-center border-2 border-line-strong bg-surface px-4 text-xs font-black uppercase tracking-[0.08em] text-ink shadow-button" href={publicProgramPath} target="_blank" rel="noreferrer">Open public program ↗</a>
           <Button variant="secondary" onClick={() => void copyText(`${window.location.origin}${publicProgramPath}`).then(() => toast("Public link copied", { tone: "success" }), () => toast("Could not copy public link", { tone: "danger" }))}>Copy public link</Button>
+          {isPublished ? (
+            <Button
+              variant="secondary"
+              loading={publicationAction === "refresh"}
+              disabled={hasConflicts || publicationAction !== null}
+              onClick={() => void publish("refresh")}
+              title="Update every saved widget from the current agenda without changing its embed URL or settings"
+            >
+              {REFRESH_LIVE_WIDGETS_LABEL}
+            </Button>
+          ) : null}
           <AlertDialog>
-            <AlertDialogTrigger asChild><Button className="h-12 rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow" loading={publishing} disabled={hasConflicts}>{status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}</Button></AlertDialogTrigger>
+            <AlertDialogTrigger asChild><Button className="h-12 rounded-none bg-production-lime px-5 text-ink shadow-[5px_5px_0_#171714] hover:bg-production-yellow" loading={publicationAction === "publish"} disabled={hasConflicts || publicationAction !== null}>{status.publication.revision === 0 ? "Publish schedule" : "Publish new revision"}</Button></AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>Publish revision {status.publication.revision + 1}?</AlertDialogTitle>
@@ -201,7 +228,7 @@ export default function PublicationPage() {
                   This replaces the audience-facing program with {confirmedTalkCount} confirmed {confirmedTalkCount === 1 ? "session" : "sessions"}. The current public revision has {publicSessionCount}. Later agenda edits stay backstage until another revision is published.
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <AlertDialogFooter><AlertDialogCancel>Keep backstage</AlertDialogCancel><AlertDialogAction onClick={() => void publish()}>Publish revision {status.publication.revision + 1}</AlertDialogAction></AlertDialogFooter>
+              <AlertDialogFooter><AlertDialogCancel>Keep backstage</AlertDialogCancel><AlertDialogAction onClick={() => void publish("publish")}>Publish revision {status.publication.revision + 1}</AlertDialogAction></AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
         </>}
