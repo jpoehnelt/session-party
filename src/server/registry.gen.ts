@@ -136,6 +136,10 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
       "path": [
         "eventId",
         "talkId"
+      ],
+      "query": [
+        "page",
+        "pageSize"
       ]
     },
     "method": "get",
@@ -3405,6 +3409,16 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "title": "maxLength(128)",
           "type": "string"
         },
+        "page": {
+          "description": "a positive number",
+          "title": "positive",
+          "type": "string"
+        },
+        "pageSize": {
+          "description": "a number between 1 and 100",
+          "title": "between(1, 100)",
+          "type": "string"
+        },
         "talkId": {
           "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
           "maxLength": 128,
@@ -3431,57 +3445,104 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "items": {
-        "additionalProperties": false,
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
+      "additionalProperties": false,
+      "properties": {
+        "pagination": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/Int",
+              "description": "a positive number",
+              "exclusiveMinimum": 0,
+              "title": "positive"
+            },
+            "pageCount": {
+              "$ref": "#/$defs/Int",
+              "description": "a non-negative number",
+              "minimum": 0,
+              "title": "nonNegative"
+            },
+            "pageSize": {
+              "$ref": "#/$defs/Int",
+              "description": "a number between 1 and 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "between(1, 100)"
+            },
+            "total": {
+              "$ref": "#/$defs/Int",
+              "description": "a non-negative number",
+              "minimum": 0,
+              "title": "nonNegative"
+            }
+          },
+          "required": [
+            "page",
+            "pageSize",
+            "total",
+            "pageCount"
+          ],
+          "type": "object"
+        },
+        "results": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "editorName": {
                 "type": "string"
               },
-              {
-                "type": "null"
+              "id": {
+                "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "title": "maxLength(128)",
+                "type": "string"
+              },
+              "occurredAt": {
+                "description": "a non-negative number",
+                "minimum": 0,
+                "title": "nonNegative",
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              },
+              "version": {
+                "$ref": "#/$defs/Int",
+                "description": "a positive number",
+                "exclusiveMinimum": 0,
+                "title": "positive"
               }
-            ]
+            },
+            "required": [
+              "id",
+              "title",
+              "description",
+              "version",
+              "editorName",
+              "occurredAt"
+            ],
+            "type": "object"
           },
-          "editorName": {
-            "type": "string"
-          },
-          "id": {
-            "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_-]+$",
-            "title": "maxLength(128)",
-            "type": "string"
-          },
-          "occurredAt": {
-            "description": "a non-negative number",
-            "minimum": 0,
-            "title": "nonNegative",
-            "type": "integer"
-          },
-          "title": {
-            "type": "string"
-          },
-          "version": {
-            "$ref": "#/$defs/Int",
-            "description": "a positive number",
-            "exclusiveMinimum": 0,
-            "title": "positive"
-          }
-        },
-        "required": [
-          "id",
-          "title",
-          "description",
-          "version",
-          "editorName",
-          "occurredAt"
-        ],
-        "type": "object"
+          "type": "array"
+        }
       },
-      "type": "array"
+      "required": [
+        "results",
+        "pagination"
+      ],
+      "type": "object"
     },
     "requiredScopes": [
       "agenda:read"
@@ -26441,6 +26502,26 @@ export const openApi = {
               "title": "maxLength(128)",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "description": "a positive number",
+              "title": "positive",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "description": "a number between 1 and 100",
+              "title": "between(1, 100)",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -26456,57 +26537,104 @@ export const openApi = {
                     }
                   },
                   "$schema": "https://json-schema.org/draft/2020-12/schema",
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "description": {
-                        "anyOf": [
-                          {
+                  "additionalProperties": false,
+                  "properties": {
+                    "pagination": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "page": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a positive number",
+                          "exclusiveMinimum": 0,
+                          "title": "positive"
+                        },
+                        "pageCount": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a non-negative number",
+                          "minimum": 0,
+                          "title": "nonNegative"
+                        },
+                        "pageSize": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a number between 1 and 100",
+                          "maximum": 100,
+                          "minimum": 1,
+                          "title": "between(1, 100)"
+                        },
+                        "total": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a non-negative number",
+                          "minimum": 0,
+                          "title": "nonNegative"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "pageSize",
+                        "total",
+                        "pageCount"
+                      ],
+                      "type": "object"
+                    },
+                    "results": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "editorName": {
                             "type": "string"
                           },
-                          {
-                            "type": "null"
+                          "id": {
+                            "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9_-]+$",
+                            "title": "maxLength(128)",
+                            "type": "string"
+                          },
+                          "occurredAt": {
+                            "description": "a non-negative number",
+                            "minimum": 0,
+                            "title": "nonNegative",
+                            "type": "integer"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "$ref": "#/$defs/Int",
+                            "description": "a positive number",
+                            "exclusiveMinimum": 0,
+                            "title": "positive"
                           }
-                        ]
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "description",
+                          "version",
+                          "editorName",
+                          "occurredAt"
+                        ],
+                        "type": "object"
                       },
-                      "editorName": {
-                        "type": "string"
-                      },
-                      "id": {
-                        "description": "a string matching the pattern ^[A-Za-z0-9_-]+$",
-                        "maxLength": 128,
-                        "minLength": 1,
-                        "pattern": "^[A-Za-z0-9_-]+$",
-                        "title": "maxLength(128)",
-                        "type": "string"
-                      },
-                      "occurredAt": {
-                        "description": "a non-negative number",
-                        "minimum": 0,
-                        "title": "nonNegative",
-                        "type": "integer"
-                      },
-                      "title": {
-                        "type": "string"
-                      },
-                      "version": {
-                        "$ref": "#/$defs/Int",
-                        "description": "a positive number",
-                        "exclusiveMinimum": 0,
-                        "title": "positive"
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "title",
-                      "description",
-                      "version",
-                      "editorName",
-                      "occurredAt"
-                    ],
-                    "type": "object"
+                      "type": "array"
+                    }
                   },
-                  "type": "array"
+                  "required": [
+                    "results",
+                    "pagination"
+                  ],
+                  "type": "object"
                 }
               }
             },

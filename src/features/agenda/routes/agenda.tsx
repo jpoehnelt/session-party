@@ -37,7 +37,7 @@ import {
   AgendaSnapshot,
   PublishedAgenda,
   RoomMutationResult,
-  TalkContentHistory,
+  TalkContentHistoryPage,
   TrackMutationResult,
   type AgendaTalk,
   type AgendaView,
@@ -313,8 +313,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [refresh, setRefresh] = useState<RefreshState>({ status: "idle", message: null });
   const [selectedTalkId, setSelectedTalkId] = useState<string | null>(null);
   const [editorVersion, setEditorVersion] = useState<number | null>(null);
-  const [contentHistory, setContentHistory] = useState<TalkContentHistory>([]);
+  const [contentHistory, setContentHistory] = useState<TalkContentHistoryPage>({
+    results: [],
+    pagination: { page: 1, pageSize: 25, total: 0, pageCount: 0 },
+  });
   const [contentHistoryLoading, setContentHistoryLoading] = useState(false);
+  const [contentHistoryLoadingMore, setContentHistoryLoadingMore] = useState(false);
   const [intent, setIntent] = useState<RealtimeIntentState>(idleIntent);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -345,10 +349,10 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       { schema: AgendaSnapshot },
     ), [event.id]);
 
-  const fetchContentHistory = useCallback((talkId: string) =>
-    apiFetch<TalkContentHistory>(
-      `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks/${encodeURIComponent(talkId)}/content-history`,
-      { schema: TalkContentHistory },
+  const fetchContentHistory = useCallback((talkId: string, page = 1) =>
+    apiFetch<TalkContentHistoryPage>(
+      `/api/v1/events/${encodeURIComponent(event.id)}/agenda/talks/${encodeURIComponent(talkId)}/content-history?page=${page}&pageSize=25`,
+      { schema: TalkContentHistoryPage },
     ), [event.id]);
 
   const refreshAgenda = useCallback(async (nextView: AgendaView): Promise<AgendaSnapshot | null> => {
@@ -500,10 +504,12 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   useEffect(() => {
     const request = ++contentHistoryRequest.current;
     if (selectedTalkId === null) {
-      setContentHistory([]);
+      setContentHistory({ results: [], pagination: { page: 1, pageSize: 25, total: 0, pageCount: 0 } });
       setContentHistoryLoading(false);
+      setContentHistoryLoadingMore(false);
       return;
     }
+    setContentHistoryLoadingMore(false);
     setContentHistoryLoading(true);
     void fetchContentHistory(selectedTalkId).then((history) => {
       if (!mounted.current || request !== contentHistoryRequest.current) return;
@@ -511,7 +517,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       setContentHistoryLoading(false);
     }).catch((error) => {
       if (!mounted.current || request !== contentHistoryRequest.current) return;
-      setContentHistory([]);
+      setContentHistory({ results: [], pagination: { page: 1, pageSize: 25, total: 0, pageCount: 0 } });
       setContentHistoryLoading(false);
       toast(error instanceof Error ? error.message : "Could not load session content history", { tone: "danger" });
     });
@@ -1309,15 +1315,15 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                     <h4 className="font-black text-ink">Version history</h4>
                     <p className="text-xs text-ink-secondary">Every saved title and abstract revision is attributed and restorable.</p>
                   </div>
-                  <Badge tone="neutral">{contentHistory.length} revisions</Badge>
+                  <Badge tone="neutral">{contentHistory.pagination.total} revisions</Badge>
                 </div>
                 {contentHistoryLoading ? (
                   <p className="mt-3 text-xs font-semibold text-ink-secondary">Loading history…</p>
-                ) : contentHistory.length === 0 ? (
+                ) : contentHistory.results.length === 0 ? (
                   <p className="mt-3 text-xs font-semibold text-ink-secondary">No saved content revisions yet.</p>
                 ) : (
                   <ol className="mt-3 space-y-2">
-                    {contentHistory.map((revision) => {
+                    {contentHistory.results.map((revision) => {
                       const current = revision.title === selectedTalk.title
                         && revision.description === selectedTalk.description;
                       return (
@@ -1348,6 +1354,34 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                     })}
                   </ol>
                 )}
+                {!contentHistoryLoading && contentHistory.pagination.page < contentHistory.pagination.pageCount ? (
+                  <Button
+                    className="mt-3"
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={contentHistoryLoadingMore}
+                    onClick={() => {
+                      if (!selectedTalkId) return;
+                      const request = contentHistoryRequest.current;
+                      setContentHistoryLoadingMore(true);
+                      void fetchContentHistory(selectedTalkId, contentHistory.pagination.page + 1).then((next) => {
+                        if (!mounted.current || request !== contentHistoryRequest.current) return;
+                        setContentHistory((current) => ({
+                          results: [...current.results, ...next.results],
+                          pagination: next.pagination,
+                        }));
+                        setContentHistoryLoadingMore(false);
+                      }).catch((error) => {
+                        if (!mounted.current || request !== contentHistoryRequest.current) return;
+                        setContentHistoryLoadingMore(false);
+                        toast(error instanceof Error ? error.message : "Could not load earlier revisions", { tone: "danger" });
+                      });
+                    }}
+                  >
+                    {contentHistoryLoadingMore ? "Loading…" : "Load earlier revisions"}
+                  </Button>
+                ) : null}
               </div>
             </section>
             <div className="flex items-center justify-between gap-3 border-2 border-line-strong bg-production-yellow p-4">

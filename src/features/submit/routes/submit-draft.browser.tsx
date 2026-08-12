@@ -175,4 +175,78 @@ describe("public submission draft lifecycle", () => {
     );
     expect(document.querySelector('[aria-label="Human verification"]')).not.toBeNull();
   });
+
+  it("requests the submitter sign-in link and preserves the proposal-dashboard handoff", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={[route]}>
+          <Routes>
+            <Route path="/submit/:eventSlug/:formId" element={(
+              <PublicSubmitPage
+                initialForm={fixture}
+                initialSuccess={{
+                  submissionId: "submission-created",
+                  status: "submitted",
+                  submittedAt: Date.UTC(2026, 7, 11, 18),
+                }}
+              />
+            )} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+
+    const email = document.querySelector<HTMLInputElement>("#submitter-account-email");
+    await act(async () => userEvent.fill(email!, " Priya@Example.com "));
+    const createAccount = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Create account"));
+    await act(async () => userEvent.click(createAccount!));
+
+    await vi.waitFor(() => expect(container.textContent).toContain("Check your email"));
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/auth/request-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "priya@example.com",
+        returnTo: "/portal/events/architecture-summit/submissions",
+      }),
+    });
+    expect(container.textContent).toContain("finish creating your account and manage this proposal");
+    expect(document.querySelector("#submitter-account-email")).toBeNull();
+  });
+
+  it("keeps the submitter-account handoff retryable when link delivery fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 503 })));
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={[route]}>
+          <Routes>
+            <Route path="/submit/:eventSlug/:formId" element={(
+              <PublicSubmitPage
+                initialForm={fixture}
+                initialSuccess={{
+                  submissionId: "submission-created",
+                  status: "submitted",
+                  submittedAt: Date.UTC(2026, 7, 11, 18),
+                }}
+              />
+            )} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+
+    const email = document.querySelector<HTMLInputElement>("#submitter-account-email");
+    await act(async () => userEvent.fill(email!, "priya@example.com"));
+    const createAccount = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Create account"));
+    await act(async () => userEvent.click(createAccount!));
+
+    await vi.waitFor(() => expect(container.textContent).toContain("Account link not sent"));
+    expect(container.textContent).toContain("Could not create your submitter account");
+    expect(document.querySelector<HTMLInputElement>("#submitter-account-email")?.value).toBe("priya@example.com");
+    expect(createAccount?.disabled).toBe(false);
+  });
 });
