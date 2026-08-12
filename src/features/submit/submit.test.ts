@@ -647,6 +647,14 @@ describe("public submission creation", () => {
         organizationAtTime: "Studio North",
       }),
     ]));
+    const dashboard = await runAs(submittingSpeaker, getOwnSubmissions({ eventSlug: EVENT_SLUG }));
+    const dashboardParticipants = dashboard.submissions.find((submission) => submission.id === first.submissionId)?.participants;
+    expect(dashboardParticipants).toHaveLength(3);
+    expect(dashboardParticipants).toEqual(expect.arrayContaining([
+      expect.objectContaining({ displayName: "Sam Rivera", roleLabel: "Primary presenter", isPrimary: true }),
+      expect.objectContaining({ displayName: "Alex Chen", roleLabel: "Panel moderator", isPrimary: false }),
+      expect.objectContaining({ displayName: "Jordan Patel", roleLabel: "Co-presenter", isPrimary: false }),
+    ]));
 
     await Promise.all(associations.map((association) =>
       db.update(speakers).set({ title: "Changed", company: "Changed" }).where(eq(speakers.id, association.speakerId))));
@@ -697,6 +705,9 @@ describe("public submission creation", () => {
       status: "submitted",
       editable: true,
       version: 1,
+      participants: [
+        expect.objectContaining({ displayName: "Sam Rivera", roleLabel: "Primary presenter", isPrimary: true }),
+      ],
     });
 
     const outsiderView = await runAs(outsider, getOwnSubmissions({ eventSlug: EVENT_SLUG }));

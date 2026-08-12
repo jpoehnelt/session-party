@@ -174,6 +174,15 @@ export const OwnSubmissionSummary = Schema.Struct({
   submittedAt: UnixTimestampMs,
   version: Schema.Int.pipe(Schema.positive()),
   editable: Schema.Boolean,
+  /** Preserves the submitted participant roster and its explicit presentation roles. */
+  participants: Schema.optional(Schema.Array(Schema.Struct({
+    speakerId: EntityId,
+    displayName: Schema.String,
+    roleLabel: Schema.String,
+    isPrimary: Schema.Boolean,
+    title: NullableText,
+    organization: NullableText,
+  }))),
 });
 export type OwnSubmissionSummary = typeof OwnSubmissionSummary.Type;
 
