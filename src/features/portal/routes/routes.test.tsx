@@ -320,11 +320,29 @@ describe("portal route registration", () => {
 });
 
 describe("portal API loading", () => {
-  it("calls the browser-session speaker endpoint directly by slug", async () => {
-    const fetchMock = vi.fn(async () => ok(snapshot));
+  it("syncs the newest accepted speaker identity before loading the portal by slug", async () => {
+    const claimed: ClaimSpeakerOutput = {
+      eventId: event.id,
+      speakerId: profile.id,
+      acceptanceEventId: "acceptance-current",
+      provisioningId: "provisioning-current",
+      speakerVersion: 6,
+      provisioningVersion: 3,
+      provisioningStatus: "provisioned",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/v1/events/${event.slug}/portal/claim` && init?.method === "POST") return ok(claimed);
+      if (url === `/api/v1/events/${event.slug}/portal` && init?.method === "GET") return ok(snapshot);
+      throw new Error(`Unexpected request: ${url}`);
+    });
     vi.stubGlobal("fetch", fetchMock);
     await expect(getSpeakerPortal(event.slug)).resolves.toEqual(snapshot);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `/api/v1/events/${event.slug}/portal/claim`, expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+    }));
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/events/${event.slug}/portal`, expect.objectContaining({ method: "GET", credentials: "include" }));
   });
 

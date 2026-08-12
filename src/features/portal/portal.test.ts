@@ -350,6 +350,57 @@ describe("portal service", () => {
     });
   });
 
+  it("shows the newest accepted session while preserving the canonical linked speaker profile", async () => {
+    const setup = await fixture();
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const currentSubmissionId = `${setup.submissionId}-current`;
+    const currentSpeakerId = `${setup.speakerId}-current`;
+    const currentAssociationId = `${currentSubmissionId}-speaker`;
+    const currentAcceptanceId = `${currentSubmissionId}-acceptance`;
+    const currentProvisioningId = `${currentSubmissionId}-provisioning`;
+    const acceptedAt = Date.now() + 10_000;
+    await env.DB.batch([
+      env.DB.prepare("insert into submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, accepted_at, version, created_at, updated_at) values (?, ?, ?, ?, 'Taming 40-Minute CI: Incremental Builds at Monorepo Scale', 'accepted', ?, ?, 1, ?, ?)").bind(currentSubmissionId, setup.eventId, setup.formId, setup.formVersionId, acceptedAt, acceptedAt, acceptedAt, acceptedAt),
+      env.DB.prepare("insert into submission_answers (id, event_id, submission_id, form_version_id, form_version_field_id, value, version, created_at, updated_at) select ?, ?, ?, ?, id, ?, 1, ?, ? from form_version_fields where event_id = ? and form_version_id = ? and semantic_key = 'speakerEmail'").bind(`${currentSubmissionId}-email`, setup.eventId, currentSubmissionId, setup.formVersionId, JSON.stringify(speakerUser.email), acceptedAt, acceptedAt, setup.eventId, setup.formVersionId),
+      env.DB.prepare("insert into speakers (id, event_id, user_id, display_name, links, visible, version, created_at, updated_at) values (?, ?, null, 'Exact current speaker', '[]', 1, 1, ?, ?)").bind(currentSpeakerId, setup.eventId, acceptedAt, acceptedAt),
+      env.DB.prepare("insert into submission_speakers (id, event_id, submission_id, speaker_id, is_primary, created_at) values (?, ?, ?, ?, 1, ?)").bind(currentAssociationId, setup.eventId, currentSubmissionId, currentSpeakerId, acceptedAt),
+      env.DB.prepare("insert into acceptance_events (id, event_id, submission_id, primary_submission_speaker_id, primary_speaker_id, primary_association_is_primary, type, submission_version, occurred_at) values (?, ?, ?, ?, ?, 1, 'accepted', 1, ?)").bind(currentAcceptanceId, setup.eventId, currentSubmissionId, currentAssociationId, currentSpeakerId, acceptedAt),
+      env.DB.prepare("insert into speaker_provisioning (id, event_id, acceptance_event_id, submission_id, primary_speaker_id, status, available_at, attempt_count, version, created_at, updated_at) values (?, ?, ?, ?, ?, 'pending', ?, 0, 1, ?, ?)").bind(currentProvisioningId, setup.eventId, currentAcceptanceId, currentSubmissionId, currentSpeakerId, acceptedAt, acceptedAt, acceptedAt),
+    ]);
+
+    const claimed = await runAs(speakerUser, claimSpeaker({
+      eventId: setup.eventSlug,
+      idempotencyKey: `claim-canonical-${setup.eventId}`,
+    }));
+    expect(claimed).toMatchObject({
+      speakerId: setup.speakerId,
+      acceptanceEventId: setup.acceptanceId,
+      provisioningId: setup.provisioningId,
+      speakerVersion: 1,
+      provisioningVersion: 2,
+      provisioningStatus: "provisioned",
+    });
+    await expect(runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug }))).resolves.toMatchObject({
+      speaker: { id: setup.speakerId, displayName: "Exact speaker" },
+      submission: {
+        id: currentSubmissionId,
+        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      },
+    });
+    const db = drizzle(env.DB);
+    const [previous, current] = await Promise.all([
+      db.select().from(speakers).where(eq(speakers.id, setup.speakerId)).limit(1),
+      db.select().from(speakers).where(eq(speakers.id, currentSpeakerId)).limit(1),
+    ]);
+    expect(previous[0]).toMatchObject({ userId: speakerUser.userId, version: 1 });
+    expect(current[0]).toMatchObject({ userId: null, version: 1 });
+  });
+
   it("claims a directly managed speaker by normalized email without acceptance provisioning", async () => {
     const setup = await fixture();
     const managed = await runAs(owner, createManagedSpeaker({

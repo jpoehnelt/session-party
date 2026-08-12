@@ -131,6 +131,7 @@ export const PORTAL_UPLOAD_MAX_BYTES = {
   document: 25 * 1_024 * 1_024,
 } as const;
 const PROFILE_SYNC_FIELDS = ["displayName", "title", "company", "bio"] as const satisfies readonly PortalProfileSyncField[];
+const normalizedEmail = (value: string): string => value.trim().toLowerCase();
 
 const escapeHtml = (value: string): string => value
   .replaceAll("&", "&amp;")
@@ -496,9 +497,67 @@ const loadCurrentProvisioning = (eventId: string, speakerId: string) => Effect.g
   return current;
 });
 
+const loadLatestAcceptedByEmail = (eventId: string, email: string) => Effect.gen(function* () {
+  const { db } = yield* Db;
+  const candidates = yield* database(() => db
+    .select({
+      acceptance: acceptanceEvents,
+      provisioning: speakerProvisioning,
+      submission: submissions,
+      answer: submissionAnswers,
+    })
+    .from(acceptanceEvents)
+    .innerJoin(speakerProvisioning, and(
+      eq(speakerProvisioning.eventId, acceptanceEvents.eventId),
+      eq(speakerProvisioning.acceptanceEventId, acceptanceEvents.id),
+    ))
+    .innerJoin(submissions, and(
+      eq(submissions.eventId, acceptanceEvents.eventId),
+      eq(submissions.id, acceptanceEvents.submissionId),
+      eq(submissions.status, "accepted"),
+    ))
+    .innerJoin(submissionAnswers, and(
+      eq(submissionAnswers.eventId, submissions.eventId),
+      eq(submissionAnswers.submissionId, submissions.id),
+      eq(submissionAnswers.formVersionId, submissions.formVersionId),
+    ))
+    .innerJoin(formVersionFields, and(
+      eq(formVersionFields.eventId, submissionAnswers.eventId),
+      eq(formVersionFields.formVersionId, submissionAnswers.formVersionId),
+      eq(formVersionFields.id, submissionAnswers.formVersionFieldId),
+      eq(formVersionFields.semanticKey, "speakerEmail"),
+    ))
+    .where(and(
+      eq(acceptanceEvents.eventId, eventId),
+      eq(acceptanceEvents.type, "accepted"),
+      sql`not exists (
+        select 1
+        from acceptance_events as newer_portal_acceptance
+        where newer_portal_acceptance.event_id = ${acceptanceEvents.eventId}
+          and newer_portal_acceptance.submission_id = ${acceptanceEvents.submissionId}
+          and (
+            newer_portal_acceptance.occurred_at > ${acceptanceEvents.occurredAt}
+            or (
+              newer_portal_acceptance.occurred_at = ${acceptanceEvents.occurredAt}
+              and newer_portal_acceptance.id > ${acceptanceEvents.id}
+            )
+          )
+      )`,
+    ))
+    .orderBy(desc(acceptanceEvents.occurredAt), desc(acceptanceEvents.id)));
+  return candidates.find(({ answer }) =>
+    typeof answer.value === "string" && normalizedEmail(answer.value) === email
+  ) ?? null;
+});
+
 const selfSpeaker = (eventId: string) => Effect.gen(function* () {
   const actor = yield* selfPrincipal();
   const { db } = yield* Db;
+  const [account] = yield* database(() => db.select({ email: users.email }).from(users)
+    .where(eq(users.id, actor.userId)).limit(1));
+  const latestAccountAcceptance = account?.email
+    ? yield* loadLatestAcceptedByEmail(eventId, normalizedEmail(account.email))
+    : null;
   const speakerRows = yield* database(() => db.select().from(speakers).where(and(
     eq(speakers.eventId, eventId),
     eq(speakers.userId, actor.userId),
@@ -520,9 +579,13 @@ const selfSpeaker = (eventId: string) => Effect.gen(function* () {
   const currentAccepted = accepted.flatMap((candidate) => candidate._tag === "Some" ? [candidate.value] : [])
     .sort((left, right) => right.acceptance.acceptance.occurredAt.getTime() - left.acceptance.acceptance.occurredAt.getTime()
       || left.speaker.id.localeCompare(right.speaker.id))[0];
-  if (currentAccepted) return { actor, ...currentAccepted };
+  if (currentAccepted) return {
+    actor,
+    speaker: currentAccepted.speaker,
+    acceptance: latestAccountAcceptance ?? currentAccepted.acceptance,
+  };
   const managed = speakerRows.find((speaker) => managedIds.has(speaker.id));
-  if (managed) return { actor, speaker: managed, acceptance: null };
+  if (managed) return { actor, speaker: managed, acceptance: latestAccountAcceptance };
   return yield* Effect.fail(new Forbidden({ reason: "A current accepted and provisioned speaker record is required" }));
 });
 
@@ -1199,8 +1262,6 @@ export const logSpeakerContact = (input: LogSpeakerContactInput): Effect.Effect<
   return contact;
 });
 
-const normalizedEmail = (value: string): string => value.trim().toLowerCase();
-
 export interface ClaimSpeakerTestHooks {
   readonly beforeCommit?: () => Promise<void>;
 }
@@ -1377,12 +1438,26 @@ export const claimSpeaker = (
     if (committed._tag === "Left") return yield* Effect.fail(committed.left);
     return yield* Effect.fail(new Conflict({ message: "The managed speaker claim changed; retry from the latest event state" }));
   }
-  if (matches.length > 1) {
-    return yield* Effect.fail(
-      new Conflict({ message: "More than one accepted speaker matches this account; contact the event organizer" }),
-    );
+  // A speaker can submit more than one proposal with the same verified account
+  // email. Preserve the already-linked active event identity so profile,
+  // headshot, participant, readiness, and in-flight provisioning history stay
+  // on one canonical speaker.
+  // For a first-time account, `acceptedRows` is newest-first and the latest
+  // current acceptance becomes that canonical identity.
+  const canonical = matches.find(({ speaker, provisioning }) =>
+    speaker.userId === actor.userId &&
+    ["pending", "retry", "claimed", "provisioned"].includes(provisioning.status)
+  );
+  if (!canonical) {
+    const [existingLink] = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
+      eq(speakers.eventId, event.id),
+      eq(speakers.userId, actor.userId),
+    )).limit(1));
+    if (existingLink) {
+      return yield* Effect.fail(new Conflict({ message: "This account already has a canonical event speaker identity" }));
+    }
   }
-  const row = matches[0]!;
+  const row = canonical ?? matches[0]!;
   if (row.speaker.userId !== null && row.speaker.userId !== actor.userId) {
     return yield* Effect.fail(
       new Conflict({ message: "This accepted speaker is already linked to another account" }),
