@@ -26,7 +26,10 @@ describe("public landing route", () => {
     expect(markup).toContain('href="/embed/ai-engineer-sandbox/speakers"');
     expect(markup).toContain('href="/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fdashboard"');
     expect(markup).toContain('href="/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fintegrations"');
-    expect(markup).toContain('href="/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fresources"');
+    expect(markup).toContain("Speaker portal resources");
+    expect(markup).toContain("Guide + video embed");
+    expect(markup).toContain('href="/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fportal"');
+    expect(markup).not.toContain('returnTo=%2Fe%2Fai-engineer-sandbox%2Fresources');
     expect(markup).toContain('href="/events"');
     expect(markup).toContain('href="/login?returnTo=%2Fevents"');
     expect(markup).not.toContain("Create event");

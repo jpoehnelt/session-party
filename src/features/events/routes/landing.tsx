@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { clientRoutes } from "contracts/routes";
 
 export const path = "/";
 export const layout = "bare";
@@ -74,9 +75,9 @@ const demoDestinations = [
     to: "/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fintegrations",
   },
   {
-    label: "Resources + embeds",
-    detail: "Speaker demo",
-    to: "/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fresources",
+    label: "Speaker portal resources",
+    detail: "Guide + video embed",
+    to: `/login?returnTo=${encodeURIComponent(clientRoutes.portal("ai-engineer-sandbox"))}`,
   },
 ] as const;
 
