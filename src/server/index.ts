@@ -300,20 +300,24 @@ export function publicProgramMetadata(pathname: string, eventName: string, canon
 async function fetchPublicProgram(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const [, , slug] = url.pathname.split("/");
-  if (!slug) return env.ASSETS.fetch(request);
+  const assets = Reflect.get(env, "ASSETS") as Fetcher | undefined;
+  const fetchAsset = (assetRequest: Request) => assets
+    ? assets.fetch(assetRequest)
+    : app.fetch(assetRequest, env);
+  if (!slug) return fetchAsset(request);
   const agendaResponse = await app.fetch(
     new Request(`${url.origin}${API}/public/events/${encodeURIComponent(slug)}/agenda/published`),
     env,
   );
-  if (!agendaResponse.ok) return env.ASSETS.fetch(request);
+  if (!agendaResponse.ok) return fetchAsset(request);
   const agenda = await agendaResponse.json<{ eventName?: unknown }>();
-  if (typeof agenda.eventName !== "string") return env.ASSETS.fetch(request);
+  if (typeof agenda.eventName !== "string") return fetchAsset(request);
   const canonicalUrl = `${url.origin}${url.pathname}`;
   const metadata = publicProgramMetadata(url.pathname, agenda.eventName, canonicalUrl);
   // Workers Static Assets canonicalizes `/index.html` to `/`. Request the
   // canonical shell directly so the metadata response remains a 200 instead
   // of forwarding that redirect to public-program visitors and crawlers.
-  const shell = await env.ASSETS.fetch(new Request(`${url.origin}/`, request));
+  const shell = await fetchAsset(new Request(`${url.origin}/`, request));
   return new HTMLRewriter()
     .on("title", { element(element) { element.setInnerContent(metadata.title); } })
     .on('meta[name="description"]', { element(element) { element.setAttribute("content", metadata.description); } })
