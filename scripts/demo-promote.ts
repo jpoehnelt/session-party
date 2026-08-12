@@ -33,6 +33,8 @@ const sqlQuote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 const snapshotTables = [
   "events",
   "users",
+  "speaker_profiles",
+  "speaker_profile_changes",
   "event_members",
   "assets",
   "forms",
@@ -83,6 +85,11 @@ SELECT
   (SELECT count(*) FROM tasks WHERE event_id = '${eventId}') AS tasks,
   (SELECT count(*) FROM pages WHERE event_id = '${eventId}') AS resources,
   (SELECT count(*) FROM assets WHERE event_id = '${eventId}') AS assets,
+  (SELECT count(*) FROM speaker_profiles WHERE user_id = 'demo-speaker' AND slug = 'priya-raman' AND visible = 1) AS reusable_profiles,
+  (SELECT count(*) FROM speaker_profile_changes c INNER JOIN speaker_profiles p ON p.id = c.profile_id WHERE p.user_id = 'demo-speaker') AS reusable_profile_changes,
+  (SELECT count(*) FROM speakers s INNER JOIN speaker_profiles p ON p.id = s.profile_source_id WHERE s.event_id = '${eventId}' AND p.user_id = s.user_id) AS linked_event_profiles,
+  (SELECT count(*) FROM domain_changes WHERE event_id = '${eventId}' AND aggregate_type = 'agenda-publication' AND event_type = 'agenda/published') AS agenda_publications,
+  (SELECT count(*) FROM domain_changes WHERE event_id = '${eventId}' AND aggregate_type = 'speaker-publication' AND event_type = 'portal/speakers-published') AS speaker_publications,
   (SELECT count(*) FROM speakers s WHERE s.event_id = '${eventId}' AND s.visible = 1 AND s.profile_review_status = 'approved' AND EXISTS (SELECT 1 FROM acceptance_events a WHERE a.event_id = s.event_id AND a.primary_speaker_id = s.id AND a.type = 'accepted')) AS public_speakers,
   (SELECT count(*) FROM speakers s WHERE s.event_id = '${eventId}' AND s.visible = 1 AND s.profile_review_status = 'approved' AND trim(coalesce(s.title, '')) <> '' AND trim(coalesce(s.company, '')) <> '' AND trim(coalesce(s.bio, '')) <> '' AND EXISTS (SELECT 1 FROM acceptance_events a WHERE a.event_id = s.event_id AND a.primary_speaker_id = s.id AND a.type = 'accepted')) AS complete_public_profiles,
   (SELECT count(*) FROM speakers s WHERE s.event_id = '${eventId}' AND s.visible = 1 AND s.profile_review_status = 'approved' AND s.headshot_asset_id IS NOT NULL AND EXISTS (SELECT 1 FROM acceptance_events a WHERE a.event_id = s.event_id AND a.primary_speaker_id = s.id AND a.type = 'accepted')) AS public_headshots,
@@ -107,6 +114,11 @@ type Verification = {
   readonly tasks: number;
   readonly resources: number;
   readonly assets: number;
+  readonly reusable_profiles: number;
+  readonly reusable_profile_changes: number;
+  readonly linked_event_profiles: number;
+  readonly agenda_publications: number;
+  readonly speaker_publications: number;
   readonly public_speakers: number;
   readonly complete_public_profiles: number;
   readonly public_headshots: number;
@@ -188,6 +200,11 @@ const verifyDemo = (row: Record<string, unknown>, location: "local" | "productio
     tasks: 5,
     resources: 1,
     assets: 32,
+    reusable_profiles: 1,
+    reusable_profile_changes: 1,
+    linked_event_profiles: 1,
+    agenda_publications: 1,
+    speaker_publications: 1,
     public_speakers: 30,
     complete_public_profiles: 30,
     public_headshots: 30,
@@ -223,6 +240,19 @@ const localUsers = queryRows(false, "SELECT id, email FROM users ORDER BY id;").
   }
   return { id: row.id, email: row.email };
 });
+const localReusableProfileIds = new Set(queryRows(
+  false,
+  `SELECT DISTINCT p.id
+   FROM speaker_profiles p
+   INNER JOIN speakers s ON s.profile_source_id = p.id
+   WHERE s.event_id = '${eventId}'
+   ORDER BY p.id;`,
+).map((row) => {
+  if (typeof row.id !== "string" || !/^[A-Za-z0-9_-]+$/.test(row.id)) {
+    throw new Error(`Invalid local reusable profile identity: ${JSON.stringify(row)}`);
+  }
+  return row.id;
+}));
 const localAssets = queryRows(
   false,
   `SELECT id, content_type, size FROM assets WHERE event_id = '${eventId}' ORDER BY id;`,
@@ -315,6 +345,10 @@ for (const line of exported.split("\n")) {
   if (!table || !snapshotTables.includes(table as typeof snapshotTables[number])) {
     throw new Error(`Unexpected table in demo export: ${table ?? line.slice(0, 80)}`);
   }
+  if (
+    (table === "speaker_profiles" || table === "speaker_profile_changes")
+    && ![...localReusableProfileIds].some((id) => line.includes(`'${id}'`))
+  ) continue;
   const statements = insertsByTable.get(table) ?? [];
   statements.push(line);
   insertsByTable.set(table, statements);
@@ -401,7 +435,11 @@ run([
   `INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at)
    VALUES ('reconciliation-unrelated-event', 'reconciliation-unrelated-event', 'Must survive demo replacement', 'UTC', 1, 1, 1);
    UPDATE talks SET description = NULL, starts_at = 1789664400000 WHERE event_id = '${eventId}';
-   UPDATE speakers SET title = NULL, company = NULL, bio = NULL, headshot_asset_id = NULL WHERE event_id = '${eventId}';`,
+   UPDATE speakers SET title = NULL, company = NULL, bio = NULL, headshot_asset_id = NULL WHERE event_id = '${eventId}';
+   INSERT INTO users (id, email, name, version, created_at, updated_at)
+   VALUES ('reconciliation-unrelated-user', 'unrelated@example.com', 'Must survive replacement', 1, 1, 1);
+   INSERT INTO speaker_profiles (id, user_id, slug, display_name, links, visible, version, created_at, updated_at)
+   VALUES ('reconciliation-unrelated-profile', 'reconciliation-unrelated-user', 'unrelated-profile', 'Must survive replacement', '[]', 1, 1, 1, 1);`,
 ]);
 run([
   "wrangler",
@@ -426,6 +464,18 @@ if (
   || !isolatedInventory.some((row) => row.id === "reconciliation-unrelated-event" && row.name === "Must survive demo replacement")
 ) {
   throw new Error(`Isolated replacement touched unrelated event state: ${JSON.stringify(isolatedInventory)}`);
+}
+const unrelatedProfiles = queryRowsAtState(
+  validationState,
+  "SELECT id, user_id, slug, display_name FROM speaker_profiles WHERE id = 'reconciliation-unrelated-profile';",
+);
+if (
+  unrelatedProfiles.length !== 1
+  || unrelatedProfiles[0]?.user_id !== "reconciliation-unrelated-user"
+  || unrelatedProfiles[0]?.slug !== "unrelated-profile"
+  || unrelatedProfiles[0]?.display_name !== "Must survive replacement"
+) {
+  throw new Error(`Isolated replacement touched unrelated reusable profiles: ${JSON.stringify(unrelatedProfiles)}`);
 }
 
 if (!applyProduction) {

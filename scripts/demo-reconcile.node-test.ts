@@ -6,6 +6,7 @@ import {
   buildDemoReplacementSql,
   demoTarget,
   fixtureUserCollisionSql,
+  reconcileDemoInsert,
 } from "./demo-reconcile";
 
 describe("demo reconciliation safeguards", () => {
@@ -37,14 +38,31 @@ describe("demo reconciliation safeguards", () => {
     const sql = buildDemoReplacementSql([
       'INSERT INTO "events" VALUES(\'demo-event\',\'ai-engineer-sandbox\');',
       'INSERT INTO "users" VALUES(\'demo-owner\',\'owner@example.com\');',
+      'INSERT INTO "speaker_profiles" ("id","user_id","slug") VALUES(\'profile-new\',\'demo-speaker\',\'priya-raman\');',
+      'INSERT INTO "speaker_profile_changes" ("id","profile_id","profile_version") VALUES(\'change-new\',\'profile-new\',1);',
       'INSERT INTO "talks" VALUES(\'demo-talk\');',
     ], "production-owner", 1_800_000_000_000);
 
     assert.match(sql, /DELETE FROM events WHERE id = 'demo-event' AND slug = 'ai-engineer-sandbox';/);
     assert.match(sql, /INSERT OR IGNORE INTO "users"/);
+    assert.match(sql, /ON CONFLICT\("user_id"\) DO UPDATE SET "id"=excluded\."id"/);
+    assert.match(sql, /ON CONFLICT\("profile_id","profile_version"\) DO UPDATE SET "id"=excluded\."id"/);
     assert.match(sql, /WHERE NOT EXISTS/);
     assert.doesNotMatch(sql, /DELETE FROM users/);
     assert.doesNotMatch(sql, /DELETE FROM events WHERE id !=/);
+  });
+
+  it("reconciles reusable profile state without replacement deletes", () => {
+    const profile = reconcileDemoInsert(
+      'INSERT INTO "speaker_profiles" ("id","user_id","slug") VALUES(\'profile-new\',\'demo-speaker\',\'priya-raman\');',
+    );
+    const change = reconcileDemoInsert(
+      'INSERT INTO "speaker_profile_changes" ("id","profile_id","profile_version") VALUES(\'change-new\',\'profile-new\',1);',
+    );
+    assert.match(profile, /ON CONFLICT\("user_id"\) DO UPDATE/);
+    assert.match(change, /ON CONFLICT\("profile_id","profile_version"\) DO UPDATE/);
+    assert.doesNotMatch(profile, /REPLACE|DELETE/i);
+    assert.doesNotMatch(change, /REPLACE|DELETE/i);
   });
 
   it("refuses snapshots without the one locked event and escapes collision queries", () => {
