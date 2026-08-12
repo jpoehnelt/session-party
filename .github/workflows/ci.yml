@@ -29,6 +29,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Audit production dependencies (advisory)
+        continue-on-error: true
+        run: pnpm audit --prod --audit-level high
       - run: pnpm check:registry
       - run: pnpm check:types
       - run: pnpm test:visual-tools
