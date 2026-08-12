@@ -336,7 +336,6 @@ export function SpeakerPortalContent({
   const [activeFormTaskId, setActiveFormTaskId] = useState<string | null>(null);
   const incompleteFormTasks = snapshot.tasks.filter((task) => task.kind === "form" && !task.completed);
   const activeFormTask = incompleteFormTasks.find((task) => task.id === activeFormTaskId);
-  const remainingTasks = snapshot.readiness.tasksTotal - snapshot.readiness.tasksDone;
   return (
     <div className="space-y-9">
       <ProductionHeader
@@ -349,14 +348,12 @@ export function SpeakerPortalContent({
             className="rounded-none border-2 border-[#171714] bg-[#caff4a] px-3 py-2 font-black uppercase tracking-[0.1em] text-[#171714] shadow-[3px_3px_0_#171714]"
             tone={snapshot.readiness.state === "ready" ? "success" : "accent"}
           >
-            {snapshot.readiness.tasksDone} of {snapshot.readiness.tasksTotal} ready
+            {snapshot.readiness.tasksDone} of {snapshot.readiness.tasksTotal} tasks complete
           </Badge>
         }
       />
       <ProductionStats
         stats={[
-          { label: "Cues complete", value: snapshot.readiness.tasksDone, tone: "lime" },
-          { label: "Cues remaining", value: remainingTasks, tone: "coral" },
           { label: "Files delivered", value: snapshot.assets.length, tone: "sky" },
           { label: "Resources", value: snapshot.resources.length, tone: "purple" },
         ]}
@@ -414,7 +411,7 @@ export function SpeakerPortalContent({
         </div>
 
         <aside className="min-w-0 space-y-5 xl:sticky xl:top-6 xl:self-start" aria-label="Speaker readiness">
-          <ProductionSectionLabel>Next cues</ProductionSectionLabel>
+          <ProductionSectionLabel>Next tasks</ProductionSectionLabel>
           {snapshot.tasks.length === 0 ? (
             <Card className={productionCardClass}>
               <EmptyState
@@ -460,6 +457,7 @@ export function SpeakerPortalContent({
               <Card className={`${productionCardClass} [&>div]:bg-[#fffdf7]`}>
                 <ProgressChecklist
                   className="[&_h3]:font-black [&_h3]:uppercase [&_h3]:tracking-[0.1em]"
+                  showProgress={false}
                   items={snapshot.tasks.map((task) => ({
                     id: task.id,
                     label: task.name,
