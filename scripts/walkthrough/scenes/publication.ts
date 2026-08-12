@@ -19,9 +19,11 @@ export const publicationScene: Scene = {
     await pause(1_500);
     await clearSpotlight();
     const refresh = page.getByRole("button", { name: /Refresh live widgets/i });
-    if (await refresh.count()) await spotlight("button:has-text('Refresh live widgets')", "Stable live URL");
-    await pause(2_000);
-    await clearSpotlight();
+    if (await refresh.count()) {
+      await spotlight("button:has-text('Refresh live widgets')", "Stable live URL");
+      await pause(2_000);
+      await clearSpotlight();
+    }
     await scrollBy(720);
     await pause(2_800);
     const formats = page.getByText("Output formats", { exact: true }).first();

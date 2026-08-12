@@ -31,8 +31,12 @@ export const cfpScene: Scene = {
     await clearTechnicalOverlay();
     await page.goto(`${baseUrl}/submit/${eventSlug}/${encodeURIComponent(formId)}`, { waitUntil: "networkidle" });
     await spotlight("h1", "Public CFP");
-    await pause(1_500);
+    await pause(1_200);
     await clearSpotlight();
+    const title = page.getByLabel(/Session title/i).first();
+    if (await title.count()) await title.fill("Taming 40-Minute CI: Incremental Builds at Monorepo Scale");
+    const abstract = page.getByLabel(/Abstract/i).first();
+    if (await abstract.count()) await abstract.fill("A concrete production case study with measured build, cache, and developer-feedback outcomes.");
     const format = page.getByLabel("Session format");
     if (await format.count()) {
       const workshop = (await format.locator("option").allTextContents()).find((option) => /workshop/i.test(option));

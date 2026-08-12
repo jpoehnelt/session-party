@@ -70,15 +70,8 @@ try {
         scrollBy: (pixels) => scrollBy(page, pixels),
       });
       const targetMilliseconds = smoke ? 0 : (targetDurationByScene.get(scene.id) ?? 15) * 1_000;
-      let remaining = targetMilliseconds - (performance.now() - startedAt);
-      let direction = 1;
-      while (remaining > 1_000) {
-        const hold = Math.min(4_000, remaining);
-        await page.evaluate((distance) => ((globalThis as any).scrollBy)({ top: distance, behavior: "smooth" }), 120 * direction).catch(() => undefined);
-        await page.waitForTimeout(hold);
-        direction *= -1;
-        remaining = targetMilliseconds - (performance.now() - startedAt);
-      }
+      const remaining = targetMilliseconds - (performance.now() - startedAt);
+      if (remaining > 0) await page.waitForTimeout(remaining);
       await page.screenshot({ path: resolve(outputDir, "screenshots", `${scene.id}.png`), fullPage: false });
       await context.tracing.stop({ path: resolve(outputDir, "traces", `${scene.id}.zip`) });
     } catch (error) {

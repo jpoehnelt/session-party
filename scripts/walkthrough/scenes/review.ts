@@ -6,7 +6,7 @@ export const reviewScene: Scene = {
   title: "Blind, structured review",
   narration: "Reviewers see only their assignments. Blind rounds hide speaker identity, rubrics capture structured scores and comments, and AI suggestions remain labeled and subordinate to the human decision.",
   shortSeconds: 10,
-  async run({ page, baseUrl, eventSlug, titleCard, spotlight, clearSpotlight, clearTechnicalOverlay, scrollBy, pause }) {
+  async run({ page, baseUrl, eventSlug, titleCard, spotlight, clearSpotlight, clearTechnicalOverlay, pause }) {
     await loginAs(page, baseUrl, "reviewer", `/e/${eventSlug}/review`);
     await page.goto(`${baseUrl}/e/${eventSlug}/review`, { waitUntil: "networkidle" });
     await titleCard("Review workspace", "Scoped assignments, blind evidence, rubric scores, and human-owned decisions.", [
@@ -25,10 +25,19 @@ export const reviewScene: Scene = {
     }
     const ai = page.getByRole("button", { name: /Request AI suggestion/i });
     if (await ai.count()) await spotlight("button:has-text('Request AI suggestion')", "Optional AI assist");
-    await pause(2_200);
+    await pause(1_500);
     await clearSpotlight();
+    const useDraft = page.getByRole("button", { name: /Use as draft/i }).first();
+    if (await useDraft.count()) {
+      await useDraft.click();
+      await pause(1_300);
+    }
+    const save = page.getByRole("button", { name: /Save my review/i });
+    if (await save.count()) {
+      await spotlight("button:has-text('Save my review')", "Human commit boundary");
+      await pause(2_000);
+      await clearSpotlight();
+    }
     await clearTechnicalOverlay();
-    await scrollBy(520);
-    await pause(3_000);
   },
 };

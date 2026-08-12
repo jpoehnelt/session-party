@@ -20,6 +20,23 @@ export const publicProgramScene: Scene = {
     await pause(2_000);
     await clearSpotlight();
     await clearTechnicalOverlay();
+    await page.goto(`${baseUrl}/event/${eventSlug}/sessions`, { waitUntil: "networkidle" });
+    const search = page.getByLabel("Search sessions or speakers");
+    if (await search.count()) {
+      await search.fill("Taming 40-Minute CI");
+      await pause(1_500);
+    }
+    const add = page.getByRole("button", { name: "Add to my schedule" }).first();
+    if (await add.count()) {
+      await spotlight("button:has-text('Add to my schedule')", "Browser-local itinerary");
+      await pause(1_000);
+      await clearSpotlight();
+      await add.click();
+      await pause(1_500);
+      const mine = page.getByRole("button", { name: /My schedule \(1\)/i });
+      if (await mine.count()) await mine.click();
+      await pause(1_500);
+    }
     await page.goto(`${baseUrl}/event/${eventSlug}/speakers`, { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "Speakers" }).waitFor({ state: "visible", timeout: 15_000 });
     await spotlight("h1", "Published speaker directory");
