@@ -7,6 +7,7 @@ import type { SpeakerDirectory } from "../schema";
 
 const apiMocks = vi.hoisted(() => ({
   downloadContent: vi.fn(),
+  getPublicSpeakerGallery: vi.fn(),
   getSpeakerDirectory: vi.fn(),
   sendSpeakerMessages: vi.fn(),
 }));
@@ -14,6 +15,7 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("./api", () => ({
   createManagedSpeaker: vi.fn(),
   downloadContent: apiMocks.downloadContent,
+  getPublicSpeakerGallery: apiMocks.getPublicSpeakerGallery,
   getSpeakerDirectory: apiMocks.getSpeakerDirectory,
   importSpeakersCsv: vi.fn(),
   provisionSpeaker: vi.fn(),
@@ -69,6 +71,7 @@ const speakerItem = (id: string, displayName: string, taskId: string): SpeakerDi
   provisioningVersion: 1,
   provisioningStatus: "provisioned",
   provisionedAt: Date.UTC(2027, 3, 1),
+  messageEligible: true,
   sessions: [],
   privateFields: [],
   readiness: {
@@ -127,6 +130,7 @@ describe("organizer bulk speaker reminders", () => {
     root = createRoot(container);
     apiMocks.downloadContent.mockReset();
     apiMocks.getSpeakerDirectory.mockReset().mockResolvedValue(directory);
+    apiMocks.getPublicSpeakerGallery.mockReset().mockResolvedValue({ event, speakers: directory.speakers.map(({ speaker }) => speaker) });
     apiMocks.sendSpeakerMessages.mockReset().mockResolvedValue({ queuedCount: 2, skippedCount: 0, idempotent: false });
   });
 
@@ -150,7 +154,7 @@ describe("organizer bulk speaker reminders", () => {
 
     await act(async () => userEvent.click(checkboxNamed("Select Ada Rivera")));
     await act(async () => userEvent.click(checkboxNamed("Select Lin Chen")));
-    expect(container.textContent).toContain("2 selected");
+    expect(container.textContent).toContain("2 of 2 outreach-eligible selected");
     await act(async () => userEvent.click(buttonNamed("Remind outstanding")));
 
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Audience: Ada Rivera, Lin Chen"));
@@ -201,5 +205,31 @@ describe("organizer bulk speaker reminders", () => {
       eventId: event.id,
       assetId: "asset-ada-headshot",
     });
+  });
+
+  it("keeps unprovisioned records out of bulk outreach selection", async () => {
+    const pending = {
+      ...speakerItem("pending", "Pat Pending", "task-pending"),
+      provisioningStatus: "pending" as const,
+      provisionedAt: null,
+      messageEligible: false,
+    };
+    apiMocks.getSpeakerDirectory.mockResolvedValue({ ...directory, speakers: [...directory.speakers, pending] });
+    apiMocks.getPublicSpeakerGallery.mockResolvedValue({ event, speakers: [directory.speakers[0]!.speaker] });
+
+    await act(async () => root.render(
+      <MemoryRouter initialEntries={["/e/reminder-summit/speakers"]}>
+        <Routes>
+          <Route path="/e/:eventSlug/speakers" element={<OrganizerSpeakersRoute />} />
+        </Routes>
+      </MemoryRouter>,
+    ));
+    await vi.waitFor(() => expect(buttonNamed("Select eligible on page")).toBeTruthy());
+
+    expect(checkboxNamed("Select Pat Pending").disabled).toBe(true);
+    await act(async () => userEvent.click(buttonNamed("Select eligible on page")));
+    expect(container.textContent).toContain("2 of 2 outreach-eligible selected");
+    expect(container.textContent).toContain("3 speaker records");
+    expect(container.textContent).toContain("Published now");
   });
 });

@@ -12765,6 +12765,9 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                   }
                 ]
               },
+              "messageEligible": {
+                "type": "boolean"
+              },
               "privateFields": {
                 "items": {
                   "additionalProperties": false,
@@ -13555,6 +13558,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "provisioningVersion",
               "provisioningStatus",
               "provisionedAt",
+              "messageEligible",
               "sessions",
               "privateFields",
               "readiness",
@@ -13835,6 +13839,9 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                   }
                 ]
               },
+              "messageEligible": {
+                "type": "boolean"
+              },
               "privateFields": {
                 "items": {
                   "additionalProperties": false,
@@ -14625,6 +14632,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "provisioningVersion",
               "provisioningStatus",
               "provisionedAt",
+              "messageEligible",
               "sessions",
               "privateFields",
               "readiness",
@@ -15913,6 +15921,9 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                     }
                   ]
                 },
+                "messageEligible": {
+                  "type": "boolean"
+                },
                 "privateFields": {
                   "items": {
                     "additionalProperties": false,
@@ -16703,6 +16714,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "provisioningVersion",
                 "provisioningStatus",
                 "provisionedAt",
+                "messageEligible",
                 "sessions",
                 "privateFields",
                 "readiness",
@@ -42035,6 +42047,9 @@ export const openApi = {
                               }
                             ]
                           },
+                          "messageEligible": {
+                            "type": "boolean"
+                          },
                           "privateFields": {
                             "items": {
                               "additionalProperties": false,
@@ -42825,6 +42840,7 @@ export const openApi = {
                           "provisioningVersion",
                           "provisioningStatus",
                           "provisionedAt",
+                          "messageEligible",
                           "sessions",
                           "privateFields",
                           "readiness",
@@ -45659,6 +45675,9 @@ export const openApi = {
                               }
                             ]
                           },
+                          "messageEligible": {
+                            "type": "boolean"
+                          },
                           "privateFields": {
                             "items": {
                               "additionalProperties": false,
@@ -46449,6 +46468,7 @@ export const openApi = {
                           "provisioningVersion",
                           "provisioningStatus",
                           "provisionedAt",
+                          "messageEligible",
                           "sessions",
                           "privateFields",
                           "readiness",
@@ -48693,6 +48713,9 @@ export const openApi = {
                         }
                       ]
                     },
+                    "messageEligible": {
+                      "type": "boolean"
+                    },
                     "privateFields": {
                       "items": {
                         "additionalProperties": false,
@@ -49483,6 +49506,7 @@ export const openApi = {
                     "provisioningVersion",
                     "provisioningStatus",
                     "provisionedAt",
+                    "messageEligible",
                     "sessions",
                     "privateFields",
                     "readiness",

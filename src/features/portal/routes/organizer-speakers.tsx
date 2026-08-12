@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { Avatar, Badge, Button, Card, Checkbox, Input, Select, Textarea, Toaster, toast } from "@/ui";
+import { ApiError } from "@/client/api";
 import type { CreateManagedSpeakerInput, SendSpeakerMessagesInput, SpeakerDirectory, SpeakerDirectoryItem, UpdateManagedSpeakerInput } from "../schema";
-import { createManagedSpeaker, getSpeakerDirectory, importSpeakersCsv, provisionSpeaker, reviewSpeakerProfile, sendSpeakerMessages, updateManagedSpeaker, updateSpeakerPublication, uploadManagedSpeakerHeadshot } from "./api";
+import { createManagedSpeaker, getPublicSpeakerGallery, getSpeakerDirectory, importSpeakersCsv, provisionSpeaker, reviewSpeakerProfile, sendSpeakerMessages, updateManagedSpeaker, updateSpeakerPublication, uploadManagedSpeakerHeadshot } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
 import { organizerAgendaTalkPath } from "@/features/agenda/links";
 import {
@@ -56,6 +57,35 @@ export function filterSpeakerDirectory(
       ...item.sessions.map((session) => session.title),
     ].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
   });
+}
+
+export const isSpeakerMessageEligible = (item: SpeakerDirectoryItem): boolean =>
+  item.messageEligible;
+
+export function speakerDirectoryMetrics(
+  directory: SpeakerDirectory,
+  publishedSpeakerIds: readonly string[],
+) {
+  return {
+    records: directory.speakers.length,
+    provisioned: directory.speakers.filter((item) => item.provisioningStatus === "provisioned").length,
+    published: publishedSpeakerIds.length,
+    nextPublish: directory.speakers.filter((item) => item.speaker.visible).length,
+    outreachEligible: directory.speakers.filter(isSpeakerMessageEligible).length,
+  } as const;
+}
+
+async function loadOrganizerSpeakers(eventSlug: string) {
+  const [directory, publishedSpeakerIds] = await Promise.all([
+    getSpeakerDirectory(eventSlug),
+    getPublicSpeakerGallery(eventSlug)
+      .then((gallery) => gallery.speakers.map(({ id }) => id))
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 404) return [];
+        throw error;
+      }),
+  ]);
+  return { directory, publishedSpeakerIds };
 }
 
 function managedSpeakerInput(eventId: string, form: HTMLFormElement): Omit<CreateManagedSpeakerInput, "idempotencyKey"> {
@@ -159,7 +189,7 @@ function ReadinessMeter({ item, compact = false }: { readonly item: SpeakerDirec
 
 export default function OrganizerSpeakersRoute() {
   const { eventSlug = "" } = useParams();
-  const [state, retry] = useRouteLoad(() => getSpeakerDirectory(eventSlug), eventSlug);
+  const [state, retry] = useRouteLoad(() => loadOrganizerSpeakers(eventSlug), eventSlug);
   const [busySpeakerId, setBusySpeakerId] = useState<string | null>(null);
 
   if (state.status === "loading") return <RouteLoading label="Loading speaker directory" />;
@@ -183,15 +213,16 @@ export default function OrganizerSpeakersRoute() {
   return (
     <>
       <OrganizerSpeakersContent
-        directory={state.data}
+        directory={state.data.directory}
+        publishedSpeakerIds={state.data.publishedSpeakerIds}
         busySpeakerId={busySpeakerId}
         onProvision={(item) => {
           const provisioningId = item.provisioningId;
           if (provisioningId === null) return;
           return mutate(
             item.speaker.id,
-            () => provisionSpeaker(state.data.event.id, {
-              eventId: state.data.event.id,
+            () => provisionSpeaker(state.data.directory.event.id, {
+              eventId: state.data.directory.event.id,
               speakerId: item.speaker.id,
               provisioningId,
               expectedVersion: item.provisioningVersion,
@@ -202,31 +233,31 @@ export default function OrganizerSpeakersRoute() {
         onVisibility={(item, visible) =>
           mutate(
             item.speaker.id,
-            () => updateSpeakerPublication(state.data.event.id, {
-              eventId: state.data.event.id,
+            () => updateSpeakerPublication(state.data.directory.event.id, {
+              eventId: state.data.directory.event.id,
               speakerId: item.speaker.id,
               expectedVersion: item.speaker.version,
               visible,
             }),
-            visible ? "Speaker published" : "Speaker hidden",
+            visible ? "Included in next speaker publish" : "Hidden from next speaker publish",
           )
         }
-        onCreate={(form) => mutate("new", () => createManagedSpeaker(state.data.event.id, {
-          ...managedSpeakerInput(state.data.event.id, form),
+        onCreate={(form) => mutate("new", () => createManagedSpeaker(state.data.directory.event.id, {
+          ...managedSpeakerInput(state.data.directory.event.id, form),
           idempotencyKey: crypto.randomUUID(),
         }), "Speaker added")}
-        onUpdate={(item, form) => mutate(item.speaker.id, () => updateManagedSpeaker(state.data.event.id, {
-          ...managedSpeakerInput(state.data.event.id, form),
+        onUpdate={(item, form) => mutate(item.speaker.id, () => updateManagedSpeaker(state.data.directory.event.id, {
+          ...managedSpeakerInput(state.data.directory.event.id, form),
           speakerId: item.speaker.id,
           expectedVersion: item.speaker.version,
         } satisfies UpdateManagedSpeakerInput), "Speaker updated")}
-        onImportCsv={(csv) => mutate("csv", () => importSpeakersCsv(state.data.event.id, {
-          eventId: state.data.event.id,
+        onImportCsv={(csv) => mutate("csv", () => importSpeakersCsv(state.data.directory.event.id, {
+          eventId: state.data.directory.event.id,
           csv,
           idempotencyKey: crypto.randomUUID(),
         }), "Speaker CSV imported")}
         onMessage={(speakerIds, kind) => {
-          const recipients = state.data.speakers
+          const recipients = state.data.directory.speakers
             .filter((item) => speakerIds.includes(item.speaker.id))
             .map((item) => item.speaker.displayName)
             .join(", ");
@@ -237,15 +268,15 @@ export default function OrganizerSpeakersRoute() {
             + "Reply-to: none\nDelivery: immediately after the durable outbox commit",
           );
           if (!authorized) return;
-          return mutate("messages", () => sendSpeakerMessages(state.data.event.id, {
-            eventId: state.data.event.id,
+          return mutate("messages", () => sendSpeakerMessages(state.data.directory.event.id, {
+            eventId: state.data.directory.event.id,
             speakerIds: speakerIds as SendSpeakerMessagesInput["speakerIds"],
             kind,
             idempotencyKey: crypto.randomUUID(),
           }), kind === "invite" ? "Invitations queued" : "Reminders queued");
         }}
-        onUploadHeadshot={(item, file) => mutate(item.speaker.id, async () => uploadManagedSpeakerHeadshot(state.data.event.id, {
-          eventId: state.data.event.id,
+        onUploadHeadshot={(item, file) => mutate(item.speaker.id, async () => uploadManagedSpeakerHeadshot(state.data.directory.event.id, {
+          eventId: state.data.directory.event.id,
           speakerId: item.speaker.id,
           expectedVersion: item.speaker.version,
           filename: file.name,
@@ -259,7 +290,7 @@ export default function OrganizerSpeakersRoute() {
             : null;
           if (decision === "changes_requested" && !note?.trim()) return;
           return mutate(item.speaker.id, () => reviewSpeakerProfile({
-            eventId: state.data.event.id,
+            eventId: state.data.directory.event.id,
             speakerId: item.speaker.id,
             expectedVersion: item.speaker.version,
             decision,
@@ -274,6 +305,7 @@ export default function OrganizerSpeakersRoute() {
 
 export function OrganizerSpeakersContent({
   directory,
+  publishedSpeakerIds = [],
   busySpeakerId = null,
   onProvision,
   onVisibility,
@@ -285,6 +317,7 @@ export function OrganizerSpeakersContent({
   onReview,
 }: {
   readonly directory: SpeakerDirectory;
+  readonly publishedSpeakerIds?: readonly string[];
   readonly busySpeakerId?: string | null;
   readonly onProvision: (speaker: SpeakerDirectoryItem) => void;
   readonly onVisibility: (speaker: SpeakerDirectoryItem, visible: boolean) => void;
@@ -306,8 +339,8 @@ export function OrganizerSpeakersContent({
   const scheduleConflictCount = directory.speakers.filter((item) =>
     scheduleResponses(item).some(({ acknowledgment }) => acknowledgment.status === "conflict")
   ).length;
-  const provisionedCount = directory.speakers.filter((item) => item.provisioningStatus === "provisioned").length;
-  const visibleCount = directory.speakers.filter((item) => item.speaker.visible).length;
+  const metrics = speakerDirectoryMetrics(directory, publishedSpeakerIds);
+  const publishedSpeakerIdSet = new Set(publishedSpeakerIds);
   const filteredSpeakers = useMemo(
     () => filterSpeakerDirectory(directory.speakers, query, filter, workflowStatus),
     [directory.speakers, filter, query, workflowStatus],
@@ -317,6 +350,10 @@ export function OrganizerSpeakersContent({
   const currentPage = Math.min(page, pageCount);
   const pageStart = (currentPage - 1) * SPEAKERS_PER_PAGE;
   const visibleSpeakers = filteredSpeakers.slice(pageStart, pageStart + SPEAKERS_PER_PAGE);
+  useEffect(() => {
+    const eligibleIds = new Set(directory.speakers.filter(isSpeakerMessageEligible).map(({ speaker }) => speaker.id));
+    setSelectedSpeakerIds((selected) => selected.filter((id) => eligibleIds.has(id)));
+  }, [directory.speakers]);
   const focusedSpeaker = visibleSpeakers.find((item) => item.speaker.id === focusedSpeakerId)
     ?? visibleSpeakers[0]
     ?? null;
@@ -330,23 +367,29 @@ export function OrganizerSpeakersContent({
       <ProductionHeader
         eyebrow="Organizer control room / Cast"
         title="Speakers"
-        description={`Production directory for ${directory.event.name}. Readiness includes onboarding tasks and each speaker's response to the published schedule.`}
+        description={`All speaker records attached to ${directory.event.name}. Provisioned speakers have portal access; published now is the immutable live gallery.`}
         accent="coral"
         actions={
           <span className="border-2 border-[#171714] bg-[#ff714f] px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] shadow-[3px_3px_0_#171714]">
-            {directory.speakers.length} speakers on call
+            {metrics.records} speaker records
           </span>
         }
       />
       <ProductionStats
         stats={[
-          { label: "Speakers", value: directory.speakers.length, tone: "paper" },
-          { label: "Provisioned", value: provisionedCount, tone: "sky" },
+          { label: "Records", value: metrics.records, tone: "paper" },
+          { label: "Provisioned", value: metrics.provisioned, tone: "sky" },
+          { label: "Published now", value: metrics.published, tone: "purple" },
+          { label: "Next publish", value: metrics.nextPublish, tone: "paper" },
           { label: "Ready", value: readyCount, tone: "lime" },
           { label: "Schedule conflicts", value: scheduleConflictCount, tone: "coral" },
-          { label: "Public", value: visibleCount, tone: "purple" },
         ]}
       />
+      <div className="grid gap-3 border-2 border-[#171714] bg-[#fffdf7] p-4 text-sm shadow-[4px_4px_0_#171714] md:grid-cols-3">
+        <p><strong className="block text-xs uppercase tracking-wide">Records</strong>Every imported, direct, or accepted speaker profile in this event.</p>
+        <p><strong className="block text-xs uppercase tracking-wide">Provisioned</strong>Accepted speakers whose portal account is active.</p>
+        <p><strong className="block text-xs uppercase tracking-wide">Published now</strong>Speakers in the current live gallery snapshot. “Next publish” is only a draft inclusion flag.</p>
+      </div>
       {onCreate || onImportCsv ? (
         <details className="group border-2 border-[#171714] bg-[#fffdf7] shadow-[4px_4px_0_#171714]">
           <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-xs font-black uppercase tracking-[0.12em] marker:content-none">
@@ -367,7 +410,7 @@ export function OrganizerSpeakersContent({
                   <Input name="title" label="Title" />
                   <Input name="company" label="Company" />
                   <Input name="workflowStatus" label="Workflow status" defaultValue="Invited" required />
-                  <Checkbox name="visible" label="Visible when published" defaultChecked />
+                  <Checkbox name="visible" label="Include in next speaker publish" defaultChecked />
                 </div>
                 <Textarea name="bio" label="Biography" />
                 <div className="flex flex-wrap gap-2">
@@ -420,7 +463,7 @@ export function OrganizerSpeakersContent({
             <option value="needs_attention">Needs attention</option>
             <option value="ready">Ready</option>
             <option value="unprovisioned">Not provisioned</option>
-            <option value="hidden">Hidden from gallery</option>
+            <option value="hidden">Hidden from next publish</option>
           </Select>
           <Select
             label="Workflow status"
@@ -436,10 +479,10 @@ export function OrganizerSpeakersContent({
         </div>
         {onMessage ? (
           <div className="mb-4 flex flex-wrap items-center gap-3 border-2 border-[#171714] bg-[#dff7ff] p-3">
-            <strong className="text-xs uppercase tracking-wide">{selectedSpeakerIds.length} selected</strong>
+            <strong className="text-xs uppercase tracking-wide">{selectedSpeakerIds.length} of {metrics.outreachEligible} outreach-eligible selected</strong>
             <Button size="sm" variant="secondary" disabled={selectedSpeakerIds.length === 0 || busySpeakerId === "messages"} onClick={() => onMessage(selectedSpeakerIds, "invite")}>Send invites</Button>
             <Button size="sm" variant="secondary" disabled={selectedSpeakerIds.length === 0 || busySpeakerId === "messages"} onClick={() => onMessage(selectedSpeakerIds, "reminder")}>Remind outstanding</Button>
-            <Button size="sm" variant="ghost" onClick={() => setSelectedSpeakerIds(visibleSpeakers.map((item) => item.speaker.id))}>Select page</Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelectedSpeakerIds(visibleSpeakers.filter(isSpeakerMessageEligible).map((item) => item.speaker.id))}>Select eligible on page</Button>
             <Button size="sm" variant="ghost" onClick={() => setSelectedSpeakerIds([])}>Clear</Button>
           </div>
         ) : null}
@@ -487,6 +530,7 @@ export function OrganizerSpeakersContent({
                       className="[&_label]:sr-only"
                       label={`Select ${item.speaker.displayName}`}
                       checked={selectedSpeakerIds.includes(item.speaker.id)}
+                      disabled={!isSpeakerMessageEligible(item)}
                       onChange={(event) => {
                         const checked = event.currentTarget.checked;
                         setSelectedSpeakerIds((selected) => checked
@@ -520,7 +564,7 @@ export function OrganizerSpeakersContent({
                     </span>
                     <span className="flex flex-wrap items-center gap-1.5 lg:block lg:space-y-1.5">
                       <Badge tone={isSpeakerReady(item) ? "success" : hasScheduleAttention(item) ? "warning" : "neutral"}>{item.speaker.workflowStatus}</Badge>
-                      <span className="block text-[11px] font-bold text-ink-faint">{item.speaker.visible ? "Public" : "Hidden"}</span>
+                      <span className="block text-[11px] font-bold text-ink-faint">{publishedSpeakerIdSet.has(item.speaker.id) ? "Published now" : item.speaker.visible ? "Next publish" : "Hidden"}</span>
                     </span>
                     <span aria-hidden="true" className="absolute right-3 top-3 text-xl font-black text-ink lg:top-1/2 lg:-translate-y-1/2">→</span>
                   </button>
@@ -653,7 +697,7 @@ export function OrganizerSpeakersContent({
                         {focusedSpeaker.source === "manual" ? <Badge tone="neutral">Direct</Badge> : focusedSpeaker.provisioningStatus === "provisioned" ? <Badge tone="success">Provisioned</Badge> : focusedSpeaker.provisioningStatus === "failed" ? <Badge tone="danger">Failed</Badge> : <Badge tone="warning">Not provisioned</Badge>}
                       </div>
                       <Checkbox
-                        label={focusedSpeaker.speaker.visible ? "Visible in public gallery" : "Hidden from public gallery"}
+                        label={focusedSpeaker.speaker.visible ? "Included in next speaker publish" : "Hidden from next speaker publish"}
                         checked={focusedSpeaker.speaker.visible}
                         disabled={busySpeakerId === focusedSpeaker.speaker.id || focusedSpeaker.provisioningStatus !== "provisioned" || focusedSpeaker.speaker.profileReviewStatus !== "approved"}
                         onChange={(event) => onVisibility(focusedSpeaker, event.currentTarget.checked)}
@@ -685,7 +729,7 @@ export function OrganizerSpeakersContent({
                           <Input name="workflowStatus" label="Workflow status" defaultValue={focusedSpeaker.speaker.workflowStatus} required />
                           <Textarea name="bio" label="Biography" defaultValue={focusedSpeaker.speaker.bio ?? ""} />
                           {onUploadHeadshot ? <Input type="file" accept="image/jpeg,image/png,image/webp" label="Replace headshot" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) onUploadHeadshot(focusedSpeaker, file); }} /> : null}
-                          <Checkbox name="visible" label="Publicly visible" defaultChecked={focusedSpeaker.speaker.visible} />
+                          <Checkbox name="visible" label="Include in next speaker publish" defaultChecked={focusedSpeaker.speaker.visible} />
                           <Button size="sm" type="submit" loading={busySpeakerId === focusedSpeaker.speaker.id}>Save speaker</Button>
                         </form>
                       </details>

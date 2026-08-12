@@ -1303,7 +1303,7 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
     }
   }
   const speakerIds = speakerRows.map((speaker) => speaker.id);
-  const [definitions, assignments, completions, contacts, sessionRows] = yield* Effect.all([
+  const [definitions, assignments, completions, contacts, sessionRows, messageEligibleSpeakerIds] = yield* Effect.all([
     database(() => db.select().from(tasks).where(eq(tasks.eventId, input.eventId)).orderBy(asc(tasks.order), asc(tasks.id))),
     database(() => db.select().from(taskAssignments).where(eq(taskAssignments.eventId, input.eventId))),
     speakerIds.length === 0 ? Effect.succeed([] as readonly (typeof taskCompletions.$inferSelect)[]) : database(() => db.select().from(taskCompletions).where(and(eq(taskCompletions.eventId, input.eventId), inArray(taskCompletions.speakerId, speakerIds)))),
@@ -1313,6 +1313,7 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
       .where(and(eq(speakerContacts.eventId, input.eventId), inArray(speakerContacts.speakerId, speakerIds)))
       .orderBy(desc(speakerContacts.contactedAt), desc(speakerContacts.id))),
     loadPublishedSpeakerSessions(input.eventId, speakerIds),
+    eligiblePublicSpeakerIds([input.eventId]),
   ]);
   const onboardingFormIds = definitions.flatMap((task) => task.kind === "form" && task.formId !== null ? [task.formId] : []);
   const storedPrivateFieldRows = speakerIds.length === 0 || onboardingFormIds.length === 0
@@ -1414,6 +1415,7 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
       provisioningVersion: accepted?.provisioning.version ?? 0,
       provisioningStatus: accepted?.provisioning.status ?? "manual",
       provisionedAt: accepted ? millis(accepted.provisioning.provisionedAt) : null,
+      messageEligible: messageEligibleSpeakerIds.has(speaker.id),
       sessions: sessionRows.filter((session) => session.speakerId === speaker.id).map(({ session }) => session),
       privateFields: privateFieldRows
         .filter((field) => {

@@ -85,6 +85,7 @@ function speakerItem(
     provisioningVersion: 2,
     provisioningStatus: "provisioned",
     provisionedAt: Date.UTC(2027, 6, 10),
+    messageEligible: true,
     sessions: [],
     readiness: {
       tasksTotal,
