@@ -55,6 +55,15 @@ The demo identities exercise the normal authorization paths without requiring ac
 - Create event tasks and resource/wiki pages, including allowlisted embedded content.
 - Give organizers an aggregate readiness dashboard, directory, and explicit contact history.
 
+### Reuse work across editions
+
+- Let private-installation staff support every event without adding fake per-event memberships.
+- Search a browser-only speaker directory across prior events, then invite a returning speaker into a new event without sending mail or accepting on their behalf.
+- Preview and copy an owner/admin/reviewer team between events while preserving existing target roles.
+- Clone an event into a private, unpublished next edition with draft forms, pending review rounds, task templates, resource pages, tracks, rooms, and message templates—but no proposals, reviews, decisions, speakers, agenda/publication state, deliveries, credentials, or integrations.
+
+See [Recurring events and install staff](docs/recurring-events.md) for the authority model and the exact clone boundary.
+
 ### Build and run the agenda
 
 - Draft talks with room, track, or time left as TBD.
@@ -148,7 +157,7 @@ Review these values in the deployment form:
 | `TURNSTILE_SECRET` | The widget's secret key |
 | `TURNSTILE_HOSTNAMES` | The final hostname, for example `events.example.com` |
 
-Keep `INITIAL_ADMIN_EMAIL` set for a private installation. That address can sign in and create the first event; reviewer invitations and managed-speaker onboarding remain available without opening public registration. Leaving it blank preserves open registration for a hosted, multi-tenant service.
+Keep `INITIAL_ADMIN_EMAIL` set for a private installation. That address can sign in, receives install-wide staff authority, and can create the first event; reviewer invitations and managed-speaker onboarding remain available without opening public registration. Leaving it blank enables open registration and deliberately disables install-wide staff grants.
 
 ### Connect the domain
 

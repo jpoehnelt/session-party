@@ -161,6 +161,94 @@ export const ApplyTeamCopyOutput = Schema.Struct({
 });
 export type ApplyTeamCopyOutput = typeof ApplyTeamCopyOutput.Type;
 
+export const EventCloneCollectionName = Schema.Literal(
+  "forms",
+  "formFields",
+  "reviewRounds",
+  "taskTemplates",
+  "resourcePages",
+  "tracks",
+  "rooms",
+  "messageTemplates",
+  "teamMemberships",
+);
+export type EventCloneCollectionName = typeof EventCloneCollectionName.Type;
+
+export const EventCloneExcludedName = Schema.Literal(
+  "submissions",
+  "reviews",
+  "decisions",
+  "speakers",
+  "agendaPlacements",
+  "publishedFormVersions",
+  "publishedAgendaRevisions",
+  "embeds",
+  "deliveries",
+  "apiKeys",
+  "integrations",
+);
+export type EventCloneExcludedName = typeof EventCloneExcludedName.Type;
+
+export const EventCloneCount = Schema.Struct({
+  collection: EventCloneCollectionName,
+  count: Schema.Int.pipe(Schema.nonNegative()),
+});
+export type EventCloneCount = typeof EventCloneCount.Type;
+
+export const EventCloneExcludedCount = Schema.Struct({
+  collection: EventCloneExcludedName,
+  sourceCount: Schema.Int.pipe(Schema.nonNegative()),
+});
+export type EventCloneExcludedCount = typeof EventCloneExcludedCount.Type;
+
+const EventCloneTarget = Schema.Struct({
+  name: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200)),
+  slug: Schema.String.pipe(
+    Schema.minLength(2),
+    Schema.maxLength(80),
+    Schema.pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  ),
+  startsAt: Schema.Int.pipe(Schema.nonNegative()),
+  endsAt: Schema.Int.pipe(Schema.nonNegative()),
+  includeTeam: Schema.Boolean,
+});
+
+export const PreviewEventCloneInput = Schema.extend(EventCloneTarget, Schema.Struct({
+  eventId: EntityId,
+}));
+export type PreviewEventCloneInput = typeof PreviewEventCloneInput.Type;
+
+export const EventClonePreview = Schema.Struct({
+  sourceEventId: EntityId,
+  sourceEventName: Schema.String,
+  sourceVersion: Schema.Int.pipe(Schema.positive()),
+  targetName: Schema.String,
+  targetSlug: Schema.String,
+  startsAt: Schema.DateFromString,
+  endsAt: Schema.DateFromString,
+  includeTeam: Schema.Boolean,
+  collections: Schema.Array(EventCloneCount),
+  excluded: Schema.Array(EventCloneExcludedCount),
+  structureFingerprint: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{64}$/)),
+});
+export type EventClonePreview = typeof EventClonePreview.Type;
+
+export const ApplyEventCloneInput = Schema.extend(PreviewEventCloneInput, Schema.Struct({
+  expectedSourceVersion: Schema.Int.pipe(Schema.positive()),
+  expectedStructureFingerprint: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{64}$/)),
+  idempotencyKey: IdempotencyKey,
+}));
+export type ApplyEventCloneInput = typeof ApplyEventCloneInput.Type;
+
+export const ApplyEventCloneOutput = Schema.Struct({
+  sourceEventId: EntityId,
+  event: EventOutput,
+  collections: Schema.Array(EventCloneCount),
+  includeTeam: Schema.Boolean,
+  idempotent: Schema.Boolean,
+});
+export type ApplyEventCloneOutput = typeof ApplyEventCloneOutput.Type;
+
 export const ReviewerInvitation = Schema.Struct({
   id: EntityId,
   eventId: EntityId,
