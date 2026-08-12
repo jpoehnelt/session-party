@@ -20,6 +20,7 @@ import {
   requireMailConfiguration,
   sendMail,
   sessionSecret,
+  turnstileVerificationPolicy,
 } from "./services";
 
 type TestEnv = Cloudflare.Env & {
@@ -98,6 +99,54 @@ beforeAll(async () => {
 });
 
 describe("hackathon demo authentication", () => {
+  it("uses Cloudflare test verification only for the exact disposable demo event", () => {
+    const productionEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        if (property === "LOCAL_MODE" || property === "PREVIEW_MODE") return undefined;
+        if (property === "TURNSTILE_SITE_KEY") return "live-site-key";
+        if (property === "TURNSTILE_SECRET") return "live-secret";
+        if (property === "TURNSTILE_HOSTNAMES") return "sessionparty.com,www.sessionparty.com";
+        return Reflect.get(target, property, receiver);
+      },
+    }) as Env;
+
+    expect(turnstileVerificationPolicy(productionEnv, "demo-event")).toMatchObject({
+      demoVerification: true,
+      secret: "1x0000000000000000000000000000000AA",
+      acceptedAction: "test",
+      configured: true,
+    });
+    expect([...turnstileVerificationPolicy(productionEnv, "demo-event").acceptedHostnames])
+      .toEqual(["localhost"]);
+
+    expect(turnstileVerificationPolicy(productionEnv, "another-event")).toMatchObject({
+      demoVerification: false,
+      secret: "live-secret",
+      acceptedAction: "cfp-submit",
+      configured: true,
+    });
+    expect([...turnstileVerificationPolicy(productionEnv, "another-event").acceptedHostnames])
+      .toEqual(["sessionparty.com", "www.sessionparty.com"]);
+  });
+
+  it("keeps non-demo verification fail-closed without live configuration", () => {
+    const productionEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        if (
+          property === "LOCAL_MODE"
+          || property === "PREVIEW_MODE"
+          || property === "TURNSTILE_SITE_KEY"
+          || property === "TURNSTILE_SECRET"
+          || property === "TURNSTILE_HOSTNAMES"
+        ) return undefined;
+        return Reflect.get(target, property, receiver);
+      },
+    }) as Env;
+
+    expect(turnstileVerificationPolicy(productionEnv, "demo-event").configured).toBe(true);
+    expect(turnstileVerificationPolicy(productionEnv, "another-event").configured).toBe(false);
+  });
+
   it.each([
     ["organizer", "sbek-organizer@example.com", "Jordan Alvarez"],
     ["speaker", "sbek-speaker@example.com", "Priya Raman"],

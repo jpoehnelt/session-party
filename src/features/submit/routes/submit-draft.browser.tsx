@@ -58,6 +58,7 @@ describe("public submission draft lifecycle", () => {
     await act(async () => root.unmount());
     container.remove();
     window.localStorage.clear();
+    delete window.turnstile;
     vi.unstubAllGlobals();
   });
 
@@ -110,6 +111,17 @@ describe("public submission draft lifecycle", () => {
   });
 
   it("uses the published Turnstile test key only for a deterministic demo round-trip", async () => {
+    const turnstileRender = vi.fn((_container: HTMLElement, options: {
+      readonly callback: (token: string) => void;
+    }) => {
+      options.callback("XXXX.DUMMY.TOKEN.XXXX");
+      return "demo-widget";
+    });
+    window.turnstile = {
+      render: turnstileRender,
+      reset: vi.fn(),
+      remove: vi.fn(),
+    };
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       submissionId: "submission-demo-created",
       status: "submitted",
@@ -118,7 +130,15 @@ describe("public submission draft lifecycle", () => {
     vi.stubGlobal("fetch", fetchMock);
     await renderForm({ ...fixture, turnstileSiteKey: "1x00000000000000000000AA" });
 
-    expect(container.textContent).toContain("Demo verification ready");
+    expect(container.textContent).toContain("Demo verification");
+    expect(container.textContent).toContain("Verification is still checked by Cloudflare");
+    expect(turnstileRender).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.objectContaining({
+        sitekey: "1x00000000000000000000AA",
+        action: "cfp-submit",
+      }),
+    );
     const title = document.querySelector<HTMLInputElement>("#public-submit-field-title");
     await act(async () => userEvent.fill(title!, "Automation without a bypass"));
     const submit = [...document.querySelectorAll<HTMLButtonElement>("button")]
@@ -130,8 +150,29 @@ describe("public submission draft lifecycle", () => {
       "/api/v1/public/events/architecture-summit/forms/form-public/submissions",
       expect.objectContaining({
         method: "POST",
-        body: expect.stringContaining('"turnstileToken":"session-party-demo-turnstile"'),
+        body: expect.stringContaining('"turnstileToken":"XXXX.DUMMY.TOKEN.XXXX"'),
       }),
     );
+  });
+
+  it("keeps the live widget and hides demo labeling for another event", async () => {
+    const turnstileRender = vi.fn(() => "live-widget");
+    window.turnstile = {
+      render: turnstileRender,
+      reset: vi.fn(),
+      remove: vi.fn(),
+    };
+
+    await renderForm({ ...fixture, turnstileSiteKey: "live-site-key" });
+
+    expect(container.textContent).not.toContain("Demo verification");
+    expect(turnstileRender).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.objectContaining({
+        sitekey: "live-site-key",
+        action: "cfp-submit",
+      }),
+    );
+    expect(document.querySelector('[aria-label="Human verification"]')).not.toBeNull();
   });
 });

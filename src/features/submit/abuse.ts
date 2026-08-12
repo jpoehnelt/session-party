@@ -5,12 +5,22 @@ import { Context, Effect } from "effect";
 export const TURNSTILE_TOKEN_MAX_LENGTH = 2_048;
 
 /**
- * Cloudflare's documented always-pass test key. AppLayer exposes it only for
- * explicitly fake external services, so the public client can make local/demo
- * automation deterministic without weakening a real production challenge.
+ * The disposable production demo event deliberately uses Cloudflare's
+ * published always-pass test credentials. Every other event continues to use
+ * the configured live widget and secret.
  */
+export const TURNSTILE_DEMO_EVENT_ID = "demo-event";
 export const TURNSTILE_ALWAYS_PASS_SITE_KEY = "1x00000000000000000000AA";
-export const TURNSTILE_DEMO_TOKEN = "session-party-demo-turnstile";
+export const TURNSTILE_ALWAYS_PASS_SECRET_KEY = "1x0000000000000000000000000000000AA";
+export const TURNSTILE_TEST_ACTION = "test";
+export const TURNSTILE_TEST_HOSTNAME = "localhost";
+
+export const turnstileSiteKeyForEvent = (
+  eventId: string,
+  configuredSiteKey: string | null,
+): string | null => eventId === TURNSTILE_DEMO_EVENT_ID
+  ? TURNSTILE_ALWAYS_PASS_SITE_KEY
+  : configuredSiteKey;
 
 export type PublicSubmissionAbuseAttempt = {
   readonly eventId: string;

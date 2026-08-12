@@ -105,7 +105,8 @@ describe("public submit route", () => {
     expect(markup).toContain("Speaker details");
     expect(markup).toContain("Accounts are not required");
     expect(markup).toContain("Add co-speaker");
-    expect(markup).toContain("Demo verification ready");
+    expect(markup).toContain("Demo verification");
+    expect(markup).toContain("Verification is still checked by Cloudflare");
     expect(markup).not.toContain("AppShell");
   });
 
