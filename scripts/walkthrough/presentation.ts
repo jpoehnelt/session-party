@@ -6,9 +6,6 @@ const overlayCss = `
   [data-walkthrough-callout]{display:none;position:absolute;border:5px solid #00e5ff;box-shadow:0 0 0 4px #fff,0 0 0 9999px #06121999,9px 9px 0 #071820;transition:all .28s ease}
   [data-walkthrough-callout]::after{content:attr(data-label);position:absolute;left:-5px;top:-42px;background:#00e5ff;color:#061219;border:3px solid #fff;padding:7px 11px;font:950 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;box-shadow:4px 4px 0 #071820}
   [data-walkthrough-callout][data-side=right]::after{left:auto;right:-4px}
-  [data-walkthrough-title]{display:none;position:absolute;left:50%;top:50%;width:min(760px,80vw);transform:translate(-50%,-50%);background:#fffdf7;border:5px solid #171714;box-shadow:14px 14px 0 #7857ff;padding:34px 42px;text-align:left}
-  [data-walkthrough-title] strong{display:block;font-size:48px;line-height:1;font-weight:950;letter-spacing:-.055em;color:#171714}
-  [data-walkthrough-title] span{display:block;margin-top:16px;font-size:22px;line-height:1.35;font-weight:700;color:#4f4a40}
   [data-walkthrough-tech]{display:none;position:absolute;right:28px;top:28px;width:min(660px,46vw);background:#061219f2;color:#fff;border:4px solid #00e5ff;box-shadow:0 0 0 4px #fff,12px 12px 0 #071820;padding:20px 22px}
   [data-walkthrough-tech] b{display:block;color:#00e5ff;font:950 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.16em;text-transform:uppercase;margin-bottom:14px}
   [data-walkthrough-tech] ul{display:grid;gap:10px;margin:0;padding:0;list-style:none}
@@ -23,7 +20,7 @@ export async function installPresentationLayer(page: Page) {
     if ((globalThis as any).document.querySelector("[data-walkthrough-layer]")) return;
     const layer = (globalThis as any).document.createElement("div");
     layer.dataset.walkthroughLayer = "true";
-    layer.innerHTML = "<div data-walkthrough-cursor></div><div data-walkthrough-callout></div><div data-walkthrough-title><strong></strong><span></span></div><aside data-walkthrough-tech><b>Technical trace · replacing SaaS with owned primitives</b><ul></ul></aside>";
+    layer.innerHTML = "<div data-walkthrough-cursor></div><div data-walkthrough-callout></div><aside data-walkthrough-tech><b>Technical trace · replacing SaaS with owned primitives</b><ul></ul></aside>";
     (globalThis as any).document.documentElement.append(layer);
     const style = (globalThis as any).document.createElement("style");
     style.dataset.walkthroughStyle = "true";
@@ -34,17 +31,8 @@ export async function installPresentationLayer(page: Page) {
 
 export async function titleCard(page: Page, title: string, subtitle: string, technicalDetails: readonly string[] = []) {
   await installPresentationLayer(page);
-  await page.evaluate(({ title, subtitle }) => {
-    const card = (globalThis as any).document.querySelector("[data-walkthrough-title]")!;
-    card.querySelector("strong")!.textContent = title;
-    card.querySelector("span")!.textContent = subtitle;
-    card.style.display = "block";
-  }, { title, subtitle });
-  await page.waitForTimeout(1_250);
-  await page.evaluate(() => {
-    const card = (globalThis as any).document.querySelector("[data-walkthrough-title]");
-    if (card) card.style.display = "none";
-  });
+  void title;
+  void subtitle;
   if (technicalDetails.length) {
     await page.evaluate((items) => {
       const panel = (globalThis as any).document.querySelector("[data-walkthrough-tech]")!;
@@ -61,7 +49,7 @@ export async function titleCard(page: Page, title: string, subtitle: string, tec
       }));
       panel.style.display = "block";
     }, technicalDetails);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(350);
   }
 }
 

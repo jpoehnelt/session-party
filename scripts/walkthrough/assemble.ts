@@ -50,36 +50,47 @@ for (const scene of manifest.scenes) {
   shortClips.push(shortTarget);
 }
 
-const normalizedById = new Map(manifest.scenes.map((scene, index) => [scene.id, normalized[index]!]));
 const hookSpecs = [
-  { id: "cfp", start: 10, label: "CFP BUILDER" },
-  { id: "cfp", start: 15, label: "PUBLIC SUBMISSION" },
-  { id: "review", start: 10, label: "BLIND REVIEW" },
-  { id: "speaker_portal", start: 9, label: "SPEAKER PORTAL" },
-  { id: "agenda", start: 11, label: "AGENDA" },
-  { id: "live_show", start: 10, label: "PARTYSERVER LIVE DESK" },
-  { id: "publication", start: 15, label: "PUBLICATION" },
-  { id: "widgets_and_close", start: 2, label: "STABLE PUBLIC EMBED" },
+  { image: "workspace.png" },
+  { image: "cfp.png" },
+  { image: "review.png" },
+  { image: "speaker_portal.png" },
+  { image: "agenda.png" },
+  { image: "live_show.png" },
+  { image: "publication.png" },
+  { image: "widgets_and_close.png" },
 ] as const;
+const hookClipSeconds = 1.5;
+const hookFadeSeconds = 0.2;
 const hookClips: string[] = [];
 for (const [index, spec] of hookSpecs.entries()) {
-  const source = normalizedById.get(spec.id);
-  if (!source) throw new Error(`Missing normalized scene for cold open: ${spec.id}`);
+  const source = resolve(outputDir, "screenshots", spec.image);
   const target = resolve(normalizedDir, `hook-${String(index + 1).padStart(2, "0")}.mp4`);
   const plate = resolve(normalizedDir, `hook-${String(index + 1).padStart(2, "0")}.png`);
   const svg = `
     <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
       <rect x="28" y="26" width="1030" height="72" fill="#061219" fill-opacity=".94"/>
       <text x="52" y="75" fill="#00e5ff" font-family="Arial, sans-serif" font-size="38" font-weight="900">KILL 6 SAAS PRODUCTS. ONE CLOUDFLARE APP.</text>
-      <rect x="28" y="980" width="620" height="68" fill="#061219" fill-opacity=".94"/>
-      <text x="52" y="1026" fill="white" font-family="Arial, sans-serif" font-size="31" font-weight="900">${spec.label}</text>
     </svg>`;
   await sharp(Buffer.from(svg)).png().toFile(plate);
-  run("ffmpeg", ["-y", "-ss", String(spec.start), "-i", source, "-loop", "1", "-i", plate, "-t", "1.35", "-filter_complex", "[0:v][1:v]overlay=0:0", "-r", "30", "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-an", target]);
+  run("ffmpeg", [
+    "-y", "-loop", "1", "-i", source, "-loop", "1", "-i", plate,
+    "-t", String(hookClipSeconds),
+    "-filter_complex", `[0:v]scale=1980:1114,crop=1920:1080:x='(in_w-out_w)*t/${hookClipSeconds}':y='(in_h-out_h)/2'[base];[base][1:v]overlay=0:0`,
+    "-r", "30", "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-an", target,
+  ]);
   hookClips.push(target);
 }
 const hook = resolve(normalizedDir, "cold-open.mp4");
-run("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", await concatFile("cold-open.txt", hookClips), "-c", "copy", hook]);
+const hookInputs = hookClips.flatMap((clip) => ["-i", clip]);
+const hookTransitions: string[] = [];
+for (let index = 1; index < hookClips.length; index += 1) {
+  const input = index === 1 ? "[0:v]" : `[hook${index - 1}]`;
+  const output = index === hookClips.length - 1 ? "[hook]" : `[hook${index}]`;
+  const offset = index * (hookClipSeconds - hookFadeSeconds);
+  hookTransitions.push(`${input}[${index}:v]xfade=transition=fade:duration=${hookFadeSeconds}:offset=${offset.toFixed(2)}${output}`);
+}
+run("ffmpeg", ["-y", ...hookInputs, "-filter_complex", hookTransitions.join(";"), "-map", "[hook]", "-r", "30", "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-an", hook]);
 normalized[0] = hook;
 const hookDuration = mediaDuration(hook);
 const hookShort = resolve(normalizedDir, "intro-short.mp4");
