@@ -88,7 +88,9 @@ describe("public schedule route", () => {
     expect(markup).toContain("Systems Summit");
     expect(markup).toContain("Schedule coming soon");
     expect(markup).toContain("no sessions have been added");
-    expect(markup).toContain("Schedule revision 3");
+    expect(markup).toContain("Updated ");
+    expect(markup).not.toContain("Live revision");
+    expect(markup).not.toContain("Schedule revision");
   });
 
   it("renders the selected aesthetic and brand color inside the embed", () => {

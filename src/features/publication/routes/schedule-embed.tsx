@@ -185,7 +185,6 @@ function ScheduleEmbedBody({
           {[
             ["Venue", agenda.location ?? "Online", "bg-production-sky"],
             ["Audience clock", agenda.timezone, "bg-production-lime"],
-            ["Live revision", String(agenda.revision).padStart(2, "0"), "bg-production-yellow"],
           ].map(([term, detail, color], index) => (
             <div className={`flex flex-col justify-center px-5 py-5 ${design.aesthetic === "bold" ? color : "bg-surface-muted"} ${index > 0 ? `${design.aesthetic === "bold" ? "border-t-2" : "border-t"} border-line-strong` : ""}`} key={term}>
               <dt className={`text-[10px] font-black uppercase tracking-[0.14em] ${design.aesthetic === "bold" ? "text-ink" : "text-ink-secondary"}`}>{term}</dt>
@@ -215,7 +214,7 @@ function ScheduleEmbedBody({
       }`}>
         <p className={`text-[10px] font-black uppercase tracking-[0.14em] ${design.aesthetic === "bold" ? "text-white/55" : "text-ink-secondary"}`}>Session Party · Audience feed</p>
         <p className={`text-[10px] font-bold uppercase tracking-[0.1em] ${design.aesthetic === "bold" ? "text-white/70" : "text-ink-secondary"}`}>
-          Schedule revision {agenda.revision} · Published {new Intl.DateTimeFormat(undefined, {
+          Updated {new Intl.DateTimeFormat(undefined, {
             dateStyle: "medium",
             timeStyle: "short",
             timeZone: agenda.timezone,
