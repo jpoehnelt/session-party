@@ -231,6 +231,7 @@ export class Scheduler extends DurableObject<Env> {
     if (request.headers.get("x-session-party-internal") !== secret) {
       return new Response("Forbidden", { status: 403 });
     }
+    if (url.pathname === "/health") return Response.json({ ok: true });
     if (url.pathname === "/poke") {
       if (!this.isCanonicalMailScheduler()) return new Response("Not found", { status: 404 });
       const next = Date.now() + 1;

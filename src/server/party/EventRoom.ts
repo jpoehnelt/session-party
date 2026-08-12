@@ -519,7 +519,7 @@ export class EventRoom extends Server<Env> {
 
   override async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method !== "POST" || url.pathname !== "/broadcast") {
+    if (request.method !== "POST" || (url.pathname !== "/broadcast" && url.pathname !== "/health")) {
       return new Response("Not found", { status: 404 });
     }
 
@@ -532,6 +532,7 @@ export class EventRoom extends Server<Env> {
     if (request.headers.get("x-session-party-internal") !== secret) {
       return new Response("Forbidden", { status: 403 });
     }
+    if (url.pathname === "/health") return Response.json({ ok: true });
 
     let broadcast: EventRoomBroadcast | null = null;
     try {

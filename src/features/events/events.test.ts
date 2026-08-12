@@ -24,6 +24,7 @@ import {
   type Authorizer,
   type ApiKeyCredentials,
   type CurrentUser,
+  type EventCreationAccess,
   type MailQueue,
   AppLayer,
   CurrentUser as CurrentUserTag,
@@ -91,17 +92,24 @@ const reviewer = browserPrincipal("user-reviewer", "Reviewer");
 const outsider = browserPrincipal("user-outsider", "Outsider");
 const secondOwner = browserPrincipal("user-second-owner", "Second owner");
 
-type EventServiceRequirements = ApiKeyCredentials | Authorizer | CurrentUser | Db | MailQueue;
+type EventServiceRequirements =
+  | ApiKeyCredentials
+  | Authorizer
+  | CurrentUser
+  | Db
+  | EventCreationAccess
+  | MailQueue;
 
 const runEitherAs = <A, E>(
   principal: BrowserSessionPrincipal | EventApiKeyPrincipal,
   effect: Effect.Effect<A, E, EventServiceRequirements>,
+  runtimeEnv: Cloudflare.Env = env,
 ) =>
   Effect.runPromise(
     effect.pipe(
       Effect.either,
       Effect.provide(
-        Layer.merge(AppLayer(env), Layer.succeed(CurrentUserTag, principal)),
+        Layer.merge(AppLayer(runtimeEnv), Layer.succeed(CurrentUserTag, principal)),
       ),
     ),
   );
@@ -119,8 +127,9 @@ const describeFailure = (error: unknown): string => {
 const runAs = async <A>(
   principal: BrowserSessionPrincipal | EventApiKeyPrincipal,
   effect: Effect.Effect<A, AppError, EventServiceRequirements>,
+  runtimeEnv: Cloudflare.Env = env,
 ): Promise<A> => {
-  const result = await runEitherAs(principal, effect);
+  const result = await runEitherAs(principal, effect, runtimeEnv);
   if (result._tag === "Left") {
     throw new Error(`Unexpected Effect failure (${describeFailure(result.left)})`);
   }
@@ -131,8 +140,9 @@ const expectFailure = async (
   principal: BrowserSessionPrincipal | EventApiKeyPrincipal,
   effect: Effect.Effect<unknown, AppError, EventServiceRequirements>,
   tag: AppError["_tag"],
+  runtimeEnv: Cloudflare.Env = env,
 ): Promise<AppError> => {
-  const result = await runEitherAs(principal, effect);
+  const result = await runEitherAs(principal, effect, runtimeEnv);
   if (result._tag === "Right") {
     throw new Error(`Expected ${tag}, but the Effect succeeded`);
   }
@@ -631,5 +641,50 @@ describe("events service", () => {
     await expectFailure(reviewer, createEventApiKey(input), "Forbidden");
     await expectFailure(outsider, listEventApiKeys({ eventId: created.id }), "Forbidden");
     await expectFailure(apiKeyPrincipal("self-managing", created.id, ["event:read", "event:write"]), createEventApiKey(input), "Forbidden");
+  });
+
+  it("restricts closed-mode event creation to the bootstrap operator and existing owners", async () => {
+    const bootstrapOperator = browserPrincipal(`bootstrap-${crypto.randomUUID()}`, "Bootstrap operator");
+    const blockedAccount = browserPrincipal(`blocked-${crypto.randomUUID()}`, "Blocked account");
+    const now = Date.now();
+    await env.DB.batch([bootstrapOperator, blockedAccount].map((principal) =>
+      env.DB.prepare(
+        "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+      ).bind(principal.userId, principal.email, principal.name, now, now),
+    ));
+
+    const closedEnv = new Proxy(env, {
+      get(target, property, receiver) {
+        if (property === "EVENT_CREATION_MODE") return "closed";
+        if (property === "INITIAL_ADMIN_EMAIL") return bootstrapOperator.email;
+        return Reflect.get(target, property, receiver);
+      },
+    }) as Cloudflare.Env;
+    const bootstrap = await runAs(
+      bootstrapOperator,
+      createEvent({ name: "Closed bootstrap", slug: `closed-${crypto.randomUUID()}` }),
+      closedEnv,
+    );
+    await expectFailure(
+      blockedAccount,
+      createEvent({ name: "Blocked account", slug: `blocked-${crypto.randomUUID()}` }),
+      "Forbidden",
+      closedEnv,
+    );
+
+    const ownerOnlyEnv = new Proxy(closedEnv, {
+      get(target, property, receiver) {
+        if (property === "INITIAL_ADMIN_EMAIL") return "another-operator@example.com";
+        return Reflect.get(target, property, receiver);
+      },
+    }) as Cloudflare.Env;
+    const additional = await runAs(
+      bootstrapOperator,
+      createEvent({ name: "Existing owner event", slug: `owner-${crypto.randomUUID()}` }),
+      ownerOnlyEnv,
+    );
+
+    expect(bootstrap.name).toBe("Closed bootstrap");
+    expect(additional.name).toBe("Existing owner event");
   });
 });

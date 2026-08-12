@@ -343,56 +343,34 @@ describe("hackathon demo authentication", () => {
 });
 
 describe("durable magic-link authentication", () => {
-  it("closes self-hosted registration while preserving bootstrap and invited users", async () => {
+  it("publishes only the effective event-creation posture", async () => {
+    const response = await SELF.fetch("https://example.test/api/v1/auth/config");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      eventCreation: {
+        configured: true,
+        mode: "open",
+        open: true,
+        initialAdminConfigured: false,
+      },
+    });
+  });
+
+  it("keeps account creation available when event creation is closed", async () => {
     const initialAdminEmail = `self-host-owner-${crypto.randomUUID()}@example.com`;
     const unknownEmail = `self-host-unknown-${crypto.randomUUID()}@example.com`;
     const existingEmail = `self-host-existing-${crypto.randomUUID()}@example.com`;
-    const invitedEmail = `self-host-reviewer-${crypto.randomUUID()}@example.com`;
     const fixture = crypto.randomUUID();
     const now = Date.now();
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES (?, ?, 'Existing User', 1, ?, ?)",
-      ).bind(`self-host-existing-${fixture}`, existingEmail, now, now),
-      env.DB.prepare(
-        "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES (?, ?, 'Inviter', 1, ?, ?)",
-      ).bind(`self-host-inviter-${fixture}`, `self-host-inviter-${fixture}@example.com`, now, now),
-      env.DB.prepare(
-        "INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES (?, ?, 'Self-host event', 'UTC', 1, ?, ?)",
-      ).bind(`self-host-event-${fixture}`, `self-host-${fixture}`, now, now),
-      env.DB.prepare(
-        "INSERT INTO mail_delivery_snapshots (id, event_id, recipient_email, from_email, subject, rendered_html, rendered_text, created_at) VALUES (?, ?, ?, 'Session Party <welcome@example.com>', 'Invitation', '<p>Invitation</p>', 'Invitation', ?)",
-      ).bind(`self-host-snapshot-${fixture}`, `self-host-event-${fixture}`, invitedEmail, now),
-      env.DB.prepare(
-        "INSERT INTO mail_deliveries (id, snapshot_id, idempotency_key, status, scheduled_for, available_at, attempt_count, max_attempts, provider, created_at) VALUES (?, ?, ?, 'pending', ?, ?, 0, 8, 'cloudflare-email', ?)",
-      ).bind(
-        `self-host-delivery-${fixture}`,
-        `self-host-snapshot-${fixture}`,
-        `self-host-reviewer-invitation-${fixture}`,
-        now,
-        now,
-        now,
-      ),
-      env.DB.prepare(
-        "INSERT INTO reviewer_invitations (id, event_id, email, token_hash, status, invited_by_user_id, delivery_id, expires_at, version, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 1, ?, ?)",
-      ).bind(
-        `self-host-invitation-${fixture}`,
-        `self-host-event-${fixture}`,
-        invitedEmail,
-        "a".repeat(64),
-        `self-host-inviter-${fixture}`,
-        `self-host-delivery-${fixture}`,
-        now + 60_000,
-        now,
-        now,
-      ),
-    ]);
+    await env.DB.prepare(
+      "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES (?, ?, 'Existing User', 1, ?, ?)",
+    ).bind(`self-host-existing-${fixture}`, existingEmail, now, now).run();
 
     const closedEnv = new Proxy(env, {
       get(target, property, receiver) {
-        return property === "INITIAL_ADMIN_EMAIL"
-          ? `  ${initialAdminEmail.toUpperCase()}  `
-          : Reflect.get(target, property, receiver);
+        if (property === "INITIAL_ADMIN_EMAIL") return `  ${initialAdminEmail.toUpperCase()}  `;
+        if (property === "EVENT_CREATION_MODE") return "closed";
+        return Reflect.get(target, property, receiver);
       },
     }) as Env;
     const request = (email: string) => worker.fetch(
@@ -411,18 +389,25 @@ describe("durable magic-link authentication", () => {
     expect((await request(initialAdminEmail)).status).toBe(202);
     expect((await request(unknownEmail)).status).toBe(202);
     expect((await request(existingEmail)).status).toBe(202);
-    expect((await request(invitedEmail)).status).toBe(202);
     expect(await env.DB.prepare(
       `SELECT
         (SELECT count(*) FROM users WHERE email = ?) AS initial_admin_users,
         (SELECT count(*) FROM users WHERE email = ?) AS unknown_users,
-        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link') AS existing_tokens,
-        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link') AS invited_tokens`,
-    ).bind(initialAdminEmail, unknownEmail, existingEmail, invitedEmail).first()).toEqual({
+        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link') AS initial_admin_tokens,
+        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link') AS unknown_tokens,
+        (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link') AS existing_tokens`,
+    ).bind(
+      initialAdminEmail,
+      unknownEmail,
+      initialAdminEmail,
+      unknownEmail,
+      existingEmail,
+    ).first()).toEqual({
       initial_admin_users: 1,
-      unknown_users: 0,
+      unknown_users: 1,
+      initial_admin_tokens: 1,
+      unknown_tokens: 1,
       existing_tokens: 1,
-      invited_tokens: 1,
     });
   });
 

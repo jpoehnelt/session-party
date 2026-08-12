@@ -14,6 +14,8 @@ import {
   synchronizeAuthenticatedPrincipal,
 } from "./api";
 import LoginPage from "./auth";
+import { EventCreationWarning } from "./event-creation";
+import SetupPage from "./setup";
 import { availableEventNavItems, type EventNavRole } from "./event-nav";
 import {
   discoveredClientRouteModules,
@@ -84,6 +86,9 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
         </Link>
         <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} border-2 border-on-accent bg-production-lime px-3 py-2.5 text-xs font-black uppercase tracking-[0.1em] text-ink shadow-[4px_4px_0_#7857ff]`} to="/events?choose=1" onClick={onNavigate}>
           Your home →
+        </Link>
+        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} text-xs font-black uppercase tracking-[0.08em] text-white/70 hover:text-white`} to="/setup" onClick={onNavigate}>
+          Operator setup
         </Link>
       </nav>
     );
@@ -235,6 +240,7 @@ function Layout({ children, contentWidth }: { children: ReactNode; contentWidth?
           />
         )}
       >
+        <EventCreationWarning />
         {children}
       </AppShell>
       <Sheet
@@ -344,6 +350,10 @@ export const router = createBrowserRouter([
   {
     path: "/login",
     element: <RouteCoordinator><LoginPage /></RouteCoordinator>,
+  },
+  {
+    path: "/setup",
+    element: routeElement(SetupPage),
   },
   ...discoveredRoutes,
   {

@@ -17,6 +17,7 @@ import {
   Authorizer,
   CurrentUser,
   Db,
+  EventCreationAccess,
   Files,
   Mail,
   MailQueue,
@@ -51,6 +52,7 @@ export type RuntimeServices =
   | Rooms
   | AiService
   | CurrentUser
+  | EventCreationAccess
   | Authorizer
   | PublicSubmissionAbuse
   | PublicSubmissionRequest;
