@@ -639,30 +639,30 @@ function ProfileEditor({
         <Button className={productionButtonClass} type="button" variant="secondary" disabled={locked || loading} onClick={onImport}>Copy from reusable profile</Button>
         <a className={`${productionButtonClass} inline-flex items-center px-3 py-2 text-xs font-black uppercase`} href="/speaker/profile">Manage reusable profile</a>
       </div>
-      <fieldset disabled={locked || loading} className="contents">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Input name="displayName" label="Display name" required defaultValue={profile.displayName} />
-        <Input name="title" label="Title" defaultValue={profile.title ?? ""} />
-        <Input name="company" label="Company" defaultValue={profile.company ?? ""} />
-      </div>
-      <Textarea name="bio" label="Biography" rows={6} defaultValue={profile.bio ?? ""} />
-      <div className="space-y-3">
-        <p className="text-xs font-black uppercase tracking-[0.12em] text-[#171714]">Public links</p>
-        {Array.from({ length: linkCount }, (_, index) => (
-          <div key={index} className="grid gap-3 sm:grid-cols-[minmax(8rem,0.4fr)_minmax(0,1fr)]">
-            <Input name="linkLabel" aria-label={`Link ${index + 1} label`} placeholder="Website" defaultValue={profile.links[index]?.label ?? ""} />
-            <Input
-              name="linkUrl"
-              aria-label={`Link ${index + 1} URL`}
-              type="url"
-              pattern="https?://.*"
-              placeholder="https://"
-              defaultValue={profile.links[index]?.url ?? ""}
-            />
-          </div>
-        ))}
-        <Button className={productionButtonClass} type="button" variant="ghost" size="sm" onClick={() => setLinkCount((count) => count + 1)}>Add another link</Button>
-      </div>
+      <fieldset disabled={locked || loading} className="space-y-5">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Input name="displayName" label="Display name" required defaultValue={profile.displayName} />
+          <Input name="title" label="Title" defaultValue={profile.title ?? ""} />
+          <Input name="company" label="Company" defaultValue={profile.company ?? ""} />
+        </div>
+        <Textarea name="bio" label="Biography" rows={6} defaultValue={profile.bio ?? ""} />
+        <div className="space-y-3">
+          <p className="text-xs font-black uppercase tracking-[0.12em] text-[#171714]">Public links</p>
+          {Array.from({ length: linkCount }, (_, index) => (
+            <div key={index} className="grid gap-3 sm:grid-cols-[minmax(8rem,0.4fr)_minmax(0,1fr)]">
+              <Input name="linkLabel" aria-label={`Link ${index + 1} label`} placeholder="Website" defaultValue={profile.links[index]?.label ?? ""} />
+              <Input
+                name="linkUrl"
+                aria-label={`Link ${index + 1} URL`}
+                type="url"
+                pattern="https?://.*"
+                placeholder="https://"
+                defaultValue={profile.links[index]?.url ?? ""}
+              />
+            </div>
+          ))}
+          <Button className={productionButtonClass} type="button" variant="ghost" size="sm" onClick={() => setLinkCount((count) => count + 1)}>Add another link</Button>
+        </div>
       </fieldset>
       <div className="flex flex-wrap gap-3">
         <Button className={`${productionButtonClass} bg-[#896aff] text-[#171714]`} type="submit" loading={loading} disabled={locked}>Save profile</Button>
