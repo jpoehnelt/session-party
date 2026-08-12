@@ -64,10 +64,13 @@ interface AssignmentOutput {
   };
 }
 
-interface AcceptanceOutput {
-  readonly provisioningId: string;
-  readonly primarySpeakerId: string;
+interface StageDecisionOutput {
   readonly submissionVersion: number;
+}
+
+interface ReleaseDecisionsOutput {
+  readonly releasedCount: number;
+  readonly acceptedCount: number;
 }
 
 interface ClaimOutput {
@@ -453,34 +456,30 @@ await request(`/events/${eventId}/review/rounds/demo-review-round-active/submiss
   },
 });
 
-workbench = await request<Workbench>(
-  `/events/${eventId}/review?selectedSubmissionId=${encode(submission.submissionId)}`,
-  { session: ownerSession },
-);
+workbench = await request<Workbench>(`/events/${eventId}/review?selectedSubmissionId=${encode(submission.submissionId)}`, { session: ownerSession });
 if (!workbench.selected) throw new Error("Submission disappeared after review");
-const accepted = await request<AcceptanceOutput>(
-  `/events/${eventId}/review/submissions/${encode(submission.submissionId)}/acceptance`,
-  {
-    method: "POST",
-    session: ownerSession,
-    headers: {
-      "idempotency-key": "demo-accept-primary-proposal-v1",
-      "x-request-id": "demo-accept-request-v1",
-    },
-    body: { expectedVersion: workbench.selected.version },
-  },
-);
+const stagedPrimary = await request<StageDecisionOutput>(`/events/${eventId}/review/submissions/${encode(submission.submissionId)}/decision`, {
+  method: "PUT", session: ownerSession,
+  headers: { "idempotency-key": "demo-stage-primary-proposal-v1", "x-request-id": "demo-stage-primary-request-v1" },
+  body: { decision: "accepted", expectedVersion: workbench.selected.version },
+});
+const primaryRelease = await request<ReleaseDecisionsOutput>(`/events/${eventId}/review/decisions/release`, {
+  method: "POST", session: ownerSession,
+  headers: { "idempotency-key": "demo-release-primary-proposal-v1", "x-request-id": "demo-release-primary-request-v1" },
+  body: { decisions: [{ submissionId: submission.submissionId, expectedVersion: stagedPrimary.submissionVersion, expectedDecision: "accepted" }] },
+});
+if (primaryRelease.releasedCount !== 1 || primaryRelease.acceptedCount !== 1) throw new Error("Primary proposal decision was not released");
 
 const claimed = await request<ClaimOutput>(`/events/${eventId}/portal/claim`, {
   method: "POST",
   session: speakerSession,
   body: { idempotencyKey: "demo-claim-primary-speaker-v1" },
 });
-if (claimed.speakerId !== accepted.primarySpeakerId || claimed.provisioningId !== accepted.provisioningId) {
+if (claimed.acceptanceEventId === "" || claimed.provisioningId === "") {
   throw new Error("Speaker claim did not resolve the accepted primary speaker");
 }
 if (claimed.provisioningStatus !== "provisioned") {
-  await request(`/events/${eventId}/portal/speakers/${encode(accepted.primarySpeakerId)}/provision`, {
+  await request(`/events/${eventId}/portal/speakers/${encode(claimed.speakerId)}/provision`, {
     method: "POST",
     session: ownerSession,
     body: { provisioningId: claimed.provisioningId, expectedVersion: claimed.provisioningVersion },
@@ -489,43 +488,37 @@ if (claimed.provisioningStatus !== "provisioned") {
 
 const acceptedPeople: Array<{
   readonly submission: SubmissionOutput;
-  readonly acceptance: AcceptanceOutput;
   readonly claim: ClaimOutput;
   readonly speaker: (typeof fixtureSpeakers)[number];
 }> = [
-  { submission, acceptance: accepted, claim: claimed, speaker: fixtureSpeakers[0]! },
+  { submission, claim: claimed, speaker: fixtureSpeakers[0]! },
 ];
 for (let index = 1; index < acceptedSubmissions.length; index += 1) {
   const candidate = acceptedSubmissions[index]!;
   const speaker = fixtureSpeakers[index]!;
-  const acceptance = await request<AcceptanceOutput>(
-    `/events/${eventId}/review/submissions/${encode(candidate.submissionId)}/acceptance`,
-    {
-      method: "POST",
-      session: ownerSession,
-      headers: {
-        "idempotency-key": `demo-accept-proposal-${index + 1}-v1`,
-        "x-request-id": `demo-accept-request-${index + 1}-v1`,
-      },
-      body: { expectedVersion: 1 },
-    },
-  );
+  const staged = await request<StageDecisionOutput>(`/events/${eventId}/review/submissions/${encode(candidate.submissionId)}/decision`, {
+    method: "PUT", session: ownerSession,
+    headers: { "idempotency-key": `demo-stage-proposal-${index + 1}-v1`, "x-request-id": `demo-stage-request-${index + 1}-v1` },
+    body: { decision: "accepted", expectedVersion: 1 },
+  });
+  await request<ReleaseDecisionsOutput>(`/events/${eventId}/review/decisions/release`, {
+    method: "POST", session: ownerSession,
+    headers: { "idempotency-key": `demo-release-proposal-${index + 1}-v1`, "x-request-id": `demo-release-request-${index + 1}-v1` },
+    body: { decisions: [{ submissionId: candidate.submissionId, expectedVersion: staged.submissionVersion, expectedDecision: "accepted" }] },
+  });
   const claim = await request<ClaimOutput>(`/events/${eventId}/portal/claim`, {
     method: "POST",
     session: speaker.session,
     body: { idempotencyKey: `demo-claim-speaker-${index + 1}-v1` },
   });
-  if (claim.speakerId !== acceptance.primarySpeakerId) {
-    throw new Error(`Speaker ${index + 1} claimed the wrong accepted profile`);
-  }
   if (claim.provisioningStatus !== "provisioned") {
-    await request(`/events/${eventId}/portal/speakers/${encode(acceptance.primarySpeakerId)}/provision`, {
+    await request(`/events/${eventId}/portal/speakers/${encode(claim.speakerId)}/provision`, {
       method: "POST",
       session: ownerSession,
       body: { provisioningId: claim.provisioningId, expectedVersion: claim.provisioningVersion },
     });
   }
-  acceptedPeople.push({ submission: candidate, acceptance, claim, speaker });
+  acceptedPeople.push({ submission: candidate, claim, speaker });
 }
 
 const managedSpeaker = await request<SpeakerProfile>(`/events/${eventId}/portal/speakers`, {
@@ -810,7 +803,7 @@ await request(`/events/${eventId}/comms/deliveries`, {
   body: {
     templateId: template.id,
     expectedTemplateVersion: template.version,
-    recipientKeys: [`${accepted.primarySpeakerId}:accepted`],
+    recipientKeys: [`${claimed.speakerId}:accepted`],
     replyToEmail: "program@sessionparty.local",
     scheduledFor: null,
     idempotencyKey: "demo-enqueue-speaker-mail-v1",
@@ -862,10 +855,10 @@ console.log(JSON.stringify({
   event: { id: eventId, slug: eventSlug },
   forms: { cfp: publishedCfp.id, task: publishedTaskForm.id },
   submission: submission.submissionId,
-  speaker: accepted.primarySpeakerId,
+  speaker: claimed.speakerId,
   reusableProfile: { id: reusableProfile.id, slug: reusableProfile.slug },
   managedSpeaker: managedSpeaker.id,
-  provisioning: accepted.provisioningId,
+  provisioning: claimed.provisioningId,
   tasks: tasks.map(({ id }) => id),
   scale: {
     speakers: publicSpeakers.speakers.length,
