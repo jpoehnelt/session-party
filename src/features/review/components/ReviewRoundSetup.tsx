@@ -204,7 +204,9 @@ export function ReviewRoundSetup({
                         <p className="truncate text-sm font-black text-ink"><span className="mr-2 bg-ink px-1.5 py-1 font-mono text-[10px] text-production-lime">{String(round.order).padStart(2, "0")}</span>{round.name}</p>
                         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-faint">
                           <Badge tone={statusTone[round.status]}>{round.status}</Badge>
-                          {round.blind && <Badge tone="warning">Blind</Badge>}
+                          <Badge tone={round.blind ? "warning" : "neutral"}>
+                            {round.blind ? "Anonymized" : "Identified"}
+                          </Badge>
                           <span>{round.rubric.criteria.length} criteria</span>
                           <span>{round.rubric.criteria.reduce((total, criterion) => total + criterion.weight, 0)} total weight</span>
                         </p>
@@ -242,7 +244,17 @@ export function ReviewRoundSetup({
               <option value="active" disabled={!canCreateActive}>Active now</option>
             </Select>
           )}
-          <Checkbox checked={blind} onChange={(event) => setBlind(event.target.checked)} label="Blind review" description="Hide presenter names and identities from reviewers in this round." />
+          <Select
+            label="Review identity mode"
+            value={blind ? "anonymized" : "identified"}
+            onChange={(event) => setBlind(event.target.value === "anonymized")}
+          >
+            <option value="identified">Identified — reviewers see presenter identity</option>
+            <option value="anonymized">Anonymized — hide presenter identity from reviewers</option>
+          </Select>
+          <p className="text-xs leading-5 text-ink-faint">
+            Anonymized rounds hide presenter profiles and identity-tagged form answers from reviewers. Owners and admins always retain the full submission record.
+          </p>
 
           <div className="space-y-3 border-t-2 border-line-strong pt-4">
             <div className="flex flex-wrap items-center justify-between gap-2">

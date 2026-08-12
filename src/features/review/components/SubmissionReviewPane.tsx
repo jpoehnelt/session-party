@@ -367,13 +367,18 @@ export function SubmissionReviewPane({
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={statusTone[submission.status]}>{statusLabel[submission.status]}</Badge>
           <Badge tone="neutral">{submission.category ?? "Uncategorized"}</Badge>
+          {round ? (
+            <Badge tone={round.blind ? "warning" : "neutral"}>
+              {round.blind ? "Anonymized review" : "Identified review"}
+            </Badge>
+          ) : null}
           <span className="text-[10px] font-black uppercase tracking-[0.08em] text-ink">Version {submission.version}</span>
         </div>
         <h2 id={`proposal-heading-${submission.id}`} className="mt-3 max-w-4xl text-3xl font-black leading-tight tracking-[-0.045em] text-ink">{submission.title}</h2>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm font-semibold text-ink">
           <span>
             {round?.blind && submission.speakers.length === 0
-              ? "Presenter identities hidden for blind review"
+              ? "Presenter identities and identity-tagged answers are hidden for this anonymized round"
               : submission.speakers.map((speaker, index) => (
                 <span key={speaker.id}>
                   {index > 0 && ", "}

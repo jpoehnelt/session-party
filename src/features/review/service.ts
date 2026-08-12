@@ -1086,9 +1086,12 @@ export const getWorkbench = (
       const abstract = answerRows.find(
         (answer) => answer.semanticKey === "submissionAbstract" && typeof answer.value === "string",
       )?.value;
-      const hiddenAnswerKeys = new Set(["submissionTitle", "submissionAbstract", "speakerName", "speakerEmail"]);
+      const primaryAnswerKeys = new Set(["submissionTitle", "submissionAbstract"]);
+      const identityAnswerKeys = new Set(["speakerName", "speakerEmail"]);
+      const anonymizeForReviewer = selectedRound?.blind === true && viewer.role === "reviewer";
       const visibleAnswers = answerRows
-        .filter((answer) => !answer.semanticKey || !hiddenAnswerKeys.has(answer.semanticKey))
+        .filter((answer) => !answer.semanticKey || !primaryAnswerKeys.has(answer.semanticKey))
+        .filter((answer) => !anonymizeForReviewer || !answer.semanticKey || !identityAnswerKeys.has(answer.semanticKey))
         .map((answer) => ({
           label: answer.label,
           value: typeof answer.value === "string"
@@ -1135,13 +1138,13 @@ export const getWorkbench = (
       selected = {
         ...selectedSummary,
         abstract: typeof abstract === "string" ? abstract : "",
-        speakers: selectedRound?.blind && viewer.role === "reviewer"
+        speakers: anonymizeForReviewer
           ? []
           : speakerRows.map((speaker) => ({
             ...speaker,
             role: speaker.roleLabel ?? (speaker.isPrimary ? "Primary presenter" : "Co-presenter"),
           })),
-        answers: selectedRound?.blind && viewer.role === "reviewer" ? [] : visibleAnswers,
+        answers: visibleAnswers,
         round: selectedRound ?? null,
         assignments: detailAssignments,
         reviews: detailHumanReviews,

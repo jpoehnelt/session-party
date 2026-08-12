@@ -332,6 +332,9 @@ describe("review workbench route", () => {
     expect(markup).toContain("Ada Rivera</a> (Primary presenter)");
     expect(markup).toContain("Review rounds");
     expect(markup).toContain("Create round");
+    expect(markup).toContain("Identified review");
+    expect(markup).toContain("Review identity mode");
+    expect(markup).toContain("Anonymized — hide presenter identity from reviewers");
     expect(markup).toContain("Version 3");
     expect(markup).not.toContain("Fixture snapshot");
     expect(markup).not.toContain("reviewWorkbenchFixture");
@@ -346,6 +349,38 @@ describe("review workbench route", () => {
     expect(markup).toContain("Accept &amp; provision primary speaker");
     expect(markup).toContain("No email is sent");
     expect(markup).toContain("Save my review");
+  });
+
+  it("makes anonymized mode explicit to reviewers without rendering presenter identity", () => {
+    const anonymizedWorkbench: ReviewWorkbench = {
+      ...workbench,
+      viewerRole: "reviewer",
+      viewerUserId: "user_reviewer",
+      reviewers: [],
+      progress: null,
+      rounds: workbench.rounds.map((round) => ({ ...round, blind: true })),
+      queue: workbench.queue.map((submission) => ({ ...submission, assignedToMe: true, assignmentCount: 1 })),
+      selected: workbench.selected && {
+        ...workbench.selected,
+        assignedToMe: true,
+        assignmentCount: 1,
+        speakers: [],
+        answers: [{ label: "Session format", value: "Workshop (120 min)" }],
+        round: workbench.selected.round && { ...workbench.selected.round, blind: true },
+      },
+    };
+
+    const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
+      workbench: anonymizedWorkbench,
+      onSelectSubmission: () => undefined,
+    }));
+
+    expect(markup).toContain("Anonymized review");
+    expect(markup).toContain("Presenter identities and identity-tagged answers are hidden for this anonymized round");
+    expect(markup).toContain("Session format");
+    expect(markup).toContain("Workshop (120 min)");
+    expect(markup).not.toContain("Ada Rivera");
+    expect(markup).not.toContain("Review identity mode");
   });
 
   it("reuses known event identity for cancellable proposal detail loads", async () => {

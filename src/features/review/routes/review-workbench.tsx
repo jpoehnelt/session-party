@@ -698,6 +698,11 @@ export function ReviewWorkbenchContent({
             <h1 className="text-4xl font-black leading-none tracking-[-0.055em] text-ink sm:text-5xl">Proposal review</h1>
             <Badge tone="neutral">{queue.length} in round</Badge>
             <Badge tone="accent">{loadedRound ? `${loadedRound.name} · ${loadedRound.status}` : "No review round"}</Badge>
+            {loadedRound ? (
+              <Badge tone={loadedRound.blind ? "warning" : "neutral"}>
+                {loadedRound.blind ? "Anonymized review" : "Identified review"}
+              </Badge>
+            ) : null}
           </div>
           <p className="mt-3 text-sm font-semibold text-ink">Evidence-first triage for {workbench.eventName}. Times shown in {workbench.timezone}.</p>
           {workbench.rounds.length > 1 && onSelectRound && loadedRound && (
