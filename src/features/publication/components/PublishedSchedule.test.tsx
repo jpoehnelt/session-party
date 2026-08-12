@@ -100,6 +100,16 @@ describe("published schedule rendering", () => {
     expect(markup).toContain('aria-label="All sessions"');
   });
 
+  it("wraps long timezone names inside the fixed schedule time rail", () => {
+    const markup = renderToStaticMarkup(createElement(PublishedSchedule, {
+      agenda,
+      initialView: "list",
+    }));
+
+    expect(markup).toContain("[overflow-wrap:anywhere]");
+    expect(markup).toContain("45 min · America/Los_Angeles");
+  });
+
   it("links duplicate display names by stable event-speaker identity", () => {
     const markup = renderToStaticMarkup(createElement(PublishedSchedule, {
       agenda: {
