@@ -509,6 +509,32 @@ describe("speaker portal content", () => {
     expect(markup).toContain("headshots up to 10 MiB, slides up to 100 MiB, and documents up to 25 MiB");
   });
 
+  it("offers an explicit checklist-task selector when multiple upload requests share a purpose", () => {
+    const uploadTask = {
+      ...snapshot.tasks[0]!,
+      id: "task-slides-final",
+      name: "Upload Session Presentation",
+      kind: "upload" as const,
+      description: "Upload slides as PDF or 16:9 deck.",
+      prerequisite: { satisfied: true, message: null },
+    };
+    const markup = renderToStaticMarkup(createElement(SpeakerPortalContent, {
+      snapshot: {
+        ...snapshot,
+        tasks: [uploadTask, { ...uploadTask, id: "task-slides-revised", name: "Upload revised presentation" }],
+      },
+      onSaveProfile: noop,
+      onToggleTask: noop,
+      onUpload: noop,
+      onSubmitTaskForm: succeeds,
+    }));
+
+    expect(markup).toContain("Checklist task");
+    expect(markup).toContain("Choose the request this file completes");
+    expect(markup).toContain("Upload Session Presentation");
+    expect(markup).toContain("Upload revised presentation");
+  });
+
   it("offers incomplete linked forms without bypassing their completion prerequisite", () => {
     const formSnapshot: PortalSnapshot = {
       ...snapshot,
