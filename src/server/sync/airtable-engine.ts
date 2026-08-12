@@ -25,9 +25,9 @@ import {
   asc,
   desc,
   eq,
+  gt,
   inArray,
   isNull,
-  lt,
   lte,
   or,
   sql,
@@ -60,6 +60,8 @@ const MIN_REQUEST_INTERVAL_MS = 250;
 const RECOVERY_INTERVAL_MS = 60_000;
 const BACKGROUND_REFRESH_INTERVAL_MS = 60_000;
 const MAX_ERROR_LENGTH = 2_000;
+export const AIRTABLE_PROJECTION_SCAN_PAGE_SIZE = 25;
+const REFRESH_RECORD_CONCURRENCY = 4;
 
 type AppDb = DrizzleD1Database<typeof schema>;
 
@@ -79,6 +81,15 @@ export interface AirtableLaneRuntime {
   readonly adapter: AirtableAdapterService;
   readonly broadcast: (eventId: string, message: ServerMessage) => Promise<void>;
   readonly now?: () => Date;
+  readonly projectionCursor?: {
+    readonly get: (integrationId: string) => Promise<AirtableProjectionCursor | undefined>;
+    readonly set: (integrationId: string, cursor: AirtableProjectionCursor) => Promise<void>;
+  };
+}
+
+export interface AirtableProjectionCursor {
+  readonly entityType: AirtableEntityType;
+  readonly afterId: string | null;
 }
 
 export interface AirtableDrainResult {
@@ -292,21 +303,33 @@ const entityProjection = async (
   };
 };
 
-const entityIds = async (
+const entityIdsAfter = async (
   db: AppDb,
   eventId: string,
   entityType: AirtableEntityType,
+  afterId: string | null,
 ): Promise<readonly string[]> => {
   if (entityType === "speaker") {
-    return (await db.select({ id: speakers.id }).from(speakers).where(eq(speakers.eventId, eventId)).orderBy(asc(speakers.id)))
+    return (await db.select({ id: speakers.id }).from(speakers)
+      .where(and(eq(speakers.eventId, eventId), afterId === null ? undefined : gt(speakers.id, afterId)))
+      .orderBy(asc(speakers.id)).limit(AIRTABLE_PROJECTION_SCAN_PAGE_SIZE))
       .map((row) => row.id);
   }
   if (entityType === "submission") {
-    return (await db.select({ id: submissions.id }).from(submissions).where(eq(submissions.eventId, eventId)).orderBy(asc(submissions.id)))
+    return (await db.select({ id: submissions.id }).from(submissions)
+      .where(and(eq(submissions.eventId, eventId), afterId === null ? undefined : gt(submissions.id, afterId)))
+      .orderBy(asc(submissions.id)).limit(AIRTABLE_PROJECTION_SCAN_PAGE_SIZE))
       .map((row) => row.id);
   }
-  return (await db.select({ id: talks.id }).from(talks).where(eq(talks.eventId, eventId)).orderBy(asc(talks.id)))
+  return (await db.select({ id: talks.id }).from(talks)
+    .where(and(eq(talks.eventId, eventId), afterId === null ? undefined : gt(talks.id, afterId)))
+    .orderBy(asc(talks.id)).limit(AIRTABLE_PROJECTION_SCAN_PAGE_SIZE))
     .map((row) => row.id);
+};
+
+const nextEntityType = (entityType: AirtableEntityType): AirtableEntityType => {
+  const index = AIRTABLE_ENTITY_TYPES.indexOf(entityType);
+  return AIRTABLE_ENTITY_TYPES[(index + 1) % AIRTABLE_ENTITY_TYPES.length]!;
 };
 
 /** Recovery projection: transactional feature producers remain the fast path. */
@@ -314,9 +337,25 @@ const enqueueOneMissingProjection = async (
   db: AppDb,
   integration: AirtableIntegration,
   now: Date,
+  cursorStore?: AirtableLaneRuntime["projectionCursor"],
 ): Promise<boolean> => {
-  for (const entityType of AIRTABLE_ENTITY_TYPES) {
-    for (const entityId of await entityIds(db, integration.eventId, entityType)) {
+  const storedCursor = await cursorStore?.get(integration.id);
+  let cursor: AirtableProjectionCursor = storedCursor
+    && AIRTABLE_ENTITY_TYPES.includes(storedCursor.entityType)
+    ? storedCursor
+    : { entityType: AIRTABLE_ENTITY_TYPES[0]!, afterId: null };
+  for (let typeCount = 0; typeCount < AIRTABLE_ENTITY_TYPES.length; typeCount += 1) {
+    const entityType = cursor.entityType;
+    const ids = await entityIdsAfter(db, integration.eventId, entityType, cursor.afterId);
+    if (ids.length === 0) {
+      cursor = { entityType: nextEntityType(entityType), afterId: null };
+      await cursorStore?.set(integration.id, cursor);
+      continue;
+    }
+    for (const entityId of ids) {
+      const nextCursor = ids.length < AIRTABLE_PROJECTION_SCAN_PAGE_SIZE && entityId === ids.at(-1)
+        ? { entityType: nextEntityType(entityType), afterId: null }
+        : { entityType, afterId: entityId };
       const projection = await entityProjection(db, integration, entityType, entityId);
       if (!projection) continue;
       const desiredHash = await sha256(projection.d1);
@@ -355,7 +394,9 @@ const enqueueOneMissingProjection = async (
           )),
       ]);
       if (link?.outboundHash === desiredHash) continue;
-      if (latest?.outboundHash === desiredHash && latest.status !== "dead_letter" && latest.status !== "blocked") continue;
+      if (latest?.outboundHash === desiredHash && latest.status !== "dead_letter" && latest.status !== "blocked") {
+        continue;
+      }
       if (latest?.status === "dead_letter" || latest?.status === "blocked") continue;
 
       const pendingValues = Object.fromEntries(pending.map((row) => [row.fieldKey, row.intendedValue]));
@@ -390,8 +431,14 @@ const enqueueOneMissingProjection = async (
       }).onConflictDoNothing({
         target: [airtableOutbox.integrationId, airtableOutbox.idempotencyKey],
       });
+      await cursorStore?.set(integration.id, nextCursor);
       return true;
     }
+    const lastEntityId = ids.at(-1)!;
+    await cursorStore?.set(integration.id, ids.length < AIRTABLE_PROJECTION_SCAN_PAGE_SIZE
+      ? { entityType: nextEntityType(entityType), afterId: null }
+      : { entityType, afterId: lastEntityId });
+    return false;
   }
   return false;
 };
@@ -456,12 +503,16 @@ const applyInboundRecord = async (
     readonly authoritativeScope?: readonly string[];
     readonly outboundRevision?: number;
     readonly outboundHash?: string;
+    readonly existingLink?: typeof airtableRecordLinks.$inferSelect | null;
+    readonly projection?: EntityProjection | null;
   },
 ): Promise<{ readonly state: "confirmed" | "refreshed" | "conflict"; readonly fields: readonly string[] }> => {
   const scope = input.authoritativeScope ?? airtableOwnedLogicalFields(entityType);
   const incoming = normalizeAuthoritative(integration.config, entityType, record.fields, scope);
   const [existingLink, pending, projection] = await Promise.all([
-    db
+    input.existingLink !== undefined
+      ? Promise.resolve(input.existingLink ?? undefined)
+      : db
       .select()
       .from(airtableRecordLinks)
       .where(and(
@@ -480,7 +531,9 @@ const applyInboundRecord = async (
         eq(airtablePendingEdits.entityId, entityId),
         eq(airtablePendingEdits.status, "pending"),
       )),
-    entityProjection(db, integration, entityType, entityId),
+    input.projection !== undefined
+      ? Promise.resolve(input.projection)
+      : entityProjection(db, integration, entityType, entityId),
   ]);
   if (!projection) {
     throw new AirtableSyncError({
@@ -821,17 +874,27 @@ const claimOutbound = async (
       and(eq(airtableOutbox.status, "claimed"), lte(airtableOutbox.leaseExpiresAt, now)),
     ),
   )).orderBy(asc(airtableOutbox.createdAt), asc(airtableOutbox.outboundRevision)).limit(50);
+  if (candidates.length === 0) return [];
+  const earliestRows = await db
+    .select({
+      entityType: airtableOutbox.entityType,
+      entityId: airtableOutbox.entityId,
+      outboundRevision: sql<number>`min(${airtableOutbox.outboundRevision})`,
+    })
+    .from(airtableOutbox)
+    .where(and(
+      eq(airtableOutbox.integrationId, integrationId),
+      inArray(airtableOutbox.status, ["pending", "retry", "claimed"]),
+    ))
+    .groupBy(airtableOutbox.entityType, airtableOutbox.entityId);
+  const earliestByEntity = new Map(earliestRows.map((row) => [
+    `${row.entityType}:${row.entityId}`,
+    Number(row.outboundRevision),
+  ]));
   const firstByEntity = new Map<string, typeof airtableOutbox.$inferSelect>();
   for (const row of candidates) {
-    const [earlier] = await db.select({ id: airtableOutbox.id }).from(airtableOutbox).where(and(
-      eq(airtableOutbox.integrationId, row.integrationId),
-      eq(airtableOutbox.entityType, row.entityType),
-      eq(airtableOutbox.entityId, row.entityId),
-      lt(airtableOutbox.outboundRevision, row.outboundRevision),
-      inArray(airtableOutbox.status, ["pending", "retry", "claimed"]),
-    )).limit(1);
-    if (earlier) continue;
     const key = `${row.entityType}:${row.entityId}`;
+    if (earliestByEntity.get(key) !== row.outboundRevision) continue;
     if (!firstByEntity.has(key)) firstByEntity.set(key, row);
   }
   const first = firstByEntity.values().next().value as typeof airtableOutbox.$inferSelect | undefined;
@@ -839,23 +902,27 @@ const claimOutbound = async (
   const selected = [...firstByEntity.values()]
     .filter((row) => row.entityType === first.entityType && row.operation === first.operation)
     .slice(0, MAX_AIRTABLE_BATCH);
-  const claimed: (typeof airtableOutbox.$inferSelect)[] = [];
-  for (const row of selected) {
-    const leaseOwner = crypto.randomUUID();
-    const [updated] = await db.update(airtableOutbox).set({
-      status: "claimed",
-      leaseOwner,
-      leaseExpiresAt: new Date(now.getTime() + LEASE_MS),
-      attemptCount: row.attemptCount + 1,
-    }).where(and(
-      eq(airtableOutbox.id, row.id),
-      row.status === "claimed"
-        ? and(eq(airtableOutbox.status, "claimed"), lte(airtableOutbox.leaseExpiresAt, now))
-        : and(inArray(airtableOutbox.status, ["pending", "retry"]), lte(airtableOutbox.availableAt, now)),
-    )).returning();
-    if (updated) claimed.push(updated);
-  }
-  return claimed;
+  if (selected.length === 0) return [];
+  const leaseOwner = crypto.randomUUID();
+  const claims = selected.map((row) => db.update(airtableOutbox).set({
+    status: "claimed",
+    leaseOwner,
+    leaseExpiresAt: new Date(now.getTime() + LEASE_MS),
+    attemptCount: row.attemptCount + 1,
+  }).where(and(
+    eq(airtableOutbox.id, row.id),
+    row.status === "claimed"
+      ? and(eq(airtableOutbox.status, "claimed"), lte(airtableOutbox.leaseExpiresAt, now))
+      : and(inArray(airtableOutbox.status, ["pending", "retry"]), lte(airtableOutbox.availableAt, now)),
+  )));
+  await db.batch(claims as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+  const claimed = await db.select().from(airtableOutbox).where(and(
+    inArray(airtableOutbox.id, selected.map((row) => row.id)),
+    eq(airtableOutbox.status, "claimed"),
+    eq(airtableOutbox.leaseOwner, leaseOwner),
+  ));
+  const order = new Map(selected.map((row, index) => [row.id, index]));
+  return claimed.sort((left, right) => order.get(left.id)! - order.get(right.id)!);
 };
 
 const processOutbound = async (
@@ -1058,6 +1125,22 @@ const failRefresh = async (
   }
 };
 
+const forEachWithConcurrency = async <T>(
+  items: readonly T[],
+  limit: number,
+  visit: (item: T) => Promise<void>,
+): Promise<void> => {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      if (item !== undefined) await visit(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+};
+
 const processRefresh = async (
   db: AppDb,
   integration: AirtableIntegration,
@@ -1098,6 +1181,7 @@ const processRefresh = async (
       cursor: claimed.cursor ?? undefined,
     });
     const seen = new Set<string>();
+    const records: { readonly record: AirtableRecord; readonly sessionPartyId: string }[] = [];
     for (const record of page.records) {
       const sessionPartyId = record.fields[table.fields.sessionPartyId];
       if (typeof sessionPartyId !== "string" || sessionPartyId.length === 0) {
@@ -1131,14 +1215,19 @@ const processRefresh = async (
         continue;
       }
       seen.add(sessionPartyId);
+      records.push({ record, sessionPartyId });
+    }
+    const existingLinks = records.length === 0
+      ? []
+      : await db.select().from(airtableRecordLinks).where(and(
+        eq(airtableRecordLinks.integrationId, integration.id),
+        eq(airtableRecordLinks.entityType, claimed.entityType),
+        inArray(airtableRecordLinks.entityId, records.map(({ sessionPartyId }) => sessionPartyId)),
+      ));
+    const linksByEntity = new Map(existingLinks.map((link) => [link.entityId, link]));
+    await forEachWithConcurrency(records, REFRESH_RECORD_CONCURRENCY, async ({ record, sessionPartyId }) => {
       try {
-        const [existingRecordLink] = await db.select({
-          airtableRecordId: airtableRecordLinks.airtableRecordId,
-        }).from(airtableRecordLinks).where(and(
-          eq(airtableRecordLinks.integrationId, integration.id),
-          eq(airtableRecordLinks.entityType, claimed.entityType),
-          eq(airtableRecordLinks.entityId, sessionPartyId),
-        )).limit(1);
+        const existingRecordLink = linksByEntity.get(sessionPartyId);
         if (existingRecordLink && existingRecordLink.airtableRecordId !== record.id) {
           throw new AirtableSyncError({
             code: "duplicate_session_party_id",
@@ -1170,7 +1259,7 @@ const processRefresh = async (
           claimed.entityType,
           sessionPartyId,
           record,
-          { now },
+          { now, existingLink: existingRecordLink ?? null, projection },
         );
         await integrationBroadcast(broadcast, integration, {
           t: "integrations/airtable_sync",
@@ -1191,7 +1280,7 @@ const processRefresh = async (
           now,
         });
       }
-    }
+    });
     const finished = !page.cursor;
     await db.update(airtableRefreshState).set({
       status: finished ? "idle" : "requested",
@@ -1290,8 +1379,13 @@ export const drainAirtableBase = async (
   const now = runtime.now?.() ?? new Date();
   const baseIntegrations = await integrationsForBase(db, baseId);
   for (const integration of baseIntegrations) {
-    await enqueueOneMissingProjection(db, integration, now);
     if (await processOutbound(db, integration, runtime.adapter, now, runtime.broadcast)) {
+      return { processed: true, nextAlarmAt: now.getTime() + MIN_REQUEST_INTERVAL_MS };
+    }
+  }
+  for (const integration of baseIntegrations) {
+    if (await enqueueOneMissingProjection(db, integration, now, runtime.projectionCursor)
+      && await processOutbound(db, integration, runtime.adapter, now, runtime.broadcast)) {
       return { processed: true, nextAlarmAt: now.getTime() + MIN_REQUEST_INTERVAL_MS };
     }
   }
