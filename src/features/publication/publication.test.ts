@@ -496,6 +496,33 @@ describe("publication boundary", () => {
     expect(jsonResponse.headers.get("x-session-party-revision")).toBe("1");
     expect(await jsonResponse.json()).toEqual(published);
 
+    const publicAgendaUrl = `https://example.test/api/v1/public/events/${seeded.eventSlug}/agenda/published`;
+    const publicAgendaResponse = await SELF.fetch(publicAgendaUrl);
+    expect(publicAgendaResponse.status).toBe(200);
+    expect(publicAgendaResponse.headers.get("cache-control")).toBe("public, max-age=60, s-maxage=60");
+    const publicAgendaEtag = publicAgendaResponse.headers.get("etag");
+    expect(publicAgendaEtag).toBeTruthy();
+    const notModifiedPublicAgenda = await SELF.fetch(publicAgendaUrl, {
+      headers: { "If-None-Match": publicAgendaEtag! },
+    });
+    expect(notModifiedPublicAgenda.status).toBe(304);
+    expect(await notModifiedPublicAgenda.text()).toBe("");
+
+    for (const [credentialName, credentialValue] of [
+      ["Authorization", "Bearer invalid-public-cache-probe"],
+      ["Cookie", "session=invalid-public-cache-probe"],
+    ] as const) {
+      const credentialed = await SELF.fetch(publicAgendaUrl, {
+        headers: new Headers([
+          [credentialName, credentialValue],
+          ["If-None-Match", publicAgendaEtag!],
+        ]),
+      });
+      expect(credentialed.status).toBe(200);
+      expect(credentialed.headers.get("cache-control")).toBe("private, no-store");
+      expect(credentialed.headers.get("etag")).toBeNull();
+    }
+
     const filteredJsonResponse = await SELF.fetch(
       `https://example.test/events/${seeded.eventSlug}/schedule.json?track=Systems`,
     );

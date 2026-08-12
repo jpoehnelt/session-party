@@ -5,6 +5,7 @@ import { Effect } from "effect";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
 import publicationFeeds from "@/features/publication/feed-api";
+import publicHeadshots from "@/features/portal/public-headshots";
 import auth, { apiKeyUserFromRequest, userFromRequest } from "./auth";
 import { runRestOperation, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
@@ -228,6 +229,7 @@ export class SessionPartyMcp extends McpAgent<Env> {
 const app = new Hono<{ Bindings: Env }>();
 
 app.route("/", publicationFeeds);
+app.route("/", publicHeadshots);
 app.route(`${API}/auth`, auth);
 app.get(`${API}/runtime-config`, (c) => c.json(publicRuntimeConfig(c.env)));
 for (const registration of restRegistrations) {
@@ -239,6 +241,10 @@ for (const registration of restRegistrations) {
       await userFromRequest(c.req.raw, c.env) as Principal | null,
       operation,
       registration.input,
+      {
+        cachePublicRead: registration.operationId === "agenda.getPublished"
+          || registration.operationId === "portal.getPublicSpeakers",
+      },
     ),
   );
 }

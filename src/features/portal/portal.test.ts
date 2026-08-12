@@ -1,4 +1,4 @@
-import { env, applyD1Migrations, type D1Migration } from "cloudflare:test";
+import { env, SELF, applyD1Migrations, type D1Migration } from "cloudflare:test";
 import type { AppError } from "contracts/errors";
 import type { BrowserSessionPrincipal } from "contracts/principal";
 import type { ServerMessage } from "contracts/protocol";
@@ -1678,6 +1678,67 @@ describe("portal service", () => {
     await publishSpeakerGallery(setup.eventId, [manual.id], 2);
     const hidden = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
     expect(hidden.speakers).toEqual([expect.objectContaining({ id: manual.id, displayName: "Managed keynote" })]);
+  });
+
+  it("streams only the latest published headshot through a cacheable public URL", async () => {
+    const setup = await fixture();
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const current = (await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId })))
+      .speakers.find(({ speaker }) => speaker.id === setup.speakerId)?.speaker;
+    if (!current) throw new Error("Expected provisioned speaker");
+    const headshot = await runAs(owner, uploadManagedSpeakerHeadshot({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      expectedVersion: current.version,
+      filename: "public-headshot.png",
+      contentType: "image/png",
+      contentBase64: validPngBase64,
+      idempotencyKey: `public-headshot-${setup.eventId}`,
+    }));
+    await publishSpeakerGallery(setup.eventId, [setup.speakerId]);
+
+    const galleryResponse = await SELF.fetch(
+      `https://example.test/api/v1/public/events/${setup.eventSlug}/speakers`,
+    );
+    expect(galleryResponse.status).toBe(200);
+    expect(galleryResponse.headers.get("cache-control")).toContain("public");
+    const gallery = await galleryResponse.json<{ speakers: readonly { id: string; headshotUrl: string | null }[] }>();
+    const headshotUrl = gallery.speakers.find(({ id }) => id === setup.speakerId)?.headshotUrl;
+    expect(headshotUrl).toBe(
+      `/api/v1/public/events/${setup.eventSlug}/speakers/${setup.speakerId}/headshots/${headshot.id}/r1`,
+    );
+    expect(headshotUrl).not.toMatch(/^data:/);
+
+    const publicAssetUrl = `https://example.test${headshotUrl}`;
+    const assetResponse = await SELF.fetch(publicAssetUrl);
+    expect(assetResponse.status).toBe(200);
+    expect(assetResponse.headers.get("content-type")).toBe("image/png");
+    expect(assetResponse.headers.get("cache-control")).toBe("public, max-age=60, s-maxage=60");
+    expect(assetResponse.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(new Uint8Array(await assetResponse.arrayBuffer())).toEqual(
+      Uint8Array.from(atob(validPngBase64), (character) => character.charCodeAt(0)),
+    );
+
+    const etag = assetResponse.headers.get("etag");
+    expect(etag).toBeTruthy();
+    const notModified = await SELF.fetch(publicAssetUrl, { headers: { "If-None-Match": etag! } });
+    expect(notModified.status).toBe(304);
+    expect(await notModified.text()).toBe("");
+    const credentialed = await SELF.fetch(publicAssetUrl, {
+      headers: { Cookie: "session=invalid-public-headshot-cache-probe", "If-None-Match": etag! },
+    });
+    expect(credentialed.status).toBe(200);
+    expect(credentialed.headers.get("cache-control")).toBe("private, no-store");
+    expect(credentialed.headers.get("etag")).toBeNull();
+    expect((await SELF.fetch(publicAssetUrl.replace(`/${setup.speakerId}/`, "/other-speaker/"))).status).toBe(404);
+
+    await publishSpeakerGallery(setup.eventId, [], 2);
+    expect((await SELF.fetch(publicAssetUrl)).status).toBe(404);
   });
 
   it("copies a reusable profile into an event snapshot and locks it through organizer review", async () => {
