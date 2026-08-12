@@ -741,6 +741,7 @@ describe("agenda service", () => {
     const seeded = await seedAgenda("backlog-track-answer");
     const now = new Date(FIXED_NOW);
     const trackFieldId = "backlog-track-answer-field-track";
+    const configuredTrackId = "backlog-track-answer-track-platform-infra";
     await seeded.db.batch([
       seeded.db.insert(formVersionFields).values({
         id: trackFieldId,
@@ -766,7 +767,7 @@ describe("agenda service", () => {
         updatedAt: now,
       }),
       seeded.db.insert(tracks).values({
-        id: "backlog-track-answer-track-platform-infra",
+        id: configuredTrackId,
         eventId: seeded.eventId,
         name: "Platform & Infra",
         order: 1,
@@ -781,6 +782,21 @@ describe("agenda service", () => {
       .toBe("Platform & Infra");
     expect(agenda.backlog.find(({ submissionId }) => submissionId === seeded.submissionB)?.category)
       .toBe("Practice");
+
+    const created = await runAs(seeded.user, createTalk({
+      eventId: seeded.eventId,
+      submissionId: seeded.submissionA,
+      trackId: null,
+      roomId: null,
+      startsAt: null,
+      durationMin: 30,
+      idempotencyKey: "backlog-track-answer-create-0001",
+    }));
+    expect(created.talk.trackId).toBe(configuredTrackId);
+    await expect(seeded.db.select({ trackId: talks.trackId }).from(talks).where(and(
+      eq(talks.eventId, seeded.eventId),
+      eq(talks.id, created.talk.id),
+    )).limit(1)).resolves.toEqual([{ trackId: configuredTrackId }]);
   });
 
   it("retries when a mutation lands between projection and version reads", async () => {
