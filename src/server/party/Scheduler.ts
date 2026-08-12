@@ -29,6 +29,22 @@ const CFP_RATE_RECIPIENT_LIMIT = 3;
 export const MAIL_SCHEDULER_NAME = "mail";
 const MAIL_SCHEDULER_ENABLED_KEY = "mail-scheduler-enabled";
 
+const setAlarmNoLaterThanInTransaction = async (
+  transaction: DurableObjectTransaction,
+  next: number,
+): Promise<void> => {
+  const current = await transaction.getAlarm();
+  if (current === null || current > next) await transaction.setAlarm(next);
+};
+
+export const setSchedulerAlarmNoLaterThan = async (
+  storage: DurableObjectStorage,
+  next: number,
+): Promise<void> => {
+  await storage.transaction((transaction) =>
+    setAlarmNoLaterThanInTransaction(transaction, next));
+};
+
 export const ACCOUNT_DAILY_EMAIL_LIMIT = 1_000;
 export const ACCOUNT_DAILY_CAMPAIGN_LIMIT = 900;
 export const EVENT_DAILY_EMAIL_LIMIT = 500;
@@ -217,8 +233,11 @@ export class Scheduler extends DurableObject<Env> {
     }
     if (url.pathname === "/poke") {
       if (!this.isCanonicalMailScheduler()) return new Response("Not found", { status: 404 });
-      await this.ctx.storage.put(MAIL_SCHEDULER_ENABLED_KEY, true);
-      await this.ctx.storage.setAlarm(Date.now() + 1);
+      const next = Date.now() + 1;
+      await this.ctx.storage.transaction(async (transaction) => {
+        await transaction.put(MAIL_SCHEDULER_ENABLED_KEY, true);
+        await setAlarmNoLaterThanInTransaction(transaction, next);
+      });
       return Response.json({ ok: true });
     }
     if (url.pathname === "/auth/request-link/authorize") {
@@ -832,7 +851,7 @@ export class Scheduler extends DurableObject<Env> {
       });
     } finally {
       if (mailSchedulerEnabled) {
-        await this.ctx.storage.setAlarm(Date.now() + INTERVAL_MS);
+        await setSchedulerAlarmNoLaterThan(this.ctx.storage, Date.now() + INTERVAL_MS);
       }
     }
   }
