@@ -71,8 +71,20 @@ export async function loadOrganizerRoute<T>(
   return apiFetch(`${api}/events/${segment(eventId)}/portal${suffix}`, { schema });
 }
 
-export const getSpeakerPortal = (eventSlug: string) =>
-  apiFetch(`${api}/events/${segment(eventSlug)}/portal`, { schema: PortalSnapshot });
+export async function getSpeakerPortal(eventSlug: string) {
+  // Keep an existing portal account aligned with its newest accepted proposal.
+  // This is best-effort so legacy submissions without speakerEmail semantics do
+  // not prevent an already-provisioned speaker from opening their workspace.
+  try {
+    await claimSpeakerAccount(eventSlug, {
+      eventId: eventSlug,
+      idempotencyKey: crypto.randomUUID(),
+    });
+  } catch {
+    // The portal read below remains authoritative and surfaces access failures.
+  }
+  return apiFetch(`${api}/events/${segment(eventSlug)}/portal`, { schema: PortalSnapshot });
+}
 
 export function claimSpeakerAccount(eventSlug: string, input: ClaimSpeakerInput) {
   const body = requestBody(input, "eventId");
