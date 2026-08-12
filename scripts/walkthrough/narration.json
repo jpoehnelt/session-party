@@ -9,7 +9,7 @@
     "notes": "Lead with organizer value. Let important UI state remain visible for at least two seconds after each action. Do not narrate routine navigation."
   },
   "full": {
-    "targetDurationSeconds": 418,
+    "targetDurationSeconds": 416,
     "scenes": [
       {
         "id": "intro",

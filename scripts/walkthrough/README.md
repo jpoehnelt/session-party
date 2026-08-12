@@ -15,7 +15,7 @@ The recording follows one connected record through the product:
 7. Organizer publishes an immutable program revision.
 8. An anonymous visitor sees the responsive schedule, speakers, embeds, and feeds.
 
-The detailed timing, narration, visual beats, and short-cut edit are in [`narration.json`](./narration.json). The full cut targets 418 seconds; the short cut targets 82 seconds. The assembled video opens with an approximately 11-second flipbook across CFP, submission, review, speaker, agenda, PartyServer live control, publication, and the stable public embed. Every detailed scene carries a persistent technical trace naming the replaced SaaS, registered operation, state primitive, and behavioral guarantee; the trace is cleared only after the relevant interaction finishes.
+The detailed timing, narration, visual beats, and short-cut edit are in [`narration.json`](./narration.json). The full cut targets 416 seconds; the short cut targets 82 seconds. The assembled video opens with an approximately 11-second flipbook across CFP, submission, review, speaker, agenda, PartyServer live control, publication, and the stable public embed. It uses clean held frames, a subtle push-in, short cross-dissolves, and the product's own headings instead of recorder chapter cards. Every detailed scene carries a persistent technical trace naming the replaced SaaS, registered operation, state primitive, and behavioral guarantee; the trace is cleared only after the relevant interaction finishes.
 
 ## Safety and account requirements
 
