@@ -6,6 +6,7 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
+  Avatar,
   Badge,
   Button,
   Card,
@@ -56,6 +57,7 @@ import {
   productionCardClass,
   productionFormClass,
 } from "../components/production-ui";
+import { preferredHeadshotUrl, useDownloadedHeadshot } from "./headshot";
 
 export const path = "/e/:eventSlug/portal/*";
 export const layout = "bare" as const;
@@ -319,6 +321,7 @@ export interface SpeakerPortalContentProps {
     answers: readonly SubmissionAnswer[],
     idempotencyKey: string,
   ) => Promise<boolean>;
+  readonly downloadedHeadshotUrl?: string | null;
 }
 
 export function SpeakerPortalContent({
@@ -332,8 +335,14 @@ export function SpeakerPortalContent({
   onUpload,
   onAddComment = () => undefined,
   onSubmitTaskForm,
+  downloadedHeadshotUrl,
 }: SpeakerPortalContentProps) {
   const [activeFormTaskId, setActiveFormTaskId] = useState<string | null>(null);
+  const loadedHeadshotUrl = useDownloadedHeadshot(snapshot.event.id, snapshot.speaker.headshotAssetId);
+  const headshotUrl = preferredHeadshotUrl(
+    downloadedHeadshotUrl === undefined ? loadedHeadshotUrl : downloadedHeadshotUrl,
+    snapshot.speaker.headshotUrl,
+  );
   const incompleteFormTasks = snapshot.tasks.filter((task) => task.kind === "form" && !task.completed);
   const activeFormTask = incompleteFormTasks.find((task) => task.id === activeFormTaskId);
   return (
@@ -397,6 +406,7 @@ export function SpeakerPortalContent({
             onSave={onSaveProfile}
             onImport={onImportReusableProfile}
             onSubmitReview={onSubmitProfileReview}
+            headshotUrl={headshotUrl}
           />
           <UploadWorkspace
             eventId={snapshot.event.id}
@@ -597,12 +607,14 @@ export function SpeakerTaskFormPanel({
 
 function ProfileEditor({
   profile,
+  headshotUrl,
   loading,
   onSave,
   onImport,
   onSubmitReview,
 }: {
   readonly profile: SpeakerProfile;
+  readonly headshotUrl: string | undefined;
   readonly loading: boolean;
   readonly onSave: (input: UpdateProfileInput) => void;
   readonly onImport: () => void;
@@ -625,10 +637,13 @@ function ProfileEditor({
       aria-labelledby="profile-heading"
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#3e268f]">Profile desk / Public identity</p>
-        <h2 id="profile-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Speaker profile</h2>
-        <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">Bio, links, and a valid reusable headshot stay synced to this event record. Organizer approval and workflow status remain event-specific.</p>
+        <div className="flex min-w-0 items-start gap-4">
+          <Avatar name={profile.displayName} src={headshotUrl} size="lg" className="size-20" />
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#3e268f]">Profile desk / Public identity</p>
+            <h2 id="profile-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Speaker profile</h2>
+            <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">Bio, links, and a valid reusable headshot stay synced to this event record. Organizer approval and workflow status remain event-specific.</p>
+          </div>
         </div>
         <Badge tone={profile.profileReviewStatus === "approved" ? "success" : profile.profileReviewStatus === "changes_requested" ? "danger" : "neutral"}>{statusLabel}</Badge>
       </div>

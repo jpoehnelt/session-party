@@ -4,17 +4,24 @@ import { getSpeakerDirectory } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
 import { organizerAgendaTalkPath } from "@/features/agenda/links";
 import type { SpeakerDirectory } from "../schema";
+import { preferredHeadshotUrl, useDownloadedHeadshot } from "./headshot";
 
 export const path = "/e/:eventSlug/speakers/:speakerId";
 
-export function OrganizerSpeakerDetailContent({ directory, eventSlug, speakerId }: {
+export function OrganizerSpeakerDetailContent({ directory, eventSlug, speakerId, downloadedHeadshotUrl }: {
   readonly directory: SpeakerDirectory;
   readonly eventSlug: string;
   readonly speakerId: string;
+  readonly downloadedHeadshotUrl?: string | null;
 }) {
   const item = directory.speakers.find((candidate) => candidate.speaker.id === speakerId);
+  const loadedHeadshotUrl = useDownloadedHeadshot(directory.event.id, item?.speaker.headshotAssetId ?? null);
   if (!item) return <EmptyState title="Speaker not found" description="This speaker is not part of the selected event." action={<Link className="font-bold underline" to={`/e/${eventSlug}/speakers`}>Back to speakers</Link>} />;
   const { speaker } = item;
+  const headshotUrl = preferredHeadshotUrl(
+    downloadedHeadshotUrl === undefined ? loadedHeadshotUrl : downloadedHeadshotUrl,
+    speaker.headshotUrl,
+  );
   return (
     <div className="space-y-8">
       <PageHeader
@@ -25,7 +32,7 @@ export function OrganizerSpeakerDetailContent({ directory, eventSlug, speakerId 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <Card className="p-6">
           <div className="flex items-start gap-4">
-            <Avatar name={speaker.displayName} src={speaker.headshotUrl ?? undefined} size="lg" />
+            <Avatar name={speaker.displayName} src={headshotUrl} size="lg" />
             <div>
               <div className="flex flex-wrap gap-2">
                 <Badge tone={speaker.profileReviewStatus === "approved" ? "success" : speaker.profileReviewStatus === "changes_requested" ? "danger" : "neutral"}>{speaker.profileReviewStatus.replace("_", " ")}</Badge>

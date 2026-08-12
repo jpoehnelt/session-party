@@ -536,6 +536,29 @@ describe("speaker portal content", () => {
     expect(markup).not.toContain("0 of 1 complete");
   });
 
+  it("renders the persisted uploaded headshot ahead of a stale profile URL", () => {
+    const uploadedHeadshot = "data:image/png;base64,SEVBRFNIT1Q=";
+    const markup = renderToStaticMarkup(createElement(SpeakerPortalContent, {
+      snapshot: {
+        ...snapshot,
+        speaker: {
+          ...snapshot.speaker,
+          headshotAssetId: "asset-headshot",
+          headshotUrl: "https://images.example.com/stale.png",
+        },
+      },
+      downloadedHeadshotUrl: uploadedHeadshot,
+      onSaveProfile: noop,
+      onToggleTask: noop,
+      onUpload: noop,
+      onSubmitTaskForm: succeeds,
+    }));
+
+    expect(markup).toContain(`src="${uploadedHeadshot}"`);
+    expect(markup).toContain('alt="River Okafor"');
+    expect(markup).not.toContain("https://images.example.com/stale.png");
+  });
+
   it("offers an explicit checklist-task selector when multiple upload requests share a purpose", () => {
     const uploadTask = {
       ...snapshot.tasks[0]!,
@@ -731,6 +754,34 @@ describe("organizer content and workflows", () => {
     expect(markup).toContain(`src="${syncedHeadshot}"`);
     expect(markup).toContain("approved");
     expect(markup).toContain("reusable headshot stay synced");
+  });
+
+  it("renders the persisted uploaded headshot ahead of the organizer's stale URL", () => {
+    const uploadedHeadshot = "data:image/webp;base64,SEVBRFNIT1Q=";
+    const staleHeadshot = "https://images.example.com/stale.png";
+    const uploadedDirectory: SpeakerDirectory = {
+      ...directory,
+      speakers: directory.speakers.map((item) => ({
+        ...item,
+        speaker: {
+          ...item.speaker,
+          headshotAssetId: "asset-headshot",
+          headshotUrl: staleHeadshot,
+        },
+      })),
+    };
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null,
+      createElement(OrganizerSpeakerDetailContent, {
+        directory: uploadedDirectory,
+        eventSlug: event.slug,
+        speakerId: profile.id,
+        downloadedHeadshotUrl: uploadedHeadshot,
+      }),
+    ));
+
+    expect(markup).toContain(`src="${uploadedHeadshot}"`);
+    expect(markup).toContain('alt="River Okafor"');
+    expect(markup).not.toContain(staleHeadshot);
   });
 
   it("renders a dense speaker directory and readiness matrix from returned state", () => {
