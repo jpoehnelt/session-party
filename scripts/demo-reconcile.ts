@@ -16,6 +16,51 @@ export interface ProductionEventIdentity {
 
 const sqlQuote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
+const appendUpsert = (
+  statement: string,
+  conflictColumns: readonly string[],
+  updateColumns: readonly string[],
+): string => {
+  if (!statement.endsWith(";")) throw new Error("Exported demo insert must end with a semicolon.");
+  const conflict = conflictColumns.map((column) => `"${column}"`).join(",");
+  const updates = updateColumns.map((column) => `"${column}"=excluded."${column}"`).join(",");
+  return `${statement.slice(0, -1)} ON CONFLICT(${conflict}) DO UPDATE SET ${updates};`;
+};
+
+export function reconcileDemoInsert(statement: string): string {
+  if (statement.startsWith('INSERT INTO "users"')) {
+    return statement.replace('INSERT INTO "users"', 'INSERT OR IGNORE INTO "users"');
+  }
+  if (statement.startsWith('INSERT INTO "speaker_profiles"')) {
+    // The reusable profile belongs to the fixture user, not to one event. Reconcile
+    // it in place so another event's snapshot/source link is never deleted.
+    return appendUpsert(statement, ["user_id"], [
+      "id",
+      "slug",
+      "display_name",
+      "title",
+      "company",
+      "bio",
+      "headshot_url",
+      "links",
+      "visible",
+      "version",
+      "created_at",
+      "updated_at",
+    ]);
+  }
+  if (statement.startsWith('INSERT INTO "speaker_profile_changes"')) {
+    return appendUpsert(statement, ["profile_id", "profile_version"], [
+      "id",
+      "actor_user_id",
+      "before",
+      "after",
+      "created_at",
+    ]);
+  }
+  return statement;
+}
+
 export function assertExactProductionTarget(rows: readonly ProductionEventIdentity[]): void {
   if (
     rows.length !== 1
@@ -63,11 +108,7 @@ export function buildDemoReplacementSql(
   ) {
     throw new Error("Demo snapshot must contain exactly the locked event identity.");
   }
-  const safeInserts = orderedInserts.map((statement) =>
-    statement.startsWith('INSERT INTO "users"')
-      ? statement.replace('INSERT INTO "users"', 'INSERT OR IGNORE INTO "users"')
-      : statement
-  );
+  const safeInserts = orderedInserts.map(reconcileDemoInsert);
   return [
     "-- Session Party demo-event replacement. Generated locally after isolated import validation.",
     `-- Scope is locked to ${demoTarget.eventId}/${demoTarget.eventSlug}; user rows are retained when their exact identity already exists.`,
