@@ -12395,6 +12395,81 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                   }
                 ]
               },
+              "privateFields": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fieldId": {
+                      "description": "a string at most 255 character(s) long",
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "title": "maxLength(255)",
+                      "type": "string"
+                    },
+                    "formId": {
+                      "description": "a string at most 255 character(s) long",
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "title": "maxLength(255)",
+                      "type": "string"
+                    },
+                    "formName": {
+                      "description": "a string at most 500 character(s) long",
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "title": "maxLength(500)",
+                      "type": "string"
+                    },
+                    "label": {
+                      "description": "a string at most 500 character(s) long",
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "title": "maxLength(500)",
+                      "type": "string"
+                    },
+                    "submissionId": {
+                      "description": "a string at most 255 character(s) long",
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "title": "maxLength(255)",
+                      "type": "string"
+                    },
+                    "submittedAt": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative"
+                    },
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "submissionId",
+                    "formId",
+                    "formName",
+                    "fieldId",
+                    "label",
+                    "value",
+                    "submittedAt"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "provisionedAt": {
                 "anyOf": [
                   {
@@ -13006,6 +13081,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "provisioningStatus",
               "provisionedAt",
               "sessions",
+              "privateFields",
               "readiness",
               "latestContact"
             ],
@@ -13284,6 +13360,81 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                   }
                 ]
               },
+              "privateFields": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fieldId": {
+                      "description": "a string at most 255 character(s) long",
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "title": "maxLength(255)",
+                      "type": "string"
+                    },
+                    "formId": {
+                      "description": "a string at most 255 character(s) long",
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "title": "maxLength(255)",
+                      "type": "string"
+                    },
+                    "formName": {
+                      "description": "a string at most 500 character(s) long",
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "title": "maxLength(500)",
+                      "type": "string"
+                    },
+                    "label": {
+                      "description": "a string at most 500 character(s) long",
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "title": "maxLength(500)",
+                      "type": "string"
+                    },
+                    "submissionId": {
+                      "description": "a string at most 255 character(s) long",
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "title": "maxLength(255)",
+                      "type": "string"
+                    },
+                    "submittedAt": {
+                      "$ref": "#/$defs/Int",
+                      "description": "a non-negative number",
+                      "minimum": 0,
+                      "title": "nonNegative"
+                    },
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "submissionId",
+                    "formId",
+                    "formName",
+                    "fieldId",
+                    "label",
+                    "value",
+                    "submittedAt"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "provisionedAt": {
                 "anyOf": [
                   {
@@ -13895,6 +14046,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
               "provisioningStatus",
               "provisionedAt",
               "sessions",
+              "privateFields",
               "readiness",
               "latestContact"
             ],
@@ -15181,6 +15333,81 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                     }
                   ]
                 },
+                "privateFields": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fieldId": {
+                        "description": "a string at most 255 character(s) long",
+                        "maxLength": 255,
+                        "minLength": 1,
+                        "title": "maxLength(255)",
+                        "type": "string"
+                      },
+                      "formId": {
+                        "description": "a string at most 255 character(s) long",
+                        "maxLength": 255,
+                        "minLength": 1,
+                        "title": "maxLength(255)",
+                        "type": "string"
+                      },
+                      "formName": {
+                        "description": "a string at most 500 character(s) long",
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "title": "maxLength(500)",
+                        "type": "string"
+                      },
+                      "label": {
+                        "description": "a string at most 500 character(s) long",
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "title": "maxLength(500)",
+                        "type": "string"
+                      },
+                      "submissionId": {
+                        "description": "a string at most 255 character(s) long",
+                        "maxLength": 255,
+                        "minLength": 1,
+                        "title": "maxLength(255)",
+                        "type": "string"
+                      },
+                      "submittedAt": {
+                        "$ref": "#/$defs/Int",
+                        "description": "a non-negative number",
+                        "minimum": 0,
+                        "title": "nonNegative"
+                      },
+                      "value": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "submissionId",
+                      "formId",
+                      "formName",
+                      "fieldId",
+                      "label",
+                      "value",
+                      "submittedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "provisionedAt": {
                   "anyOf": [
                     {
@@ -15792,6 +16019,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
                 "provisioningStatus",
                 "provisionedAt",
                 "sessions",
+                "privateFields",
                 "readiness",
                 "latestContact"
               ],
@@ -39449,6 +39677,81 @@ export const openApi = {
                               }
                             ]
                           },
+                          "privateFields": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fieldId": {
+                                  "description": "a string at most 255 character(s) long",
+                                  "maxLength": 255,
+                                  "minLength": 1,
+                                  "title": "maxLength(255)",
+                                  "type": "string"
+                                },
+                                "formId": {
+                                  "description": "a string at most 255 character(s) long",
+                                  "maxLength": 255,
+                                  "minLength": 1,
+                                  "title": "maxLength(255)",
+                                  "type": "string"
+                                },
+                                "formName": {
+                                  "description": "a string at most 500 character(s) long",
+                                  "maxLength": 500,
+                                  "minLength": 1,
+                                  "title": "maxLength(500)",
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "description": "a string at most 500 character(s) long",
+                                  "maxLength": 500,
+                                  "minLength": 1,
+                                  "title": "maxLength(500)",
+                                  "type": "string"
+                                },
+                                "submissionId": {
+                                  "description": "a string at most 255 character(s) long",
+                                  "maxLength": 255,
+                                  "minLength": 1,
+                                  "title": "maxLength(255)",
+                                  "type": "string"
+                                },
+                                "submittedAt": {
+                                  "$ref": "#/$defs/Int",
+                                  "description": "a non-negative number",
+                                  "minimum": 0,
+                                  "title": "nonNegative"
+                                },
+                                "value": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "submissionId",
+                                "formId",
+                                "formName",
+                                "fieldId",
+                                "label",
+                                "value",
+                                "submittedAt"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
                           "provisionedAt": {
                             "anyOf": [
                               {
@@ -40060,6 +40363,7 @@ export const openApi = {
                           "provisioningStatus",
                           "provisionedAt",
                           "sessions",
+                          "privateFields",
                           "readiness",
                           "latestContact"
                         ],
@@ -42546,6 +42850,81 @@ export const openApi = {
                               }
                             ]
                           },
+                          "privateFields": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fieldId": {
+                                  "description": "a string at most 255 character(s) long",
+                                  "maxLength": 255,
+                                  "minLength": 1,
+                                  "title": "maxLength(255)",
+                                  "type": "string"
+                                },
+                                "formId": {
+                                  "description": "a string at most 255 character(s) long",
+                                  "maxLength": 255,
+                                  "minLength": 1,
+                                  "title": "maxLength(255)",
+                                  "type": "string"
+                                },
+                                "formName": {
+                                  "description": "a string at most 500 character(s) long",
+                                  "maxLength": 500,
+                                  "minLength": 1,
+                                  "title": "maxLength(500)",
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "description": "a string at most 500 character(s) long",
+                                  "maxLength": 500,
+                                  "minLength": 1,
+                                  "title": "maxLength(500)",
+                                  "type": "string"
+                                },
+                                "submissionId": {
+                                  "description": "a string at most 255 character(s) long",
+                                  "maxLength": 255,
+                                  "minLength": 1,
+                                  "title": "maxLength(255)",
+                                  "type": "string"
+                                },
+                                "submittedAt": {
+                                  "$ref": "#/$defs/Int",
+                                  "description": "a non-negative number",
+                                  "minimum": 0,
+                                  "title": "nonNegative"
+                                },
+                                "value": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "submissionId",
+                                "formId",
+                                "formName",
+                                "fieldId",
+                                "label",
+                                "value",
+                                "submittedAt"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
                           "provisionedAt": {
                             "anyOf": [
                               {
@@ -43157,6 +43536,7 @@ export const openApi = {
                           "provisioningStatus",
                           "provisionedAt",
                           "sessions",
+                          "privateFields",
                           "readiness",
                           "latestContact"
                         ],
@@ -45399,6 +45779,81 @@ export const openApi = {
                         }
                       ]
                     },
+                    "privateFields": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "fieldId": {
+                            "description": "a string at most 255 character(s) long",
+                            "maxLength": 255,
+                            "minLength": 1,
+                            "title": "maxLength(255)",
+                            "type": "string"
+                          },
+                          "formId": {
+                            "description": "a string at most 255 character(s) long",
+                            "maxLength": 255,
+                            "minLength": 1,
+                            "title": "maxLength(255)",
+                            "type": "string"
+                          },
+                          "formName": {
+                            "description": "a string at most 500 character(s) long",
+                            "maxLength": 500,
+                            "minLength": 1,
+                            "title": "maxLength(500)",
+                            "type": "string"
+                          },
+                          "label": {
+                            "description": "a string at most 500 character(s) long",
+                            "maxLength": 500,
+                            "minLength": 1,
+                            "title": "maxLength(500)",
+                            "type": "string"
+                          },
+                          "submissionId": {
+                            "description": "a string at most 255 character(s) long",
+                            "maxLength": 255,
+                            "minLength": 1,
+                            "title": "maxLength(255)",
+                            "type": "string"
+                          },
+                          "submittedAt": {
+                            "$ref": "#/$defs/Int",
+                            "description": "a non-negative number",
+                            "minimum": 0,
+                            "title": "nonNegative"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "type": "boolean"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "submissionId",
+                          "formId",
+                          "formName",
+                          "fieldId",
+                          "label",
+                          "value",
+                          "submittedAt"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "provisionedAt": {
                       "anyOf": [
                         {
@@ -46010,6 +46465,7 @@ export const openApi = {
                     "provisioningStatus",
                     "provisionedAt",
                     "sessions",
+                    "privateFields",
                     "readiness",
                     "latestContact"
                   ],
