@@ -973,7 +973,7 @@ describe("review and acceptance slice", () => {
     await db.delete(submissions).where(eq(submissions.id, submissionId));
   });
 
-  it("anonymizes only identity-bearing fields for assigned reviewers while organizers retain the full record", async () => {
+  it("hides presenter identities from assigned reviewers in blind rounds", async () => {
     const reviewerView = await runAs(reviewer, getWorkbench({
       eventId: fixtureEventId,
       roundId: completedRoundFixture.id,
