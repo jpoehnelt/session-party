@@ -14,7 +14,7 @@ import {
   synchronizeAuthenticatedPrincipal,
 } from "./api";
 import LoginPage from "./auth";
-import { RegistrationWarning } from "./registration";
+import { EventCreationWarning } from "./event-creation";
 import SetupPage from "./setup";
 import { availableEventNavItems, type EventNavRole } from "./event-nav";
 import {
@@ -240,7 +240,7 @@ function Layout({ children, contentWidth }: { children: ReactNode; contentWidth?
           />
         )}
       >
-        <RegistrationWarning />
+        <EventCreationWarning />
         {children}
       </AppShell>
       <Sheet

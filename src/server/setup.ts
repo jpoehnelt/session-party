@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { sessionUser } from "./auth";
-import { registrationPolicy } from "./registration";
+import { eventCreationPolicy } from "./event-creation";
 import { isExplicitLocalEnvironment, isExplicitPreviewEnvironment, sessionSecret } from "./services";
 
 type AppHono = { Bindings: Env };
@@ -122,23 +122,23 @@ const turnstileCheck = (env: Env): SetupCheck => {
 };
 
 const initialAdminCheck = (env: Env, operatorEmail: string): SetupCheck => {
-  const policy = registrationPolicy(env);
+  const policy = eventCreationPolicy(env);
   if (!policy.configured) {
-    return check("initialAdmin", "Registration", "fail", "Set REGISTRATION_MODE to closed or open.");
+    return check("initialAdmin", "Event creation", "fail", "Set EVENT_CREATION_MODE to closed or open.");
   }
   if (policy.mode === "open") {
-    return check("initialAdmin", "Registration", "warn", "Open registration is enabled; anyone can create an account.");
+    return check("initialAdmin", "Event creation", "warn", "Open event creation is enabled; any signed-in account can create an event.");
   }
   if (!policy.initialAdminEmail) {
-    return check("initialAdmin", "Registration", "fail", "Closed registration requires INITIAL_ADMIN_EMAIL.");
+    return check("initialAdmin", "Event creation", "fail", "Closed event creation requires INITIAL_ADMIN_EMAIL.");
   }
   return policy.initialAdminEmail === operatorEmail.toLowerCase()
-    ? check("initialAdmin", "Registration", "pass", "Closed registration and initial-admin access are configured.")
-    : check("initialAdmin", "Registration", "warn", "Registration is closed; this operator is an event owner rather than INITIAL_ADMIN_EMAIL.");
+    ? check("initialAdmin", "Event creation", "pass", "Closed event creation and initial-admin access are configured.")
+    : check("initialAdmin", "Event creation", "warn", "Event creation is closed; this operator is authorized as an existing event owner.");
 };
 
 const mayViewSetup = async (env: Env, userId: string, email: string): Promise<boolean> => {
-  const initialAdminEmail = registrationPolicy(env).initialAdminEmail;
+  const initialAdminEmail = eventCreationPolicy(env).initialAdminEmail;
   if (initialAdminEmail === email.toLowerCase()) return true;
   try {
     const row = await env.DB.prepare(

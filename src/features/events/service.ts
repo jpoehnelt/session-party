@@ -24,7 +24,14 @@ import {
 import { Effect, Schema } from "effect";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { ApiKeyCredentials, Authorizer, CurrentUser, Db, MailQueue } from "@/server/services";
+import {
+  ApiKeyCredentials,
+  Authorizer,
+  CurrentUser,
+  Db,
+  EventCreationAccess,
+  MailQueue,
+} from "@/server/services";
 import {
   AcceptReviewerInvitationOutput,
   type AcceptReviewerInvitationInput,
@@ -200,7 +207,7 @@ const findEvent = (idOrSlug: string) =>
 
 export const createEvent = (
   input: CreateEventInput,
-): Effect.Effect<EventRecord, AppError, Authorizer | CurrentUser | Db> =>
+): Effect.Effect<EventRecord, AppError, Authorizer | CurrentUser | Db | EventCreationAccess> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     const principal = yield* authorizeCurrent(browserSessionAuthorization, null);
@@ -209,6 +216,8 @@ export const createEvent = (
         new Forbidden({ reason: "This operation requires a browser session" }),
       );
     }
+    const { authorize } = yield* EventCreationAccess;
+    yield* authorize(principal);
 
     yield* validateDateOrder(input.startsAt ?? null, input.endsAt ?? null);
 

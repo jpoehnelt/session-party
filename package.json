@@ -107,8 +107,11 @@
       "APP_URL": {
         "description": "The public origin for this installation, such as `https://events.example.com`. Use the same hostname when you connect the Custom Domain."
       },
+      "EVENT_CREATION_MODE": {
+        "description": "Choose `closed` for self-hosting (recommended) or `open` to let every signed-in account create events. Missing or invalid values fail closed."
+      },
       "INITIAL_ADMIN_EMAIL": {
-        "description": "Recommended for self-hosting: the first administrator email. When set, unknown emails cannot register unless they have a reviewer invitation or managed-speaker record. Leave blank only for an open-registration service."
+        "description": "Recommended for self-hosting: the first operator email authorized to create an event when EVENT_CREATION_MODE is closed."
       },
       "MAIL_FROM": {
         "description": "A sender on a domain onboarded to [Cloudflare Email Service](https://developers.cloudflare.com/email-service/get-started/), such as `Session Party <welcome@example.com>`."
@@ -118,9 +121,6 @@
       },
       "POSTHOG_HOST": {
         "description": "Optional HTTPS PostHog origin, such as `https://us.i.posthog.com`. Analytics activates only when this and `POSTHOG_KEY` are both set."
-      },
-      "REGISTRATION_MODE": {
-        "description": "Choose `closed` for self-hosting (recommended) or `open` only for an intentional multi-tenant service. Missing or invalid values fail closed."
       },
       "SESSION_SECRET": {
         "description": "Generate a unique signing secret with `openssl rand -hex 32`. Rotating it signs every user out."

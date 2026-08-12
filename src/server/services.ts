@@ -28,6 +28,7 @@ import {
   TURNSTILE_TOKEN_MAX_LENGTH,
   type PublicSubmissionAbuseAttempt,
 } from "@/features/submit/abuse";
+import { eventCreationPolicy, mayCreateEvent } from "./event-creation";
 
 export type AppDatabase = DrizzleD1Database<typeof schema>;
 
@@ -123,6 +124,16 @@ export class AiService extends Context.Tag("session-party/AiService")<
 export class CurrentUser extends Context.Tag("session-party/CurrentUser")<
   CurrentUser,
   Principal
+>() {}
+
+export class EventCreationAccess extends Context.Tag("session-party/EventCreationAccess")<
+  EventCreationAccess,
+  {
+    readonly authorize: (principal: {
+      readonly userId: string;
+      readonly email: string;
+    }) => Effect.Effect<void, Forbidden | External>;
+  }
 >() {}
 
 export class ApiKeyCredentials extends Context.Tag("session-party/ApiKeyCredentials")<
@@ -606,6 +617,7 @@ export class Authorizer extends Context.Tag("session-party/Authorizer")<
 
 export const AppLayer = (env: Env) => {
   const db = drizzle(env.DB, { schema });
+  const eventPolicy = eventCreationPolicy(env);
   const secrets = createSecretResolver(optionalSecret(env, "ACCELEVENTS_API_TOKEN"));
   const fixtureAcceleventsAdapter = createFixtureAcceleventsAdapter();
   const acceleventsAdapter = usesFakeExternalServices(env)
@@ -646,6 +658,32 @@ export const AppLayer = (env: Env) => {
     Layer.succeed(PublicSubmissionAbuse, publicSubmissionAbuse(env)),
     Layer.succeed(PublicSubmissionRequest, { remoteIp: null }),
     Layer.succeed(Authorizer, { authorize: authorizePrincipal }),
+    Layer.succeed(EventCreationAccess, {
+      authorize: ({ userId, email }) => Effect.gen(function* () {
+        if (!eventPolicy.configured) {
+          return yield* Effect.fail(new Forbidden({
+            reason: "Event creation is locked until EVENT_CREATION_MODE is configured",
+          }));
+        }
+        const normalizedEmail = email.trim().toLowerCase();
+        if (mayCreateEvent(eventPolicy, normalizedEmail, false)) return;
+        const [ownership] = yield* externalEffect("database", () =>
+          db
+            .select({ id: schema.eventMembers.id })
+            .from(schema.eventMembers)
+            .where(and(
+              eq(schema.eventMembers.userId, userId),
+              eq(schema.eventMembers.role, "owner"),
+            ))
+            .limit(1),
+        );
+        if (!mayCreateEvent(eventPolicy, normalizedEmail, ownership !== undefined)) {
+          return yield* Effect.fail(new Forbidden({
+            reason: "Event creation is restricted to the installation operator",
+          }));
+        }
+      }),
+    }),
     Layer.succeed(ApiKeyCredentials, {
       generate: () => externalEffect("api-key-credentials", async () => {
         const bytes = new Uint8Array(32);
@@ -737,4 +775,5 @@ export type AppServices =
   | Rooms
   | AiService
   | ApiKeyCredentials
+  | EventCreationAccess
   | Authorizer;

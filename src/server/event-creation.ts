@@ -1,13 +1,13 @@
-export type RegistrationMode = "closed" | "open";
+export type EventCreationMode = "closed" | "open";
 
-type RegistrationBindings = {
-  readonly REGISTRATION_MODE?: string;
+type EventCreationBindings = {
+  readonly EVENT_CREATION_MODE?: string;
   readonly INITIAL_ADMIN_EMAIL?: string;
 };
 
-export type RegistrationPolicy = {
+export type EventCreationPolicy = {
   readonly configured: boolean;
-  readonly mode: RegistrationMode;
+  readonly mode: EventCreationMode;
   readonly initialAdminEmail: string | null;
 };
 
@@ -16,9 +16,9 @@ const normalizedEmail = (value: unknown): string | null =>
     ? value.trim().toLowerCase()
     : null;
 
-export const registrationPolicy = (env: RegistrationBindings): RegistrationPolicy => {
-  const configuredMode = typeof env.REGISTRATION_MODE === "string"
-    ? env.REGISTRATION_MODE.trim().toLowerCase()
+export const eventCreationPolicy = (env: EventCreationBindings): EventCreationPolicy => {
+  const configuredMode = typeof env.EVENT_CREATION_MODE === "string"
+    ? env.EVENT_CREATION_MODE.trim().toLowerCase()
     : "";
   return {
     configured: configuredMode === "closed" || configuredMode === "open",
@@ -27,10 +27,12 @@ export const registrationPolicy = (env: RegistrationBindings): RegistrationPolic
   };
 };
 
-export const mayCreateAccount = (
-  policy: RegistrationPolicy,
+export const mayCreateEvent = (
+  policy: EventCreationPolicy,
   normalizedCandidateEmail: string,
+  ownsEvent: boolean,
 ): boolean => policy.configured && (
   policy.mode === "open"
   || policy.initialAdminEmail === normalizedCandidateEmail
+  || ownsEvent
 );

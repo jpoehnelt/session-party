@@ -139,17 +139,17 @@ Review these values in the deployment form:
 | Setting | Value |
 |---|---|
 | `APP_URL` | The final origin, for example `https://events.example.com` |
-| `INITIAL_ADMIN_EMAIL` | Your email address; required to bootstrap a closed installation |
+| `INITIAL_ADMIN_EMAIL` | Your email address; required to create the first event in a closed installation |
 | `MAIL_FROM` | A sender on the onboarded domain, for example `Session Party <welcome@example.com>` |
 | `POSTHOG_KEY` / `POSTHOG_HOST` | Optional analytics settings. Leave both blank to send no product analytics. |
-| `REGISTRATION_MODE` | `closed` for self-hosting (recommended), or `open` for an intentional multi-tenant service |
+| `EVENT_CREATION_MODE` | `closed` for self-hosting (recommended), or `open` to let every signed-in account create events |
 | `SESSION_SECRET` | A unique value generated with `openssl rand -hex 32` |
 | `INTERNAL_SERVICE_SECRET` | Optional dedicated Worker-to-Durable-Object bearer generated with `openssl rand -hex 32`; until provisioned, a one-way domain-separated token is derived from `SESSION_SECRET` so the session key is never transmitted |
 | `TURNSTILE_SITE_KEY` | The widget's site key |
 | `TURNSTILE_SECRET` | The widget's secret key |
 | `TURNSTILE_HOSTNAMES` | The final hostname, for example `events.example.com` |
 
-Registration fails closed unless `REGISTRATION_MODE` is exactly `closed` or `open`. In closed mode, keep `INITIAL_ADMIN_EMAIL` set so that address can create the first account and event. Existing accounts, pending reviewer invitations, and managed-speaker onboarding can still sign in without opening public registration. Open mode is always identified by a prominent warning in the application.
+Event creation fails closed unless `EVENT_CREATION_MODE` is exactly `closed` or `open`. In closed mode, `INITIAL_ADMIN_EMAIL` can create the first event, and existing event owners can create additional events. Account creation and sign-in remain available so invitees can join; event membership still controls access to event data. Open mode lets every signed-in account create events and is always identified by a prominent warning in the application.
 
 ### Connect the domain
 
