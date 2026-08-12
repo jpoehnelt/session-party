@@ -327,10 +327,78 @@ const loadTalk = (eventId: string, talkId: string) =>
     return talk;
   });
 
+const normalizedTrackName = (value: string): string =>
+  value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+
+const answerStrings = (value: unknown): readonly string[] => {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === "string");
+  return [];
+};
+
+const hasRoutingForAnswer = (routing: unknown, answer: string): boolean =>
+  routing !== null &&
+  typeof routing === "object" &&
+  !Array.isArray(routing) &&
+  Object.keys(routing).some((option) => normalizedTrackName(option) === normalizedTrackName(answer));
+
+const loadConfiguredTracksBySubmission = (
+  eventId: string,
+): Effect.Effect<ReadonlyMap<string, { readonly id: string; readonly name: string }>, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const [configuredAnswers, trackRows] = yield* Effect.all([
+      database(() =>
+        db
+          .select({
+            submissionId: submissionAnswers.submissionId,
+            value: submissionAnswers.value,
+            label: formVersionFields.label,
+            routing: formVersionFields.routing,
+          })
+          .from(submissionAnswers)
+          .innerJoin(
+            formVersionFields,
+            and(
+              eq(formVersionFields.eventId, submissionAnswers.eventId),
+              eq(formVersionFields.formVersionId, submissionAnswers.formVersionId),
+              eq(formVersionFields.id, submissionAnswers.formVersionFieldId),
+            ),
+          )
+          .where(eq(submissionAnswers.eventId, eventId))
+          .orderBy(asc(formVersionFields.order), asc(submissionAnswers.id)),
+      ),
+      database(() =>
+        db
+          .select({ id: tracks.id, name: tracks.name })
+          .from(tracks)
+          .where(eq(tracks.eventId, eventId))
+          .orderBy(asc(tracks.order), asc(tracks.name), asc(tracks.id)),
+      ),
+    ]);
+
+    const trackByNormalizedName = new Map(
+      trackRows.map((track) => [normalizedTrackName(track.name), track] as const),
+    );
+    const configuredTrackBySubmission = new Map<string, { readonly id: string; readonly name: string }>();
+    for (const answer of configuredAnswers) {
+      if (configuredTrackBySubmission.has(answer.submissionId)) continue;
+      for (const value of answerStrings(answer.value)) {
+        const track = trackByNormalizedName.get(normalizedTrackName(value));
+        if (!track) continue;
+        const trackField = normalizedTrackName(answer.label).includes("track") || hasRoutingForAnswer(answer.routing, value);
+        if (!trackField) continue;
+        configuredTrackBySubmission.set(answer.submissionId, track);
+        break;
+      }
+    }
+    return configuredTrackBySubmission;
+  });
+
 const loadBacklog = (eventId: string): Effect.Effect<readonly BacklogProposal[], AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const [acceptances, provisionings, activeTalks] = yield* Effect.all([
+    const [acceptances, provisionings, activeTalks, configuredTrackBySubmission] = yield* Effect.all([
       database(() =>
         db
           .select({
@@ -370,6 +438,7 @@ const loadBacklog = (eventId: string): Effect.Effect<readonly BacklogProposal[],
           .from(talks)
           .where(and(eq(talks.eventId, eventId), ne(talks.status, "cancelled"))),
       ),
+      loadConfiguredTracksBySubmission(eventId),
     ]);
 
     const latestAcceptance = new Map<string, (typeof acceptances)[number]>();
@@ -395,7 +464,7 @@ const loadBacklog = (eventId: string): Effect.Effect<readonly BacklogProposal[],
         return {
           submissionId: row.submissionId,
           title: row.title,
-          category: row.category,
+          category: configuredTrackBySubmission.get(row.submissionId)?.name ?? row.category,
           submissionVersion: row.submissionVersion,
           acceptanceEventId: row.acceptanceEventId,
           primarySpeakerId: row.primarySpeakerId,
@@ -1190,12 +1259,16 @@ export const createTalk = (
       workspaceVersion,
     });
     yield* getEvent(input.eventId);
-    yield* ensureScheduleReferences(input.eventId, input.roomId, input.trackId);
 
     const [submission] = yield* database(() =>
       db.select().from(submissions).where(and(eq(submissions.eventId, input.eventId), eq(submissions.id, input.submissionId))).limit(1),
     );
     if (!submission) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
+    const configuredTrack = input.trackId === null
+      ? (yield* loadConfiguredTracksBySubmission(input.eventId)).get(input.submissionId) ?? null
+      : null;
+    const trackId = input.trackId ?? configuredTrack?.id ?? null;
+    yield* ensureScheduleReferences(input.eventId, input.roomId, trackId);
 
     const [acceptance] = yield* database(() =>
       db
@@ -1277,7 +1350,7 @@ export const createTalk = (
       submissionId: input.submissionId,
       title: submission.title,
       description,
-      trackId: input.trackId,
+      trackId,
       roomId: input.roomId,
       startsAt: input.startsAt,
       durationMin: input.durationMin,
@@ -1305,7 +1378,7 @@ export const createTalk = (
       submissionId: input.submissionId,
       title: submission.title,
       description,
-      trackId: input.trackId,
+      trackId,
       roomId: input.roomId,
       startsAt: input.startsAt === null ? null : new Date(input.startsAt),
       durationMin: input.durationMin,

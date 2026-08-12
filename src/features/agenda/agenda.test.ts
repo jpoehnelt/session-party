@@ -515,6 +515,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
     db,
     eventId,
     eventSlug,
+    formVersionId,
     user: owner(userId),
     submissionA,
     submissionB,
@@ -734,6 +735,68 @@ describe("agenda service", () => {
     expect(agenda.timezone).toBe("America/Los_Angeles");
     expect(agenda.backlog.map(({ title }) => title)).toEqual(["Durable workflows", "Effects at scale"]);
     expect(agenda.talks).toEqual([]);
+  });
+
+  it("prefers a configured track answer that matches an agenda track over the stored category", async () => {
+    const seeded = await seedAgenda("backlog-track-answer");
+    const now = new Date(FIXED_NOW);
+    const trackFieldId = "backlog-track-answer-field-track";
+    const configuredTrackId = "backlog-track-answer-track-platform-infra";
+    await seeded.db.batch([
+      seeded.db.insert(formVersionFields).values({
+        id: trackFieldId,
+        eventId: seeded.eventId,
+        formVersionId: seeded.formVersionId,
+        order: 2,
+        type: "radio",
+        label: "Best-fit track",
+        semanticKey: null,
+        required: true,
+        options: ["Platform & Infra"],
+        routing: { "Platform & Infra": "platform-infra" },
+        createdAt: now,
+      }),
+      seeded.db.insert(submissionAnswers).values({
+        id: "backlog-track-answer-answer-track",
+        eventId: seeded.eventId,
+        submissionId: seeded.submissionA,
+        formVersionId: seeded.formVersionId,
+        formVersionFieldId: trackFieldId,
+        value: " Platform & Infra ",
+        createdAt: now,
+        updatedAt: now,
+      }),
+      seeded.db.insert(tracks).values({
+        id: configuredTrackId,
+        eventId: seeded.eventId,
+        name: "Platform & Infra",
+        order: 1,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    ]);
+
+    const agenda = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }));
+
+    expect(agenda.backlog.find(({ submissionId }) => submissionId === seeded.submissionA)?.category)
+      .toBe("Platform & Infra");
+    expect(agenda.backlog.find(({ submissionId }) => submissionId === seeded.submissionB)?.category)
+      .toBe("Practice");
+
+    const created = await runAs(seeded.user, createTalk({
+      eventId: seeded.eventId,
+      submissionId: seeded.submissionA,
+      trackId: null,
+      roomId: null,
+      startsAt: null,
+      durationMin: 30,
+      idempotencyKey: "backlog-track-answer-create-0001",
+    }));
+    expect(created.talk.trackId).toBe(configuredTrackId);
+    await expect(seeded.db.select({ trackId: talks.trackId }).from(talks).where(and(
+      eq(talks.eventId, seeded.eventId),
+      eq(talks.id, created.talk.id),
+    )).limit(1)).resolves.toEqual([{ trackId: configuredTrackId }]);
   });
 
   it("retries when a mutation lands between projection and version reads", async () => {
