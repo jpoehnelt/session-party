@@ -450,6 +450,8 @@ export class Scheduler extends DurableObject<Env> {
           idempotencyKey: mailDeliveries.idempotencyKey,
           supersededAt: mailDeliveries.supersededAt,
           status: mailDeliveries.status,
+          attemptCount: mailDeliveries.attemptCount,
+          maxAttempts: mailDeliveries.maxAttempts,
           provider: mailDeliveries.provider,
           fromEmail: mailDeliverySnapshots.fromEmail,
           replyToEmail: mailDeliverySnapshots.replyToEmail,
@@ -507,6 +509,53 @@ export class Scheduler extends DurableObject<Env> {
         }
         const leaseOwner = crypto.randomUUID();
         const reclaim = delivery.status === "claimed" || delivery.status === "dispatching";
+        const [reclaimedAttempt] = reclaim
+          ? await db
+            .select({
+              id: mailDeliveryAttempts.id,
+              status: mailDeliveryAttempts.status,
+              providerMessageId: mailDeliveryAttempts.providerMessageId,
+              providerResult: mailDeliveryAttempts.providerResult,
+              completedAt: mailDeliveryAttempts.completedAt,
+            })
+            .from(mailDeliveryAttempts)
+            .where(and(
+              eq(mailDeliveryAttempts.deliveryId, delivery.id),
+              eq(mailDeliveryAttempts.attemptNumber, delivery.attemptCount),
+            ))
+            .limit(1)
+          : [];
+        const storedReceiptAttempt = reclaimedAttempt?.status === "sent" && reclaimedAttempt.providerMessageId !== null
+          ? { ...reclaimedAttempt, providerMessageId: reclaimedAttempt.providerMessageId }
+          : undefined;
+        if (reclaim && delivery.attemptCount >= delivery.maxAttempts && !storedReceiptAttempt) {
+          const detail = "Delivery lease expired after the maximum number of attempts";
+          await db.batch([
+            db.update(mailDeliveryAttempts).set({
+              status: "failed",
+              error: detail,
+              completedAt: now,
+            }).where(and(
+              eq(mailDeliveryAttempts.deliveryId, delivery.id),
+              eq(mailDeliveryAttempts.attemptNumber, delivery.attemptCount),
+              eq(mailDeliveryAttempts.status, "started"),
+            )),
+            db.update(mailDeliveries).set({
+              status: "dead_letter",
+              lastError: detail,
+              deadLetteredAt: now,
+              leaseOwner: null,
+              leaseExpiresAt: null,
+            }).where(and(
+              eq(mailDeliveries.id, delivery.id),
+              inArray(mailDeliveries.status, ["claimed", "dispatching"]),
+              lte(mailDeliveries.leaseExpiresAt, now),
+              sql`${mailDeliveries.attemptCount} >= ${mailDeliveries.maxAttempts}`,
+            )),
+          ]);
+          await redactAuthSnapshot(db, delivery.snapshotId, delivery.idempotencyKey, now);
+          continue;
+        }
         const [claim] = reclaim
           ? await db
             .update(mailDeliveries)
@@ -514,11 +563,17 @@ export class Scheduler extends DurableObject<Env> {
               status: "dispatching",
               leaseOwner,
               leaseExpiresAt: new Date(now.getTime() + LEASE_MS),
+              attemptCount: storedReceiptAttempt
+                ? delivery.attemptCount
+                : sql`${mailDeliveries.attemptCount} + 1`,
             })
             .where(and(
               eq(mailDeliveries.id, delivery.id),
               inArray(mailDeliveries.status, ["claimed", "dispatching"]),
               lte(mailDeliveries.leaseExpiresAt, now),
+              storedReceiptAttempt
+                ? sql`${mailDeliveries.attemptCount} = ${delivery.attemptCount}`
+                : lt(mailDeliveries.attemptCount, mailDeliveries.maxAttempts),
               or(
                 eq(mailDeliveries.status, "dispatching"),
                 isNull(mailDeliveries.supersededAt),
@@ -563,38 +618,20 @@ export class Scheduler extends DurableObject<Env> {
           continue;
         }
 
-        let attemptId = crypto.randomUUID();
-        const [existingAttempt] = reclaim
-          ? await db
-            .select({
-              id: mailDeliveryAttempts.id,
-              status: mailDeliveryAttempts.status,
-              providerMessageId: mailDeliveryAttempts.providerMessageId,
-              providerResult: mailDeliveryAttempts.providerResult,
-              completedAt: mailDeliveryAttempts.completedAt,
-            })
-            .from(mailDeliveryAttempts)
-            .where(and(
-              eq(mailDeliveryAttempts.deliveryId, delivery.id),
-              eq(mailDeliveryAttempts.attemptNumber, claim.attemptCount),
-            ))
-            .limit(1)
-          : [];
-        if (
-          existingAttempt?.status === "sent" &&
-          existingAttempt.providerMessageId
-        ) {
+        const attemptId = crypto.randomUUID();
+        const existingAttempt = reclaimedAttempt;
+        if (storedReceiptAttempt) {
           const [completed] = await db
             .update(mailDeliveries)
             .set({
               status: "sent",
-              provider: existingAttempt.providerMessageId.startsWith("local-fake:")
+              provider: storedReceiptAttempt.providerMessageId.startsWith("local-fake:")
                 ? "local-fake"
                 : delivery.provider,
-              providerMessageId: existingAttempt.providerMessageId,
-              providerResult: existingAttempt.providerResult,
+              providerMessageId: storedReceiptAttempt.providerMessageId,
+              providerResult: storedReceiptAttempt.providerResult,
               lastError: null,
-              sentAt: existingAttempt.completedAt ?? now,
+              sentAt: storedReceiptAttempt.completedAt ?? now,
               leaseOwner: null,
               leaseExpiresAt: null,
             })
@@ -609,35 +646,33 @@ export class Scheduler extends DurableObject<Env> {
               db,
               delivery.snapshotId,
               delivery.idempotencyKey,
-              existingAttempt.completedAt ?? now,
+              storedReceiptAttempt.completedAt ?? now,
             );
           }
           continue;
         }
         if (!reclaim && !await authorizeMailDispatch(db, delivery.id, leaseOwner)) continue;
         if (existingAttempt) {
-          attemptId = existingAttempt.id;
           await db
             .update(mailDeliveryAttempts)
             .set({
-              leaseOwner,
-              status: "started",
-              providerMessageId: null,
-              providerResult: null,
-              error: null,
-              completedAt: null,
+              status: "retry",
+              error: "Delivery lease expired before completion; retrying with a new attempt",
+              completedAt: now,
             })
-            .where(eq(mailDeliveryAttempts.id, attemptId));
-        } else {
-          await db.insert(mailDeliveryAttempts).values({
-            id: attemptId,
-            deliveryId: delivery.id,
-            attemptNumber: claim.attemptCount,
-            leaseOwner,
-            status: "started",
-            startedAt: now,
-          });
+            .where(and(
+              eq(mailDeliveryAttempts.id, existingAttempt.id),
+              eq(mailDeliveryAttempts.status, "started"),
+            ));
         }
+        await db.insert(mailDeliveryAttempts).values({
+          id: attemptId,
+          deliveryId: delivery.id,
+          attemptNumber: claim.attemptCount,
+          leaseOwner,
+          status: "started",
+          startedAt: now,
+        });
 
         const dispatchNow = Date.now();
         const budget = await reserveDispatchBudget(this.ctx.storage, {
