@@ -21,6 +21,7 @@ import {
   type RouteModule,
 } from "./route-discovery";
 import { loginPathForLocation } from "./return-to";
+import { clientRouteAccess, RouteAccessBoundary } from "./route-access";
 
 export { discoveredClientRoutePaths };
 
@@ -319,11 +320,13 @@ export function RouteCoordinator({ children }: { children: ReactNode }) {
   </>;
 }
 
-function routeElement(Component: ComponentType, layout?: RouteModule["layout"], contentWidth?: RouteModule["contentWidth"]) {
+function routeElement(Component: ComponentType, path: string, layout?: RouteModule["layout"], contentWidth?: RouteModule["contentWidth"]) {
   const page = (
-    <Suspense fallback={<div className="flex min-h-48 items-center justify-center gap-3 text-sm text-ink-secondary" role="status"><Spinner /> Loading page…</div>}>
-      <Component />
-    </Suspense>
+    <RouteAccessBoundary access={clientRouteAccess(path)}>
+      <Suspense fallback={<div className="flex min-h-48 items-center justify-center gap-3 text-sm text-ink-secondary" role="status"><Spinner /> Loading page…</div>}>
+        <Component />
+      </Suspense>
+    </RouteAccessBoundary>
   );
   return <RouteCoordinator>{layout === "bare" ? page : <Layout contentWidth={contentWidth}>{page}</Layout>}</RouteCoordinator>;
 }
@@ -332,7 +335,7 @@ const discoveredRoutes = discoveredClientRouteModules.map(({ path, layout, conte
   const Component = lazy(load);
   return {
     path,
-    element: routeElement(Component, layout, contentWidth),
+    element: routeElement(Component, path, layout, contentWidth),
   };
 });
 

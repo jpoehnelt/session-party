@@ -359,7 +359,13 @@ describe("portal service", () => {
     await expectFailure(reviewer, getPortalDashboard({ eventId: setup.eventId }), "Forbidden");
     await expectFailure(reviewer, logSpeakerContact({ eventId: setup.eventId, speakerId: setup.speakerId, medium: "text", note: null, idempotencyKey: `contact-${setup.eventId}` }), "Forbidden");
     await expectFailure(speakerUser, getPortalSnapshot({ eventId: setup.eventId }), "Forbidden");
+    await expect(runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }))).resolves.toMatchObject({
+      speakers: [expect.objectContaining({ messageEligible: false })],
+    });
     await runAs(owner, provisionSpeaker({ eventId: setup.eventId, speakerId: setup.speakerId, provisioningId: setup.provisioningId, expectedVersion: 1 }));
+    await expect(runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }))).resolves.toMatchObject({
+      speakers: [expect.objectContaining({ messageEligible: true })],
+    });
     await expectFailure(otherUser, getPortalSnapshot({ eventId: setup.eventId }), "Forbidden");
     await expect(runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventId }))).resolves.toMatchObject({ provisioningStatus: "provisioned", speaker: { id: setup.speakerId } });
     await expect(runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug }))).resolves.toMatchObject({

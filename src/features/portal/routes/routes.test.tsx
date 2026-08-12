@@ -41,7 +41,7 @@ import {
 } from "./api";
 import { path as dashboardPath, OrganizerDashboardContent } from "./organizer-dashboard";
 import { path as resourcesPath, OrganizerResourcesContent } from "./organizer-resources";
-import { filterSpeakerDirectory, path as speakersPath, OrganizerSpeakersContent } from "./organizer-speakers";
+import { filterSpeakerDirectory, isSpeakerMessageEligible, path as speakersPath, OrganizerSpeakersContent, speakerDirectoryMetrics } from "./organizer-speakers";
 import { path as tasksPath, OrganizerTasksContent } from "./organizer-tasks";
 import { buildStoredZip, path as contentPath, OrganizerContentLibrary } from "./organizer-content";
 import { OrganizerSpeakerDetailContent } from "./organizer-speaker-detail";
@@ -229,6 +229,7 @@ const directory: SpeakerDirectory = {
     provisioningStatus: "pending",
     provisioningVersion: 2,
     provisionedAt: null,
+    messageEligible: false,
     sessions: [],
     privateFields: [],
     readiness: snapshot.readiness,
@@ -901,7 +902,7 @@ describe("organizer content and workflows", () => {
     ));
     expect(speakersMarkup).toContain("River Okafor");
     expect(speakersMarkup).toContain("The calm show call");
-    expect(speakersMarkup).toContain("public gallery");
+    expect(speakersMarkup).toContain("current live gallery");
     expect(speakersMarkup).toContain("0/1");
     expect(speakersMarkup).toContain('aria-label="Speaker readiness"');
     expect(speakersMarkup).toContain("Review speaker profile");
@@ -941,6 +942,7 @@ describe("organizer content and workflows", () => {
           provisioningStatus: "manual",
           provisioningVersion: 0,
           provisionedAt: null,
+          messageEligible: true,
         },
         ...directory.speakers,
       ],
@@ -1020,6 +1022,46 @@ describe("organizer content and workflows", () => {
     expect(filterSpeakerDirectory(speakers, "", "hidden")).toEqual([readySpeaker]);
     expect(filterSpeakerDirectory(speakers, "", "all", "Invited")).toHaveLength(2);
     expect(filterSpeakerDirectory(speakers, "", "all", "Ready")).toHaveLength(0);
+  });
+
+  it("keeps directory, provisioning, publication, and outreach cohorts explicit", () => {
+    const provisioned = {
+      ...directory.speakers[0]!,
+      provisioningStatus: "provisioned" as const,
+      messageEligible: true,
+    };
+    const manual = {
+      ...directory.speakers[0]!,
+      speaker: { ...directory.speakers[0]!.speaker, id: "speaker-manual", visible: false },
+      source: "manual" as const,
+      provisioningStatus: "manual" as const,
+      messageEligible: true,
+    };
+    const modeledDirectory = { ...directory, speakers: [provisioned, manual] };
+
+    expect(speakerDirectoryMetrics(modeledDirectory, [provisioned.speaker.id])).toEqual({
+      records: 2,
+      provisioned: 1,
+      published: 1,
+      nextPublish: 1,
+      outreachEligible: 2,
+    });
+    expect(isSpeakerMessageEligible(provisioned)).toBe(true);
+    expect(isSpeakerMessageEligible(manual)).toBe(true);
+    expect(isSpeakerMessageEligible(directory.speakers[0]!)).toBe(false);
+
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null,
+      createElement(OrganizerSpeakersContent, {
+        directory: modeledDirectory,
+        publishedSpeakerIds: [provisioned.speaker.id],
+        onProvision: noop,
+        onVisibility: noop,
+      }),
+    ));
+    expect(markup).toContain("2 speaker records");
+    expect(markup).toContain("Published now");
+    expect(markup).toContain("Next publish");
+    expect(markup).toContain("immutable live gallery");
   });
 
   it("caps the rendered speaker table at 25 rows and exposes pagination", () => {

@@ -308,6 +308,7 @@ export const SpeakerDirectoryItem = Schema.Struct({
   provisioningVersion: VersionFromZero,
   provisioningStatus: Schema.Literal("manual", "pending", "claimed", "provisioned", "retry", "failed", "revoked"),
   provisionedAt: Schema.NullOr(Timestamp),
+  messageEligible: Schema.Boolean,
   sessions: Schema.Array(SpeakerSession),
   privateFields: Schema.Array(SpeakerPrivateField),
   readiness: ReadinessSummary,
