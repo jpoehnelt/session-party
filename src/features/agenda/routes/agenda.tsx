@@ -66,6 +66,58 @@ const views = [
   { id: "room", label: "Room", panelId: "agenda-view-room" },
 ];
 
+export type AgendaFilter = "all" | "needs-placement" | "conflicts" | "published";
+
+const agendaFilterPresentation: Record<Exclude<AgendaFilter, "all">, string> = {
+  "needs-placement": "Needs placement",
+  conflicts: "Conflicts",
+  published: "Published sessions",
+};
+
+export function agendaFilterFromSearch(value: string | null): AgendaFilter {
+  return value === "needs-placement" || value === "conflicts" || value === "published" ? value : "all";
+}
+
+export function agendaViewFromSearch(value: string | null): AgendaView | null {
+  return value === "list" || value === "day" || value === "week" || value === "track" || value === "room"
+    ? value
+    : null;
+}
+
+export function filterAgendaSnapshot(
+  agenda: AgendaSnapshot,
+  filter: AgendaFilter,
+  publishedTalkIds: ReadonlySet<string> = new Set(),
+): AgendaSnapshot {
+  if (filter === "all") return agenda;
+
+  const conflictTalkIds = new Set(agenda.conflicts.flatMap(({ talkIds }) => talkIds));
+  const talks = agenda.talks.filter((talk) => {
+    if (filter === "needs-placement") {
+      return talk.status !== "cancelled" && (talk.roomId === null || talk.startsAt === null);
+    }
+    if (filter === "conflicts") return conflictTalkIds.has(talk.id);
+    return publishedTalkIds.has(talk.id);
+  });
+  const visibleTalkIds = new Set(talks.map(({ id }) => id));
+  const conflicts = agenda.conflicts.filter(({ talkIds }) => talkIds.some((talkId) => visibleTalkIds.has(talkId)));
+
+  return {
+    ...agenda,
+    backlog: filter === "needs-placement" ? agenda.backlog : [],
+    talks,
+    conflicts,
+    warnings: {
+      unplacedTalkCount: talks.filter(
+        ({ roomId, startsAt, status }) => status !== "cancelled" && (roomId === null || startsAt === null),
+      ).length,
+      conflictCount: conflicts.length,
+      roomConflictCount: conflicts.filter(({ kind }) => kind === "room_overlap").length,
+      speakerConflictCount: conflicts.filter(({ kind }) => kind === "speaker_overlap").length,
+    },
+  };
+}
+
 const idleIntent = (): RealtimeIntentState => ({
   clientIntentId: null,
   connection: typeof navigator !== "undefined" && navigator.onLine ? "reconnecting" : "offline",
@@ -308,8 +360,12 @@ type RefreshState =
 function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedTalkId = searchParams.get("talk");
-  const [view, setView] = useState<AgendaView>("day");
+  const requestedView = agendaViewFromSearch(searchParams.get("view"));
+  const agendaFilter = agendaFilterFromSearch(searchParams.get("filter"));
+  const [view, setView] = useState<AgendaView>(() => requestedView ?? "day");
   const [agenda, setAgenda] = useState<AgendaSnapshot | null | undefined>(undefined);
+  const [publishedTalkIds, setPublishedTalkIds] = useState<ReadonlySet<string> | null>(null);
+  const [publishedFilterError, setPublishedFilterError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState<RefreshState>({ status: "idle", message: null });
   const [selectedTalkId, setSelectedTalkId] = useState<string | null>(null);
   const [editorVersion, setEditorVersion] = useState<number | null>(null);
@@ -342,6 +398,10 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const viewRef = useRef(view);
   viewRef.current = view;
   const mounted = useRef(true);
+
+  useEffect(() => {
+    if (requestedView !== null && requestedView !== viewRef.current) setView(requestedView);
+  }, [requestedView]);
 
   const fetchAgenda = useCallback((nextView: AgendaView) =>
     apiFetch<AgendaSnapshot>(
@@ -401,6 +461,35 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
       toast(error instanceof Error ? error.message : "Could not load agenda", { tone: "danger" });
     });
   }, [refreshAgenda, view]);
+
+  useEffect(() => {
+    if (agendaFilter !== "published") {
+      setPublishedTalkIds(null);
+      setPublishedFilterError(null);
+      return;
+    }
+    if (!agenda) return;
+    if (agenda.publication.revision === 0) {
+      setPublishedTalkIds(new Set());
+      setPublishedFilterError(null);
+      return;
+    }
+
+    let active = true;
+    setPublishedTalkIds(null);
+    setPublishedFilterError(null);
+    void apiFetch<PublishedAgenda>(
+      `/api/v1/public/events/${encodeURIComponent(event.slug)}/agenda/published`,
+      { schema: PublishedAgenda },
+    ).then((published) => {
+      if (active) setPublishedTalkIds(new Set(published.talks.map(({ id }) => id)));
+    }).catch((error) => {
+      if (!active) return;
+      setPublishedTalkIds(new Set());
+      setPublishedFilterError(error instanceof Error ? error.message : "Could not load the published agenda revision");
+    });
+    return () => { active = false; };
+  }, [agenda?.publication.revision, agendaFilter, event.slug]);
 
   const room = useEventRoom(event.id, (message) => {
     if (message.t === "room/presence") setPresence(message.users);
@@ -969,6 +1058,19 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     }
   };
 
+  const changeAgendaView = (nextView: AgendaView) => {
+    setView(nextView);
+    const next = new URLSearchParams(searchParams);
+    next.set("view", nextView);
+    setSearchParams(next, { replace: true });
+  };
+
+  const clearAgendaFilter = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("filter");
+    setSearchParams(next, { replace: true });
+  };
+
   if (agenda === undefined) {
     return <LoadingRegion label={`Loading ${event.name} agenda`} className="h-[36rem]" />;
   }
@@ -1003,6 +1105,11 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const confirmedTalkCount = agenda.talks.filter(({ status }) => status === "confirmed").length;
   const mutationsDisabled = busy || refresh.status !== "idle" || intent.connection === "offline";
   const talkMutationsDisabled = mutationsDisabled || talkEditorStale || editorExpectedVersion === null;
+  const filteredAgenda = filterAgendaSnapshot(agenda, agendaFilter, publishedTalkIds ?? new Set());
+  const filteredTalkCount = filteredAgenda.talks.filter(({ status }) => status !== "cancelled").length;
+  const filteredItemCount = agendaFilter === "needs-placement"
+    ? filteredTalkCount + filteredAgenda.backlog.length
+    : filteredTalkCount;
 
   return (
     <>
@@ -1088,11 +1195,27 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         />
       ) : (
         <>
+          {agendaFilter !== "all" ? (
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-production-sky px-4 py-3 shadow-[4px_4px_0_#171714]" role="status">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-ink-faint">Filtered agenda</p>
+                <p className="mt-1 text-sm font-black text-ink">
+                  {agendaFilterPresentation[agendaFilter]} · {agendaFilter === "published" && publishedTalkIds === null
+                    ? "loading latest revision…"
+                    : `${filteredItemCount} ${filteredItemCount === 1 ? "item" : "items"}`}
+                </p>
+                {publishedFilterError ? (
+                  <p className="mt-1 text-xs font-semibold text-danger">Published revision could not be loaded: {publishedFilterError}</p>
+                ) : null}
+              </div>
+              <Button size="sm" variant="secondary" onClick={clearAgendaFilter}>Show all agenda items</Button>
+            </div>
+          ) : null}
           <div className="mb-5 flex flex-wrap items-center justify-between gap-4 border-b-2 border-line-strong pb-5">
             <Tabs
               tabs={views}
               active={view}
-              onChange={(id) => setView(id as AgendaView)}
+              onChange={(id) => changeAgendaView(id as AgendaView)}
             />
             <div className="relative w-full max-w-md border-l-4 border-production-coral pl-3 text-xs font-bold text-ink-secondary md:w-auto">
               <p className={refresh.status === "idle" ? undefined : "invisible"} aria-hidden={refresh.status !== "idle"}>
@@ -1120,7 +1243,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         aria-labelledby={`agenda-view-${view}-tab`}
       >
         <AgendaBoard
-          agenda={agenda}
+          agenda={filteredAgenda}
           eventSlug={event.slug}
           view={view}
           intent={intent}

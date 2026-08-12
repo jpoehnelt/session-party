@@ -110,6 +110,18 @@ export function reviewSelectionSearch(currentSearch: string, submissionId: strin
   return query ? `?${query}` : "";
 }
 
+export function reviewStatusFromSearch(search: string): SubmissionStatus | "all" {
+  const status = new URLSearchParams(search).get("status");
+  return status === "submitted"
+      || status === "in_review"
+      || status === "accepted"
+      || status === "waitlist"
+      || status === "rejected"
+      || status === "withdrawn"
+    ? status
+    : "all";
+}
+
 export function selectCachedReviewDetail(
   workbench: ReviewWorkbench,
   detail: SubmissionReviewDetail,
@@ -427,6 +439,23 @@ export default function ReviewWorkbenchRoute() {
     setInitialRequestVersion((version) => version + 1);
   }, [navigate]);
 
+  const selectStatus = useCallback((status: SubmissionStatus | "all") => {
+    const currentLocation = locationRef.current;
+    const params = new URLSearchParams(currentLocation.search);
+    if (status === "all") params.delete("status");
+    else params.set("status", status);
+    params.delete("selectedSubmissionId");
+    params.delete("page");
+    selectedSubmissionIdRef.current = undefined;
+    detailCacheRef.current.clear();
+    const query = params.toString();
+    void navigate(
+      { pathname: currentLocation.pathname, search: query ? `?${query}` : "" },
+      { replace: true },
+    );
+    setInitialRequestVersion((version) => version + 1);
+  }, [navigate]);
+
   const retry = () => {
     if (result && detailRequest?.eventSlug === eventSlug) {
       setDetailRequest((current) => current && { ...current, version: current.version + 1 });
@@ -448,12 +477,14 @@ export default function ReviewWorkbenchRoute() {
 
   return (
     <ReviewWorkbenchContent
-      key={result.event.id}
+      key={`${result.event.id}:${reviewStatusFromSearch(location.search)}`}
       eventSlug={eventSlug}
       workbench={result.workbench}
+      initialStatus={reviewStatusFromSearch(location.search)}
       isDetailLoading={isDetailLoading}
       onSelectSubmission={requestDetail}
       onSelectRound={selectRound}
+      onStatusChange={selectStatus}
       onMutationCommitted={() => refreshSelectedDetail(result.workbench.selected?.id ?? "")}
     />
   );
@@ -462,22 +493,26 @@ export default function ReviewWorkbenchRoute() {
 export function ReviewWorkbenchContent({
   workbench,
   eventSlug,
+  initialStatus = "all",
   isDetailLoading = false,
   onSelectSubmission,
   onSelectRound,
+  onStatusChange,
   onMutationCommitted = async () => undefined,
 }: {
   readonly workbench: ReviewWorkbench;
   readonly eventSlug?: string;
+  readonly initialStatus?: SubmissionStatus | "all";
   readonly isDetailLoading?: boolean;
   readonly onSelectSubmission: (submissionId: string) => void;
   readonly onSelectRound?: (roundId: string) => void;
+  readonly onStatusChange?: (status: SubmissionStatus | "all") => void;
   readonly onMutationCommitted?: () => Promise<void>;
 }) {
   const [focusedId, setFocusedId] = useState(workbench.selected?.id ?? workbench.queue[0]?.id ?? "");
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
-  const [status, setStatus] = useState<SubmissionStatus | "all">("all");
+  const [status, setStatus] = useState<SubmissionStatus | "all">(initialStatus);
   const [category, setCategory] = useState("all");
   const [assignment, setAssignment] = useState<"all" | "mine" | "assigned" | "unassigned">("all");
   const [order, setOrder] = useState(workbench.order);
@@ -609,6 +644,7 @@ export function ReviewWorkbenchContent({
   const clearFilters = () => {
     setQuery("");
     setStatus("all");
+    onStatusChange?.("all");
     setCategory("all");
     setAssignment("all");
     setOrder("coverage");
@@ -923,7 +959,11 @@ export function ReviewWorkbenchContent({
       {queue.length > 0 && (
         <section className="mb-6 grid gap-3 border-2 border-line-strong bg-surface p-4 shadow-[4px_4px_0_#171714] sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1.5fr)_repeat(4,minmax(9rem,0.7fr))]" aria-label="Queue filters">
           <Input ref={searchRef} label="Search proposals" placeholder="Title or category" value={query} onChange={(event) => setQuery(event.target.value)} />
-          <Select label="Status" value={status} onChange={(event) => setStatus(event.target.value as SubmissionStatus | "all")}>
+          <Select label="Status" value={status} onChange={(event) => {
+            const nextStatus = event.target.value as SubmissionStatus | "all";
+            setStatus(nextStatus);
+            onStatusChange?.(nextStatus);
+          }}>
             <option value="all">All statuses</option>
             {Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </Select>

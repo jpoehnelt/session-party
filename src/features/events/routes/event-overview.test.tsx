@@ -129,7 +129,12 @@ describe("event overview dashboard", () => {
     expect(markup).toContain("1 / 3");
     expect(markup).toContain("Needs placement");
     expect(markup).toContain('href="/e/production-summit/review"');
+    expect(markup).toContain('href="/e/production-summit/review?status=submitted"');
+    expect(markup).toContain('href="/e/production-summit/review?status=accepted"');
     expect(markup).toContain('href="/e/production-summit/agenda"');
+    expect(markup).toContain('href="/e/production-summit/agenda?view=list&amp;filter=needs-placement"');
+    expect(markup).toContain('href="/e/production-summit/agenda?view=list&amp;filter=conflicts"');
+    expect(markup).toContain('href="/e/production-summit/agenda?view=list&amp;filter=published"');
     expect(markup).toContain("Production brief");
     expect(markup).toContain("Pier 27, San Francisco");
     expect(markup).toContain("Planning");

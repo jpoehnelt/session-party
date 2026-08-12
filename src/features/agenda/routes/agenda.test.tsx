@@ -1,13 +1,65 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { acceptedProposalFixtures, FIXED_DAY_START, scheduledAgendaFixture } from "../fixtures";
+import {
+  acceptedProposalFixtures,
+  FIXED_DAY_START,
+  roomConflictAgendaFixture,
+  scheduledAgendaFixture,
+} from "../fixtures";
 import type { AgendaMutationResult } from "../schema";
-import { createAcceptedAgendaTalk, path, talkEditorConcurrency } from "./agenda";
+import {
+  agendaFilterFromSearch,
+  agendaViewFromSearch,
+  createAcceptedAgendaTalk,
+  filterAgendaSnapshot,
+  path,
+  talkEditorConcurrency,
+} from "./agenda";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("agenda organizer route", () => {
   it("exports the agenda navigation route", () => {
     expect(path).toBe("/e/:eventSlug/agenda");
+  });
+
+  it("turns dashboard query state into stable agenda views and filters", () => {
+    expect(agendaViewFromSearch("list")).toBe("list");
+    expect(agendaViewFromSearch("invalid")).toBeNull();
+    expect(agendaFilterFromSearch("needs-placement")).toBe("needs-placement");
+    expect(agendaFilterFromSearch("conflicts")).toBe("conflicts");
+    expect(agendaFilterFromSearch("published")).toBe("published");
+    expect(agendaFilterFromSearch("invalid")).toBe("all");
+  });
+
+  it("filters the agenda to placement work, conflicts, or the latest published talk ids", () => {
+    const placedTalk = scheduledAgendaFixture.snapshot.talks[0]!;
+    const unplacedTalk = {
+      ...scheduledAgendaFixture.snapshot.talks[1]!,
+      roomId: null,
+      startsAt: null,
+      status: "draft" as const,
+    };
+    const placementAgenda = {
+      ...scheduledAgendaFixture.snapshot,
+      talks: [placedTalk, unplacedTalk],
+      warnings: { ...scheduledAgendaFixture.snapshot.warnings, unplacedTalkCount: 1 },
+    };
+
+    const placement = filterAgendaSnapshot(placementAgenda, "needs-placement");
+    expect(placement.talks.map(({ id }) => id)).toEqual([unplacedTalk.id]);
+    expect(placement.backlog).toEqual(scheduledAgendaFixture.snapshot.backlog);
+
+    const conflicts = filterAgendaSnapshot(roomConflictAgendaFixture.snapshot, "conflicts");
+    expect(conflicts.talks).toHaveLength(2);
+    expect(conflicts.conflicts).toHaveLength(1);
+
+    const published = filterAgendaSnapshot(
+      scheduledAgendaFixture.snapshot,
+      "published",
+      new Set([placedTalk.id]),
+    );
+    expect(published.talks.map(({ id }) => id)).toEqual([placedTalk.id]);
+    expect(published.backlog).toEqual([]);
   });
 
   it("keeps the editor-open version when live agenda state advances", () => {

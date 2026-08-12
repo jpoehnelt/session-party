@@ -12,6 +12,7 @@ import {
   loadReviewWorkbench,
   path,
   reviewSelectionSearch,
+  reviewStatusFromSearch,
   ReviewLoadFailure,
   ReviewWorkbenchContent,
   serializeReviewCsvRows,
@@ -197,6 +198,14 @@ describe("review workbench route", () => {
 
   it("exports the review navigation route", () => {
     expect(path).toBe("/e/:eventSlug/review");
+  });
+
+  it("initializes dashboard pipeline filters from valid status query values", () => {
+    expect(reviewStatusFromSearch("?status=submitted")).toBe("submitted");
+    expect(reviewStatusFromSearch("?status=in_review")).toBe("in_review");
+    expect(reviewStatusFromSearch("?status=accepted")).toBe("accepted");
+    expect(reviewStatusFromSearch("?status=unknown")).toBe("all");
+    expect(reviewStatusFromSearch("")).toBe("all");
   });
 
   it("preloads proposal detail as queue focus changes without reloading current or pending detail", () => {
