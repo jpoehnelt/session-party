@@ -119,6 +119,48 @@ export const RemoveEventMemberOutput = Schema.Struct({
 });
 export type RemoveEventMemberOutput = typeof RemoveEventMemberOutput.Type;
 
+export const TeamCopyMembership = Schema.Struct({
+  sourceMemberId: EntityId,
+  userId: EntityId,
+  email: Email,
+  name: Schema.NullOr(Schema.String),
+  role: EventRole,
+  existingRole: Schema.NullOr(EventRole),
+});
+export type TeamCopyMembership = typeof TeamCopyMembership.Type;
+
+export const PreviewTeamCopyInput = Schema.Struct({
+  eventId: EntityId,
+  sourceEventId: EntityId,
+});
+export type PreviewTeamCopyInput = typeof PreviewTeamCopyInput.Type;
+
+export const TeamCopyPreview = Schema.Struct({
+  sourceEventId: EntityId,
+  sourceEventName: Schema.String,
+  targetEventId: EntityId,
+  targetEventName: Schema.String,
+  create: Schema.Array(TeamCopyMembership),
+  skip: Schema.Array(TeamCopyMembership),
+});
+export type TeamCopyPreview = typeof TeamCopyPreview.Type;
+
+export const ApplyTeamCopyInput = Schema.extend(PreviewTeamCopyInput, Schema.Struct({
+  idempotencyKey: IdempotencyKey,
+}));
+export type ApplyTeamCopyInput = typeof ApplyTeamCopyInput.Type;
+
+export const ApplyTeamCopyOutput = Schema.Struct({
+  sourceEventId: EntityId,
+  targetEventId: EntityId,
+  created: Schema.Array(EventMember),
+  skipped: Schema.Array(TeamCopyMembership),
+  createdCount: Schema.Int.pipe(Schema.nonNegative()),
+  skippedCount: Schema.Int.pipe(Schema.nonNegative()),
+  idempotent: Schema.Boolean,
+});
+export type ApplyTeamCopyOutput = typeof ApplyTeamCopyOutput.Type;
+
 export const ReviewerInvitation = Schema.Struct({
   id: EntityId,
   eventId: EntityId,
