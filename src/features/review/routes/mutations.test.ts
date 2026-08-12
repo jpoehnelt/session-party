@@ -255,6 +255,7 @@ describe("review mutation client", () => {
       eventId: "event_one",
       roundId: "round_one",
       submissionId: "submission_one",
+      idempotencyKey: "ai-suggestion-key-1",
       requestId: "request-ai",
     });
     await acceptSubmissionRequest({
@@ -301,7 +302,7 @@ describe("review mutation client", () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/events/event_one/review/rounds/round_one/submissions/submission_one/ai-suggestions", {
       method: "POST",
-      headers: { "x-request-id": "request-ai" },
+      headers: { "x-request-id": "request-ai", "idempotency-key": "ai-suggestion-key-1" },
       body: undefined,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/v1/events/event_one/review/submissions/submission_one/acceptance", {

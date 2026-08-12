@@ -14,6 +14,7 @@ import {
   reviewSelectionSearch,
   ReviewLoadFailure,
   ReviewWorkbenchContent,
+  serializeReviewCsvRows,
   selectCachedReviewDetail,
   selectVisibleFallback,
   shouldApplyReviewRefresh,
@@ -119,6 +120,28 @@ const workbench: ReviewWorkbench = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("review workbench route", () => {
+  it("neutralizes spreadsheet formulas in exported review cells after whitespace and control prefixes", () => {
+    const csv = serializeReviewCsvRows([[
+      "Safe title",
+      "=HYPERLINK(\"https://evil.example\")",
+      "  +SUM(1,1)",
+      "\u0000-2+3",
+      "\tWEBSERVICE(\"https://evil.example\")",
+      "\r@attacker",
+      "ordinary, quoted",
+    ]]);
+
+    expect(csv).toBe([
+      '"Safe title"',
+      '"\'=HYPERLINK(""https://evil.example"")"',
+      '"\'  +SUM(1,1)"',
+      '"\'\u0000-2+3"',
+      '"\'\tWEBSERVICE(""https://evil.example"")"',
+      '"\'\r@attacker"',
+      '"ordinary, quoted"',
+    ].join(","));
+  });
+
   it("keeps ambiguous retry keys stable and rotates them across proposal and decision state changes", () => {
     const submittedAIdentity = submissionDecisionLifecycleIdentity({
       id: "submission-a",

@@ -188,6 +188,7 @@ export function SubmissionReviewPane({
   );
   decisionKeysRef.current = decisionKeys;
   const commentKey = useRef(`review-comment-${crypto.randomUUID()}`);
+  const aiSuggestionKey = useRef(`review-ai-suggestion-${crypto.randomUUID()}`);
   const recusalKey = useRef(`review-recusal-${crypto.randomUUID()}`);
   const removalKeys = useRef(new Map<string, string>());
 
@@ -202,6 +203,7 @@ export function SubmissionReviewPane({
     setThreadBody("");
     setRecusalReason("");
     commentKey.current = `review-comment-${crypto.randomUUID()}`;
+    aiSuggestionKey.current = `review-ai-suggestion-${crypto.randomUUID()}`;
     recusalKey.current = `review-recusal-${crypto.randomUUID()}`;
     removalKeys.current.clear();
   }, [submission.id]);
@@ -291,12 +293,16 @@ export function SubmissionReviewPane({
 
   const requestAi = () => {
     if (!round || !canRequestAi) return;
-    void runMutation("ai", () => requestAiSuggestionRequest({
-      eventId,
-      roundId: round.id,
-      submissionId: submission.id,
-      requestId: operationRequestId("review-ai"),
-    }));
+    void runMutation("ai", async () => {
+      await requestAiSuggestionRequest({
+        eventId,
+        roundId: round.id,
+        submissionId: submission.id,
+        idempotencyKey: aiSuggestionKey.current,
+        requestId: operationRequestId("review-ai"),
+      });
+      aiSuggestionKey.current = `review-ai-suggestion-${crypto.randomUUID()}`;
+    });
   };
 
   const appendComment = () => {

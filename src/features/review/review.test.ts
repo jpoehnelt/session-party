@@ -1226,6 +1226,7 @@ describe("review and acceptance slice", () => {
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
       submissionId: "submission_task_form",
+      idempotencyKey: "ai-task-form-01",
       requestId: "request_ai_task_form",
     }));
     const acceptance = await runEitherAs(owner, acceptSubmission({
@@ -1701,6 +1702,7 @@ describe("review and acceptance slice", () => {
       eventId: fixtureEventId,
       roundId: pendingRoundFixture.id,
       submissionId: "submission_21",
+      idempotencyKey: "ai-pending-round-01",
       requestId: "request_ai_pending",
     }));
     expect(pendingAi._tag).toBe("Left");
@@ -1710,6 +1712,7 @@ describe("review and acceptance slice", () => {
       eventId: fixtureEventId,
       roundId: completedRoundFixture.id,
       submissionId: "submission_22",
+      idempotencyKey: "ai-complete-round-01",
       requestId: "request_ai_complete",
     }));
     expect(completedAi._tag).toBe("Left");
@@ -1907,8 +1910,29 @@ describe("review and acceptance slice", () => {
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
       submissionId: "submission_31",
+      idempotencyKey: "ai-suggestion-01",
       requestId: "request_ai_01",
     }));
+    const replay = await runAs(reviewer, requestAiSuggestion({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_31",
+      idempotencyKey: "ai-suggestion-01",
+      requestId: "request_ai_replay_01",
+    }));
+    expect(replay).toEqual(result);
+    const rateLimited = await runEitherAs(reviewer, requestAiSuggestion({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_31",
+      idempotencyKey: "ai-suggestion-02",
+      requestId: "request_ai_rate_limited_02",
+    }));
+    expect(rateLimited._tag).toBe("Left");
+    if (rateLimited._tag === "Left") {
+      expect(rateLimited.left._tag).toBe("Conflict");
+      expect(rateLimited.left.message).toContain("one request per submission each minute");
+    }
     expect(result.suggestion.label).toContain("requires human confirmation");
     expect(result.suggestion.inputFields).toEqual(["title", "abstract", "rubric"]);
     expect(lastAiPrompt).toContain('"title"');
@@ -1918,6 +1942,13 @@ describe("review and acceptance slice", () => {
     expect(result.submissionStatus).not.toBe("accepted");
     const [submission] = await db.select().from(submissions).where(eq(submissions.id, "submission_31"));
     expect(submission?.status).toBe("submitted");
+    const suggestionRows = await db.select().from(reviews).where(and(
+      eq(reviews.eventId, fixtureEventId),
+      eq(reviews.roundId, activeRoundFixture.id),
+      eq(reviews.submissionId, "submission_31"),
+      eq(reviews.ai, true),
+    ));
+    expect(suggestionRows).toHaveLength(1);
     const [change] = await db.select().from(domainChanges).where(eq(domainChanges.requestId, "request_ai_01"));
     expect(change?.audiences).toEqual([
       { kind: "admins" },
@@ -1992,6 +2023,7 @@ describe("review and acceptance slice", () => {
       eventId: fixtureEventId,
       roundId: activeRoundFixture.id,
       submissionId: "submission_08",
+      idempotencyKey: "ai-api-key-01",
       requestId: "request_api_ai",
     }));
     const [aiRow] = await db.select().from(reviews).where(eq(reviews.id, aiResult.suggestion.id));

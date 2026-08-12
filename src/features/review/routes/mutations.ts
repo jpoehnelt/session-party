@@ -245,6 +245,7 @@ export function requestAiSuggestionRequest(input: RequestAiSuggestionInput) {
     path: `/api/v1/events/${segment(input.eventId)}/review/rounds/${segment(input.roundId)}/submissions/${segment(input.submissionId)}/ai-suggestions`,
     method: "POST",
     requestId: input.requestId,
+    idempotencyKey: input.idempotencyKey,
     schema: RequestAiSuggestionOutput,
   });
 }

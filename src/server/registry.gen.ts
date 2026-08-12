@@ -1630,6 +1630,7 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
     "input": {
       "body": [],
       "headers": {
+        "idempotencyKey": "idempotency-key",
         "requestId": "x-request-id"
       },
       "path": [
@@ -20400,6 +20401,13 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "title": "maxLength(128)",
           "type": "string"
         },
+        "idempotencyKey": {
+          "description": "a string at most 256 character(s) long",
+          "maxLength": 256,
+          "minLength": 8,
+          "title": "maxLength(256)",
+          "type": "string"
+        },
         "requestId": {
           "description": "a string at most 128 character(s) long",
           "maxLength": 128,
@@ -20428,6 +20436,7 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "eventId",
         "roundId",
         "submissionId",
+        "idempotencyKey",
         "requestId"
       ],
       "type": "object"
@@ -22246,6 +22255,13 @@ export const partyIntents: readonly PartyIntentDescriptor[] = [
           "title": "maxLength(128)",
           "type": "string"
         },
+        "idempotencyKey": {
+          "description": "a string at most 256 character(s) long",
+          "maxLength": 256,
+          "minLength": 8,
+          "title": "maxLength(256)",
+          "type": "string"
+        },
         "requestId": {
           "description": "a string at most 128 character(s) long",
           "maxLength": 128,
@@ -22274,6 +22290,7 @@ export const partyIntents: readonly PartyIntentDescriptor[] = [
         "eventId",
         "roundId",
         "submissionId",
+        "idempotencyKey",
         "requestId"
       ],
       "type": "object"
@@ -52664,6 +52681,18 @@ export const openApi = {
           },
           {
             "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "description": "a string at most 256 character(s) long",
+              "maxLength": 256,
+              "minLength": 8,
+              "title": "maxLength(256)",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
             "name": "x-request-id",
             "required": true,
             "schema": {
@@ -52875,7 +52904,7 @@ export const openApi = {
         "x-emits": [
           "review.aiSuggestion.created"
         ],
-        "x-idempotency": "none",
+        "x-idempotency": "required",
         "x-operation-kind": "command"
       }
     },
