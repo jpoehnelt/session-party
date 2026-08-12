@@ -580,6 +580,51 @@ describe("portal service", () => {
       .toHaveLength(1);
   });
 
+  it("shows only the latest private onboarding answers on the exact organizer speaker record", async () => {
+    const setup = await fixture();
+    const formId = `logistics-${setup.eventId}`;
+    const versionId = `${formId}-v1`;
+    const travelFieldId = `${versionId}-travel`;
+    const dietaryFieldId = `${versionId}-dietary`;
+    const oldSubmissionId = `${formId}-old`;
+    const currentSubmissionId = `${formId}-current`;
+    const taskId = `${formId}-task`;
+    const now = Date.now();
+    const exactLogistics = "Arrival May 11, aisle seat; dietary: Vegetarian";
+    await env.DB.batch([
+      env.DB.prepare("insert into forms (id, event_id, kind, name, status, version, created_at, updated_at) values (?, ?, 'task', 'Speaker logistics', 'open', 1, ?, ?)").bind(formId, setup.eventId, now, now),
+      env.DB.prepare("insert into form_versions (id, event_id, form_id, version_number, name, published_at, created_at) values (?, ?, ?, 1, 'Speaker logistics', ?, ?)").bind(versionId, setup.eventId, formId, now, now),
+      env.DB.prepare("insert into form_version_fields (id, event_id, form_version_id, source_field_id, \"order\", type, label, required, created_at) values (?, ?, ?, null, 1, 'textarea', 'Travel or accessibility notes', 0, ?)").bind(travelFieldId, setup.eventId, versionId, now),
+      env.DB.prepare("insert into form_version_fields (id, event_id, form_version_id, source_field_id, \"order\", type, label, required, created_at) values (?, ?, ?, null, 2, 'radio', 'Dietary preference', 1, ?)").bind(dietaryFieldId, setup.eventId, versionId, now),
+      env.DB.prepare("insert into tasks (id, event_id, name, kind, form_id, \"order\", target_mode, version, created_at, updated_at) values (?, ?, 'Complete speaker logistics', 'form', ?, 1, 'all', 1, ?, ?)").bind(taskId, setup.eventId, formId, now, now),
+      env.DB.prepare("insert into submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, version, created_at, updated_at) values (?, ?, ?, ?, 'Speaker logistics', 'submitted', ?, 1, ?, ?)").bind(oldSubmissionId, setup.eventId, formId, versionId, now - 1_000, now - 1_000, now - 1_000),
+      env.DB.prepare("insert into submission_speakers (id, event_id, submission_id, speaker_id, is_primary, created_at) values (?, ?, ?, ?, 1, ?)").bind(`${oldSubmissionId}-speaker`, setup.eventId, oldSubmissionId, setup.speakerId, now - 1_000),
+      env.DB.prepare("insert into submission_answers (id, event_id, submission_id, form_version_id, form_version_field_id, value, version, created_at, updated_at) values (?, ?, ?, ?, ?, ?, 1, ?, ?)").bind(`${oldSubmissionId}-travel`, setup.eventId, oldSubmissionId, versionId, travelFieldId, JSON.stringify("Old travel answer"), now - 1_000, now - 1_000),
+      env.DB.prepare("insert into submissions (id, event_id, form_id, form_version_id, title, status, submitted_at, version, created_at, updated_at) values (?, ?, ?, ?, 'Speaker logistics', 'submitted', ?, 1, ?, ?)").bind(currentSubmissionId, setup.eventId, formId, versionId, now, now, now),
+      env.DB.prepare("insert into submission_speakers (id, event_id, submission_id, speaker_id, is_primary, created_at) values (?, ?, ?, ?, 1, ?)").bind(`${currentSubmissionId}-speaker`, setup.eventId, currentSubmissionId, setup.speakerId, now),
+      env.DB.prepare("insert into submission_answers (id, event_id, submission_id, form_version_id, form_version_field_id, value, version, created_at, updated_at) values (?, ?, ?, ?, ?, ?, 1, ?, ?)").bind(`${currentSubmissionId}-travel`, setup.eventId, currentSubmissionId, versionId, travelFieldId, JSON.stringify(exactLogistics), now, now),
+      env.DB.prepare("insert into submission_answers (id, event_id, submission_id, form_version_id, form_version_field_id, value, version, created_at, updated_at) values (?, ?, ?, ?, ?, ?, 1, ?, ?)").bind(`${currentSubmissionId}-dietary`, setup.eventId, currentSubmissionId, versionId, dietaryFieldId, JSON.stringify("Vegetarian"), now, now),
+    ]);
+
+    const directory = await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }));
+    expect(directory.speakers.find(({ speaker }) => speaker.id === setup.speakerId)?.privateFields).toEqual([
+      expect.objectContaining({
+        submissionId: currentSubmissionId,
+        formId,
+        formName: "Speaker logistics",
+        label: "Travel or accessibility notes",
+        value: exactLogistics,
+      }),
+      expect.objectContaining({ label: "Dietary preference", value: "Vegetarian" }),
+    ]);
+    expect(JSON.stringify(directory)).not.toContain("Old travel answer");
+
+    await publishSpeakerGallery(setup.eventId, [setup.speakerId]);
+    const publicGallery = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
+    expect(JSON.stringify(publicGallery)).not.toContain(exactLogistics);
+    expect(JSON.stringify(publicGallery)).not.toContain("Dietary preference");
+  });
+
   it("persists completion and transitions readiness after provisioning", async () => {
     const setup = await fixture();
     const task = await runAs(owner, createPortalTask({ eventId: setup.eventId, name: "Confirm", description: null, kind: "confirm", formId: null, dueAt: null, order: 1 }));

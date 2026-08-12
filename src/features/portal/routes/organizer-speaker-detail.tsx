@@ -37,6 +37,24 @@ export default function OrganizerSpeakerDetailRoute() {
             <h2 className="text-xs font-black uppercase tracking-[0.12em]">Biography</h2>
             <p className="mt-3 whitespace-pre-line text-sm leading-6 text-ink-secondary">{speaker.bio || "Biography pending."}</p>
           </div>
+          {item.privateFields.length > 0 && (
+            <div className="mt-6 border-t-2 border-line-strong pt-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xs font-black uppercase tracking-[0.12em]">Private logistics &amp; custom fields</h2>
+                <Badge tone="neutral">Event team only</Badge>
+              </div>
+              <p className="mt-2 text-xs text-ink-muted">Saved from this speaker's onboarding forms. These answers are never included in public speaker pages or embeds.</p>
+              <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+                {item.privateFields.map((field) => (
+                  <div className="border-l-2 border-line-strong pl-3" key={`${field.submissionId}-${field.fieldId}`}>
+                    <dt className="text-xs font-black uppercase tracking-wide text-ink-faint">{field.label}</dt>
+                    <dd className="mt-1 whitespace-pre-line text-sm font-medium text-ink-secondary">{Array.isArray(field.value) ? field.value.join(", ") : typeof field.value === "boolean" ? (field.value ? "Yes" : "No") : field.value}</dd>
+                    <dd className="mt-1 text-xs text-ink-faint">{field.formName} · submitted {new Date(field.submittedAt).toLocaleDateString()}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
           {speaker.links.length > 0 && <div className="mt-5 flex flex-wrap gap-3">{speaker.links.map((link) => <a className="font-bold text-accent-deep underline" href={link.url} key={`${link.label}-${link.url}`}>{link.label}</a>)}</div>}
           {speaker.profileReviewNote && <p className="mt-5 border-2 border-line-strong bg-warning-soft p-3 text-sm"><strong>Review note:</strong> {speaker.profileReviewNote}</p>}
         </Card>

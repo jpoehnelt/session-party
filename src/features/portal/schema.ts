@@ -155,6 +155,25 @@ export const SpeakerContact = Schema.Struct({
 });
 export type SpeakerContact = typeof SpeakerContact.Type;
 
+/** Organizer-only answers from onboarding forms submitted by this exact speaker. */
+export const SpeakerPrivateFieldValue = Schema.Union(
+  Schema.String,
+  Schema.Array(Schema.String),
+  Schema.Boolean,
+);
+export type SpeakerPrivateFieldValue = typeof SpeakerPrivateFieldValue.Type;
+
+export const SpeakerPrivateField = Schema.Struct({
+  submissionId: EntityId,
+  formId: EntityId,
+  formName: NonEmptyText,
+  fieldId: EntityId,
+  label: NonEmptyText,
+  value: SpeakerPrivateFieldValue,
+  submittedAt: Timestamp,
+});
+export type SpeakerPrivateField = typeof SpeakerPrivateField.Type;
+
 export const AcceptedSubmission = Schema.Struct({
   id: EntityId,
   title: Schema.String,
@@ -224,6 +243,7 @@ export const SpeakerDirectoryItem = Schema.Struct({
   provisioningStatus: Schema.Literal("manual", "pending", "claimed", "provisioned", "retry", "failed", "revoked"),
   provisionedAt: Schema.NullOr(Timestamp),
   sessions: Schema.Array(SpeakerSession),
+  privateFields: Schema.Array(SpeakerPrivateField),
   readiness: ReadinessSummary,
   latestContact: Schema.NullOr(SpeakerContact),
 });

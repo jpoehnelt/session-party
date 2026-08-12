@@ -11,6 +11,7 @@ import {
   auditLog,
   domainChanges,
   events,
+  forms,
   formVersionFields,
   idempotencyRecords,
   integrations,
@@ -84,6 +85,7 @@ import {
   type SetTaskCompletionInput,
   type SpeakerDirectory,
   type SpeakerDirectoryItem,
+  SpeakerPrivateFieldValue as SpeakerPrivateFieldValueSchema,
   type SpeakerProfile,
   type SubmitProfileReviewInput,
   type UpdateProfileInput,
@@ -976,6 +978,60 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
     )).where(and(eq(talkSpeakers.eventId, input.eventId), inArray(talkSpeakers.speakerId, speakerIds)))
       .orderBy(asc(talks.startsAt), asc(talks.title))),
   ]);
+  const onboardingFormIds = definitions.flatMap((task) => task.kind === "form" && task.formId !== null ? [task.formId] : []);
+  const storedPrivateFieldRows = speakerIds.length === 0 || onboardingFormIds.length === 0
+    ? []
+    : yield* database(() => db.select({
+      speakerId: submissionSpeakers.speakerId,
+      submissionId: submissions.id,
+      formId: submissions.formId,
+      formName: forms.name,
+      fieldId: formVersionFields.id,
+      fieldOrder: formVersionFields.order,
+      label: formVersionFields.label,
+      value: submissionAnswers.value,
+      submittedAt: submissions.submittedAt,
+    })
+      .from(submissionSpeakers)
+      .innerJoin(submissions, and(
+        eq(submissions.eventId, submissionSpeakers.eventId),
+        eq(submissions.id, submissionSpeakers.submissionId),
+      ))
+      .innerJoin(forms, and(
+        eq(forms.eventId, submissions.eventId),
+        eq(forms.id, submissions.formId),
+      ))
+      .innerJoin(submissionAnswers, and(
+        eq(submissionAnswers.eventId, submissions.eventId),
+        eq(submissionAnswers.submissionId, submissions.id),
+        eq(submissionAnswers.formVersionId, submissions.formVersionId),
+      ))
+      .innerJoin(formVersionFields, and(
+        eq(formVersionFields.eventId, submissionAnswers.eventId),
+        eq(formVersionFields.formVersionId, submissionAnswers.formVersionId),
+        eq(formVersionFields.id, submissionAnswers.formVersionFieldId),
+      ))
+      .where(and(
+        eq(submissionSpeakers.eventId, input.eventId),
+        inArray(submissionSpeakers.speakerId, speakerIds),
+        inArray(submissions.formId, onboardingFormIds),
+        eq(forms.kind, "task"),
+      ))
+      .orderBy(desc(submissions.submittedAt), desc(submissions.id), asc(formVersionFields.order)));
+  const privateFieldRows = yield* Effect.forEach(storedPrivateFieldRows, (row) =>
+    Schema.decodeUnknown(SpeakerPrivateFieldValueSchema)(row.value).pipe(
+      Effect.map((value) => ({ ...row, value })),
+      Effect.mapError((error) => new External({
+        service: "database",
+        detail: `Invalid private speaker field ${row.fieldId}: ${String(error)}`,
+      })),
+    ),
+  );
+  const latestPrivateSubmissionBySpeakerForm = new Map<string, string>();
+  for (const row of privateFieldRows) {
+    const key = `${row.speakerId}\0${row.formId}`;
+    if (!latestPrivateSubmissionBySpeakerForm.has(key)) latestPrivateSubmissionBySpeakerForm.set(key, row.submissionId);
+  }
   const bySpeaker = new Map<string, (typeof taskCompletions.$inferSelect)[]>();
   for (const completion of completions) bySpeaker.set(completion.speakerId, [...(bySpeaker.get(completion.speakerId) ?? []), completion]);
   const latestContactBySpeaker = new Map<string, typeof speakerContacts.$inferSelect>();
@@ -1011,6 +1067,21 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
         durationMin: session.durationMin,
         status: session.status,
       })),
+      privateFields: privateFieldRows
+        .filter((field) => {
+          const taskApplies = speakerDefinitions.some((task) => task.kind === "form" && task.formId === field.formId);
+          const latestSubmissionId = latestPrivateSubmissionBySpeakerForm.get(`${speaker.id}\0${field.formId}`);
+          return field.speakerId === speaker.id && taskApplies && latestSubmissionId === field.submissionId;
+        })
+        .map((field) => ({
+          submissionId: field.submissionId,
+          formId: field.formId,
+          formName: field.formName,
+          fieldId: field.fieldId,
+          label: field.label,
+          value: field.value,
+          submittedAt: field.submittedAt.getTime(),
+        })),
       readiness: withContactEscalation(readiness(speakerDefinitions, bySpeaker.get(speaker.id) ?? []), latestContact),
       latestContact,
     };

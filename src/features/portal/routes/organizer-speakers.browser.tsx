@@ -68,6 +68,7 @@ const speakerItem = (id: string, displayName: string, taskId: string): SpeakerDi
   provisioningStatus: "provisioned",
   provisionedAt: Date.UTC(2027, 3, 1),
   sessions: [],
+  privateFields: [],
   readiness: {
     tasksTotal: 1,
     tasksDone: 0,
