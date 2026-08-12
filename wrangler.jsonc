@@ -40,6 +40,9 @@
     // Set this to the self-hosted owner email to disable open registration.
     "INITIAL_ADMIN_EMAIL": "",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
+    // Optional public project settings. Analytics remains disabled while either value is blank.
+    "POSTHOG_KEY": "",
+    "POSTHOG_HOST": "",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAELTRHiRum336lV9",
     "TURNSTILE_HOSTNAMES": "sessionparty.com"
   },
@@ -70,6 +73,8 @@
         "APP_URL": "https://preview.invalid",
         "INITIAL_ADMIN_EMAIL": "",
         "MAIL_FROM": "Session Party Preview <welcome@sessionparty.com>",
+        "POSTHOG_KEY": "",
+        "POSTHOG_HOST": "",
         "TURNSTILE_SITE_KEY": "preview-fake",
         "TURNSTILE_HOSTNAMES": "invalid"
       }

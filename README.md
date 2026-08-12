@@ -141,6 +141,7 @@ Review these values in the deployment form:
 | `APP_URL` | The final origin, for example `https://events.example.com` |
 | `INITIAL_ADMIN_EMAIL` | Your email address; this closes public registration |
 | `MAIL_FROM` | A sender on the onboarded domain, for example `Session Party <welcome@example.com>` |
+| `POSTHOG_KEY` / `POSTHOG_HOST` | Optional analytics settings. Leave both blank to send no product analytics. |
 | `SESSION_SECRET` | A unique value generated with `openssl rand -hex 32` |
 | `TURNSTILE_SITE_KEY` | The widget's site key |
 | `TURNSTILE_SECRET` | The widget's secret key |
@@ -158,6 +159,10 @@ After the first deployment:
 4. Open the hostname, sign in with `INITIAL_ADMIN_EMAIL`, and create the first event.
 
 Cloudflare creates the DNS record and certificate. Remove any existing CNAME for that hostname before attaching it.
+
+### Pull-request previews
+
+Repository pull-request previews are UI-only: they have no D1 or R2 bindings, cannot run scheduled jobs, and never apply remote migrations. API-backed preview workflows require separately provisioned preview storage and are intentionally disabled by the default template.
 
 ## Local development
 
@@ -211,6 +216,8 @@ Feature modules own their domain logic and declare their routes and transports. 
 Self-hosting requires a Cloudflare account and project-owned D1, R2, Durable Object, Workers AI, Turnstile, and Email Sending resources. The deploy button provisions the supported resources and rewrites their binding identifiers in the copied repository.
 
 Production requires `SESSION_SECRET` and `TURNSTILE_SECRET`. Live Accelevents and Airtable integrations additionally use `ACCELEVENTS_API_TOKEN` and `AIRTABLE_PAT`; those provider secrets are never accepted from the browser.
+
+Product analytics are off by default for self-hosted installations. Set both `POSTHOG_KEY` and `POSTHOG_HOST` only if the installation owner explicitly wants PostHog collection; partial or invalid settings keep analytics disabled.
 
 After reviewing the target bindings and migration plan:
 

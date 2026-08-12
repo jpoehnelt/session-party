@@ -113,6 +113,12 @@
       "MAIL_FROM": {
         "description": "A sender on a domain onboarded to [Cloudflare Email Service](https://developers.cloudflare.com/email-service/get-started/), such as `Session Party <welcome@example.com>`."
       },
+      "POSTHOG_KEY": {
+        "description": "Optional public PostHog project key. Leave this and `POSTHOG_HOST` blank to send no product analytics."
+      },
+      "POSTHOG_HOST": {
+        "description": "Optional HTTPS PostHog origin, such as `https://us.i.posthog.com`. Analytics activates only when this and `POSTHOG_KEY` are both set."
+      },
       "SESSION_SECRET": {
         "description": "Generate a unique signing secret with `openssl rand -hex 32`. Rotating it signs every user out."
       },
