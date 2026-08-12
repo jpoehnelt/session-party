@@ -1,4 +1,4 @@
-import { EntityId, UnixTimestampMs } from "contracts/domain";
+import { EntityId, Pagination, PaginationInput, UnixTimestampMs } from "contracts/domain";
 import { Schema } from "effect";
 
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(8), Schema.maxLength(200));
@@ -88,10 +88,11 @@ export const AudienceSnapshot = Schema.Struct({
   recipients: Schema.Array(AudienceRecipient),
   eligibleCount: Schema.Int.pipe(Schema.nonNegative()),
   dependency: Schema.Literal("decidedApplicants"),
+  pagination: Pagination,
 });
 export type AudienceSnapshot = typeof AudienceSnapshot.Type;
 
-export const ListAudienceInput = Schema.Struct({ eventId: EntityId });
+export const ListAudienceInput = Schema.Struct({ eventId: EntityId, ...PaginationInput.fields });
 export type ListAudienceInput = typeof ListAudienceInput.Type;
 
 export const PreviewMode = Schema.Literal("decidedApplicant", "sample");
@@ -178,10 +179,11 @@ export const DeliveryHistory = Schema.Struct({
   eventId: EntityId,
   deliveries: Schema.Array(DeliveryHistoryItem),
   localCaptureCount: Schema.Int.pipe(Schema.nonNegative()),
+  pagination: Pagination,
 });
 export type DeliveryHistory = typeof DeliveryHistory.Type;
 
-export const ListDeliveriesInput = Schema.Struct({ eventId: EntityId });
+export const ListDeliveriesInput = Schema.Struct({ eventId: EntityId, ...PaginationInput.fields });
 export type ListDeliveriesInput = typeof ListDeliveriesInput.Type;
 
 export const EnqueueCommunicationInput = Schema.Struct({

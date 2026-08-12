@@ -298,6 +298,10 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
     "input": {
       "path": [
         "eventId"
+      ],
+      "query": [
+        "page",
+        "pageSize"
       ]
     },
     "method": "get",
@@ -309,6 +313,10 @@ export const restRegistrations: readonly RestRegistrationDescriptor[] = [
     "input": {
       "path": [
         "eventId"
+      ],
+      "query": [
+        "page",
+        "pageSize"
       ]
     },
     "method": "get",
@@ -5196,6 +5204,16 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "pattern": "^[A-Za-z0-9_-]+$",
           "title": "maxLength(128)",
           "type": "string"
+        },
+        "page": {
+          "description": "a positive number",
+          "title": "positive",
+          "type": "string"
+        },
+        "pageSize": {
+          "description": "a number between 1 and 100",
+          "title": "between(1, 100)",
+          "type": "string"
         }
       },
       "required": [
@@ -5235,6 +5253,43 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "pattern": "^[A-Za-z0-9_-]+$",
           "title": "maxLength(128)",
           "type": "string"
+        },
+        "pagination": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/Int",
+              "description": "a positive number",
+              "exclusiveMinimum": 0,
+              "title": "positive"
+            },
+            "pageCount": {
+              "$ref": "#/$defs/Int",
+              "description": "a non-negative number",
+              "minimum": 0,
+              "title": "nonNegative"
+            },
+            "pageSize": {
+              "$ref": "#/$defs/Int",
+              "description": "a number between 1 and 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "between(1, 100)"
+            },
+            "total": {
+              "$ref": "#/$defs/Int",
+              "description": "a non-negative number",
+              "minimum": 0,
+              "title": "nonNegative"
+            }
+          },
+          "required": [
+            "page",
+            "pageSize",
+            "total",
+            "pageCount"
+          ],
+          "type": "object"
         },
         "recipients": {
           "items": {
@@ -5326,7 +5381,8 @@ export const mcpTools: readonly McpToolDescriptor[] = [
         "eventId",
         "recipients",
         "eligibleCount",
-        "dependency"
+        "dependency",
+        "pagination"
       ],
       "type": "object"
     },
@@ -5346,6 +5402,16 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "minLength": 1,
           "pattern": "^[A-Za-z0-9_-]+$",
           "title": "maxLength(128)",
+          "type": "string"
+        },
+        "page": {
+          "description": "a positive number",
+          "title": "positive",
+          "type": "string"
+        },
+        "pageSize": {
+          "description": "a number between 1 and 100",
+          "title": "between(1, 100)",
           "type": "string"
         }
       },
@@ -5671,12 +5737,50 @@ export const mcpTools: readonly McpToolDescriptor[] = [
           "description": "a non-negative number",
           "minimum": 0,
           "title": "nonNegative"
+        },
+        "pagination": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/Int",
+              "description": "a positive number",
+              "exclusiveMinimum": 0,
+              "title": "positive"
+            },
+            "pageCount": {
+              "$ref": "#/$defs/Int",
+              "description": "a non-negative number",
+              "minimum": 0,
+              "title": "nonNegative"
+            },
+            "pageSize": {
+              "$ref": "#/$defs/Int",
+              "description": "a number between 1 and 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "between(1, 100)"
+            },
+            "total": {
+              "$ref": "#/$defs/Int",
+              "description": "a non-negative number",
+              "minimum": 0,
+              "title": "nonNegative"
+            }
+          },
+          "required": [
+            "page",
+            "pageSize",
+            "total",
+            "pageCount"
+          ],
+          "type": "object"
         }
       },
       "required": [
         "eventId",
         "deliveries",
-        "localCaptureCount"
+        "localCaptureCount",
+        "pagination"
       ],
       "type": "object"
     },
@@ -28153,6 +28257,26 @@ export const openApi = {
               "title": "maxLength(128)",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "description": "a positive number",
+              "title": "positive",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "description": "a number between 1 and 100",
+              "title": "between(1, 100)",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -28189,6 +28313,43 @@ export const openApi = {
                       "pattern": "^[A-Za-z0-9_-]+$",
                       "title": "maxLength(128)",
                       "type": "string"
+                    },
+                    "pagination": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "page": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a positive number",
+                          "exclusiveMinimum": 0,
+                          "title": "positive"
+                        },
+                        "pageCount": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a non-negative number",
+                          "minimum": 0,
+                          "title": "nonNegative"
+                        },
+                        "pageSize": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a number between 1 and 100",
+                          "maximum": 100,
+                          "minimum": 1,
+                          "title": "between(1, 100)"
+                        },
+                        "total": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a non-negative number",
+                          "minimum": 0,
+                          "title": "nonNegative"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "pageSize",
+                        "total",
+                        "pageCount"
+                      ],
+                      "type": "object"
                     },
                     "recipients": {
                       "items": {
@@ -28280,7 +28441,8 @@ export const openApi = {
                     "eventId",
                     "recipients",
                     "eligibleCount",
-                    "dependency"
+                    "dependency",
+                    "pagination"
                   ],
                   "type": "object"
                 }
@@ -28327,6 +28489,26 @@ export const openApi = {
               "minLength": 1,
               "pattern": "^[A-Za-z0-9_-]+$",
               "title": "maxLength(128)",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "description": "a positive number",
+              "title": "positive",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "description": "a number between 1 and 100",
+              "title": "between(1, 100)",
               "type": "string"
             }
           }
@@ -28650,12 +28832,50 @@ export const openApi = {
                       "description": "a non-negative number",
                       "minimum": 0,
                       "title": "nonNegative"
+                    },
+                    "pagination": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "page": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a positive number",
+                          "exclusiveMinimum": 0,
+                          "title": "positive"
+                        },
+                        "pageCount": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a non-negative number",
+                          "minimum": 0,
+                          "title": "nonNegative"
+                        },
+                        "pageSize": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a number between 1 and 100",
+                          "maximum": 100,
+                          "minimum": 1,
+                          "title": "between(1, 100)"
+                        },
+                        "total": {
+                          "$ref": "#/$defs/Int",
+                          "description": "a non-negative number",
+                          "minimum": 0,
+                          "title": "nonNegative"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "pageSize",
+                        "total",
+                        "pageCount"
+                      ],
+                      "type": "object"
                     }
                   },
                   "required": [
                     "eventId",
                     "deliveries",
-                    "localCaptureCount"
+                    "localCaptureCount",
+                    "pagination"
                   ],
                   "type": "object"
                 }

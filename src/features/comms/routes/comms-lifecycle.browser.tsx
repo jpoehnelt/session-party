@@ -67,6 +67,7 @@ const audience = {
   ],
   eligibleCount: 2,
   dependency: "decidedApplicants" as const,
+  pagination: { page: 1, pageSize: 100, total: 2, pageCount: 1 },
 };
 
 const enqueueResult = {
@@ -165,9 +166,9 @@ describe("rendered campaign confirmation lifecycle", () => {
           : Promise.resolve(enqueueResult);
       }
       if (path.endsWith("/templates")) return Promise.resolve([template]);
-      if (path.endsWith("/audience")) return Promise.resolve(audience);
-      if (path.endsWith("/deliveries")) {
-        return Promise.resolve({ eventId: "event-1", deliveries: [], localCaptureCount: 0 });
+      if (path.includes("/audience")) return Promise.resolve(audience);
+      if (path.includes("/deliveries")) {
+        return Promise.resolve({ eventId: "event-1", deliveries: [], localCaptureCount: 0, pagination: { page: 1, pageSize: 100, total: 0, pageCount: 0 } });
       }
       throw new Error(`Unexpected API request: ${path}`);
     });
@@ -221,8 +222,8 @@ describe("rendered campaign confirmation lifecycle", () => {
     apiMocks.apiFetch.mockImplementation((path: string, options?: { method?: string; body?: unknown }) => {
       if (options?.method === "POST" && path.endsWith("/deliveries")) return Promise.resolve(enqueueResult);
       if (path.endsWith("/templates")) return Promise.resolve([template]);
-      if (path.endsWith("/audience")) return Promise.resolve(audience);
-      if (path.endsWith("/deliveries")) return Promise.resolve({ eventId: "event-1", deliveries: [], localCaptureCount: 0 });
+      if (path.includes("/audience")) return Promise.resolve(audience);
+      if (path.includes("/deliveries")) return Promise.resolve({ eventId: "event-1", deliveries: [], localCaptureCount: 0, pagination: { page: 1, pageSize: 100, total: 0, pageCount: 0 } });
       throw new Error(`Unexpected API request: ${path}`);
     });
     await act(async () => {
@@ -252,8 +253,8 @@ describe("rendered campaign confirmation lifecycle", () => {
   it("deep links tabs and templates while guarding internal and history navigation", async () => {
     apiMocks.apiFetch.mockImplementation((path: string) => {
       if (path.endsWith("/templates")) return Promise.resolve([template, followUpTemplate]);
-      if (path.endsWith("/audience")) return Promise.resolve(audience);
-      if (path.endsWith("/deliveries")) return Promise.resolve({ eventId: "event-1", deliveries: [], localCaptureCount: 0 });
+      if (path.includes("/audience")) return Promise.resolve(audience);
+      if (path.includes("/deliveries")) return Promise.resolve({ eventId: "event-1", deliveries: [], localCaptureCount: 0, pagination: { page: 1, pageSize: 100, total: 0, pageCount: 0 } });
       throw new Error(`Unexpected API request: ${path}`);
     });
     await act(async () => {

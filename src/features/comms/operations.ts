@@ -109,7 +109,7 @@ export const listAudienceOperation = {
   rest: {
     method: "get",
     path: "/events/:eventId/comms/audience",
-    input: { path: ["eventId"] },
+    input: { path: ["eventId"], query: ["page", "pageSize"] },
     summary: "List decided-applicant communication recipients",
   },
   mcp: {
@@ -180,7 +180,7 @@ export const listDeliveriesOperation = {
   rest: {
     method: "get",
     path: "/events/:eventId/comms/deliveries",
-    input: { path: ["eventId"] },
+    input: { path: ["eventId"], query: ["page", "pageSize"] },
     summary: "List communication delivery history",
   },
   mcp: {

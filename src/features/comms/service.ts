@@ -112,10 +112,16 @@ const stableValue = (value: unknown): unknown => {
 
 const stableStringify = (value: unknown): string => JSON.stringify(stableValue(value));
 
-const sha256 = (value: string): Effect.Effect<string> =>
-  Effect.promise(async () => {
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
-    return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const sha256 = (value: string): Effect.Effect<string, External> =>
+  Effect.tryPromise({
+    try: async () => {
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+      return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    },
+    catch: (error) => new External({
+      service: "crypto",
+      detail: error instanceof Error ? error.message : String(error),
+    }),
   });
 
 interface PreparedCommand<A> {
@@ -530,15 +536,76 @@ const loadAudience = (eventId: string): Effect.Effect<AudienceSnapshot, AppError
       recipients,
       eligibleCount: recipients.filter((recipient) => recipient.eligibility === "eligible").length,
       dependency: "decidedApplicants",
+      pagination: { page: 1, pageSize: Math.max(1, recipients.length), total: recipients.length, pageCount: recipients.length === 0 ? 0 : 1 },
+    };
+  });
+
+type AudiencePageInput = Pick<ListAudienceInput, "eventId"> & Partial<Pick<ListAudienceInput, "page" | "pageSize">>;
+
+const loadAudiencePage = (input: AudiencePageInput): Effect.Effect<AudienceSnapshot, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const page = input.page ?? 1;
+    const pageSize = input.pageSize ?? 25;
+    const recipientIdentity = sql`${speakers.id} || ':' || ${submissions.status}`;
+    const recipientEmail = sql<string | null>`coalesce(${users.email}, ${speakers.contactEmail})`;
+    const [totals] = yield* database(() => db.select({
+      total: sql<number>`count(distinct ${recipientIdentity})`.mapWith(Number),
+      eligibleCount: sql<number>`count(distinct case when ${recipientEmail} is not null then ${recipientIdentity} end)`.mapWith(Number),
+    })
+      .from(submissions)
+      .innerJoin(submissionSpeakers, and(
+        eq(submissionSpeakers.eventId, submissions.eventId),
+        eq(submissionSpeakers.submissionId, submissions.id),
+      ))
+      .innerJoin(speakers, and(eq(speakers.eventId, submissionSpeakers.eventId), eq(speakers.id, submissionSpeakers.speakerId)))
+      .leftJoin(users, eq(users.id, speakers.userId))
+      .where(and(eq(submissions.eventId, input.eventId), inArray(submissions.status, ["accepted", "rejected"]))));
+    const rows = yield* database(() => db.select({
+      speakerId: speakers.id,
+      speakerName: speakers.displayName,
+      userId: speakers.userId,
+      email: recipientEmail,
+      decision: sql<"accepted" | "rejected">`${submissions.status}`,
+      sessionTitles: sql<string>`json_group_array(${submissions.title})`,
+    })
+      .from(submissions)
+      .innerJoin(submissionSpeakers, and(
+        eq(submissionSpeakers.eventId, submissions.eventId),
+        eq(submissionSpeakers.submissionId, submissions.id),
+      ))
+      .innerJoin(speakers, and(eq(speakers.eventId, submissionSpeakers.eventId), eq(speakers.id, submissionSpeakers.speakerId)))
+      .leftJoin(users, eq(users.id, speakers.userId))
+      .where(and(eq(submissions.eventId, input.eventId), inArray(submissions.status, ["accepted", "rejected"])))
+      .groupBy(speakers.id, speakers.displayName, speakers.userId, recipientEmail, submissions.status)
+      .orderBy(asc(speakers.displayName), asc(speakers.id), asc(submissions.status))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize));
+    const total = totals?.total ?? 0;
+    return {
+      eventId: input.eventId,
+      recipients: rows.map((row) => ({
+        recipientKey: audienceRecipientKey(row.speakerId, row.decision),
+        speakerId: row.speakerId,
+        userId: row.userId,
+        name: row.speakerName,
+        email: row.email,
+        decision: row.decision,
+        sessionTitles: (JSON.parse(row.sessionTitles) as string[]).sort(),
+        eligibility: row.email === null ? "missingEmail" as const : "eligible" as const,
+      })),
+      eligibleCount: totals?.eligibleCount ?? 0,
+      dependency: "decidedApplicants",
+      pagination: { page, pageSize, total, pageCount: Math.ceil(total / pageSize) },
     };
   });
 
 export const listAudience = (
-  input: ListAudienceInput,
+  input: AudiencePageInput,
 ): Effect.Effect<AudienceSnapshot, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
     yield* authorizeCurrent(communicationsReadAuthorization, input.eventId);
-    return yield* loadAudience(input.eventId);
+    return yield* loadAudiencePage(input);
   });
 
 type RenderContext = MergeContext;
@@ -1155,12 +1222,23 @@ const loadRetryClaim = (
       : null;
   });
 
+type DeliveryPageInput = Pick<ListDeliveriesInput, "eventId"> & Partial<Pick<ListDeliveriesInput, "page" | "pageSize">>;
+
 export const listDeliveries = (
-  input: ListDeliveriesInput,
+  input: DeliveryPageInput,
 ): Effect.Effect<DeliveryHistory, AppError, Authorizer | CurrentUser | Db> =>
   Effect.gen(function* () {
     yield* authorizeCurrent(communicationsReadAuthorization, input.eventId);
     const { db } = yield* Db;
+    const page = input.page ?? 1;
+    const pageSize = input.pageSize ?? 25;
+    const [totals] = yield* database(() => db.select({
+      total: sql<number>`count(*)`.mapWith(Number),
+      localCaptureCount: sql<number>`sum(case when ${mailDeliveries.provider} = 'local-fake' then 1 else 0 end)`.mapWith(Number),
+    })
+      .from(mailDeliveries)
+      .innerJoin(mailDeliverySnapshots, eq(mailDeliverySnapshots.id, mailDeliveries.snapshotId))
+      .where(eq(mailDeliverySnapshots.eventId, input.eventId)));
     const rows = yield* database(() =>
       db.select({
         id: mailDeliveries.id,
@@ -1187,10 +1265,14 @@ export const listDeliveries = (
         .innerJoin(mailDeliverySnapshots, eq(mailDeliverySnapshots.id, mailDeliveries.snapshotId))
         .leftJoin(emailTemplates, and(eq(emailTemplates.eventId, mailDeliverySnapshots.eventId), eq(emailTemplates.id, mailDeliverySnapshots.templateId)))
         .where(eq(mailDeliverySnapshots.eventId, input.eventId))
-        .orderBy(desc(mailDeliveries.createdAt), desc(mailDeliveries.id)),
+        .orderBy(desc(mailDeliveries.createdAt), desc(mailDeliveries.id))
+        .limit(pageSize)
+        .offset((page - 1) * pageSize),
     );
+    const total = totals?.total ?? 0;
+    const pagination = { page, pageSize, total, pageCount: Math.ceil(total / pageSize) };
     if (rows.length === 0) {
-      return { eventId: input.eventId, deliveries: [], localCaptureCount: 0 };
+      return { eventId: input.eventId, deliveries: [], localCaptureCount: totals?.localCaptureCount ?? 0, pagination };
     }
     const attempts = yield* database(() =>
       db.select({
@@ -1203,9 +1285,7 @@ export const listDeliveries = (
         startedAt: mailDeliveryAttempts.startedAt,
         completedAt: mailDeliveryAttempts.completedAt,
       }).from(mailDeliveryAttempts)
-        .innerJoin(mailDeliveries, eq(mailDeliveries.id, mailDeliveryAttempts.deliveryId))
-        .innerJoin(mailDeliverySnapshots, eq(mailDeliverySnapshots.id, mailDeliveries.snapshotId))
-        .where(eq(mailDeliverySnapshots.eventId, input.eventId))
+        .where(inArray(mailDeliveryAttempts.deliveryId, rows.map(({ id }) => id)))
         .orderBy(asc(mailDeliveryAttempts.deliveryId), asc(mailDeliveryAttempts.attemptNumber)),
     );
     const attemptsByDelivery = new Map<string, DeliveryAttempt[]>();
@@ -1249,7 +1329,8 @@ export const listDeliveries = (
     return {
       eventId: input.eventId,
       deliveries,
-      localCaptureCount: deliveries.filter((delivery) => delivery.mode === "localCapture").length,
+      localCaptureCount: totals?.localCaptureCount ?? 0,
+      pagination,
     };
   });
 
