@@ -19,6 +19,7 @@ import {
   mailDeliverySnapshots,
   rooms,
   speakerProvisioning,
+  speakerProfiles,
   speakers,
   submissionAnswers,
   submissionSpeakers,
@@ -198,6 +199,7 @@ interface SeedOptions {
   readonly secondTalk?: boolean;
   readonly sharedSpeaker?: boolean;
   readonly linkedSpeaker?: boolean;
+  readonly duplicateStableSpeaker?: "accountEmail" | "profile";
 }
 
 const seedAgenda = async (name: string, options: SeedOptions = {}) => {
@@ -214,6 +216,8 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
   const submissionB = id("submission-b");
   const speakerA = id("speaker-a");
   const speakerB = id("speaker-b");
+  const speakerUserId = id("speaker-user");
+  const speakerProfileId = id("speaker-profile");
   const acceptanceA = id("acceptance-a");
   const acceptanceB = id("acceptance-b");
   const trackId = id("track");
@@ -230,6 +234,26 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
       createdAt: now,
       updatedAt: now,
     }),
+    ...(options.duplicateStableSpeaker ? [
+      db.insert(users).values({
+        id: speakerUserId,
+        email: `${speakerUserId}@example.com`,
+        name: "Ada Rivera",
+        createdAt: now,
+        updatedAt: now,
+      }),
+      ...(options.duplicateStableSpeaker === "profile" ? [
+        db.insert(speakerProfiles).values({
+          id: speakerProfileId,
+          userId: speakerUserId,
+          slug: id("ada-rivera"),
+          displayName: "Ada Rivera",
+          visible: true,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      ] : []),
+    ] : []),
     db.insert(events).values({
       id: eventId,
       slug: eventSlug,
@@ -334,7 +358,7 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
       {
         id: speakerA,
         eventId,
-        userId: options.linkedSpeaker ? userId : null,
+        userId: options.duplicateStableSpeaker ? speakerUserId : options.linkedSpeaker ? userId : null,
         displayName: "Ada Rivera",
         visible: true,
         createdAt: now,
@@ -343,7 +367,10 @@ const seedAgenda = async (name: string, options: SeedOptions = {}) => {
       {
         id: speakerB,
         eventId,
-        displayName: "Lin Okafor",
+        displayName: options.duplicateStableSpeaker ? "Ada Rivera" : "Lin Okafor",
+        contactEmail: options.duplicateStableSpeaker === "accountEmail" ? `${speakerUserId}@example.com` : null,
+        profileSourceId: options.duplicateStableSpeaker === "profile" ? speakerProfileId : null,
+        profileSourceVersion: options.duplicateStableSpeaker === "profile" ? 1 : null,
         visible: true,
         createdAt: now,
         updatedAt: now,
@@ -1105,6 +1132,63 @@ describe("agenda service", () => {
       speakerConflictCount: 1,
     });
   });
+
+  it.each(["accountEmail", "profile"] as const)(
+    "detects and clears overlaps across duplicate speaker rows tied by %s identity",
+    async (identitySource) => {
+      const seeded = await seedAgenda(`stable-speaker-conflict-${identitySource}`, {
+        scheduled: true,
+        duplicateStableSpeaker: identitySource,
+      });
+      const created = await runAs(seeded.user, createTalk({
+        eventId: seeded.eventId,
+        submissionId: seeded.submissionB,
+        trackId: null,
+        roomId: null,
+        startsAt: null,
+        durationMin: 30,
+        idempotencyKey: `stable-speaker-conflict-${identitySource}-create-0001`,
+      }));
+
+      const overlapping = await runAs(seeded.user, scheduleTalk({
+        eventId: seeded.eventId,
+        talkId: created.talk.id,
+        trackId: seeded.trackId,
+        roomId: seeded.roomB,
+        startsAt: FIXED_DAY_START + 15 * 60_000,
+        durationMin: 30,
+        expectedVersion: created.talk.version,
+        idempotencyKey: `stable-speaker-conflict-${identitySource}-schedule-0001`,
+      }));
+      expect(overlapping.conflicts).toEqual([
+        expect.objectContaining({
+          kind: "speaker_overlap",
+          speakerId: seeded.speakerB,
+          speakerName: "Ada Rivera",
+        }),
+      ]);
+
+      const resolved = await runAs(seeded.user, moveTalk({
+        eventId: seeded.eventId,
+        talkId: overlapping.talk.id,
+        trackId: seeded.trackId,
+        roomId: seeded.roomB,
+        startsAt: FIXED_DAY_START + 60 * 60_000,
+        durationMin: 30,
+        expectedVersion: overlapping.talk.version,
+        idempotencyKey: `stable-speaker-conflict-${identitySource}-move-0001`,
+      }));
+      expect(resolved.conflicts).toEqual([]);
+
+      const snapshot = await runAs(seeded.user, listAgenda({ eventId: seeded.eventId, view: "day" }));
+      expect(snapshot.warnings).toEqual({
+        unplacedTalkCount: 0,
+        conflictCount: 0,
+        roomConflictCount: 0,
+        speakerConflictCount: 0,
+      });
+    },
+  );
 
   it("saves TBD placement through the versioned move operation and defers completeness to publication", async () => {
     const seeded = await seedAgenda("partial-draft", { scheduled: true });
