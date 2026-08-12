@@ -4,6 +4,7 @@ import { userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FIXED_DAY_START, scheduledAgendaFixture } from "../fixtures";
 import { AgendaBoard } from "./AgendaBoard";
+import { LiveShowControl } from "./LiveShowControl";
 
 describe("multi-day agenda builder", () => {
   let container: HTMLDivElement;
@@ -85,5 +86,34 @@ describe("multi-day agenda builder", () => {
     expect(action).not.toBeNull();
     await act(async () => userEvent.click(action!));
     expect(onAutoScheduleProposal).toHaveBeenCalledWith(proposal);
+  });
+
+  it("clears the show-control selection after a reset", async () => {
+    const state = {
+      revision: 2,
+      status: "ready" as const,
+      currentTalkId: scheduledAgendaFixture.snapshot.talks[0]!.id,
+      startedAt: null,
+      holdStartedAt: null,
+      accumulatedHoldMs: 0,
+      updatedAt: FIXED_DAY_START,
+      updatedBy: null,
+    };
+    const renderControl = (currentState: typeof state | { readonly currentTalkId: null; readonly revision: number; readonly status: "idle" }) => (
+      <LiveShowControl
+        agenda={scheduledAgendaFixture.snapshot}
+        state={{ ...state, ...currentState }}
+        cues={[]}
+        onControl={vi.fn()}
+        onCue={vi.fn()}
+        onSurfaceChange={vi.fn()}
+      />
+    );
+    await act(async () => root.render(renderControl(state)));
+    const selection = container.querySelector<HTMLSelectElement>("select");
+    expect(selection?.value).toBe(state.currentTalkId);
+
+    await act(async () => root.render(renderControl({ currentTalkId: null, revision: 3, status: "idle" })));
+    expect(selection?.value).toBe("");
   });
 });

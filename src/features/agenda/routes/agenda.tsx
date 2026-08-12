@@ -12,6 +12,9 @@ import { ApiError, apiFetch } from "@/client/api";
 import { useEventRoom } from "@/client/socket";
 import { loginPathForLocation } from "@/client/return-to";
 import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
   Badge,
   Button,
   EmptyState,
@@ -142,6 +145,14 @@ interface RoomDraft {
 
 const emptyTrackDraft = (): TrackDraft => ({ id: null, name: "", color: "", order: "0", version: 0 });
 const emptyRoomDraft = (): RoomDraft => ({ id: null, name: "", capacity: "", order: "0", version: 0 });
+
+export const talkEditorConcurrency = (
+  editorVersion: number | null,
+  currentVersion: number | null,
+) => ({
+  expectedVersion: editorVersion,
+  stale: editorVersion !== null && currentVersion !== null && editorVersion !== currentVersion,
+});
 
 const localInputValue = (timestamp: number | null, timezone: string) => {
   if (timestamp === null) return "";
@@ -301,6 +312,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const [agenda, setAgenda] = useState<AgendaSnapshot | null | undefined>(undefined);
   const [refresh, setRefresh] = useState<RefreshState>({ status: "idle", message: null });
   const [selectedTalkId, setSelectedTalkId] = useState<string | null>(null);
+  const [editorVersion, setEditorVersion] = useState<number | null>(null);
   const [contentHistory, setContentHistory] = useState<TalkContentHistory>([]);
   const [contentHistoryLoading, setContentHistoryLoading] = useState(false);
   const [intent, setIntent] = useState<RealtimeIntentState>(idleIntent);
@@ -480,6 +492,10 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
     () => agenda?.talks.find(({ id }) => id === selectedTalkId) ?? null,
     [agenda, selectedTalkId],
   );
+  const {
+    expectedVersion: editorExpectedVersion,
+    stale: talkEditorStale,
+  } = talkEditorConcurrency(editorVersion, selectedTalk?.version ?? null);
 
   useEffect(() => {
     const request = ++contentHistoryRequest.current;
@@ -546,6 +562,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   const selectTalk = useCallback((talk: AgendaTalk, message: string | null = null) => {
     room.send({ t: "agenda/focus", talkId: talk.id });
     setSelectedTalkId(talk.id);
+    setEditorVersion(talk.version);
     const next = new URLSearchParams(searchParams);
     next.set("talk", talk.id);
     setSearchParams(next, { replace: true });
@@ -563,7 +580,10 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   useEffect(() => {
     if (!agenda) return;
     if (!linkedTalkId) {
-      if (selectedTalkId !== null) setSelectedTalkId(null);
+      if (selectedTalkId !== null) {
+        setSelectedTalkId(null);
+        setEditorVersion(null);
+      }
       return;
     }
     if (selectedTalkId === linkedTalkId) return;
@@ -670,7 +690,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
 
   const saveSchedule = async (submitEvent: FormEvent) => {
     submitEvent.preventDefault();
-    if (!selectedTalk) return;
+    if (!selectedTalk || editorExpectedVersion === null || talkEditorStale) return;
     const startsAt = form.startsAt === "" ? null : zonedTimestamp(form.startsAt, event.timezone);
     const durationMin = Number(form.durationMin);
     if ((form.startsAt !== "" && startsAt === null) || !Number.isInteger(durationMin) || durationMin < 5 || durationMin > 480) {
@@ -688,7 +708,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
             roomId: form.roomId || null,
             startsAt,
             durationMin,
-            expectedVersion: selectedTalk.version,
+            expectedVersion: editorExpectedVersion,
             idempotencyKey: idempotencyKey("move-talk"),
           },
           schema: AgendaMutationResult,
@@ -704,7 +724,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   };
 
   const saveTalkContent = async () => {
-    if (!selectedTalk) return;
+    if (!selectedTalk || editorExpectedVersion === null || talkEditorStale) return;
     const title = form.title.trim();
     if (!title) {
       toast("Enter a session title", { tone: "danger" });
@@ -719,7 +739,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           body: {
             title,
             description: form.description.trim() || null,
-            expectedVersion: selectedTalk.version,
+            expectedVersion: editorExpectedVersion,
             idempotencyKey: idempotencyKey("update-talk-content"),
           },
           schema: AgendaMutationResult,
@@ -740,7 +760,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   };
 
   const restoreTalkContent = async (revision: TalkContentRevision) => {
-    if (!selectedTalk) return;
+    if (!selectedTalk || editorExpectedVersion === null || talkEditorStale) return;
     const clientId = clientIntentId();
     try {
       const result = await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
@@ -750,7 +770,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
           body: {
             title: revision.title,
             description: revision.description,
-            expectedVersion: selectedTalk.version,
+            expectedVersion: editorExpectedVersion,
             idempotencyKey: idempotencyKey("restore-talk-content"),
           },
           schema: AgendaMutationResult,
@@ -771,7 +791,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   };
 
   const autoPlaceSelectedTalk = async () => {
-    if (!selectedTalk) return;
+    if (!selectedTalk || editorExpectedVersion === null || talkEditorStale) return;
     const clientId = clientIntentId();
     try {
       const result = await runMutation(clientId, () => apiFetch<AgendaMutationResult>(
@@ -779,7 +799,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         {
           method: "POST",
           body: {
-            expectedVersion: selectedTalk.version,
+            expectedVersion: editorExpectedVersion,
             idempotencyKey: idempotencyKey("auto-place-talk"),
           },
           schema: AgendaMutationResult,
@@ -795,7 +815,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   };
 
   const cancelTalk = async () => {
-    if (!selectedTalk) return;
+    if (!selectedTalk || editorExpectedVersion === null || talkEditorStale) return;
     if (!window.confirm(`Cancel "${selectedTalk.title}"? It will be removed from the draft schedule but kept in the audit history.`)) return;
     const clientId = clientIntentId();
     try {
@@ -804,7 +824,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         {
           method: "DELETE",
           body: {
-            expectedVersion: selectedTalk.version,
+            expectedVersion: editorExpectedVersion,
             idempotencyKey: idempotencyKey("cancel-talk"),
           },
           schema: AgendaMutationResult,
@@ -976,6 +996,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
   ).length;
   const confirmedTalkCount = agenda.talks.filter(({ status }) => status === "confirmed").length;
   const mutationsDisabled = busy || refresh.status !== "idle" || intent.connection === "offline";
+  const talkMutationsDisabled = mutationsDisabled || talkEditorStale || editorExpectedVersion === null;
 
   return (
     <>
@@ -1235,18 +1256,29 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
         footer={
           selectedTalk ? (
             <div className="flex w-full items-center justify-between gap-3">
-              <Button variant="danger" disabled={mutationsDisabled} onClick={() => void cancelTalk()}>Cancel talk</Button>
-              <Button form="agenda-move-form" type="submit" loading={busy} disabled={mutationsDisabled}>Save schedule</Button>
+              <Button variant="danger" disabled={talkMutationsDisabled} onClick={() => void cancelTalk()}>Cancel talk</Button>
+              <Button form="agenda-move-form" type="submit" loading={busy} disabled={talkMutationsDisabled}>Save schedule</Button>
             </div>
           ) : null
         }
       >
         {selectedTalk && (
           <form id="agenda-move-form" className="space-y-5" onSubmit={(event) => void saveSchedule(event)}>
+            {talkEditorStale && (
+              <Alert tone="warning">
+                <AlertTitle>This talk changed while you were editing</AlertTitle>
+                <AlertDescription>
+                  <p>Another organizer saved version {selectedTalk.version}. Your editor is still based on version {editorExpectedVersion}; saving is disabled to prevent overwriting their changes.</p>
+                  <Button className="mt-3" type="button" size="sm" variant="secondary" onClick={() => selectTalk(selectedTalk, "Loaded the latest talk version.")}>
+                    Load latest changes
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
             <div className="border-2 border-line-strong bg-production-sky p-4 shadow-[4px_4px_0_#171714]">
               <p className="text-[10px] font-black uppercase tracking-[0.14em] text-ink/65">On stage</p>
               <SpeakerLinks className="mt-1 block text-lg font-black tracking-[-0.025em] text-ink" eventSlug={event.slug} speakerIds={selectedTalk.speakerIds} speakerNames={selectedTalk.speakerNames} />
-              <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-secondary">Cue version {selectedTalk.version}</p>
+              <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-secondary">Editing version {editorExpectedVersion ?? selectedTalk.version} · latest version {selectedTalk.version}</p>
             </div>
             <ConflictIndicator conflicts={selectedConflicts} blocking={false} />
             <section className="space-y-3 border-2 border-line-strong bg-surface-muted p-4" aria-labelledby="agenda-session-content-heading">
@@ -1268,7 +1300,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                 value={form.description}
                 onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
               />
-              <Button type="button" variant="secondary" disabled={mutationsDisabled} onClick={() => void saveTalkContent()}>
+              <Button type="button" variant="secondary" disabled={talkMutationsDisabled} onClick={() => void saveTalkContent()}>
                 Save session content
               </Button>
               <div className="border-t-2 border-line-strong pt-3" aria-label="Session content history">
@@ -1304,7 +1336,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                                 type="button"
                                 size="sm"
                                 variant="secondary"
-                                disabled={mutationsDisabled}
+                                disabled={talkMutationsDisabled}
                                 onClick={() => void restoreTalkContent(revision)}
                               >
                                 Restore
@@ -1323,7 +1355,7 @@ function AgendaWorkspace({ event }: { readonly event: EventIdentity }) {
                 <p className="font-black text-ink">Assisted placement</p>
                 <p className="text-xs text-ink-secondary">Find the first room and time without room or speaker overlap.</p>
               </div>
-              <Button type="button" variant="secondary" disabled={mutationsDisabled} onClick={() => void autoPlaceSelectedTalk()}>
+              <Button type="button" variant="secondary" disabled={talkMutationsDisabled} onClick={() => void autoPlaceSelectedTalk()}>
                 Auto-place talk
               </Button>
             </div>

@@ -47,6 +47,39 @@ const capabilities = [
   ["06", "Public speaker and schedule embeds", "LIVE"],
 ] as const;
 
+const demoDestinations = [
+  {
+    label: "Published program",
+    detail: "23 live sessions",
+    to: "/event/ai-engineer-sandbox",
+  },
+  {
+    label: "Speaker gallery",
+    detail: "30 public profiles",
+    to: "/embed/ai-engineer-sandbox/speakers",
+  },
+  {
+    label: "Readiness cockpit",
+    detail: "Organizer demo",
+    to: "/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fdashboard",
+  },
+  {
+    label: "Review room",
+    detail: "Reviewer demo",
+    to: "/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Freview",
+  },
+  {
+    label: "Accelevents import",
+    detail: "Integration evidence",
+    to: "/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fintegrations",
+  },
+  {
+    label: "Resources + embeds",
+    detail: "Speaker demo",
+    to: "/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fresources",
+  },
+] as const;
+
 const primaryLinkClass =
   "inline-flex min-h-12 items-center justify-center gap-3 border-2 border-[#171714] bg-[#171714] px-6 text-sm font-black uppercase tracking-[0.08em] text-white shadow-[6px_6px_0_#7857ff] transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7857ff] focus-visible:ring-offset-4";
 
@@ -244,6 +277,34 @@ export default function LandingPage() {
             </div>
 
             <ProductPreview />
+          </div>
+        </section>
+
+        <section className="border-b-2 border-[#171714] bg-[#ffd34e]" aria-labelledby="live-demo-heading">
+          <div className="mx-auto max-w-[90rem] px-5 py-8 sm:px-8 lg:px-10">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#3e268f]">Hackathon walkthrough</p>
+                <h2 id="live-demo-heading" className="mt-1 text-3xl font-black tracking-[-0.045em]">Explore the live demo.</h2>
+              </div>
+              <p className="max-w-xl text-sm font-bold leading-6 text-[#4f4a40]">Jump straight to judging evidence. Signed-in links open the role picker, then return to the selected workflow.</p>
+            </div>
+            <nav className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Live demo workflows">
+              {demoDestinations.map(({ label, detail, to }, index) => (
+                <Link
+                  className="group flex min-h-20 items-center justify-between gap-4 border-2 border-[#171714] bg-[#fffdf7] px-4 py-3 shadow-[4px_4px_0_#171714] transition-transform hover:-translate-y-0.5"
+                  key={label}
+                  to={to}
+                >
+                  <span>
+                    <span className="block text-[9px] font-black uppercase tracking-[0.14em] text-[#665f52]">Demo {String(index + 1).padStart(2, "0")}</span>
+                    <span className="mt-1 block text-sm font-black">{label}</span>
+                    <span className="mt-0.5 block text-[10px] font-bold uppercase tracking-[0.08em] text-[#665f52]">{detail}</span>
+                  </span>
+                  <span className="text-xl font-black transition-transform group-hover:translate-x-1" aria-hidden="true">→</span>
+                </Link>
+              ))}
+            </nav>
           </div>
         </section>
 

@@ -567,7 +567,8 @@ await request(`/events/${eventId}/portal/resources`, {
     slug: "speaker-production-guide",
     title: "Speaker production guide",
     body: "Use this guide for stage setup, slide ratios, arrival timing, and accessibility support.",
-    embedUrl: "https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ",
+    // YouTube's official IFrame Player API sample is explicitly embeddable.
+    embedUrl: "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE",
     audience: "speakers",
     order: 1,
   },

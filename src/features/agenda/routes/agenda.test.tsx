@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acceptedProposalFixtures, FIXED_DAY_START, scheduledAgendaFixture } from "../fixtures";
 import type { AgendaMutationResult } from "../schema";
-import { createAcceptedAgendaTalk, path } from "./agenda";
+import { createAcceptedAgendaTalk, path, talkEditorConcurrency } from "./agenda";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("agenda organizer route", () => {
   it("exports the agenda navigation route", () => {
     expect(path).toBe("/e/:eventSlug/agenda");
+  });
+
+  it("keeps the editor-open version when live agenda state advances", () => {
+    expect(talkEditorConcurrency(4, 4)).toEqual({ expectedVersion: 4, stale: false });
+    expect(talkEditorConcurrency(4, 5)).toEqual({ expectedVersion: 4, stale: true });
   });
 
   it("creates an accepted session and immediately auto-schedules the resulting talk", async () => {

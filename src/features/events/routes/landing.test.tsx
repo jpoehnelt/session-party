@@ -21,6 +21,12 @@ describe("public landing route", () => {
     expect(markup).toContain("ready on cue.");
     expect(markup).toContain("One connected workflow");
     expect(markup).toContain("Production, not busywork");
+    expect(markup).toContain("Explore the live demo.");
+    expect(markup).toContain('href="/event/ai-engineer-sandbox"');
+    expect(markup).toContain('href="/embed/ai-engineer-sandbox/speakers"');
+    expect(markup).toContain('href="/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fdashboard"');
+    expect(markup).toContain('href="/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fintegrations"');
+    expect(markup).toContain('href="/login?returnTo=%2Fe%2Fai-engineer-sandbox%2Fresources"');
     expect(markup).toContain('href="/events"');
     expect(markup).toContain('href="/login?returnTo=%2Fevents"');
     expect(markup).not.toContain("Create event");
