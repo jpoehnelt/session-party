@@ -2727,6 +2727,7 @@ export const uploadPortalAsset = (input: UploadPortalAssetInput): Effect.Effect<
     uploaderUserId: actor.userId,
     speakerId: speaker.id,
     purpose: input.purpose,
+    brandKind: null,
     supersedesAssetId: oldAssetId,
     restoredFromAssetId: null,
     current: true,
