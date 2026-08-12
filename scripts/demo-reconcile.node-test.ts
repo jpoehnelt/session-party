@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
 import {
   assertCompatibleDemoUsers,
@@ -63,6 +64,82 @@ describe("demo reconciliation safeguards", () => {
     assert.match(change, /ON CONFLICT\("profile_id","profile_version"\) DO UPDATE/);
     assert.doesNotMatch(profile, /REPLACE|DELETE/i);
     assert.doesNotMatch(change, /REPLACE|DELETE/i);
+  });
+
+  it("replaces only fixture profile history and permits the next versioned save", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      PRAGMA foreign_keys=ON;
+      CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL);
+      CREATE TABLE events (id TEXT PRIMARY KEY, slug TEXT NOT NULL);
+      CREATE TABLE speaker_profiles (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL UNIQUE,
+        slug TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        title TEXT,
+        company TEXT,
+        bio TEXT,
+        headshot_url TEXT,
+        links TEXT,
+        visible INTEGER NOT NULL,
+        version INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE speaker_profile_changes (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL REFERENCES speaker_profiles(id) ON UPDATE CASCADE ON DELETE CASCADE,
+        profile_version INTEGER NOT NULL,
+        actor_user_id TEXT NOT NULL,
+        before TEXT,
+        after TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(profile_id, profile_version)
+      );
+      CREATE TABLE event_members (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(event_id, user_id)
+      );
+      INSERT INTO users VALUES ('demo-speaker', 'sbek-speaker@example.com');
+      INSERT INTO users VALUES ('production-owner', 'owner@example.com');
+      INSERT INTO users VALUES ('unrelated-user', 'unrelated@example.com');
+      INSERT INTO events VALUES ('demo-event', 'ai-engineer-sandbox');
+      INSERT INTO speaker_profiles VALUES ('old-demo-profile', 'demo-speaker', 'priya-raman', 'Stale', NULL, NULL, NULL, NULL, '[]', 1, 3, 1, 3);
+      INSERT INTO speaker_profiles VALUES ('unrelated-profile', 'unrelated-user', 'unrelated', 'Unrelated', NULL, NULL, NULL, NULL, '[]', 1, 2, 1, 2);
+      INSERT INTO speaker_profile_changes VALUES ('demo-v1', 'old-demo-profile', 1, 'demo-speaker', NULL, '{}', 1);
+      INSERT INTO speaker_profile_changes VALUES ('demo-v2', 'old-demo-profile', 2, 'demo-speaker', '{}', '{}', 2);
+      INSERT INTO speaker_profile_changes VALUES ('demo-v3', 'old-demo-profile', 3, 'demo-speaker', '{}', '{}', 3);
+      INSERT INTO speaker_profile_changes VALUES ('unrelated-v1', 'unrelated-profile', 1, 'unrelated-user', NULL, '{}', 1);
+      INSERT INTO speaker_profile_changes VALUES ('unrelated-v2', 'unrelated-profile', 2, 'unrelated-user', '{}', '{}', 2);
+    `);
+
+    db.exec(buildDemoReplacementSql([
+      `INSERT INTO "events" ("id","slug") VALUES('demo-event','ai-engineer-sandbox');`,
+      `INSERT INTO "speaker_profiles" ("id","user_id","slug","display_name","title","company","bio","headshot_url","links","visible","version","created_at","updated_at") VALUES('new-demo-profile','demo-speaker','priya-raman','Priya Raman',NULL,NULL,NULL,NULL,'[]',1,1,10,10);`,
+      `INSERT INTO "speaker_profile_changes" ("id","profile_id","profile_version","actor_user_id","before","after","created_at") VALUES('new-demo-v1','new-demo-profile',1,'demo-speaker',NULL,'{}',10);`,
+    ], "production-owner", 10));
+
+    assert.deepEqual(
+      db.prepare("SELECT profile_version FROM speaker_profile_changes WHERE profile_id = 'new-demo-profile' ORDER BY profile_version").all()
+        .map((row) => row.profile_version),
+      [1],
+    );
+    assert.deepEqual(
+      db.prepare("SELECT profile_version FROM speaker_profile_changes WHERE profile_id = 'unrelated-profile' ORDER BY profile_version").all()
+        .map((row) => row.profile_version),
+      [1, 2],
+    );
+    assert.doesNotThrow(() => db.exec(`
+      UPDATE speaker_profiles SET version = 2 WHERE id = 'new-demo-profile' AND version = 1;
+      INSERT INTO speaker_profile_changes VALUES ('new-demo-v2', 'new-demo-profile', 2, 'demo-speaker', '{}', '{}', 11);
+    `));
   });
 
   it("refuses snapshots without the one locked event and escapes collision queries", () => {

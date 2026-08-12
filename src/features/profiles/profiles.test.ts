@@ -2,6 +2,7 @@ import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import type { AppError } from "contracts/errors";
 import type { BrowserSessionPrincipal } from "contracts/principal";
 import {
+  assets,
   domainChanges,
   events,
   speakerProfileChanges,
@@ -57,7 +58,7 @@ describe("reusable speaker profiles", () => {
       title: "Principal engineer",
       company: "Session Party",
       bio: "Builds calm systems for busy rooms.",
-      headshotUrl: "https://images.example.com/ada.webp",
+      headshotUrl: null,
       links: [{ label: "Website", url: "https://ada.example.com" }],
       visible: true,
     }));
@@ -68,6 +69,7 @@ describe("reusable speaker profiles", () => {
     const now = new Date();
     const eventId = "profile-public-event";
     const eventSpeakerId = "profile-public-event-speaker";
+    const headshotAssetId = "profile-public-headshot";
     const talkId = "profile-public-talk";
     await drizzle(env.DB).batch([
       drizzle(env.DB).insert(events).values({
@@ -75,9 +77,14 @@ describe("reusable speaker profiles", () => {
         location: "Denver", timezone: "America/Denver", startsAt: new Date("2026-09-20T15:00:00Z"),
         endsAt: new Date("2026-09-20T23:00:00Z"), version: 1, createdAt: now, updatedAt: now,
       }),
+      drizzle(env.DB).insert(assets).values({
+        id: headshotAssetId, eventId, uploaderUserId: speaker.userId, speakerId: eventSpeakerId,
+        purpose: "headshot", current: true, filename: "ada.png", contentType: "image/png", size: 128,
+        version: 1, createdAt: now, updatedAt: now,
+      }),
       drizzle(env.DB).insert(speakers).values({
         id: eventSpeakerId, eventId, userId: speaker.userId, displayName: "Ada Rivera", title: "Principal engineer",
-        company: "Session Party", bio: "Event-approved bio", workflowStatus: "Ready", links: [], visible: true,
+        company: "Session Party", bio: "Event-approved bio", workflowStatus: "Ready", headshotAssetId, links: [], visible: true,
         profileSourceId: created.id, profileSourceVersion: created.version, profileReviewStatus: "approved", version: 1,
         createdAt: now, updatedAt: now,
       }),
@@ -95,7 +102,7 @@ describe("reusable speaker profiles", () => {
         payload: {
           event: { id: eventId, slug: "systems-summit", name: "Systems Summit", description: "Public event", location: "Denver", timezone: "America/Denver", startsAt: Date.parse("2026-09-20T15:00:00Z"), endsAt: Date.parse("2026-09-20T23:00:00Z"), bannerAssetId: null, accentColor: null },
           revision: 1, publishedAt: now.getTime(),
-          speakers: [{ id: eventSpeakerId, displayName: "Ada Rivera", title: "Principal engineer", company: "Session Party", bio: "Event-approved bio", headshotAssetId: null, publicProfileSlug: "ada-rivera", links: [] }],
+          speakers: [{ id: eventSpeakerId, displayName: "Ada Rivera", title: "Principal engineer", company: "Session Party", bio: "Event-approved bio", headshotAssetId, publicProfileSlug: "ada-rivera", links: [] }],
         },
         actorUserId: speaker.userId, actorApiKeyId: null, idempotencyRecordId: null, occurredAt: now,
       },
@@ -113,7 +120,11 @@ describe("reusable speaker profiles", () => {
 
     await expect(Effect.runPromise(getPublicProfile({ slug: "ada-rivera" }).pipe(Effect.provide(AppLayer(env)))))
       .resolves.toMatchObject({
-        profile: { id: created.id, displayName: "Ada Rivera" },
+        profile: {
+          id: created.id,
+          displayName: "Ada Rivera",
+          headshotUrl: `/api/v1/public/events/systems-summit/speakers/${eventSpeakerId}/headshots/${headshotAssetId}/r1`,
+        },
         appearances: [{ eventName: "Systems Summit", talks: [{ id: talkId, title: "Durable profiles" }] }],
       });
   });
