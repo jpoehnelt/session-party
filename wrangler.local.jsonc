@@ -33,6 +33,8 @@
     "APP_URL": "http://127.0.0.1:5173",
     "INITIAL_ADMIN_EMAIL": "",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
+    "POSTHOG_KEY": "",
+    "POSTHOG_HOST": "",
     "TURNSTILE_HOSTNAMES": "localhost,127.0.0.1"
   }
 }

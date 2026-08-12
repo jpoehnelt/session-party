@@ -20,6 +20,7 @@ import {
   restRegistrations,
 } from "./registry.gen";
 import { AppLayer, isExplicitLocalEnvironment, sessionSecret } from "./services";
+import { publicRuntimeConfig } from "./runtime-config";
 
 type JsonRpcId = string | number;
 type JsonRpcRequest = {
@@ -228,6 +229,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.route("/", publicationFeeds);
 app.route(`${API}/auth`, auth);
+app.get(`${API}/runtime-config`, (c) => c.json(publicRuntimeConfig(c.env)));
 for (const registration of restRegistrations) {
   const operation = operationById[registration.operationId];
   if (!operation) throw new Error(`Unregistered operation: ${registration.operationId}`);
