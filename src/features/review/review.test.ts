@@ -120,6 +120,16 @@ const reviewApiKey: Principal = {
   expiresAt: fixtureClock + 86_400_000,
 };
 
+const reviewReadApiKey: Principal = {
+  kind: "api-key",
+  userId: "api-key:review-reporting",
+  apiKeyId: "review_reporting",
+  eventId: fixtureEventId,
+  name: "Review reporting",
+  scopes: ["reviews:read"],
+  expiresAt: fixtureClock + 86_400_000,
+};
+
 const db = drizzle(env.DB, { schema: dbSchema });
 const dbLayer = Layer.succeed(Db, { db });
 let lastAiPrompt = "";
@@ -249,6 +259,14 @@ beforeAll(async () => {
       options: ["Conference talk (30 min)", "Workshop (120 min)"], createdAt,
     },
     {
+      id: "field_speaker_name", eventId: fixtureEventId, formVersionId: "form_version_01", order: 3,
+      type: "text", label: "Presenter name", semanticKey: "speakerName", required: true, createdAt,
+    },
+    {
+      id: "field_speaker_email", eventId: fixtureEventId, formVersionId: "form_version_01", order: 4,
+      type: "email", label: "Presenter email", semanticKey: "speakerEmail", required: true, createdAt,
+    },
+    {
       id: "field_task_notes", eventId: fixtureEventId, formVersionId: "form_version_task", order: 1,
       type: "textarea", label: "Logistics notes", required: true, createdAt,
     },
@@ -310,6 +328,58 @@ beforeAll(async () => {
     createdAt,
     updatedAt: createdAt,
   });
+  await db.insert(submissionAnswers).values([
+    {
+      id: "answer_speaker_name_05",
+      eventId: fixtureEventId,
+      submissionId: "submission_05",
+      formVersionId: "form_version_01",
+      formVersionFieldId: "field_speaker_name",
+      value: "Jordan Lee",
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: "answer_speaker_email_05",
+      eventId: fixtureEventId,
+      submissionId: "submission_05",
+      formVersionId: "form_version_01",
+      formVersionFieldId: "field_speaker_email",
+      value: "jordan@example.com",
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: "answer_format_22",
+      eventId: fixtureEventId,
+      submissionId: "submission_22",
+      formVersionId: "form_version_01",
+      formVersionFieldId: "field_format",
+      value: "Conference talk (30 min)",
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: "answer_speaker_name_22",
+      eventId: fixtureEventId,
+      submissionId: "submission_22",
+      formVersionId: "form_version_01",
+      formVersionFieldId: "field_speaker_name",
+      value: "Jordan Lee",
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: "answer_speaker_email_22",
+      eventId: fixtureEventId,
+      submissionId: "submission_22",
+      formVersionId: "form_version_01",
+      formVersionFieldId: "field_speaker_email",
+      value: "jordan@example.com",
+      createdAt,
+      updatedAt: createdAt,
+    },
+  ]);
   await db.insert(submissionAnswers).values({
     id: "answer_task_form",
     eventId: fixtureEventId,
@@ -529,6 +599,10 @@ describe("review and acceptance slice", () => {
       expect(commentAuthorization.browser).toEqual({ kind: "event-member", roles: ["owner", "admin", "reviewer"] });
       expect(commentAuthorization.apiKey.kind).toBe("deny");
     }
+    const workbenchOperation = operations.find((operation) => operation.id === "review.getWorkbench")!;
+    expect(workbenchOperation.invoke).toBe(getWorkbench);
+    expect(workbenchOperation.rest).toMatchObject({ method: "get", path: "/events/:eventId/review" });
+    expect("mcp" in workbenchOperation && workbenchOperation.mcp).toMatchObject({ name: "review_get_workbench" });
   });
 
   it("creates pending or active rounds with validated rubrics, authoritative counts, and replay", async () => {
@@ -803,6 +877,8 @@ describe("review and acceptance slice", () => {
     ]);
     expect(reviewerView.selected?.answers).toEqual([
       { label: "Session format", value: "Workshop (120 min)" },
+      { label: "Presenter name", value: "Jordan Lee" },
+      { label: "Presenter email", value: "jordan@example.com" },
     ]);
 
     const assignedToMe = await runAs(reviewer, getWorkbench({
@@ -897,7 +973,7 @@ describe("review and acceptance slice", () => {
     await db.delete(submissions).where(eq(submissions.id, submissionId));
   });
 
-  it("hides presenter identities from assigned reviewers in blind rounds", async () => {
+  it("anonymizes only identity-bearing fields for assigned reviewers while organizers retain the full record", async () => {
     const reviewerView = await runAs(reviewer, getWorkbench({
       eventId: fixtureEventId,
       roundId: completedRoundFixture.id,
@@ -907,7 +983,11 @@ describe("review and acceptance slice", () => {
     }));
     expect(reviewerView.selected?.round).toMatchObject({ id: completedRoundFixture.id, blind: true });
     expect(reviewerView.selected?.speakers).toEqual([]);
-    expect(reviewerView.selected?.answers).toEqual([]);
+    expect(reviewerView.selected?.answers).toEqual([
+      { label: "Session format", value: "Conference talk (30 min)" },
+    ]);
+    expect(JSON.stringify(reviewerView.selected)).not.toContain("Jordan Lee");
+    expect(JSON.stringify(reviewerView.selected)).not.toContain("jordan@example.com");
 
     const organizerView = await runAs(owner, getWorkbench({
       eventId: fixtureEventId,
@@ -920,7 +1000,25 @@ describe("review and acceptance slice", () => {
       displayName: "Jordan Lee",
       role: "Primary presenter",
     });
-    expect(organizerView.selected?.answers).toBeDefined();
+    expect(organizerView.selected?.answers).toEqual([
+      { label: "Session format", value: "Conference talk (30 min)" },
+      { label: "Presenter name", value: "Jordan Lee" },
+      { label: "Presenter email", value: "jordan@example.com" },
+    ]);
+
+    const organizerAutomationView = await runAs(reviewReadApiKey, getWorkbench({
+      eventId: fixtureEventId,
+      roundId: completedRoundFixture.id,
+      selectedSubmissionId: "submission_22",
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(organizerAutomationView.viewerRole).toBe("admin");
+    expect(organizerAutomationView.selected?.speakers[0]?.displayName).toBe("Jordan Lee");
+    expect(organizerAutomationView.selected?.answers).toContainEqual({
+      label: "Presenter email",
+      value: "jordan@example.com",
+    });
   });
 
   it("appends multiple idempotent committee messages independently from scoring and broadcasts full-committee evidence", async () => {
