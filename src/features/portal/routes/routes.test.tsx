@@ -51,6 +51,7 @@ import {
   layout as portalLayout,
   path as portalPath,
   PORTAL_UPLOAD_MAX_BYTES,
+  ResourceList,
   SpeakerClaimPrompt,
   SpeakerPortalContent,
   SpeakerTaskFormPanel,
@@ -642,6 +643,21 @@ describe("speaker portal content", () => {
     expect(allowlistedEmbedUrl("http://docs.google.com/presentation/d/x/embed")).toBeNull();
     expect(allowlistedEmbedUrl("https://attacker.example/embed")).toBeNull();
     expect(allowlistedEmbedUrl("javascript:alert(1)")).toBeNull();
+  });
+
+  it("renders YouTube resources with the origin referrer required for playback", () => {
+    const markup = renderToStaticMarkup(createElement(ResourceList, {
+      resources: [{
+        ...resource,
+        title: "Speaker portal walkthrough",
+        embedUrl: "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE",
+      }],
+    }));
+
+    expect(markup).toContain('src="https://www.youtube-nocookie.com/embed/M7lc1UVf-VE"');
+    expect(markup).toContain('title="Speaker portal walkthrough"');
+    expect(markup).toContain('allow="fullscreen"');
+    expect(markup).toMatch(/referrerpolicy="strict-origin-when-cross-origin"/i);
   });
 
   it("sends profile fields to the slug endpoint without trusting a body event id", async () => {
