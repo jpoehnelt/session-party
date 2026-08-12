@@ -29,7 +29,12 @@ import {
   prepareAirtableSubmissionProjection,
 } from "@/server/sync/airtable-outbox";
 import { ConditionalLogic, FormFieldType, Routing } from "@/features/forms/schema";
-import { PublicSubmissionAbuse, PublicSubmissionRequest, normalizePublicEmail } from "./abuse";
+import {
+  PublicSubmissionAbuse,
+  PublicSubmissionRequest,
+  normalizePublicEmail,
+  turnstileSiteKeyForEvent,
+} from "./abuse";
 import {
   CreatePublicSubmissionOutput,
   type CreatePublicSubmissionInput,
@@ -251,7 +256,10 @@ export const getPublicSubmissionForm = (
       return yield* Effect.fail(new NotFound({ entity: "published CFP form", id: input.formId }));
     }
     const abuse = yield* PublicSubmissionAbuse;
-    return { ...loaded.publicForm, turnstileSiteKey: abuse.turnstileSiteKey };
+    return {
+      ...loaded.publicForm,
+      turnstileSiteKey: turnstileSiteKeyForEvent(loaded.eventId, abuse.turnstileSiteKey),
+    };
   });
 
 export const getTaskSubmissionForm = (

@@ -20,6 +20,7 @@ import {
   requireMailConfiguration,
   sendMail,
   sessionSecret,
+  turnstileVerificationPolicy,
 } from "./services";
 
 type TestEnv = Cloudflare.Env & {
@@ -98,6 +99,47 @@ beforeAll(async () => {
 });
 
 describe("hackathon demo authentication", () => {
+  it("uses Cloudflare test verification only for the exact disposable demo event", () => {
+    const productionEnv = Object.assign(Object.create(env), {
+      LOCAL_MODE: undefined,
+      PREVIEW_MODE: undefined,
+      TURNSTILE_SITE_KEY: "live-site-key",
+      TURNSTILE_SECRET: "live-secret",
+      TURNSTILE_HOSTNAMES: "sessionparty.com,www.sessionparty.com",
+    }) as Env;
+
+    expect(turnstileVerificationPolicy(productionEnv, "demo-event")).toMatchObject({
+      demoVerification: true,
+      secret: "1x0000000000000000000000000000000AA",
+      acceptedAction: "test",
+      configured: true,
+    });
+    expect([...turnstileVerificationPolicy(productionEnv, "demo-event").acceptedHostnames])
+      .toEqual(["localhost"]);
+
+    expect(turnstileVerificationPolicy(productionEnv, "another-event")).toMatchObject({
+      demoVerification: false,
+      secret: "live-secret",
+      acceptedAction: "cfp-submit",
+      configured: true,
+    });
+    expect([...turnstileVerificationPolicy(productionEnv, "another-event").acceptedHostnames])
+      .toEqual(["sessionparty.com", "www.sessionparty.com"]);
+  });
+
+  it("keeps non-demo verification fail-closed without live configuration", () => {
+    const productionEnv = Object.assign(Object.create(env), {
+      LOCAL_MODE: undefined,
+      PREVIEW_MODE: undefined,
+      TURNSTILE_SITE_KEY: undefined,
+      TURNSTILE_SECRET: undefined,
+      TURNSTILE_HOSTNAMES: undefined,
+    }) as Env;
+
+    expect(turnstileVerificationPolicy(productionEnv, "demo-event").configured).toBe(true);
+    expect(turnstileVerificationPolicy(productionEnv, "another-event").configured).toBe(false);
+  });
+
   it.each([
     ["organizer", "sbek-organizer@example.com", "Jordan Alvarez"],
     ["speaker", "sbek-speaker@example.com", "Priya Raman"],

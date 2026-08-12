@@ -24,6 +24,10 @@ import {
   localTestPublicSubmissionAbuse,
   PublicSubmissionAbuse,
   PublicSubmissionRequest,
+  TURNSTILE_ALWAYS_PASS_SECRET_KEY,
+  TURNSTILE_DEMO_EVENT_ID,
+  TURNSTILE_TEST_ACTION,
+  TURNSTILE_TEST_HOSTNAME,
   TURNSTILE_TOKEN_MAX_LENGTH,
   type PublicSubmissionAbuseAttempt,
 } from "@/features/submit/abuse";
@@ -216,28 +220,55 @@ const hmacBearerMaterial = async (env: Env & SecretBindings, value: string): Pro
   ).join("");
 };
 
-const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
-  if (usesFakeExternalServices(env)) return localTestPublicSubmissionAbuse;
-
-  const siteKey = configuredValue(env.TURNSTILE_SITE_KEY) ?? null;
-  const expectedHostnames = new Set(
+export const turnstileVerificationPolicy = (
+  env: Env & TurnstileBindings,
+  eventId: string,
+) => {
+  const demoVerification = eventId === TURNSTILE_DEMO_EVENT_ID;
+  const liveHostnames = new Set(
     (configuredValue(env.TURNSTILE_HOSTNAMES) ?? "")
       .split(",")
       .map((hostname) => hostname.trim().toLowerCase())
       .filter(Boolean),
   );
+  return demoVerification
+    ? {
+        demoVerification: true,
+        secret: TURNSTILE_ALWAYS_PASS_SECRET_KEY,
+        acceptedAction: TURNSTILE_TEST_ACTION,
+        acceptedHostnames: new Set([TURNSTILE_TEST_HOSTNAME]),
+        configured: true,
+      } as const
+    : {
+        demoVerification: false,
+        secret: optionalSecret(env, "TURNSTILE_SECRET"),
+        acceptedAction: "cfp-submit",
+        acceptedHostnames: liveHostnames,
+        configured: Boolean(
+          configuredValue(env.TURNSTILE_SITE_KEY)
+          && optionalSecret(env, "TURNSTILE_SECRET")
+          && liveHostnames.size > 0
+        ),
+      } as const;
+};
+
+const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
+  if (usesFakeExternalServices(env)) return localTestPublicSubmissionAbuse;
+
+  const siteKey = configuredValue(env.TURNSTILE_SITE_KEY) ?? null;
 
   return {
     turnstileSiteKey: siteKey,
     authorize: (attempt: PublicSubmissionAbuseAttempt) =>
       Effect.gen(function* () {
-        const secret = optionalSecret(env, "TURNSTILE_SECRET");
-        if (!siteKey || !secret || expectedHostnames.size === 0) {
+        const policy = turnstileVerificationPolicy(env, attempt.eventId);
+        if (!policy.configured || !policy.secret) {
           return yield* Effect.fail(new External({
             service: "turnstile",
             detail: "Human verification is not configured",
           }));
         }
+        const secret = policy.secret;
         if (
           !attempt.turnstileToken
           || attempt.turnstileToken.length > TURNSTILE_TOKEN_MAX_LENGTH
@@ -282,8 +313,8 @@ const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
           : "";
         if (
           verification.success !== true
-          || verification.action !== "cfp-submit"
-          || !expectedHostnames.has(hostname)
+          || verification.action !== policy.acceptedAction
+          || !policy.acceptedHostnames.has(hostname)
         ) {
           return yield* Effect.fail(new Validation({
             message: "Human verification could not be completed. Please try again.",
