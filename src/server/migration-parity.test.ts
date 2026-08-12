@@ -319,7 +319,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -334,7 +334,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -534,7 +534,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -632,7 +632,7 @@ describe("baseline migration parity", () => {
   it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).REVIEW_MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     await applyOneByOne(db, migrations.slice(0, 11));
     const now = 1_700_000_000_000;
     await db.batch([
@@ -702,8 +702,8 @@ describe("baseline migration parity", () => {
   it("adds private staged decisions without rebuilding or exposing impossible final states", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).DECISION_MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
-    await applyOneByOne(db, migrations.slice(0, 18));
+    expect(migrations).toHaveLength(20);
+    await applyOneByOne(db, migrations.slice(0, 19));
     const now = 1_700_000_000_000;
     await db.batch([
       db.prepare("INSERT INTO events (id, slug, name, timezone, version, created_at, updated_at) VALUES ('decision-event', 'decision-event', 'Decision Event', 'UTC', 1, ?, ?)").bind(now, now),
@@ -736,7 +736,7 @@ describe("baseline migration parity", () => {
   it("freezes the latest legacy public speaker gallery without exposing ineligible profiles", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     const backfill = speakerPublicationMigration(migrations);
     expect(backfill.queries).toHaveLength(1);
     expect(backfill.queries[0]).toContain("speaker_publication_backfill");
@@ -785,7 +785,7 @@ describe("baseline migration parity", () => {
   it("repairs duplicate current asset lineages before enforcing uniqueness", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(19);
+    expect(migrations).toHaveLength(20);
     const lineageMigration = migrations.find(({ name }) => name.startsWith("0012_groovy_epoch"));
     if (!lineageMigration) throw new Error("Asset-lineage migration is unavailable");
     await applyOneByOne(db, migrations.filter((migration) => migration !== lineageMigration));
