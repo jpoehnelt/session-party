@@ -685,10 +685,13 @@ function UploadWorkspace({
   readonly onUpload: (input: UploadPortalAssetInput) => void;
 }) {
   const [purpose, setPurpose] = useState<UploadPortalAssetInput["purpose"]>("slides");
+  const [selectedUploadTaskId, setSelectedUploadTaskId] = useState("");
   const compatibleUploadTasks = tasks.filter((task) =>
     task.kind === "upload" && inferUploadTaskPurpose(task) === purpose
   );
-  const uploadTask = compatibleUploadTasks.length === 1 ? compatibleUploadTasks[0] : undefined;
+  const uploadTask = compatibleUploadTasks.length === 1
+    ? compatibleUploadTasks[0]
+    : compatibleUploadTasks.find((task) => task.id === selectedUploadTaskId);
   return (
     <section className={`space-y-5 border-[3px] border-[#171714] bg-[#fffdf7] p-5 shadow-[7px_7px_0_#ff714f] sm:p-7 ${productionFormClass}`} aria-labelledby="uploads-heading">
       <div>
@@ -698,20 +701,36 @@ function UploadWorkspace({
           Upload final production files: headshots up to 10 MiB, slides up to 100 MiB, and documents up to 25 MiB.
         </p>
       </div>
-      <Select label="File purpose" value={purpose} disabled={loading} onChange={(event) => setPurpose(event.currentTarget.value as UploadPortalAssetInput["purpose"])}>
+      <Select label="File purpose" value={purpose} disabled={loading} onChange={(event) => {
+        setPurpose(event.currentTarget.value as UploadPortalAssetInput["purpose"]);
+        setSelectedUploadTaskId("");
+      }}>
         <option value="slides">Slides</option>
         <option value="document">Document</option>
         <option value="headshot">Headshot</option>
       </Select>
-      {tasks.some((task) => task.kind === "upload") && !uploadTask ? (
+      {compatibleUploadTasks.length > 1 ? (
+        <Select
+          label="Checklist task"
+          value={selectedUploadTaskId}
+          disabled={loading}
+          onChange={(event) => setSelectedUploadTaskId(event.currentTarget.value)}
+        >
+          <option value="">Choose the request this file completes</option>
+          {compatibleUploadTasks.map((task) => (
+            <option key={task.id} value={task.id}>{task.name}</option>
+          ))}
+        </Select>
+      ) : null}
+      {tasks.some((task) => task.kind === "upload") && compatibleUploadTasks.length === 0 ? (
         <p className="text-sm font-medium text-[#4f4a40]">
-          This file will be saved without completing a checklist task because no single {purpose} upload task matches it.
+          This file will be saved without completing a checklist task because no {purpose} upload task matches it.
         </p>
       ) : null}
       <Dropzone
         className="rounded-none border-2 border-[#171714] bg-[#ece8dc] [&>div]:rounded-none [&>div]:border-2 [&>div]:border-[#171714] [&>div]:bg-[#caff4a] [&>div]:text-[#171714] [&_button]:font-black [&_button]:text-[#3e268f]"
         multiple={false}
-        disabled={loading}
+        disabled={loading || (compatibleUploadTasks.length > 1 && !uploadTask)}
         accept={purpose === "headshot"
           ? ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
           : purpose === "slides"
