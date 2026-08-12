@@ -1480,6 +1480,16 @@ type OwnAnswerRow = {
   readonly version: number;
 };
 
+type OwnParticipantRow = {
+  readonly submissionId: string;
+  readonly speakerId: string;
+  readonly displayName: string;
+  readonly roleLabel: string | null;
+  readonly isPrimary: boolean;
+  readonly title: string | null;
+  readonly organization: string | null;
+};
+
 const requireSubmissionOwner = (): Effect.Effect<{
   readonly userId: string;
   readonly email: string;
@@ -1502,6 +1512,7 @@ const ownSubmissionRows = (
 ): Effect.Effect<{
   readonly submissions: readonly OwnSubmissionRow[];
   readonly answers: readonly OwnAnswerRow[];
+  readonly participants: readonly OwnParticipantRow[];
 }, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
@@ -1547,7 +1558,7 @@ const ownSubmissionRows = (
         .orderBy(desc(submissions.submittedAt), desc(submissions.id)),
     );
     const submissionIds = rows.map((row) => row.id);
-    if (submissionIds.length === 0) return { submissions: [], answers: [] };
+    if (submissionIds.length === 0) return { submissions: [], answers: [], participants: [] };
     const answers = yield* database(() =>
       db
         .select({
@@ -1578,20 +1589,46 @@ const ownSubmissionRows = (
     for (const answer of answers) {
       answerBySubmission.set(answer.submissionId, [...(answerBySubmission.get(answer.submissionId) ?? []), answer]);
     }
+    const ownedSubmissions = rows.filter((row) => {
+      if (row.status === "accepted") return row.primarySpeakerUserId === owner.userId;
+      if (row.primarySpeakerUserId === owner.userId) return true;
+      const email = answerBySubmission.get(row.id)?.find((answer) => answer.semanticKey === "speakerEmail")?.value;
+      return typeof email === "string" && normalizePublicEmail(email) === owner.email;
+    });
+    const ownedSubmissionIds = ownedSubmissions.map((row) => row.id);
+    const participants = ownedSubmissionIds.length === 0 ? [] : yield* database(() =>
+      db
+        .select({
+          submissionId: submissionSpeakers.submissionId,
+          speakerId: speakers.id,
+          displayName: speakers.displayName,
+          roleLabel: submissionSpeakers.roleLabel,
+          isPrimary: submissionSpeakers.isPrimary,
+          title: submissionSpeakers.titleAtTime,
+          organization: submissionSpeakers.organizationAtTime,
+        })
+        .from(submissionSpeakers)
+        .innerJoin(
+          speakers,
+          and(eq(speakers.eventId, submissionSpeakers.eventId), eq(speakers.id, submissionSpeakers.speakerId)),
+        )
+        .where(and(
+          eq(submissionSpeakers.eventId, eventId),
+          inArray(submissionSpeakers.submissionId, ownedSubmissionIds),
+        ))
+        .orderBy(desc(submissionSpeakers.isPrimary), asc(submissionSpeakers.id)),
+    );
     return {
-      submissions: rows.filter((row) => {
-        if (row.status === "accepted") return row.primarySpeakerUserId === owner.userId;
-        if (row.primarySpeakerUserId === owner.userId) return true;
-        const email = answerBySubmission.get(row.id)?.find((answer) => answer.semanticKey === "speakerEmail")?.value;
-        return typeof email === "string" && normalizePublicEmail(email) === owner.email;
-      }),
+      submissions: ownedSubmissions,
       answers,
+      participants,
     };
   });
 
 const ownSummary = (
   row: OwnSubmissionRow,
   answers: readonly OwnAnswerRow[],
+  participants: readonly OwnParticipantRow[],
   at: number,
 ): OwnSubmissionSummary => {
   const abstract = answers.find(
@@ -1607,6 +1644,16 @@ const ownSummary = (
     status: row.status,
     submittedAt: row.submittedAt.getTime(),
     version: row.version,
+    participants: participants
+      .filter((participant) => participant.submissionId === row.id)
+      .map((participant) => ({
+        speakerId: participant.speakerId,
+        displayName: participant.displayName,
+        roleLabel: participant.roleLabel?.trim() || (participant.isPrimary ? "Primary presenter" : "Co-presenter"),
+        isPrimary: participant.isPrimary,
+        title: participant.title,
+        organization: participant.organization,
+      })),
     editable: availability(row.formStatus, row.opensAt, row.closesAt, at) === "open"
       && row.status !== "rejected"
       && row.status !== "withdrawn",
@@ -1627,7 +1674,7 @@ export const getOwnSubmissions = (
     const at = Date.now();
     return {
       event: { name: event.name, slug: event.slug },
-      submissions: owned.submissions.map((row) => ownSummary(row, owned.answers, at)),
+      submissions: owned.submissions.map((row) => ownSummary(row, owned.answers, owned.participants, at)),
     };
   });
 
@@ -1676,7 +1723,7 @@ export const updateOwnSubmissionAbstract = (
     if (row.version !== input.expectedVersion) {
       return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before saving" }));
     }
-    if (!ownSummary(row, owned.answers, Date.now()).editable) {
+    if (!ownSummary(row, owned.answers, owned.participants, Date.now()).editable) {
       return yield* Effect.fail(new Conflict({ message: "This proposal can no longer be edited" }));
     }
     const abstractAnswer = owned.answers.find(
@@ -1694,7 +1741,7 @@ export const updateOwnSubmissionAbstract = (
     const summary: OwnSubmissionSummary = ownSummary({ ...row, version: nextVersion }, [
       ...owned.answers.filter((answer) => answer.id !== abstractAnswer.id),
       { ...abstractAnswer, value: abstract },
-    ], savedAt.getTime());
+    ], owned.participants, savedAt.getTime());
     const output = { submission: summary, idempotent: false } as const;
     const commitNowMs = sql<Date>`CAST(unixepoch('subsec') * 1000 AS INTEGER)`;
     const updatedAt = savedAt.getTime();

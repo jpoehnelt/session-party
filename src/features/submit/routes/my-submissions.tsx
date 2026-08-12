@@ -262,6 +262,22 @@ export default function MySubmissionsPage({ initialData }: MySubmissionsPageProp
               <p className="mt-4 inline-block border-2 border-line-strong bg-surface-muted px-3 py-2 text-[10px] font-black uppercase tracking-[0.1em] text-ink-secondary">
                 {submission.formName} · submitted {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(submission.submittedAt)}
               </p>
+              {(submission.participants?.length ?? 0) > 0 && (
+                <section className="mt-5 border-2 border-line-strong bg-surface p-4" aria-label={`Participants for ${submission.title}`}>
+                  <h3 className="text-[10px] font-black uppercase tracking-[0.12em] text-ink-faint">Participants</h3>
+                  <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {submission.participants?.map((participant) => (
+                      <li className="border-l-[3px] border-accent bg-surface-muted px-3 py-2" key={participant.speakerId}>
+                        <p className="text-sm font-black text-ink">{participant.displayName}</p>
+                        <p className="mt-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-ink-secondary">{participant.roleLabel}</p>
+                        {(participant.title || participant.organization) && (
+                          <p className="mt-1 text-xs text-ink-faint">{[participant.title, participant.organization].filter(Boolean).join(" · ")}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
               <div className="mt-5 border-l-[3px] border-line-strong pl-4">
                 <Textarea
                   label="Abstract"

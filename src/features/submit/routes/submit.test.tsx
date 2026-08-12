@@ -342,6 +342,10 @@ describe("speaker submission dashboard route", () => {
         submittedAt: Date.UTC(2026, 7, 8, 12),
         version: 2,
         editable: true,
+        participants: [
+          { speakerId: "speaker-primary", displayName: "Priya Raman", roleLabel: "Primary presenter", isPrimary: true, title: "Staff Engineer", organization: "Latticework" },
+          { speakerId: "speaker-co", displayName: "Marcus Lee", roleLabel: "Live demo operator", isPrimary: false, title: null, organization: "Latticework" },
+        ],
       },
       {
         id: "submission-rejected",
@@ -369,6 +373,11 @@ describe("speaker submission dashboard route", () => {
     expect(markup).toContain("Save proposal changes");
     expect(markup).toContain("Proposal not selected");
     expect(markup).toContain("The organizer decision is now reflected here.");
+    expect(markup).toContain("Participants");
+    expect(markup).toContain("Priya Raman");
+    expect(markup).toContain("Primary presenter");
+    expect(markup).toContain("Marcus Lee");
+    expect(markup).toContain("Live demo operator");
   });
 });
 
