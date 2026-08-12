@@ -630,7 +630,7 @@ function ProfileEditor({
         <div>
         <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#3e268f]">Profile desk / Public identity</p>
         <h2 id="profile-heading" className="mt-2 text-2xl font-black tracking-[-0.04em] text-[#171714]">Speaker profile</h2>
-        <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">This event keeps a reviewed snapshot. It never changes automatically when you edit your reusable profile.</p>
+        <p className="mt-2 text-sm font-medium leading-6 text-[#4f4a40]">Bio, links, and a valid reusable headshot stay synced to this event record. Organizer approval and workflow status remain event-specific.</p>
         </div>
         <Badge tone={profile.profileReviewStatus === "approved" ? "success" : profile.profileReviewStatus === "changes_requested" ? "danger" : "neutral"}>{statusLabel}</Badge>
       </div>

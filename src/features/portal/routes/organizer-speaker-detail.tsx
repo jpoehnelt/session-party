@@ -3,22 +3,23 @@ import { Avatar, Badge, Card, EmptyState, PageHeader, ProgressChecklist } from "
 import { getSpeakerDirectory } from "./api";
 import { RouteFailure, RouteLoading, useRouteLoad } from "../components/route-state";
 import { organizerAgendaTalkPath } from "@/features/agenda/links";
+import type { SpeakerDirectory } from "../schema";
 
 export const path = "/e/:eventSlug/speakers/:speakerId";
 
-export default function OrganizerSpeakerDetailRoute() {
-  const { eventSlug = "", speakerId = "" } = useParams();
-  const [state, retry] = useRouteLoad(() => getSpeakerDirectory(eventSlug), `${eventSlug}:${speakerId}`);
-  if (state.status === "loading") return <RouteLoading label="Loading event speaker profile" />;
-  if (state.status === "error") return <RouteFailure message={state.message} onRetry={retry} />;
-  const item = state.data.speakers.find((candidate) => candidate.speaker.id === speakerId);
+export function OrganizerSpeakerDetailContent({ directory, eventSlug, speakerId }: {
+  readonly directory: SpeakerDirectory;
+  readonly eventSlug: string;
+  readonly speakerId: string;
+}) {
+  const item = directory.speakers.find((candidate) => candidate.speaker.id === speakerId);
   if (!item) return <EmptyState title="Speaker not found" description="This speaker is not part of the selected event." action={<Link className="font-bold underline" to={`/e/${eventSlug}/speakers`}>Back to speakers</Link>} />;
   const { speaker } = item;
   return (
     <div className="space-y-8">
       <PageHeader
         title={speaker.displayName}
-        description={`Event-specific speaker profile for ${state.data.event.name}. This reviewed snapshot is independent from the speaker's reusable profile.`}
+        description={`Event speaker record for ${directory.event.name}. Speaker-owned bio, links, and reusable headshot stay synced while organizer approval remains event-specific.`}
         actions={<Link className="font-bold underline decoration-2 underline-offset-4" to={`/e/${eventSlug}/speakers`}>Back to speakers</Link>}
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -81,4 +82,12 @@ export default function OrganizerSpeakerDetailRoute() {
       </div>
     </div>
   );
+}
+
+export default function OrganizerSpeakerDetailRoute() {
+  const { eventSlug = "", speakerId = "" } = useParams();
+  const [state, retry] = useRouteLoad(() => getSpeakerDirectory(eventSlug), `${eventSlug}:${speakerId}`);
+  if (state.status === "loading") return <RouteLoading label="Loading event speaker profile" />;
+  if (state.status === "error") return <RouteFailure message={state.message} onRetry={retry} />;
+  return <OrganizerSpeakerDetailContent directory={state.data} eventSlug={eventSlug} speakerId={speakerId} />;
 }

@@ -76,6 +76,7 @@ import {
   uploadPortalAsset,
 } from "./service";
 import { listEventAccess } from "@/features/events/service";
+import { saveMyProfile } from "@/features/profiles/service";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
 type PortalRequirements = AirtableSync | Authorizer | CurrentUser | Db | Files | MailQueue | Rooms;
@@ -1687,5 +1688,76 @@ describe("portal service", () => {
       note: null,
     }));
     expect(approved).toMatchObject({ profileReviewStatus: "approved", version: 5 });
+  });
+
+  it("syncs a newer account-owned bio, social link, and headshot into the approved organizer record", async () => {
+    const setup = await fixture({
+      linkedUserId: otherUser.userId,
+      speakerEmail: otherUser.email,
+    });
+    const db = drizzle(env.DB);
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const initial = await runAs(otherUser, saveMyProfile({
+      expectedVersion: 0,
+      slug: `portable-${sequence}`,
+      displayName: "Portable profile",
+      title: null,
+      company: null,
+      bio: "Initial reusable biography.",
+      headshotUrl: "https://images.example.com/initial.png",
+      links: [],
+      visible: false,
+    }));
+
+    const initialPortal = await runAs(otherUser, getPortalSnapshot({ eventId: setup.eventSlug }));
+    expect(initialPortal.speaker).toMatchObject({
+      bio: "Initial reusable biography.",
+      headshotUrl: "https://images.example.com/initial.png",
+      profileSourceId: initial.id,
+      profileSourceVersion: 1,
+      profileReviewStatus: "approved",
+    });
+
+    const saved = await runAs(otherUser, saveMyProfile({
+      expectedVersion: initial.version,
+      slug: initial.slug,
+      displayName: initial.displayName,
+      title: initial.title,
+      company: initial.company,
+      bio: "SBEK-PORTAL-BIO-01",
+      headshotUrl: "https://images.example.com/headshot.png",
+      links: [{ label: "Social", url: "https://social.example.com/portable" }],
+      visible: initial.visible,
+    }));
+    expect(saved.version).toBe(2);
+
+    const directory = await runAs(owner, getSpeakerDirectory({ eventId: setup.eventId }));
+    const organizerRecord = directory.speakers.find(({ speaker }) => speaker.id === setup.speakerId)?.speaker;
+    expect(organizerRecord).toMatchObject({
+      bio: "SBEK-PORTAL-BIO-01",
+      headshotUrl: "https://images.example.com/headshot.png",
+      links: [{ label: "Social", url: "https://social.example.com/portable" }],
+      profileSourceId: initial.id,
+      profileSourceVersion: 2,
+      profileReviewStatus: "approved",
+      visible: true,
+    });
+    await expect(runAs(otherUser, getPortalSnapshot({ eventId: setup.eventSlug }))).resolves.toMatchObject({
+      speaker: {
+        id: setup.speakerId,
+        bio: "SBEK-PORTAL-BIO-01",
+        headshotUrl: "https://images.example.com/headshot.png",
+        profileReviewStatus: "approved",
+      },
+    });
+    await expect(db.select().from(auditLog).where(and(
+      eq(auditLog.eventId, setup.eventId),
+      eq(auditLog.action, "portal.profile.reusable-synced"),
+    ))).resolves.toHaveLength(2);
   });
 });
