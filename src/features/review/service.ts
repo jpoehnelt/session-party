@@ -24,7 +24,7 @@ import {
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
-import { AiService, CurrentUser, Db, MailQueue } from "@/server/services";
+import { AiService, CurrentUser, Db, effectiveEventAuthority, MailQueue } from "@/server/services";
 import { prepareAirtableSubmissionProjection } from "@/server/sync/airtable-outbox";
 import {
   AcceptSubmissionOutput,
@@ -127,18 +127,12 @@ const requireEventAccess = (
     }
 
     const { db } = yield* Db;
-    const [membership] = yield* database(() =>
-      db
-        .select({ role: eventMembers.role })
-        .from(eventMembers)
-        .where(and(eq(eventMembers.eventId, eventId), eq(eventMembers.userId, principal.userId)))
-        .limit(1),
-    );
-    if (!membership) {
+    const authority = yield* effectiveEventAuthority(db, principal.userId, eventId);
+    if (!authority) {
       return yield* Effect.fail(new Forbidden({ reason: "Event membership required" }));
     }
     return {
-      role: membership.role,
+      role: authority.role,
       userId: principal.userId,
       actorUserId: principal.userId,
       actorApiKeyId: null,

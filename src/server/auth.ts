@@ -1,7 +1,7 @@
 import { appErrorStatus, External, toPublicAppError, Unauthenticated, Validation, type AppError } from "contracts/errors";
 import type { Principal } from "contracts/principal";
 import { ApiScopes } from "contracts/principal";
-import { apiKeys, authTokens, users } from "contracts/schema";
+import { apiKeys, authTokens, installGrants, users } from "contracts/schema";
 import { Schema } from "effect";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
@@ -244,6 +244,29 @@ const mayCreateUser = (env: Env, email: string): boolean => {
     ? env.INITIAL_ADMIN_EMAIL.trim().toLowerCase()
     : "";
   return configured.length === 0 || email === configured;
+};
+
+const configuredInitialAdminEmail = (env: Env): string | null => {
+  const configured = typeof env.INITIAL_ADMIN_EMAIL === "string"
+    ? env.INITIAL_ADMIN_EMAIL.trim().toLowerCase()
+    : "";
+  return configured || null;
+};
+
+const ensureExistingBootstrapStaff = async (env: Env, userId: string, email: string): Promise<void> => {
+  if (configuredInitialAdminEmail(env) !== email) return;
+  const nowMs = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO install_grants (
+       id, user_id, role, granted_by_user_id, granted_at, revoked_by_user_id, revoked_at,
+       grant_key_hash, grant_request_hash, revoke_key_hash, revoke_request_hash,
+       version, created_at, updated_at
+     )
+     SELECT ?, ?, 'staff', ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, 1, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM install_grants WHERE user_id = ? AND role = 'staff' AND revoked_at IS NULL
+     )`,
+  ).bind(nanoid(), userId, userId, nowMs, nowMs, nowMs, userId).run();
 };
 
 const hasInvitationOrManagedSpeaker = async (
@@ -538,9 +561,15 @@ export const userFromRequest = async (
       userId: users.id,
       email: users.email,
       name: users.name,
+      installRole: installGrants.role,
     })
     .from(authTokens)
     .innerJoin(users, eq(users.id, authTokens.userId))
+    .leftJoin(installGrants, and(
+      eq(installGrants.userId, users.id),
+      eq(installGrants.role, "staff"),
+      isNull(installGrants.revokedAt),
+    ))
     .where(
       and(
         eq(authTokens.tokenHash, hash),
@@ -559,6 +588,7 @@ export const userFromRequest = async (
         name: displayName(row.email, row.name),
         sessionId: row.sessionId,
         expiresAt: row.expiresAt.getTime(),
+        ...(row.installRole === "staff" ? { installRole: "staff" as const } : {}),
       }
     : null;
 };
@@ -643,6 +673,7 @@ auth.post("/request-link", async (c) => {
       return c.json({ ok: true }, 202);
     }
     const userId = existingUser?.id ?? nanoid();
+    if (existingUser) await ensureExistingBootstrapStaff(c.env, userId, email);
     const [outstanding] = existingUser
       ? await db
         .select({ id: authTokens.id, expiresAt: authTokens.expiresAt })
@@ -675,6 +706,15 @@ auth.post("/request-link", async (c) => {
       statements.push(c.env.DB.prepare(
         "INSERT INTO users (id, email, name, version, created_at, updated_at) VALUES (?, ?, NULL, 1, ?, ?)",
       ).bind(userId, email, nowMs, nowMs));
+      if (configuredInitialAdminEmail(c.env) === email) {
+        statements.push(c.env.DB.prepare(
+          `INSERT INTO install_grants (
+             id, user_id, role, granted_by_user_id, granted_at, revoked_by_user_id, revoked_at,
+             grant_key_hash, grant_request_hash, revoke_key_hash, revoke_request_hash,
+             version, created_at, updated_at
+           ) VALUES (?, ?, 'staff', ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, 1, ?, ?)`,
+        ).bind(nanoid(), userId, userId, nowMs, nowMs, nowMs));
+      }
     }
     if (outstanding) {
       statements.push(

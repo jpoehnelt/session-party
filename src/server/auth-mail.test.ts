@@ -416,11 +416,13 @@ describe("durable magic-link authentication", () => {
       `SELECT
         (SELECT count(*) FROM users WHERE email = ?) AS initial_admin_users,
         (SELECT count(*) FROM users WHERE email = ?) AS unknown_users,
+        (SELECT count(*) FROM install_grants g JOIN users u ON u.id = g.user_id WHERE u.email = ? AND g.role = 'staff' AND g.revoked_at IS NULL) AS initial_admin_staff_grants,
         (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link') AS existing_tokens,
         (SELECT count(*) FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.kind = 'magic_link') AS invited_tokens`,
-    ).bind(initialAdminEmail, unknownEmail, existingEmail, invitedEmail).first()).toEqual({
+    ).bind(initialAdminEmail, unknownEmail, initialAdminEmail, existingEmail, invitedEmail).first()).toEqual({
       initial_admin_users: 1,
       unknown_users: 0,
+      initial_admin_staff_grants: 1,
       existing_tokens: 1,
       invited_tokens: 1,
     });

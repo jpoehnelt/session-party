@@ -46,6 +46,7 @@ function access(
   return {
     event: eventValue,
     memberRole: "owner",
+    staff: false,
     speakerPortal: false,
     ...overrides,
   };
@@ -208,6 +209,7 @@ describe("events home", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify([{
       event: eventPayload,
       memberRole: "owner",
+      staff: false,
       speakerPortal: true,
     }]), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

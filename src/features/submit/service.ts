@@ -5,7 +5,6 @@ import {
   auditLog,
   domainChanges,
   events,
-  eventMembers,
   formVersionFields,
   formVersions,
   forms,
@@ -22,7 +21,7 @@ import type { AnswerValue } from "contracts/types";
 import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { nanoid } from "nanoid";
-import { AirtableSync, Authorizer, CurrentUser, Db, MailQueue, Rooms } from "@/server/services";
+import { AirtableSync, Authorizer, CurrentUser, Db, effectiveEventAuthority, MailQueue, Rooms } from "@/server/services";
 import {
   prepareAirtableProjection,
   prepareAirtableSubmissionProjection,
@@ -1364,20 +1363,14 @@ const authorizeQueueViewer = (
     yield* authorizer.authorize({ principal, policy: organizerReadAuthorization, eventId });
     if (principal.kind === "api-key") return { role: "admin", userId: principal.userId };
     const { db } = yield* Db;
-    const [membership] = yield* database(() =>
-      db
-        .select({ role: eventMembers.role })
-        .from(eventMembers)
-        .where(and(eq(eventMembers.eventId, eventId), eq(eventMembers.userId, principal.userId)))
-        .limit(1),
-    );
-    if (!membership) {
+    const authority = yield* effectiveEventAuthority(db, principal.userId, eventId);
+    if (!authority) {
       return yield* Effect.fail(new Forbidden({ reason: "Event membership required" }));
     }
-    if (membership.role === "reviewer") {
+    if (authority.role === "reviewer") {
       return yield* Effect.fail(new Forbidden({ reason: "Organizer membership required" }));
     }
-    return { role: membership.role, userId: principal.userId };
+    return { role: authority.role, userId: principal.userId };
   });
 
 export const listSubmissions = (

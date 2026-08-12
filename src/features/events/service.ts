@@ -24,7 +24,15 @@ import {
 import { Effect, Schema } from "effect";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { ApiKeyCredentials, Authorizer, CurrentUser, Db, MailQueue } from "@/server/services";
+import {
+  activeInstallRole,
+  ApiKeyCredentials,
+  Authorizer,
+  CurrentUser,
+  Db,
+  effectiveEventAuthority,
+  MailQueue,
+} from "@/server/services";
 import {
   AcceptReviewerInvitationOutput,
   type AcceptReviewerInvitationInput,
@@ -283,6 +291,9 @@ export const listEvents = (): Effect.Effect<
         db.select().from(events).where(eq(events.id, principal.eventId)),
       );
     }
+    if ((yield* activeInstallRole(db, principal.userId)) === "staff") {
+      return yield* database(() => db.select().from(events));
+    }
     return yield* database(() =>
       db
         .select({ event: events })
@@ -312,6 +323,7 @@ export const listEventAccess = (): Effect.Effect<
       );
     }
 
+    const staff = (yield* activeInstallRole(db, principal.userId)) === "staff";
     const [memberRows, acceptedSpeakerRows, managedSpeakerRows] = yield* Effect.all([
       database(() => db
         .select({ event: events, memberRole: eventMembers.role })
@@ -367,10 +379,22 @@ export const listEventAccess = (): Effect.Effect<
     ]);
 
     const accessByEvent = new Map<string, EventAccessType>();
+    if (staff) {
+      const allEvents = yield* database(() => db.select().from(events));
+      for (const event of allEvents) {
+        accessByEvent.set(event.id, {
+          event,
+          memberRole: null,
+          staff: true,
+          speakerPortal: false,
+        });
+      }
+    }
     for (const row of memberRows) {
       accessByEvent.set(row.event.id, {
         event: row.event,
         memberRole: row.memberRole,
+        staff,
         speakerPortal: false,
       });
     }
@@ -379,6 +403,7 @@ export const listEventAccess = (): Effect.Effect<
       accessByEvent.set(row.event.id, {
         event: row.event,
         memberRole: current?.memberRole ?? null,
+        staff,
         speakerPortal: true,
       });
     }
@@ -500,16 +525,11 @@ const requireMemberManager = (eventId: string): Effect.Effect<MemberActor, AppEr
       return yield* Effect.fail(new Forbidden({ reason: "Member management requires an owner or admin browser session" }));
     }
     const { db } = yield* Db;
-    const [membership] = yield* database(() =>
-      db.select({ role: eventMembers.role })
-        .from(eventMembers)
-        .where(and(eq(eventMembers.eventId, eventId), eq(eventMembers.userId, principal.userId)))
-        .limit(1),
-    );
-    if (!membership || (membership.role !== "owner" && membership.role !== "admin")) {
+    const authority = yield* effectiveEventAuthority(db, principal.userId, eventId);
+    if (!authority || (authority.role !== "owner" && authority.role !== "admin")) {
       return yield* Effect.fail(new Forbidden({ reason: "Owner or admin role required" }));
     }
-    return { userId: principal.userId, role: membership.role };
+    return { userId: principal.userId, role: authority.source === "staff" ? "owner" : authority.role };
   });
 
 export const listEventApiKeys = (

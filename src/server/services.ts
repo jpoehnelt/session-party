@@ -1,14 +1,17 @@
-import { External, Forbidden, Unauthenticated, Validation } from "contracts/errors";
+import { External, Forbidden, OpenRegistrationStaffUnavailable, Unauthenticated, Validation } from "contracts/errors";
 import {
   allowsApiScopes,
   allowsEventRole,
   type AuthorizationPolicy,
+  type EventMemberPolicy,
+  type EventRole,
+  type InstallRole,
   type Principal,
 } from "contracts/principal";
 import * as schema from "contracts/schema";
 import type { EventRoomBroadcast, ServerMessage } from "contracts/protocol";
 import { Context, Effect, Layer } from "effect";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import {
   createAcceleventsImports,
@@ -123,6 +126,14 @@ export class AiService extends Context.Tag("session-party/AiService")<
 export class CurrentUser extends Context.Tag("session-party/CurrentUser")<
   CurrentUser,
   Principal
+>() {}
+
+export class InstallationConfig extends Context.Tag("session-party/InstallationConfig")<
+  InstallationConfig,
+  {
+    readonly initialAdminEmail: string | null;
+    readonly openRegistration: boolean;
+  }
 >() {}
 
 export class ApiKeyCredentials extends Context.Tag("session-party/ApiKeyCredentials")<
@@ -543,9 +554,75 @@ export interface AuthorizationRequest {
   readonly eventId: string | null;
 }
 
+export const loadActiveInstallRole = async (
+  db: AppDatabase,
+  userId: string,
+): Promise<InstallRole | null> => {
+  const [grant] = await db
+    .select({ role: schema.installGrants.role })
+    .from(schema.installGrants)
+    .where(and(
+      eq(schema.installGrants.userId, userId),
+      eq(schema.installGrants.role, "staff"),
+      isNull(schema.installGrants.revokedAt),
+    ))
+    .limit(1);
+  return grant?.role ?? null;
+};
+
+export const activeInstallRole = (
+  db: AppDatabase,
+  userId: string,
+): Effect.Effect<InstallRole | null, External> =>
+  externalEffect("database", () => loadActiveInstallRole(db, userId));
+
+/** One live resolver shared by REST/MCP operation policy checks and Party admission/revalidation. */
+export const loadEffectiveEventAuthority = async (
+  db: AppDatabase,
+  userId: string,
+  eventId: string,
+): Promise<{ readonly role: EventRole; readonly source: "membership" | "staff" } | null> => {
+  const [membership] = await db
+    .select({ role: schema.eventMembers.role })
+    .from(schema.eventMembers)
+    .where(and(
+      eq(schema.eventMembers.eventId, eventId),
+      eq(schema.eventMembers.userId, userId),
+    ))
+    .limit(1);
+  if (membership) return { role: membership.role, source: "membership" };
+  return (await loadActiveInstallRole(db, userId)) === "staff"
+    ? { role: "owner", source: "staff" }
+    : null;
+};
+
+export const effectiveEventAuthority = (
+  db: AppDatabase,
+  userId: string,
+  eventId: string,
+): Effect.Effect<{ readonly role: EventRole; readonly source: "membership" | "staff" } | null, External> =>
+  externalEffect("database", () => loadEffectiveEventAuthority(db, userId, eventId));
+
+export const loadEffectiveEventRole = async (
+  db: AppDatabase,
+  userId: string,
+  eventId: string,
+): Promise<EventRole | null> => (await loadEffectiveEventAuthority(db, userId, eventId))?.role ?? null;
+
+export const effectiveEventRole = (
+  db: AppDatabase,
+  userId: string,
+  eventId: string,
+): Effect.Effect<EventRole | null, External> =>
+  effectiveEventAuthority(db, userId, eventId).pipe(Effect.map((authority) => authority?.role ?? null));
+
+const staffSatisfiesEventPolicy = (policy: EventMemberPolicy): boolean =>
+  policy.kind === "event-member" &&
+  policy.roles.some((role) => role === "owner" || role === "admin");
+
 export type AuthorizePrincipal = (
   request: AuthorizationRequest,
-) => Effect.Effect<Principal | null, Unauthenticated | Forbidden | External, Db>;
+) => Effect.Effect<Principal | null, Unauthenticated | Forbidden | OpenRegistrationStaffUnavailable | External, Db>;
 
 export const authorizePrincipal: AuthorizePrincipal = ({ principal, policy, eventId }) =>
   Effect.gen(function* () {
@@ -564,6 +641,17 @@ export const authorizePrincipal: AuthorizePrincipal = ({ principal, policy, even
       }
       return principal;
     }
+    const { db } = yield* Db;
+    if (policy.kind === "install") {
+      if (principal.kind !== "browser-session") {
+        return yield* Effect.fail(new Forbidden({ reason: "Install authority requires a browser session" }));
+      }
+      const role = yield* activeInstallRole(db, principal.userId);
+      if (!role || !policy.browser.roles.includes(role)) {
+        return yield* Effect.fail(new Forbidden({ reason: "Active install staff authority is required" }));
+      }
+      return principal;
+    }
     if (!eventId) {
       return yield* Effect.fail(
         new Forbidden({ reason: "Event authorization requires a resolved event ID" }),
@@ -578,20 +666,8 @@ export const authorizePrincipal: AuthorizePrincipal = ({ principal, policy, even
       return principal;
     }
 
-    const { db } = yield* Db;
-    const [membership] = yield* externalEffect("database", () =>
-      db
-        .select({ role: schema.eventMembers.role })
-        .from(schema.eventMembers)
-        .where(
-          and(
-            eq(schema.eventMembers.eventId, eventId),
-            eq(schema.eventMembers.userId, principal.userId),
-          ),
-        )
-        .limit(1),
-    );
-    if (!membership || !allowsEventRole(policy.browser, membership.role)) {
+    const authority = yield* effectiveEventAuthority(db, principal.userId, eventId);
+    if (!authority || (!allowsEventRole(policy.browser, authority.role) && !(authority.source === "staff" && staffSatisfiesEventPolicy(policy.browser)))) {
       return yield* Effect.fail(
         new Forbidden({ reason: "Event membership does not satisfy the authorization policy" }),
       );
@@ -619,9 +695,14 @@ export const AppLayer = (env: Env) => {
   });
   const airtableMode = isExplicitLocalEnvironment(env) ? "fake" as const : "live" as const;
   const airtableAvailable = airtableMode === "fake" || optionalSecret(env, "AIRTABLE_PAT") !== undefined;
+  const initialAdminEmail = configuredValue(env.INITIAL_ADMIN_EMAIL)?.toLowerCase() ?? null;
 
   return Layer.mergeAll(
     Layer.succeed(Db, { db }),
+    Layer.succeed(InstallationConfig, {
+      initialAdminEmail,
+      openRegistration: initialAdminEmail === null,
+    }),
     Layer.succeed(SecretResolver, secrets),
     Layer.succeed(AcceleventsAdapter, acceleventsAdapter),
     Layer.succeed(AcceleventsImports, acceleventsImports),
@@ -645,7 +726,11 @@ export const AppLayer = (env: Env) => {
     }),
     Layer.succeed(PublicSubmissionAbuse, publicSubmissionAbuse(env)),
     Layer.succeed(PublicSubmissionRequest, { remoteIp: null }),
-    Layer.succeed(Authorizer, { authorize: authorizePrincipal }),
+    Layer.succeed(Authorizer, {
+      authorize: (request) => request.policy.kind === "install" && initialAdminEmail === null
+        ? Effect.fail(new OpenRegistrationStaffUnavailable({ reason: "INITIAL_ADMIN_EMAIL is unset" }))
+        : authorizePrincipal(request),
+    }),
     Layer.succeed(ApiKeyCredentials, {
       generate: () => externalEffect("api-key-credentials", async () => {
         const bytes = new Uint8Array(32);
@@ -737,4 +822,5 @@ export type AppServices =
   | Rooms
   | AiService
   | ApiKeyCredentials
+  | InstallationConfig
   | Authorizer;

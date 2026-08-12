@@ -48,6 +48,11 @@ export const generatedClientRoutes = [
     load: () => import("../features/forms/routes/forms"),
   },
   {
+    path: "/staff",
+    contentWidth: "standard",
+    load: () => import("../features/install/routes/staff"),
+  },
+  {
     path: "/e/:eventSlug/integrations",
     contentWidth: "wide",
     load: () => import("../features/integrations/routes/integrations"),

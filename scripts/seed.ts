@@ -67,6 +67,7 @@ const rubric = {
 const sql = `
 DELETE FROM events WHERE id = 'demo-event';
 DELETE FROM events WHERE id = 'demo-other-event';
+DELETE FROM install_grants WHERE user_id IN (${personas.map(([id]) => quote(id)).join(", ")});
 DELETE FROM auth_tokens WHERE user_id IN (${personas.map(([id]) => quote(id)).join(", ")});
 DELETE FROM users WHERE id IN (${personas.map(([id]) => quote(id)).join(", ")});
 
@@ -77,6 +78,16 @@ VALUES
 INSERT INTO auth_tokens (id, token_hash, user_id, kind, expires_at, consumed_at, created_at)
 VALUES
   ${tokenValues};
+
+INSERT INTO install_grants (
+  id, user_id, role, granted_by_user_id, granted_at, revoked_by_user_id, revoked_at,
+  grant_key_hash, grant_request_hash, revoke_key_hash, revoke_request_hash,
+  version, created_at, updated_at
+)
+VALUES (
+  'demo-install-staff', 'demo-owner', 'staff', 'demo-owner', ${createdAt}, NULL, NULL,
+  NULL, NULL, NULL, NULL, 1, ${createdAt}, ${createdAt}
+);
 
 INSERT INTO events (
   id, slug, name, description, location, timezone, starts_at, ends_at,

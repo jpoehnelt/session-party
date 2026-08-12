@@ -49,9 +49,10 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
       return;
     }
     let current = true;
-    void apiFetch<readonly { event: { slug: string }; memberRole: EventNavRole }[]>("/api/v1/me/events")
+    void apiFetch<readonly { event: { slug: string }; memberRole: EventNavRole; staff: boolean }[]>("/api/v1/me/events")
       .then((access) => {
-        if (current) setMemberRole(access.find(({ event }) => event.slug === eventSlug)?.memberRole ?? null);
+        const currentAccess = access.find(({ event }) => event.slug === eventSlug);
+        if (current) setMemberRole(currentAccess?.staff ? "owner" : currentAccess?.memberRole ?? null);
       })
       .catch(() => {
         if (current) setMemberRole(null);

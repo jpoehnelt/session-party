@@ -3,6 +3,9 @@ import { Schema } from "effect";
 export const EventRole = Schema.Literal("owner", "admin", "reviewer");
 export type EventRole = typeof EventRole.Type;
 
+export const InstallRole = Schema.Literal("staff");
+export type InstallRole = typeof InstallRole.Type;
+
 export const ApiScope = Schema.Literal(
   "event:read",
   "event:write",
@@ -36,6 +39,8 @@ export interface BrowserSessionPrincipal {
   readonly name: string;
   readonly sessionId: string;
   readonly expiresAt: number;
+  /** Informational snapshot for clients; authorization always rechecks the active grant. */
+  readonly installRole?: InstallRole;
   readonly apiKeyId?: undefined;
   readonly eventId?: undefined;
   readonly scopes?: undefined;
@@ -82,16 +87,31 @@ export interface EventAuthorizationPolicy {
   readonly apiKey: EventApiKeyPolicy;
 }
 
+export interface InstallAuthorizationPolicy {
+  readonly kind: "install";
+  readonly browser: {
+    readonly kind: "install-role";
+    readonly roles: NonEmptyReadonlyArray<InstallRole>;
+  };
+  readonly apiKey: { readonly kind: "deny" };
+}
+
 /** Declarative metadata consumed by operation adapters; it contains no transport behavior. */
 export type AuthorizationPolicy =
   | { readonly kind: "public" }
   | { readonly kind: "authenticated" }
   | { readonly kind: "browser-session" }
+  | InstallAuthorizationPolicy
   | EventAuthorizationPolicy;
 
 export const publicAuthorization: AuthorizationPolicy = { kind: "public" };
 export const authenticatedAuthorization: AuthorizationPolicy = { kind: "authenticated" };
 export const browserSessionAuthorization: AuthorizationPolicy = { kind: "browser-session" };
+export const installStaffAuthorization: InstallAuthorizationPolicy = {
+  kind: "install",
+  browser: { kind: "install-role", roles: ["staff"] },
+  apiKey: { kind: "deny" },
+};
 
 export const eventAuthorization = (
   browser: EventMemberPolicy,
