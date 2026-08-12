@@ -16,6 +16,7 @@ import {
   MAIL_SCHEDULER_NAME,
   processWithBoundedConcurrency,
   reserveDispatchBudget,
+  setSchedulerAlarmNoLaterThan,
 } from "./Scheduler";
 
 type TestEnv = Cloudflare.Env & {
@@ -73,6 +74,38 @@ afterAll(async () => {
 });
 
 describe("Scheduler durable delivery recovery", () => {
+  it("preserves an immediate poke that arrives while an alarm drain is in flight", async () => {
+    const scheduler = await resetMailScheduler();
+    await runInDurableObject(scheduler, async (instance, state) => {
+      await state.storage.deleteAlarm();
+      const draining = instance.alarm();
+      const response = await instance.fetch(new Request("https://scheduler/poke", {
+        method: "POST",
+        headers: { "x-session-party-internal": await internalServiceToken(env) },
+      }));
+      expect(response.status).toBe(200);
+      const pokeAlarm = await state.storage.getAlarm();
+      expect(pokeAlarm).not.toBeNull();
+
+      await draining;
+
+      expect(await state.storage.getAlarm()).toBe(pokeAlarm);
+    });
+  });
+
+  it("never postpones an earlier Scheduler alarm", async () => {
+    const scheduler = await resetMailScheduler();
+    await runInDurableObject(scheduler, async (_instance, state) => {
+      const now = Date.now();
+      const poke = now + 10_000;
+      await state.storage.setAlarm(now + 60_000);
+      await setSchedulerAlarmNoLaterThan(state.storage, poke);
+      expect(await state.storage.getAlarm()).toBe(poke);
+      await setSchedulerAlarmNoLaterThan(state.storage, now + 120_000);
+      expect(await state.storage.getAlarm()).toBe(poke);
+    });
+  });
+
   it("contains and redacts scheduled Effect failures at the adapter boundary", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
