@@ -6,6 +6,7 @@ import { Cause, Effect, Exit, Layer, Schema } from "effect";
 import type { Context } from "hono";
 import { PublicSubmissionAbuse, PublicSubmissionRequest } from "@/features/submit/abuse";
 import { sessionUser } from "./auth";
+import { isAnonymousPublicRequest, matchPublicCache, publicJsonResponse } from "./public-cache";
 import {
   AiService,
   AcceleventsAdapter,
@@ -26,6 +27,15 @@ import {
 
 export type AppHono = { Bindings: Env };
 export const MAX_PUBLIC_SUBMISSION_BODY_BYTES = 256 * 1_024;
+const PUBLIC_CACHE_OPERATION_IDS = new Set([
+  "agenda.getPublished",
+  "portal.getPublicSpeakers",
+]);
+
+export interface RestOperationOptions {
+  /** Only the generated public REST dispatcher may opt into shared response caching. */
+  readonly cachePublicRead?: boolean;
+}
 
 class RequestBodyTooLarge extends Error {}
 export type RuntimeServices =
@@ -197,7 +207,18 @@ export const runRestOperation = async (
   principal: Principal | null,
   operation: AnyOperationDef,
   locations: RestInputLocations,
+  options?: RestOperationOptions,
 ): Promise<Response> => {
+  const publicCacheOperation = options?.cachePublicRead === true
+    && operation.kind === "query"
+    && PUBLIC_CACHE_OPERATION_IDS.has(operation.id);
+  const cachePublicRead = publicCacheOperation
+    && principal === null
+    && isAnonymousPublicRequest(c.req.raw);
+  if (cachePublicRead) {
+    const cached = await matchPublicCache(c.req.raw);
+    if (cached) return cached;
+  }
   const requestId = requestIdFor(c.req.raw);
   try {
     const rawInput = await restInput(c, locations, {
@@ -231,11 +252,16 @@ export const runRestOperation = async (
         }
       }
       const status = operation.rest?.successStatus ?? 200;
+      if (cachePublicRead && status === 200) {
+        return publicJsonResponse(c.req.raw, exit.value, c.executionCtx);
+      }
+      if (publicCacheOperation && status === 200) c.header("Cache-Control", "private, no-store");
       return status === 204 ? c.body(null, 204) : c.json(exit.value, status);
     }
     const failure = failureFrom(exit);
     if (failure) {
       logAppError(failure, requestId, operation.id);
+      if (publicCacheOperation) c.header("Cache-Control", "no-store");
       return c.json(toPublicAppError(failure, requestId), appErrorStatus(failure));
     }
     console.error(JSON.stringify({ message: "REST operation defect", requestId, cause: Cause.pretty(exit.cause) }));
@@ -253,6 +279,7 @@ export const runRestOperation = async (
       error: error instanceof Error ? error.message : String(error),
     }));
   }
+  if (publicCacheOperation) c.header("Cache-Control", "no-store");
   return c.json({ error: "Internal", message: "Internal server error", requestId }, 500);
 };
 

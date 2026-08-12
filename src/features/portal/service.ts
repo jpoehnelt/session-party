@@ -101,6 +101,7 @@ import {
   SendSpeakerMessagesOutput as SendSpeakerMessagesOutputSchema,
   type SendSpeakerMessagesOutput,
 } from "./schema";
+import { portalAssetKey as assetKey, publicSpeakerHeadshotPath } from "./public-assets";
 
 const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
   Effect.tryPromise({
@@ -123,7 +124,6 @@ const fileEffect = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
 const id = (prefix: string) => `${prefix}_${nanoid()}`;
 const now = () => new Date();
 const millis = (value: Date | null) => value?.getTime() ?? null;
-const assetKey = (eventId: string, assetId: string) => `portal/${eventId}/${assetId}`;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1_000;
 export const PORTAL_UPLOAD_MAX_BYTES = {
   headshot: 10 * 1_024 * 1_024,
@@ -4304,7 +4304,7 @@ export const downloadContent = (input: DownloadContentInput): Effect.Effect<Down
   return { asset, contentBase64: encodeBase64(bytes) };
 });
 
-export const getPublicSpeakers = (input: PublicSpeakersInput): Effect.Effect<PublicSpeakerGallery, AppError, Db | Files> => Effect.gen(function* () {
+export const getPublicSpeakers = (input: PublicSpeakersInput): Effect.Effect<PublicSpeakerGallery, AppError, Db> => Effect.gen(function* () {
   const { db } = yield* Db;
   const [event] = yield* database(() => db.select().from(events).where(eq(events.slug, input.eventSlug)).limit(1));
   if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventSlug }));
@@ -4323,24 +4323,25 @@ export const getPublicSpeakers = (input: PublicSpeakersInput): Effect.Effect<Pub
     inArray(assets.id, assetIds),
   )));
   const assetById = new Map(assetRows.map((asset) => [asset.id, asset] as const));
-  const { get } = yield* Files;
-  const publicSpeakers = yield* Effect.forEach(snapshot.speakers, (speaker) => Effect.gen(function* () {
+  const publicSpeakers = snapshot.speakers.map((speaker) => {
     let headshotUrl: string | null = speaker.headshotUrl && safeHttpUrl(speaker.headshotUrl) && speaker.headshotUrl.startsWith("https://")
       ? speaker.headshotUrl
       : null;
     const asset = speaker.headshotAssetId === null ? undefined : assetById.get(speaker.headshotAssetId);
-    if (asset && ["image/jpeg", "image/png", "image/webp"].includes(asset.contentType)) {
-      const object = yield* get(assetKey(event.id, asset.id));
-      if (object) {
-        const bytes = new Uint8Array(yield* fileEffect(() => object.arrayBuffer()));
-        let binary = "";
-        for (let offset = 0; offset < bytes.length; offset += 32_768) {
-          binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
-        }
-        headshotUrl = `data:${asset.contentType};base64,${btoa(binary)}`;
-      }
+    if (
+      asset
+      && asset.speakerId === speaker.id
+      && asset.purpose === "headshot"
+      && ["image/jpeg", "image/png", "image/webp"].includes(asset.contentType)
+    ) {
+      headshotUrl = publicSpeakerHeadshotPath(
+        event.slug,
+        speaker.id,
+        asset.id,
+        snapshot.revision,
+      );
     }
     return { id: speaker.id, displayName: speaker.displayName, title: speaker.title, company: speaker.company, bio: speaker.bio, headshotUrl, publicProfileSlug: speaker.publicProfileSlug, links: speaker.links.filter((link) => safeHttpUrl(link.url)) };
-  }));
+  });
   return { event: snapshot.event, speakers: publicSpeakers };
 });
