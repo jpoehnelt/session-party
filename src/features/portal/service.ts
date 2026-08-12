@@ -1378,12 +1378,14 @@ export const claimSpeaker = (
     return yield* Effect.fail(new Conflict({ message: "The managed speaker claim changed; retry from the latest event state" }));
   }
   // A speaker can submit more than one proposal with the same verified account
-  // email. Preserve the already-linked, provisioned event identity so profile,
-  // headshot, participant, and readiness history stay on one canonical speaker.
+  // email. Preserve the already-linked active event identity so profile,
+  // headshot, participant, readiness, and in-flight provisioning history stay
+  // on one canonical speaker.
   // For a first-time account, `acceptedRows` is newest-first and the latest
   // current acceptance becomes that canonical identity.
   const canonical = matches.find(({ speaker, provisioning }) =>
-    speaker.userId === actor.userId && provisioning.status === "provisioned"
+    speaker.userId === actor.userId &&
+    ["pending", "retry", "claimed", "provisioned"].includes(provisioning.status)
   );
   if (!canonical) {
     const [existingLink] = yield* database(() => db.select({ id: speakers.id }).from(speakers).where(and(
