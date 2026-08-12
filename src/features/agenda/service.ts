@@ -330,6 +330,113 @@ const loadTalk = (eventId: string, talkId: string) =>
 const normalizedTrackName = (value: string): string =>
   value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 
+const normalizedSpeakerEmail = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLocaleLowerCase();
+  return normalized.length > 0 ? normalized : null;
+};
+
+type AgendaReadyPrimarySpeaker = {
+  readonly id: string;
+  readonly name: string;
+  readonly provisionedAt: Date;
+};
+
+type AgendaAcceptancePrimary = {
+  readonly primarySpeakerId: string;
+  readonly primarySpeakerName: string;
+};
+
+type AgendaProvisioning = {
+  readonly status: "pending" | "claimed" | "provisioned" | "retry" | "failed" | "revoked";
+  readonly provisionedAt: Date | null;
+};
+
+const resolveAgendaReadyPrimarySpeaker = (
+  acceptance: AgendaAcceptancePrimary,
+  provisioning: AgendaProvisioning | undefined,
+  immutableSpeakerEmail: string | undefined,
+  canonicalByEmail: ReadonlyMap<string, AgendaReadyPrimarySpeaker>,
+): AgendaReadyPrimarySpeaker | null => {
+  if (provisioning?.status === "provisioned" && provisioning.provisionedAt !== null) {
+    return {
+      id: acceptance.primarySpeakerId,
+      name: acceptance.primarySpeakerName,
+      provisionedAt: provisioning.provisionedAt,
+    };
+  }
+  if (!provisioning || provisioning.status === "revoked" || !immutableSpeakerEmail) return null;
+  return canonicalByEmail.get(immutableSpeakerEmail) ?? null;
+};
+
+const loadImmutableSpeakerEmailsBySubmission = (
+  eventId: string,
+): Effect.Effect<ReadonlyMap<string, string>, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const rows = yield* database(() =>
+      db
+        .select({ submissionId: submissionAnswers.submissionId, value: submissionAnswers.value })
+        .from(submissionAnswers)
+        .innerJoin(
+          formVersionFields,
+          and(
+            eq(formVersionFields.eventId, submissionAnswers.eventId),
+            eq(formVersionFields.formVersionId, submissionAnswers.formVersionId),
+            eq(formVersionFields.id, submissionAnswers.formVersionFieldId),
+            eq(formVersionFields.semanticKey, "speakerEmail"),
+          ),
+        )
+        .where(eq(submissionAnswers.eventId, eventId))
+        .orderBy(asc(submissionAnswers.submissionId), asc(submissionAnswers.id)),
+    );
+    const bySubmission = new Map<string, string>();
+    for (const row of rows) {
+      if (bySubmission.has(row.submissionId)) continue;
+      const email = normalizedSpeakerEmail(row.value);
+      if (email) bySubmission.set(row.submissionId, email);
+    }
+    return bySubmission;
+  });
+
+const loadCanonicalProvisionedSpeakersByEmail = (
+  eventId: string,
+): Effect.Effect<ReadonlyMap<string, AgendaReadyPrimarySpeaker>, AppError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const rows = yield* database(() =>
+      db
+        .select({
+          id: speakers.id,
+          name: speakers.displayName,
+          accountEmail: users.email,
+          provisionedAt: speakerProvisioning.provisionedAt,
+        })
+        .from(speakerProvisioning)
+        .innerJoin(
+          speakers,
+          and(
+            eq(speakers.eventId, speakerProvisioning.eventId),
+            eq(speakers.id, speakerProvisioning.primarySpeakerId),
+          ),
+        )
+        .innerJoin(users, eq(users.id, speakers.userId))
+        .where(and(
+          eq(speakerProvisioning.eventId, eventId),
+          eq(speakerProvisioning.status, "provisioned"),
+          isNotNull(speakerProvisioning.provisionedAt),
+        ))
+        .orderBy(desc(speakerProvisioning.provisionedAt), asc(speakers.id)),
+    );
+    const byEmail = new Map<string, AgendaReadyPrimarySpeaker>();
+    for (const row of rows) {
+      const email = normalizedSpeakerEmail(row.accountEmail);
+      if (!email || !row.provisionedAt || byEmail.has(email)) continue;
+      byEmail.set(email, { id: row.id, name: row.name, provisionedAt: row.provisionedAt });
+    }
+    return byEmail;
+  });
+
 const answerStrings = (value: unknown): readonly string[] => {
   if (typeof value === "string") return [value];
   if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === "string");
@@ -398,7 +505,14 @@ const loadConfiguredTracksBySubmission = (
 const loadBacklog = (eventId: string): Effect.Effect<readonly BacklogProposal[], AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const [acceptances, provisionings, activeTalks, configuredTrackBySubmission] = yield* Effect.all([
+    const [
+      acceptances,
+      provisionings,
+      activeTalks,
+      configuredTrackBySubmission,
+      immutableSpeakerEmailsBySubmission,
+      canonicalProvisionedSpeakersByEmail,
+    ] = yield* Effect.all([
       database(() =>
         db
           .select({
@@ -439,6 +553,8 @@ const loadBacklog = (eventId: string): Effect.Effect<readonly BacklogProposal[],
           .where(and(eq(talks.eventId, eventId), ne(talks.status, "cancelled"))),
       ),
       loadConfiguredTracksBySubmission(eventId),
+      loadImmutableSpeakerEmailsBySubmission(eventId),
+      loadCanonicalProvisionedSpeakersByEmail(eventId),
     ]);
 
     const latestAcceptance = new Map<string, (typeof acceptances)[number]>();
@@ -453,23 +569,34 @@ const loadBacklog = (eventId: string): Effect.Effect<readonly BacklogProposal[],
     return [...latestAcceptance.values()]
       .filter((row) => {
         const provisioning = provisioningByAcceptance.get(row.acceptanceEventId);
+        const readyPrimary = resolveAgendaReadyPrimarySpeaker(
+          { primarySpeakerId: row.primarySpeakerId, primarySpeakerName: row.speakerName },
+          provisioning,
+          immutableSpeakerEmailsBySubmission.get(row.submissionId),
+          canonicalProvisionedSpeakersByEmail,
+        );
         return row.type === "accepted" &&
           row.submissionStatus === "accepted" &&
-          provisioning?.status === "provisioned" &&
-          provisioning.provisionedAt !== null &&
+          readyPrimary !== null &&
           !scheduledSubmissions.has(row.submissionId);
       })
       .map((row) => {
         const provisioning = provisioningByAcceptance.get(row.acceptanceEventId)!;
+        const readyPrimary = resolveAgendaReadyPrimarySpeaker(
+          { primarySpeakerId: row.primarySpeakerId, primarySpeakerName: row.speakerName },
+          provisioning,
+          immutableSpeakerEmailsBySubmission.get(row.submissionId),
+          canonicalProvisionedSpeakersByEmail,
+        )!;
         return {
           submissionId: row.submissionId,
           title: row.title,
           category: configuredTrackBySubmission.get(row.submissionId)?.name ?? row.category,
           submissionVersion: row.submissionVersion,
           acceptanceEventId: row.acceptanceEventId,
-          primarySpeakerId: row.primarySpeakerId,
-          primarySpeakerName: row.speakerName,
-          provisionedAt: provisioning.provisionedAt!.getTime(),
+          primarySpeakerId: readyPrimary.id,
+          primarySpeakerName: readyPrimary.name,
+          provisionedAt: readyPrimary.provisionedAt.getTime(),
         } satisfies BacklogProposal;
       })
       .sort((left, right) => left.title.localeCompare(right.title) || left.submissionId.localeCompare(right.submissionId));
@@ -1288,11 +1415,29 @@ export const createTalk = (
         .where(and(
           eq(speakerProvisioning.eventId, input.eventId),
           eq(speakerProvisioning.acceptanceEventId, acceptance.id),
-          eq(speakerProvisioning.status, "provisioned"),
         ))
         .limit(1),
     );
-    if (!provisioning?.provisionedAt) {
+    const [acceptancePrimary, immutableSpeakerEmailsBySubmission, canonicalProvisionedSpeakersByEmail] = yield* Effect.all([
+      database(() =>
+        db
+          .select({ id: speakers.id, name: speakers.displayName })
+          .from(speakers)
+          .where(and(eq(speakers.eventId, input.eventId), eq(speakers.id, acceptance.primarySpeakerId)))
+          .limit(1),
+      ).pipe(Effect.map((rows) => rows[0] ?? null)),
+      loadImmutableSpeakerEmailsBySubmission(input.eventId),
+      loadCanonicalProvisionedSpeakersByEmail(input.eventId),
+    ]);
+    const readyPrimary = acceptancePrimary
+      ? resolveAgendaReadyPrimarySpeaker(
+        { primarySpeakerId: acceptancePrimary.id, primarySpeakerName: acceptancePrimary.name },
+        provisioning,
+        immutableSpeakerEmailsBySubmission.get(input.submissionId),
+        canonicalProvisionedSpeakersByEmail,
+      )
+      : null;
+    if (!readyPrimary) {
       return yield* Effect.fail(new Validation({ message: "The accepted proposal must have a provisioned primary speaker" }));
     }
     const [active] = yield* database(() =>
@@ -1304,9 +1449,9 @@ export const createTalk = (
     );
     if (active) return yield* Effect.fail(new Conflict({ message: "This proposal already has an active talk" }));
 
-    const proposalSpeakers = yield* database(() =>
+    const linkedProposalSpeakers = yield* database(() =>
       db
-        .select({ id: speakers.id, name: speakers.displayName })
+        .select({ id: speakers.id, name: speakers.displayName, isPrimary: submissionSpeakers.isPrimary })
         .from(submissionSpeakers)
         .innerJoin(
           speakers,
@@ -1315,9 +1460,17 @@ export const createTalk = (
         .where(and(eq(submissionSpeakers.eventId, input.eventId), eq(submissionSpeakers.submissionId, input.submissionId)))
         .orderBy(desc(submissionSpeakers.isPrimary), asc(speakers.displayName), asc(speakers.id)),
     );
-    if (proposalSpeakers.length === 0) {
+    if (linkedProposalSpeakers.length === 0) {
       return yield* Effect.fail(new Validation({ message: "The accepted proposal has no linked speakers" }));
     }
+    const proposalSpeakersById = new Map<string, { readonly id: string; readonly name: string }>();
+    for (const speaker of linkedProposalSpeakers) {
+      const resolved = speaker.isPrimary
+        ? { id: readyPrimary.id, name: readyPrimary.name }
+        : { id: speaker.id, name: speaker.name };
+      if (!proposalSpeakersById.has(resolved.id)) proposalSpeakersById.set(resolved.id, resolved);
+    }
+    const proposalSpeakers = [...proposalSpeakersById.values()];
 
     const [abstractAnswer] = yield* database(() =>
       db
