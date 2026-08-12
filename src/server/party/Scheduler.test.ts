@@ -9,7 +9,7 @@ import { Effect } from "effect";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runScheduledEffect } from "../adapt";
 import worker, { recoverMailScheduler } from "../index";
-import { sendMail, sessionSecret } from "../services";
+import { internalServiceToken, sendMail } from "../services";
 import {
   DEMO_RATE_SOURCE_LIMIT,
   MAIL_DISPATCH_CONCURRENCY,
@@ -575,7 +575,7 @@ describe("Scheduler durable delivery recovery", () => {
     const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("auth-rate-limit-proof"));
     expect((await stub.fetch("https://scheduler/poke", {
       method: "POST",
-      headers: { "x-session-party-internal": sessionSecret(env) },
+      headers: { "x-session-party-internal": await internalServiceToken(env) },
     })).status).toBe(404);
     const scheduledAt = Date.now() + 5_000;
     await runInDurableObject(stub, async (_instance, state) => {
@@ -587,7 +587,7 @@ describe("Scheduler durable delivery recovery", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-session-party-internal": sessionSecret(env),
+          "x-session-party-internal": await internalServiceToken(env),
         },
         body: JSON.stringify({
           sourceHash: index.toString(16).padStart(64, "0"),
@@ -625,11 +625,12 @@ describe("Scheduler durable delivery recovery", () => {
   });
   it("rate-limits demo login attempts per source without consuming other sources", async () => {
     const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("demo-rate-limit-proof"));
+    const internalToken = await internalServiceToken(env);
     const authorize = (sourceHash: string) => stub.fetch("https://scheduler/auth/demo/authorize", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-session-party-internal": sessionSecret(env),
+        "x-session-party-internal": internalToken,
       },
       body: JSON.stringify({ sourceHash }),
     });
@@ -642,13 +643,14 @@ describe("Scheduler durable delivery recovery", () => {
   });
   it("atomically enforces CFP hourly source and daily recipient budgets", async () => {
     const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("cfp-rate-limit-proof"));
+    const internalToken = await internalServiceToken(env);
     const authorize = (source: number, recipient: number) => stub.fetch(
       "https://scheduler/cfp/authorize",
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-session-party-internal": sessionSecret(env),
+          "x-session-party-internal": internalToken,
         },
         body: JSON.stringify({
           sourceHash: source.toString(16).padStart(64, "0"),
@@ -675,7 +677,7 @@ describe("Scheduler durable delivery recovery", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-session-party-internal": sessionSecret(env),
+        "x-session-party-internal": await internalServiceToken(env),
       },
       body: JSON.stringify({ sourceHash: "untrusted" }),
     });

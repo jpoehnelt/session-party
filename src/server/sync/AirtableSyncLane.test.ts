@@ -27,7 +27,7 @@ import {
   fakeAirtableStorageKey,
   type AirtableRecord,
 } from "../airtable";
-import { sessionSecret } from "../services";
+import { internalServiceToken } from "../services";
 import { setAirtableAlarmNoLaterThan } from "./AirtableSyncLane";
 import {
   AIRTABLE_PROJECTION_SCAN_PAGE_SIZE,
@@ -147,7 +147,7 @@ describe("AirtableSyncLane", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-session-party-internal": sessionSecret(env),
+        "x-session-party-internal": await internalServiceToken(env),
       },
       body: JSON.stringify({ baseId: authorizationBase }),
     });
@@ -156,7 +156,7 @@ describe("AirtableSyncLane", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-session-party-internal": sessionSecret(env),
+        "x-session-party-internal": await internalServiceToken(env),
       },
       body: JSON.stringify({ baseId: "appDifferentBase" }),
     });

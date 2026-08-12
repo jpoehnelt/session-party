@@ -6,7 +6,7 @@ import {
   createLiveAirtableAdapter,
   type AirtableAdapterService,
 } from "../airtable";
-import { isExplicitLocalEnvironment, sessionSecret } from "../services";
+import { internalServiceToken, isExplicitLocalEnvironment } from "../services";
 import {
   drainAirtableBase,
   type AirtableProjectionCursor,
@@ -83,7 +83,7 @@ export class AirtableSyncLane extends DurableObject<Env> {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-session-party-internal": sessionSecret(this.env),
+        "x-session-party-internal": await internalServiceToken(this.env),
       },
       body: JSON.stringify({ message } satisfies EventRoomBroadcast),
     });
@@ -94,7 +94,7 @@ export class AirtableSyncLane extends DurableObject<Env> {
     if (request.method !== "POST") return new Response("Not found", { status: 404 });
     let secret: string;
     try {
-      secret = sessionSecret(this.env);
+      secret = await internalServiceToken(this.env);
     } catch {
       return new Response("Airtable sync unavailable", { status: 503 });
     }

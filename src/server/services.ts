@@ -137,6 +137,7 @@ type SecretBindings = {
   readonly LOCAL_MODE?: string;
   readonly PREVIEW_MODE?: string;
   readonly SESSION_SECRET?: string;
+  readonly INTERNAL_SERVICE_SECRET?: string;
   readonly ACCELEVENTS_API_TOKEN?: string;
   readonly AIRTABLE_PAT?: string;
   readonly TURNSTILE_SECRET?: string;
@@ -148,6 +149,8 @@ type TurnstileBindings = SecretBindings & {
 };
 
 const LOCAL_SESSION_SECRET = "explicit-local-only-session-secret-v1";
+const LOCAL_INTERNAL_SERVICE_TOKEN = "explicit-local-only-internal-service-token-v1";
+const INTERNAL_SERVICE_CONTEXT = "session-party/internal-service/v1";
 
 const optionalSecret = (
   env: Env & SecretBindings,
@@ -172,7 +175,7 @@ export const wakeAirtableBase = async (env: Env, baseId: string): Promise<void> 
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-session-party-internal": sessionSecret(env),
+      "x-session-party-internal": await internalServiceToken(env),
     },
     body: JSON.stringify({ baseId }),
   });
@@ -197,6 +200,30 @@ export const sessionSecret = (env: Env & SecretBindings): string => {
   const configured = optionalSecret(env, "SESSION_SECRET");
   if (configured) return configured;
   throw new Error("Missing required production secret: SESSION_SECRET");
+};
+
+/**
+ * Bearer used only for Worker-to-Durable-Object requests. When an explicit
+ * service secret has not been provisioned yet, derive a domain-separated
+ * token so SESSION_SECRET itself is never transmitted in a request header.
+ */
+export const internalServiceToken = async (env: Env & SecretBindings): Promise<string> => {
+  if (isExplicitLocalEnvironment(env)) return LOCAL_INTERNAL_SERVICE_TOKEN;
+  const configured = optionalSecret(env, "INTERNAL_SERVICE_SECRET");
+  if (configured) return configured;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(sessionSecret(env)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return Array.from(
+    new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(INTERNAL_SERVICE_CONTEXT))),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
 };
 
 const configuredValue = (value: unknown): string | undefined =>
@@ -343,13 +370,13 @@ const publicSubmissionAbuse = (env: Env & TurnstileBindings) => {
         });
         const limiterId = env.SCHEDULER.idFromName("cfp-rate-limit");
         const response = yield* Effect.tryPromise({
-          try: () => env.SCHEDULER.get(limiterId).fetch(
+          try: async () => env.SCHEDULER.get(limiterId).fetch(
             "https://scheduler/cfp/authorize",
             {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                "x-session-party-internal": sessionSecret(env),
+                "x-session-party-internal": await internalServiceToken(env),
               },
               body: JSON.stringify({
                 sourceHash,
@@ -638,7 +665,7 @@ export const AppLayer = (env: Env) => {
           const id = env.SCHEDULER.idFromName("mail");
           const response = await env.SCHEDULER.get(id).fetch("https://scheduler/poke", {
             method: "POST",
-            headers: { "x-session-party-internal": sessionSecret(env) },
+            headers: { "x-session-party-internal": await internalServiceToken(env) },
           });
           if (!response.ok) throw new Error(`Mail scheduler returned ${response.status}`);
         }).pipe(
@@ -659,7 +686,7 @@ export const AppLayer = (env: Env) => {
           const id = env.EVENT_ROOM.idFromName(eventId);
           const headers = new Headers({
             "Content-Type": "application/json",
-            "x-session-party-internal": sessionSecret(env),
+            "x-session-party-internal": await internalServiceToken(env),
           });
           const response = await env.EVENT_ROOM.get(id).fetch("https://event-room/broadcast", {
             method: "POST",

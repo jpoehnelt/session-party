@@ -20,7 +20,7 @@ import { Schema } from "effect";
 import { runTransportOperation } from "../adapt";
 import { userFromRequest } from "../auth";
 import { operationById, partyIntents } from "../registry.gen";
-import { sessionSecret } from "../services";
+import { internalServiceToken } from "../services";
 
 const MAX_MESSAGE_BYTES = 32 * 1024;
 const MAX_MESSAGES_PER_MINUTE = 120;
@@ -525,7 +525,7 @@ export class EventRoom extends Server<Env> {
 
     let secret: string;
     try {
-      secret = sessionSecret(this.env);
+      secret = await internalServiceToken(this.env);
     } catch {
       return new Response("Internal broadcast unavailable", { status: 503 });
     }

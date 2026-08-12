@@ -8,7 +8,7 @@ import {
 import type { ServerMessage } from "contracts/protocol";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { hashBearerMaterial } from "../auth";
-import { sessionSecret } from "../services";
+import { internalServiceToken } from "../services";
 import { audiencesForServerMessage } from "./EventRoom";
 
 type TestEnv = Cloudflare.Env & {
@@ -86,7 +86,7 @@ const broadcast = async (message: ServerMessage): Promise<void> => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-session-party-internal": sessionSecret(env),
+      "x-session-party-internal": await internalServiceToken(env),
       "x-partykit-room": EVENT_ID,
     },
     body: JSON.stringify({ message }),
@@ -449,7 +449,7 @@ describe("EventRoom live authorization", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-session-party-internal": sessionSecret(env),
+        "x-session-party-internal": await internalServiceToken(env),
         "x-partykit-room": EVENT_ID,
       },
       body: JSON.stringify({
