@@ -174,6 +174,18 @@ Cloudflare creates the DNS record and certificate. Remove any existing CNAME for
 
 Repository pull-request previews are UI-only: they have no D1 or R2 bindings, cannot run scheduled jobs, and never apply remote migrations. API-backed preview workflows require separately provisioned preview storage and are intentionally disabled by the default template.
 
+Then run the read-only availability check:
+
+```bash
+pnpm smoke:production -- https://events.example.com
+```
+
+Operator guides:
+
+- [Routine operations, costs, email, logs, alerts, secrets, and retention](docs/operations.md)
+- [D1 and R2 backup, recovery, and restore drills](docs/backup-restore.md)
+- [Pre-1.0 upgrade and rollback procedure](docs/upgrading.md)
+
 ## Local development
 
 ### Prerequisites
@@ -201,6 +213,11 @@ After the initial reset, use `pnpm dev` to restart while preserving local state.
 | `pnpm check` | Check generated registry freshness and TypeScript projects |
 | `pnpm test` | Run the Worker Vitest suite |
 | `pnpm smoke:local` | Exercise local REST, MCP, D1, R2, and Durable Object bindings against a running server |
+| `pnpm test:self-hosting-template` | Render and exercise a fresh owner-independent D1/R2/DO installation in CI |
+| `pnpm ops:preflight` | Check bindings, secret declarations, observability, and migration continuity without contacting Cloudflare |
+| `pnpm ops:backup-plan` | Print the reviewed D1/R2 backup command plan without executing it |
+| `pnpm ops:upgrade-plan -- v0.x.y` | Print a release validation and migration-review plan without changing remote state |
+| `pnpm smoke:production -- https://events.example.com` | Read-only check of the deployed shell and authentication boundary |
 | `pnpm build` | Build the production Worker and client assets |
 | `pnpm storybook` | Run the component and state laboratory |
 | `pnpm ci` | Run the complete type, test, visual-tool, build, and Storybook gate |
@@ -235,7 +252,7 @@ After reviewing the target bindings and migration plan:
 pnpm deploy
 ```
 
-`pnpm deploy` builds the application, applies pending migrations through the `DB` binding, and deploys the Worker. The repository's CI workflow performs the same migration and deployment sequence only after the complete gate succeeds on `main`.
+`pnpm deploy` builds the application, applies pending migrations through the `DB` binding, and deploys the Worker. Treat it as a production change: complete the [upgrade](docs/upgrading.md) and [backup](docs/backup-restore.md) gates first, then run it only with explicit approval. The repository's CI workflow performs the same migration and deployment sequence only after the complete gate succeeds on `main`.
 
 ## License
 

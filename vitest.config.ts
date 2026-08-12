@@ -15,8 +15,8 @@ export default defineConfig({
       miniflare: {
         compatibilityDate: "2025-08-01",
         compatibilityFlags: ["nodejs_compat"],
-        d1Databases: ["DB", "MIGRATION_DB", "REVIEW_MIGRATION_DB", "DECISION_MIGRATION_DB"],
-        r2Buckets: ["FILES"],
+        d1Databases: ["DB", "MIGRATION_DB", "REVIEW_MIGRATION_DB", "DECISION_MIGRATION_DB", "TEMPLATE_DB"],
+        r2Buckets: ["FILES", "TEMPLATE_FILES"],
         durableObjects: {
           EVENT_ROOM: { className: "EventRoom", useSQLite: true },
           SCHEDULER: { className: "Scheduler", useSQLite: true },
