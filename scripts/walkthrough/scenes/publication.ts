@@ -6,7 +6,7 @@ export const publicationScene: Scene = {
   title: "Publish once, distribute everywhere",
   narration: "Publishing creates an immutable audience revision. Organizers can refresh stable live widgets, configure embeds, and distribute the same privacy-filtered program as HTML, JSON, XML, and iCalendar.",
   shortSeconds: 9,
-  async run({ page, baseUrl, eventSlug, titleCard, spotlight, clearSpotlight, scrollBy, pause }) {
+  async run({ page, baseUrl, eventSlug, state, titleCard, spotlight, clearSpotlight, scrollBy, pause }) {
     await loginAs(page, baseUrl, "organizer", `/e/${eventSlug}/publication`);
     await page.goto(`${baseUrl}/e/${eventSlug}/publication`, { waitUntil: "networkidle" });
     await titleCard("Publication", "Immutable revisions, stable embeds, and standards-based schedule feeds.", [
@@ -27,5 +27,22 @@ export const publicationScene: Scene = {
     if (await formats.count()) await spotlight("text=Output formats", "HTML · JSON · XML · iCal");
     await pause(2_600);
     await clearSpotlight();
+
+    let enabled = page.getByRole("listitem").filter({ hasText: /· Enabled/i }).first();
+    if (!(await enabled.count())) {
+      const disabled = page.getByRole("listitem").filter({ hasText: /· Disabled/i }).first();
+      if (await disabled.count()) {
+        await disabled.getByRole("button", { name: "Enable" }).click();
+        await page.getByText(/Enabled “/i).waitFor({ state: "visible" });
+      } else {
+        await page.getByLabel("Embed name").fill("Walkthrough schedule");
+        await page.getByRole("button", { name: "Create embed" }).click();
+        await page.getByText(/Created “Walkthrough schedule”/i).waitFor({ state: "visible" });
+      }
+      enabled = page.getByRole("listitem").filter({ hasText: /· Enabled/i }).first();
+    }
+    const embedPath = await enabled.getByRole("link", { name: "Preview" }).getAttribute("href");
+    if (!embedPath) throw new Error("Publication did not expose an enabled embed preview path");
+    state.set("publicEmbedPath", embedPath);
   },
 };
