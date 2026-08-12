@@ -74,9 +74,10 @@ const logAppError = (
   error: AppError,
   requestId: string,
   operation?: string,
+  message = "Application request failed",
 ): void => {
   console.error(JSON.stringify({
-    message: "Application request failed",
+    message,
     requestId,
     error: error._tag,
     operation: error._tag === "External" ? error.operation ?? operation : operation,
@@ -84,6 +85,42 @@ const logAppError = (
     detail: error._tag === "External" ? error.detail : undefined,
     migration: error._tag === "External" ? error.migration : undefined,
   }));
+};
+
+/**
+ * The single runtime boundary for background Effects. Scheduled work has no
+ * transport response, so failures are recorded and contained instead of
+ * rejecting the ExecutionContext waitUntil promise.
+ */
+export const runScheduledEffect = async <A>(
+  env: Env,
+  operation: string,
+  effect: Effect.Effect<A, AppError, RuntimeServices>,
+): Promise<A | undefined> => {
+  const requestId = crypto.randomUUID();
+  try {
+    const exit = await runOperationEffect(env, null, effect);
+    if (Exit.isSuccess(exit)) return exit.value as A;
+    const failure = failureFrom(exit);
+    if (failure) {
+      logAppError(failure, requestId, operation, "Application scheduled task failed");
+    } else {
+      console.error(JSON.stringify({
+        message: "Scheduled Effect defect",
+        requestId,
+        operation,
+        cause: Cause.pretty(exit.cause),
+      }));
+    }
+  } catch (error) {
+    console.error(JSON.stringify({
+      message: "Scheduled Effect adapter failed",
+      requestId,
+      operation,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+  return undefined;
 };
 
 const requestIdFor = (request: Request): string =>
