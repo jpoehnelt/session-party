@@ -1,12 +1,14 @@
 import type { Principal } from "contracts/principal";
 import { API } from "contracts/routes";
 import { Hono } from "hono";
+import { Cause, Exit } from "effect";
 import { McpAgent } from "agents/mcp";
 import { routePartykitRequest, type Connection, type ConnectionContext } from "partyserver";
+import { getApprovedBrandAsset } from "@/features/branding/service";
 import publicationFeeds from "@/features/publication/feed-api";
 import publicHeadshots from "@/features/portal/public-headshots";
 import auth, { apiKeyUserFromRequest, userFromRequest } from "./auth";
-import { runRestOperation, runScheduledEffect, runTransportOperation } from "./adapt";
+import { runPublicEffect, runRestOperation, runScheduledEffect, runTransportOperation } from "./adapt";
 import { EventRoom } from "./party/EventRoom";
 import { MAIL_SCHEDULER_NAME, Scheduler } from "./party/Scheduler";
 import { mcpToolsForPrincipal } from "./mcp";
@@ -230,6 +232,24 @@ app.route("/", publicationFeeds);
 app.route("/", publicHeadshots);
 app.route(`${API}/auth`, auth);
 app.get(`${API}/runtime-config`, (c) => c.json(publicRuntimeConfig(c.env)));
+app.get(`${API}/assets/:id`, async (c) => {
+  const result = await runPublicEffect(c.env, getApprovedBrandAsset(c.req.param("id")));
+  if (Exit.isFailure(result)) {
+    const failure = Cause.failureOption(result.cause);
+    const status = failure._tag === "Some" && failure.value._tag === "External" ? 502 : 404;
+    return c.json({ error: status === 404 ? "NotFound" : "External", message: status === 404 ? "Resource not found" : "External service request failed", requestId: crypto.randomUUID() }, status);
+  }
+  const { object, filename, contentType } = result.value;
+  const safeFilename = filename.replace(/["\\\r\n]/g, "_");
+  const headers = new Headers({
+    "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+    "Content-Disposition": `inline; filename="${safeFilename}"`,
+    "Content-Type": contentType,
+    "ETag": object.httpEtag,
+    "X-Content-Type-Options": "nosniff",
+  });
+  return new Response(object.body, { headers });
+});
 for (const registration of restRegistrations) {
   const operation = operationById[registration.operationId];
   if (!operation) throw new Error(`Unregistered operation: ${registration.operationId}`);
@@ -292,11 +312,11 @@ const publicSurfaceLabels: Readonly<Record<string, string>> = {
   gallery: "Speaker gallery",
 };
 
-export function publicProgramMetadata(pathname: string, eventName: string, canonicalUrl: string) {
+export function publicProgramMetadata(pathname: string, eventName: string, canonicalUrl: string, installationName = "Session Party") {
   const surface = pathname.split("/").filter(Boolean).at(2) ?? "sessions";
   const label = publicSurfaceLabels[surface] ?? "Sessions";
   return {
-    title: `${label} — ${eventName} — Session Party`,
+    title: `${label} — ${eventName} — ${installationName}`,
     description: `${eventName} ${label.toLowerCase()}: the current published event program.`,
     canonicalUrl,
   };
@@ -317,8 +337,13 @@ async function fetchPublicProgram(request: Request, env: Env): Promise<Response>
   if (!agendaResponse.ok) return fetchAsset(request);
   const agenda = await agendaResponse.json<{ eventName?: unknown }>();
   if (typeof agenda.eventName !== "string") return fetchAsset(request);
+  const installationResponse = await app.fetch(new Request(`${url.origin}${API}/brand`), env);
+  const installation = installationResponse.ok
+    ? await installationResponse.json<{ name?: unknown }>()
+    : null;
+  const installationName = typeof installation?.name === "string" ? installation.name : "Session Party";
   const canonicalUrl = `${url.origin}${url.pathname}`;
-  const metadata = publicProgramMetadata(url.pathname, agenda.eventName, canonicalUrl);
+  const metadata = publicProgramMetadata(url.pathname, agenda.eventName, canonicalUrl, installationName);
   // Workers Static Assets canonicalizes `/index.html` to `/`. Request the
   // canonical shell directly so the metadata response remains a 200 instead
   // of forwarding that redirect to public-program visitors and crawlers.

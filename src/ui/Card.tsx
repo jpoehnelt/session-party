@@ -19,8 +19,8 @@ export function Card({ title, titleLevel = 3, footer, children, className }: Car
       )}
     >
       {title != null && (
-        <header className="border-b-2 border-line-strong bg-ink px-5 py-3.5 text-on-accent">
-          <Title className="text-xs font-black uppercase tracking-[0.12em] text-on-accent">{title}</Title>
+        <header className="border-b-2 border-line-strong bg-ink px-5 py-3.5 text-on-ink">
+          <Title className="text-xs font-black uppercase tracking-[0.12em] text-on-ink">{title}</Title>
         </header>
       )}
       <div className="px-5 py-4">{children}</div>

@@ -234,29 +234,29 @@ export function AgendaBoard({
   return (
     <section className="space-y-5" aria-labelledby={boardHeadingId}>
       <h2 id={boardHeadingId} className="sr-only">{agenda.eventName} agenda scheduling board</h2>
-      <div className="flex flex-wrap items-center justify-between gap-4 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent shadow-card sm:px-5">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-2 border-line-strong bg-ink px-4 py-3 text-on-ink shadow-card sm:px-5">
         <div className="flex flex-wrap items-center gap-3 text-xs font-black uppercase tracking-[0.09em]">
           <span className="bg-production-lime px-2.5 py-1.5 text-ink">Cue clock · {agenda.timezone}</span>
           <span>{scheduled.length} active</span>
-          <span className="text-on-accent/35" aria-hidden="true">◆</span>
+          <span className="text-on-ink/35" aria-hidden="true">◆</span>
           <span>{agenda.backlog.length} waiting</span>
-          <span className="text-on-accent/35" aria-hidden="true">◆</span>
+          <span className="text-on-ink/35" aria-hidden="true">◆</span>
           <span>{agenda.warnings.unplacedTalkCount} unplaced</span>
           {agenda.warnings.conflictCount > 0 && (
             <>
-              <span className="text-on-accent/35" aria-hidden="true">◆</span>
+              <span className="text-on-ink/35" aria-hidden="true">◆</span>
               <span>{agenda.warnings.conflictCount} scheduling warnings</span>
             </>
           )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2" role="status" aria-live="polite">
           {presence.slice(0, 4).map((user) => (
-            <span key={user.userId} className="border border-on-accent/40 px-2 py-1 text-[9px] font-black uppercase tracking-[0.08em] text-on-accent/75">
+            <span key={user.userId} className="border border-on-ink/40 px-2 py-1 text-[9px] font-black uppercase tracking-[0.08em] text-on-ink/75">
               {user.name} · {user.surface || "connecting"}
             </span>
           ))}
           <Badge tone={connection.tone}>{connection.label}</Badge>
-          {intent.message && <span className="max-w-md text-xs font-semibold text-on-accent/70">{intent.message}</span>}
+          {intent.message && <span className="max-w-md text-xs font-semibold text-on-ink/70">{intent.message}</span>}
         </div>
       </div>
 

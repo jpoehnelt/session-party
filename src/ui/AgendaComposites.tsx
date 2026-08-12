@@ -100,7 +100,7 @@ export function AgendaBoard({
       <div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(16rem,1fr))]">
         {groups.map((group) => (
           <section key={group.id} aria-labelledby={`agenda-group-${group.id}`}>
-            <h2 id={`agenda-group-${group.id}`} className="mb-3 border-2 border-line-strong bg-ink px-3 py-2 text-xs font-black uppercase tracking-[0.1em] text-on-accent shadow-[3px_3px_0_#7857ff]">{group.label}</h2>
+            <h2 id={`agenda-group-${group.id}`} className="mb-3 border-2 border-line-strong bg-ink px-3 py-2 text-xs font-black uppercase tracking-[0.1em] text-on-ink shadow-[3px_3px_0_#7857ff]">{group.label}</h2>
             <div className="space-y-2">
               {group.items.map((item) => (
                 <Card

@@ -778,7 +778,7 @@ export function CommunicationsWorkspace({
           </>
         )}
         description={`Draft human outreach for ${event.name}, or explicitly authorize automated delivery after reviewing the exact audience.`}
-        className="border-[3px] border-line-strong bg-ink p-5 text-on-accent shadow-[7px_7px_0_#7857ff] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-[0.88] [&_h1]:tracking-[-0.055em] [&_h1]:text-on-accent sm:[&_h1]:text-5xl [&_p]:mt-4 [&_p]:max-w-2xl [&_p]:font-semibold [&_p]:text-on-accent/70"
+        className="border-[3px] border-line-strong bg-ink p-5 text-on-ink shadow-[7px_7px_0_#7857ff] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-[0.88] [&_h1]:tracking-[-0.055em] [&_h1]:text-on-ink sm:[&_h1]:text-5xl [&_p]:mt-4 [&_p]:max-w-2xl [&_p]:font-semibold [&_p]:text-on-ink/70"
         actions={(
           <div className="border-2 border-line-strong bg-production-lime px-4 py-3 text-ink shadow-[4px_4px_0_#fffdf7]">
             <p className="text-3xl font-black leading-none tracking-[-0.06em] !text-ink">{audience.eligibleCount}</p>
@@ -971,13 +971,13 @@ export function CommunicationsWorkspace({
               <EmptyState title="No decided proposals yet" description="Acceptance and rejection recipients appear after organizers record a decision." />
             ) : (
               <div>
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink p-3 text-on-accent">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-2 border-line-strong bg-ink p-3 text-on-ink">
                   <p className="text-[10px] font-black uppercase tracking-[0.14em]">{selectedCount} selected / {eligibleRecipients.length} ready</p>
                   <div className="flex gap-2">
                     <Button size="sm" variant="secondary" onClick={() => setSelectedRecipients(new Set(eligibleRecipients.filter((recipient) => recipient.decision === "accepted").map((recipient) => recipient.recipientKey)))}>Select accepted</Button>
                     <Button size="sm" variant="secondary" onClick={() => setSelectedRecipients(new Set(eligibleRecipients.filter((recipient) => recipient.decision === "rejected").map((recipient) => recipient.recipientKey)))}>Select rejected</Button>
                     <Button size="sm" variant="secondary" onClick={() => setSelectedRecipients(new Set(eligibleRecipients.map((recipient) => recipient.recipientKey)))}>Select ready</Button>
-                    <Button size="sm" variant="ghost" className="text-on-accent hover:bg-on-accent/15 hover:text-on-accent" disabled={selectedCount === 0} onClick={() => setSelectedRecipients(new Set())}>Clear</Button>
+                    <Button size="sm" variant="ghost" className="text-on-ink hover:bg-on-ink/15 hover:text-on-ink" disabled={selectedCount === 0} onClick={() => setSelectedRecipients(new Set())}>Clear</Button>
                   </div>
                 </div>
                 <div className="divide-y-2 divide-line-strong border-2 border-line-strong">
@@ -1129,10 +1129,10 @@ export function CommunicationsWorkspace({
               </div>
             ))}
           </dl>
-          <div className="flex flex-col gap-4 border-2 border-line-strong bg-ink p-4 text-on-accent shadow-[4px_4px_0_#7857ff] sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-4 border-2 border-line-strong bg-ink p-4 text-on-ink shadow-[4px_4px_0_#7857ff] sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.14em] text-production-lime">Durable evidence log</p>
-              <p className="mt-1 text-sm font-semibold text-on-accent/70">Snapshot, provider, attempt, and dead-letter truth from the mail tables.</p>
+              <p className="mt-1 text-sm font-semibold text-on-ink/70">Snapshot, provider, attempt, and dead-letter truth from the mail tables.</p>
             </div>
             <Button variant="secondary" size="sm" onClick={() => setRefresh((value) => value + 1)}>Refresh history</Button>
           </div>

@@ -21,6 +21,7 @@ const candidates: readonly EventNavItem[] = [
   { label: "Publication", path: "/e/:eventSlug/publication", segment: "publication" },
   { label: "Exports", path: "/e/:eventSlug/exports", segment: "exports" },
   { label: "Integrations", path: "/e/:eventSlug/integrations", segment: "integrations" },
+  { label: "Appearance", path: "/e/:eventSlug/appearance", segment: "appearance" },
   { label: "Settings", path: "/e/:eventSlug/settings", segment: "settings" },
 ];
 

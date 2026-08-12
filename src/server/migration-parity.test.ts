@@ -119,6 +119,20 @@ const assertDatabaseIntegrity = async (db: D1Database): Promise<void> => {
       sql: expect.stringContaining("(`idempotency_key`)"),
     }),
   ]));
+  const brandingTable = await db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'installation_brands'",
+  ).first<{ name: string }>();
+  expect(brandingTable?.name).toBe("installation_brands");
+  const eventBrandColumns = await db.prepare("PRAGMA table_info(events)").all<{ name: string }>();
+  expect(eventBrandColumns.results.map(({ name }) => name)).toEqual(expect.arrayContaining([
+    "public_name",
+    "inherit_installation_brand",
+    "logo_asset_id",
+  ]));
+  const assetBrandColumn = await db.prepare(
+    "SELECT name FROM pragma_table_info('assets') WHERE name = 'brand_kind'",
+  ).first<{ name: string }>();
+  expect(assetBrandColumn?.name).toBe("brand_kind");
   await expect(db.prepare(
     "INSERT INTO mail_delivery_snapshots (id, event_id, template_id, recipient_email, from_email, subject, rendered_html, created_at) VALUES ('invalid-global-template', NULL, 'missing-template', 'recipient@example.com', 'sender@example.com', 'Subject', '<p>Body</p>', 1700000000000)",
   ).run()).rejects.toThrow();
@@ -318,7 +332,7 @@ const assertHistoricalFormAndSubmissionRoundTrip = async (db: D1Database): Promi
 describe("baseline migration parity", () => {
   it("treats the repair as an idempotent no-op without legacy rows", async () => {
     const migrations = testMigrations();
-    expect(migrations).toHaveLength(18);
+    expect(migrations).toHaveLength(19);
     const repair = repairMigration(migrations);
     await applyOneByOne(env.DB, migrations);
     await assertCanonicalFormVersionIds(env.DB);
@@ -333,7 +347,7 @@ describe("baseline migration parity", () => {
   it("upgrades nonempty 0000 rows without losing identity or history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(18);
+    expect(migrations).toHaveLength(19);
     const repair = repairMigration(migrations);
     await applyOneByOne(db, migrations.slice(0, 1));
     await seedLegacyRows(db);
@@ -533,7 +547,7 @@ describe("baseline migration parity", () => {
   it("adds Accelevents evidence tables without rewriting configured integrations", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(18);
+    expect(migrations).toHaveLength(19);
     await applyOneByOne(db, migrations.slice(0, 3));
     await db.batch([
       db.prepare(
@@ -631,7 +645,7 @@ describe("baseline migration parity", () => {
   it("backfills legacy assets and review rounds while preserving assignment recusal history", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).REVIEW_MIGRATION_DB;
-    expect(migrations).toHaveLength(18);
+    expect(migrations).toHaveLength(19);
     await applyOneByOne(db, migrations.slice(0, 11));
     const now = 1_700_000_000_000;
     await db.batch([
@@ -701,7 +715,7 @@ describe("baseline migration parity", () => {
   it("freezes the latest legacy public speaker gallery without exposing ineligible profiles", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(18);
+    expect(migrations).toHaveLength(19);
     const backfill = speakerPublicationMigration(migrations);
     expect(backfill.queries).toHaveLength(1);
     expect(backfill.queries[0]).toContain("speaker_publication_backfill");
@@ -750,7 +764,7 @@ describe("baseline migration parity", () => {
   it("repairs duplicate current asset lineages before enforcing uniqueness", async () => {
     const migrations = testMigrations();
     const db = (env as TestEnv).MIGRATION_DB;
-    expect(migrations).toHaveLength(18);
+    expect(migrations).toHaveLength(19);
     const lineageMigration = migrations.find(({ name }) => name.startsWith("0012_groovy_epoch"));
     if (!lineageMigration) throw new Error("Asset-lineage migration is unavailable");
     await applyOneByOne(db, migrations.filter((migration) => migration !== lineageMigration));

@@ -895,7 +895,7 @@ export const listAgenda = (
       if (confirmedWorkspaceVersion !== workspaceVersion) continue;
       return {
         eventId: event.id,
-        eventName: event.name,
+        eventName: event.publicName ?? event.name,
         eventSlug: event.slug,
         timezone: event.timezone,
         view: input.view,
@@ -2201,7 +2201,7 @@ export const publishAgenda = (
     );
     const published = yield* decodePublishedAgenda({
       eventId: event.id,
-      eventName: event.name,
+      eventName: event.publicName ?? event.name,
       eventSlug: event.slug,
       timezone: event.timezone,
       location: event.location,

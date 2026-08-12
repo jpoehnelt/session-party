@@ -37,6 +37,7 @@ describe("client route discovery", () => {
       "/e/:eventSlug/publication": "wide",
       "/e/:eventSlug/exports": "compact",
       "/e/:eventSlug/integrations": "wide",
+      "/e/:eventSlug/appearance": "compact",
       "/e/:eventSlug/settings": "compact",
     });
   });

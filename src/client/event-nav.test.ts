@@ -34,6 +34,7 @@ describe("availableEventNavItems", () => {
       "/e/:eventSlug/publication",
       "/e/:eventSlug/exports",
       "/e/:eventSlug/integrations",
+      "/e/:eventSlug/appearance",
       "/e/:eventSlug/settings",
     ];
 
@@ -52,6 +53,7 @@ describe("availableEventNavItems", () => {
       "Publication",
       "Exports",
       "Integrations",
+      "Appearance",
       "Settings",
     ]);
     expect(availableEventNavItems(routes, "reviewer").map(({ label }) => label)).toEqual([

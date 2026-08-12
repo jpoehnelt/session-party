@@ -31,10 +31,10 @@ export function Sheet({ open, onClose, title, id, children, footer, size = "md" 
             SIZES[size],
           )}
         >
-          <header className="flex shrink-0 items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-4 text-on-accent">
-            <Dialog.Title className="text-sm font-black uppercase tracking-[0.1em] text-on-accent">{title}</Dialog.Title>
+          <header className="flex shrink-0 items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-4 text-on-ink">
+            <Dialog.Title className="text-sm font-black uppercase tracking-[0.1em] text-on-ink">{title}</Dialog.Title>
             <Dialog.Close asChild>
-              <IconButton aria-label="Close" size="sm" className="-mr-1.5 min-h-11 min-w-11 text-on-accent hover:bg-white/10 hover:text-on-accent">
+              <IconButton aria-label="Close" size="sm" className="-mr-1.5 min-h-11 min-w-11 text-on-ink hover:bg-white/10 hover:text-on-ink">
                 <XIcon />
               </IconButton>
             </Dialog.Close>

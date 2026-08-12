@@ -3,6 +3,26 @@ import { expect, type Page } from "@playwright/test";
 const FROZEN_NOW = Date.parse("2026-08-09T18:00:00.000Z");
 
 export async function installDeterministicBrowser(page: Page): Promise<void> {
+  await page.route("**/api/v1/brand", async (route) => {
+    if (route.request().method() !== "GET" || new URL(route.request().url()).pathname !== "/api/v1/brand") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        configured: true,
+        name: "Session Party",
+        logoAssetId: null,
+        faviconAssetId: null,
+        primaryColor: "#896aff",
+        font: "inter",
+        appearance: "system",
+        radius: "square",
+        version: 1,
+      }),
+    });
+  });
   await page.addInitScript((now) => {
     const NativeDate = Date;
     class FrozenDate extends NativeDate {
@@ -34,6 +54,12 @@ export async function gotoVisualTarget(page: Page, path: string): Promise<void> 
   });
 
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
+  await page.waitForFunction(
+    () => ![...document.querySelectorAll('[role="status"]')]
+      .some((element) => element.textContent?.includes("Loading page…")),
+    undefined,
+    { timeout: 8_000 },
+  );
   await page
     .waitForFunction(() => !document.querySelector('[aria-busy="true"]'), undefined, {
       timeout: 8_000,

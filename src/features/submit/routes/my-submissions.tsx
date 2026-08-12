@@ -311,7 +311,7 @@ export default function MySubmissionsPage({ initialData }: MySubmissionsPageProp
           ))}
         </section>
 
-        <p className="mt-10 border-2 border-line-strong bg-ink px-4 py-4 text-sm font-semibold text-on-accent shadow-[5px_5px_0_#7857ff]">
+        <p className="mt-10 border-2 border-line-strong bg-ink px-4 py-4 text-sm font-semibold text-on-ink shadow-[5px_5px_0_#7857ff]">
           Want to submit another proposal? <Link className="font-black text-production-lime underline decoration-2 underline-offset-4" to={`/event/${data.event.slug}/sessions`}>Visit the event program</Link>.
         </p>
         <Toaster />

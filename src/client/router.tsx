@@ -14,6 +14,14 @@ import {
   synchronizeAuthenticatedPrincipal,
 } from "./api";
 import LoginPage from "./auth";
+import {
+  applyBrandTheme,
+  applyEventBrand,
+  brandInitials,
+  brandAssetUrl,
+  fetchEventBrand,
+  useBrand,
+} from "@/features/branding/components/client";
 import { availableEventNavItems, type EventNavRole } from "./event-nav";
 import {
   discoveredClientRouteModules,
@@ -42,6 +50,7 @@ const registeredEventNavItems = availableEventNavItems(
 
 function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) {
   const { eventSlug } = useParams();
+  const { brand: installationBrand } = useBrand();
   const [memberRole, setMemberRole] = useState<EventNavRole>(undefined);
   useEffect(() => {
     if (!eventSlug) {
@@ -64,26 +73,33 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
       ? []
       : availableEventNavItems(registeredEventNavItems.map(({ path }) => path), memberRole);
   const navClassName = mobile
-    ? "flex h-full flex-col gap-5 bg-ink p-1 text-on-accent"
+    ? "flex h-full flex-col gap-5 bg-ink p-1 text-on-ink"
     : "flex h-full flex-col gap-6 p-5";
 
   const brand = (
     <span className="flex items-center gap-3">
-      <span className="grid size-9 place-items-center border-2 border-on-accent bg-production-lime text-[10px] font-black tracking-[-0.04em] text-ink shadow-[3px_3px_0_#7857ff]">
-        SP
-      </span>
-      <span className="font-black tracking-[-0.035em]">Session Party</span>
+      {installationBrand.logoAssetId ? (
+        <img className="max-h-10 max-w-28 object-contain" src={brandAssetUrl(installationBrand.logoAssetId)!} alt="" />
+      ) : (
+        <span className="grid size-9 place-items-center rounded-control border-2 border-on-accent bg-accent text-[10px] font-black tracking-[-0.04em] text-on-accent shadow-button">
+          {brandInitials(installationBrand.name)}
+        </span>
+      )}
+      <span className="min-w-0 truncate font-black tracking-[-0.035em]">{installationBrand.name}</span>
     </span>
   );
 
   if (!eventSlug) {
     return (
       <nav className={navClassName} aria-label="Main navigation">
-        <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-accent`} to="/" onClick={onNavigate}>
+        <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-ink`} to="/" onClick={onNavigate}>
           {brand}
         </Link>
-        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} border-2 border-on-accent bg-production-lime px-3 py-2.5 text-xs font-black uppercase tracking-[0.1em] text-ink shadow-[4px_4px_0_#7857ff]`} to="/events?choose=1" onClick={onNavigate}>
+        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} border-2 border-on-accent bg-accent px-3 py-2.5 text-xs font-black uppercase tracking-[0.1em] text-on-accent shadow-button`} to="/events?choose=1" onClick={onNavigate}>
           Your home →
+        </Link>
+        <Link className={`${mobile ? "flex min-h-11 items-center px-3" : ""} px-3 py-2 text-[10px] font-black uppercase tracking-[0.1em] text-white/65 hover:text-white`} to="/setup" onClick={onNavigate}>
+          Installation appearance
         </Link>
       </nav>
     );
@@ -92,7 +108,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
   const eventPath = `/e/${eventSlug}`;
   return (
     <nav className={navClassName} aria-label="Event navigation">
-      <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-accent`} to="/" onClick={onNavigate}>
+      <Link className={`${mobile ? "flex min-h-12 items-center px-3" : ""} text-lg text-on-ink`} to="/" onClick={onNavigate}>
         {brand}
       </Link>
       <Link
@@ -109,7 +125,7 @@ function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?
             <NavLink
               className={({ isActive }) =>
                 `${mobile ? "flex min-h-11 items-center" : "block"} border-2 px-3 py-2.5 text-[11px] font-black uppercase tracking-[0.08em] transition-transform ${
-                  isActive ? "border-on-accent bg-production-lime text-ink shadow-[4px_4px_0_#7857ff]" : "border-transparent text-white/65 hover:border-white/40 hover:bg-white/10 hover:text-white"
+                  isActive ? "border-on-accent bg-accent text-on-accent shadow-button" : "border-transparent text-white/65 hover:border-white/40 hover:bg-white/10 hover:text-white"
                 }`
               }
               end={!segment}
@@ -268,7 +284,44 @@ function NotFound() {
 
 function RouteCoordinator({ children }: { children: ReactNode }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { brand } = useBrand();
   const previousPath = useRef(location.pathname);
+  const [surfaceBrandName, setSurfaceBrandName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const match = location.pathname.match(/^\/(?:event|embed|submit)\/([^/]+)/)
+      ?? location.pathname.match(/^\/e\/([^/]+)\/portal(?:\/|$)/);
+    if (!match?.[1]) {
+      setSurfaceBrandName(null);
+      applyBrandTheme(brand);
+      return;
+    }
+    let current = true;
+    void fetchEventBrand(decodeURIComponent(match[1]))
+      .then((eventBrand) => {
+        if (!current) return;
+        setSurfaceBrandName(eventBrand.publicName);
+        applyEventBrand(eventBrand);
+      })
+      .catch(() => {
+        if (current) setSurfaceBrandName(null);
+      });
+    return () => {
+      current = false;
+      applyBrandTheme(brand);
+    };
+  }, [brand, location.pathname]);
+
+  useEffect(() => {
+    if (brand.configured || location.pathname === "/setup" || location.pathname === "/login") return;
+    if (!location.pathname.startsWith("/events") && !location.pathname.startsWith("/e/")) return;
+    let current = true;
+    void apiFetch<AuthMeResponse>("/api/v1/auth/me")
+      .then(() => { if (current) navigate("/setup", { replace: true }); })
+      .catch(() => undefined);
+    return () => { current = false; };
+  }, [brand.configured, location.pathname, navigate]);
 
   useEffect(() => {
     const isNavigation = previousPath.current !== location.pathname;
@@ -283,8 +336,9 @@ function RouteCoordinator({ children }: { children: ReactNode }) {
         main.tabIndex = -1;
       }
       const name = heading.innerText.replace(/\s+/g, " ").trim();
-      if (location.pathname === "/") document.title = "Session Party — Your whole program, ready on cue.";
-      else if (name) document.title = `${name} — Session Party`;
+      const resolvedBrandName = surfaceBrandName ?? brand.name;
+      if (location.pathname === "/") document.title = `${resolvedBrandName} — Your whole program, ready on cue.`;
+      else if (name) document.title = `${name} — ${resolvedBrandName}`;
       const canonicalUrl = `${window.location.origin}${location.pathname}`;
       for (const selector of ['meta[property="og:title"]', 'meta[name="twitter:title"]']) {
         document.querySelector<HTMLMetaElement>(selector)?.setAttribute("content", document.title);
@@ -315,7 +369,7 @@ function RouteCoordinator({ children }: { children: ReactNode }) {
       observer.disconnect();
       window.clearTimeout(timeout);
     };
-  }, [location.pathname]);
+  }, [brand.name, location.pathname, surfaceBrandName]);
 
   return <>
     <a className="fixed left-3 top-3 z-[100] -translate-y-24 border-2 border-line-strong bg-production-lime px-4 py-3 font-black text-ink shadow-card transition-transform focus:translate-y-0" href="#main-content">Skip to main content</a>

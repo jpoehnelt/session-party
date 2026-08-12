@@ -54,6 +54,7 @@ export type RuntimeServices =
   | Authorizer
   | PublicSubmissionAbuse
   | PublicSubmissionRequest;
+type PublicRuntimeServices = Exclude<RuntimeServices, CurrentUser>;
 
 export const decode = <A, I>(schema: Schema.Schema<A, I, never>, input: unknown) =>
   Schema.decodeUnknown(schema)(input).pipe(
@@ -69,6 +70,13 @@ export const runEffect = async <A>(
   effect: Effect.Effect<A, AppError, RuntimeServices>,
 ): Promise<Exit.Exit<A, AppError>> =>
   Effect.runPromiseExit(effect.pipe(Effect.provide(layerFor(env, user))));
+
+/** Public non-JSON adapters (for example approved asset streaming) still cross the sole Effect runtime boundary here. */
+export const runPublicEffect = async <A>(
+  env: Env,
+  effect: Effect.Effect<A, AppError, PublicRuntimeServices>,
+): Promise<Exit.Exit<A, AppError>> =>
+  Effect.runPromiseExit(effect.pipe(Effect.provide(AppLayer(env))));
 
 const runOperationEffect = async (
   env: Env,

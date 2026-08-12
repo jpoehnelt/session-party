@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { Schema } from "effect";
 import { ApiError, apiFetch } from "@/client/api";
 import { getMyProfile } from "@/features/profiles/routes/api";
+import { useBrand } from "@/features/branding/components/client";
 import {
   Badge,
   Button,
@@ -273,7 +274,7 @@ export function EventsWorkspace({ access, now = new Date() }: { access: readonly
             </div>
 
             {featuredOrganizer ? (
-              <aside className="border-t-2 border-line-strong bg-ink p-6 text-on-accent lg:border-l-2 lg:border-t-0 lg:p-8">
+              <aside className="border-t-2 border-line-strong bg-ink p-6 text-on-ink lg:border-l-2 lg:border-t-0 lg:p-8">
                 <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/55">Event setup</p>
                 <div className="mt-3 flex items-end justify-between gap-4">
                   <p className="text-4xl font-black tracking-[-0.05em]">{setup.complete}/5</p>
@@ -300,7 +301,7 @@ export function EventsWorkspace({ access, now = new Date() }: { access: readonly
                 </div>
               </aside>
             ) : (
-              <aside className="border-t-2 border-line-strong bg-ink p-6 text-on-accent lg:border-l-2 lg:border-t-0 lg:p-8">
+              <aside className="border-t-2 border-line-strong bg-ink p-6 text-on-ink lg:border-l-2 lg:border-t-0 lg:p-8">
                 <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/55">Your event access</p>
                 <p className="mt-4 text-3xl font-black tracking-[-0.05em]">Choose your workspace.</p>
                 <p className="mt-3 text-sm font-semibold leading-6 text-white/65">Each destination checks this account’s current event relationship.</p>
@@ -451,6 +452,7 @@ export function fetchEventAccess(): Promise<readonly EventAccessSummary[]> {
 }
 
 export default function EventsHome() {
+  const { brand } = useBrand();
   const [access, setAccess] = useState<readonly EventAccessSummary[] | null>(null);
   const [hasReusableProfile, setHasReusableProfile] = useState<boolean | null>(null);
   const { search } = useLocation();
@@ -516,7 +518,7 @@ export default function EventsHome() {
   return (
     <>
       <PageHeader
-        title="Your Session Party"
+        title={`Your ${brand.name}`}
         description="Continue as a speaker, organizer, or reviewer. Your account only shows workspaces it can access."
       />
       {loadError === "unauthenticated" ? (

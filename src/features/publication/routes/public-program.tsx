@@ -51,7 +51,7 @@ export default function PublicProgramRoute() {
     return (
       <main className="production-grid min-h-dvh bg-canvas px-4 py-6 text-ink sm:px-6 sm:py-8 lg:px-8">
         <div className="mx-auto max-w-7xl space-y-7">
-          <header className="flex flex-wrap items-center justify-between gap-4 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent shadow-[5px_5px_0_#7857ff]">
+          <header className="flex flex-wrap items-center justify-between gap-4 border-2 border-line-strong bg-ink px-4 py-3 text-on-ink shadow-[5px_5px_0_#7857ff]">
             <div className="flex items-center gap-3">
               <span className="grid size-9 place-items-center border-2 border-on-accent bg-production-lime text-[10px] font-black tracking-[-0.04em] text-ink">SP</span>
               <h1 className="text-sm font-black tracking-[-0.025em]">Loading published program</h1>
@@ -70,7 +70,7 @@ export default function PublicProgramRoute() {
     return (
       <main className="production-grid min-h-dvh bg-canvas px-4 py-6 text-ink sm:px-6 sm:py-8 lg:px-8">
         <div className="mx-auto max-w-4xl">
-          <header className="mb-7 flex flex-wrap items-center justify-between gap-4 border-2 border-line-strong bg-ink px-4 py-3 text-on-accent shadow-[5px_5px_0_#7857ff]">
+          <header className="mb-7 flex flex-wrap items-center justify-between gap-4 border-2 border-line-strong bg-ink px-4 py-3 text-on-ink shadow-[5px_5px_0_#7857ff]">
             <div className="flex items-center gap-3">
               <span className="grid size-9 place-items-center border-2 border-on-accent bg-production-lime text-[10px] font-black tracking-[-0.04em] text-ink">SP</span>
               <p className="text-sm font-black tracking-[-0.025em]">Session Party · Public program</p>

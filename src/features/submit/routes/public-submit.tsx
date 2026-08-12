@@ -22,6 +22,7 @@ import {
   type PublicSubmissionForm as PublicSubmissionFormValue,
 } from "../schema";
 import { TURNSTILE_DEMO_DISABLED_SITE_KEY } from "../abuse";
+import { brandAssetUrl, brandInitials, useBrand, useEventBrand } from "@/features/branding/components/client";
 
 export const path = "/submit/:eventSlug/:formId";
 export const layout = "bare" as const;
@@ -287,21 +288,25 @@ export interface PublicSubmitPageProps {
 }
 
 function PublicSubmitShell({ children }: { readonly children: ReactNode }) {
+  const { eventSlug } = useParams();
+  const { brand: installationBrand } = useBrand();
+  const eventBrand = useEventBrand(eventSlug);
+  const brandName = eventBrand?.publicName ?? installationBrand.name;
+  const logoAssetId = eventBrand?.effectiveLogoAssetId ?? installationBrand.logoAssetId;
   return (
     <div className="production-grid min-h-dvh bg-canvas text-ink">
       <header className="border-b-2 border-line-strong bg-canvas">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-          <Link className="inline-flex items-center gap-3 no-underline" to="/" aria-label="Session Party home">
-            <span className="grid size-9 place-items-center border-2 border-line-strong bg-production-lime text-[11px] font-black tracking-[-0.04em] shadow-[3px_3px_0_#171714]">
-              SP
-            </span>
-            <span className="text-sm font-black tracking-[-0.03em]">Session Party</span>
+          <Link className="inline-flex items-center gap-3 no-underline" to="/" aria-label={`${brandName} home`}>
+            {logoAssetId ? <img className="max-h-10 max-w-36 object-contain" src={brandAssetUrl(logoAssetId)!} alt="" /> : <span className="grid size-9 place-items-center rounded-control border-2 border-line-strong bg-accent text-[11px] font-black tracking-[-0.04em] text-on-accent shadow-button">{brandInitials(brandName)}</span>}
+            <span className="text-sm font-black tracking-[-0.03em]">{brandName}</span>
           </Link>
           <span className="border-2 border-line-strong bg-surface px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] shadow-[3px_3px_0_#171714]">
             Proposal desk
           </span>
         </div>
       </header>
+      {eventBrand && !eventBrand.inheritInstallationBrand && eventBrand.bannerAssetId ? <img className="mx-auto mt-6 aspect-[5/1] w-[min(72rem,calc(100%-2rem))] rounded-card border-2 border-line-strong object-cover shadow-card" src={brandAssetUrl(eventBrand.bannerAssetId)!} alt="" /> : null}
       {children}
     </div>
   );
@@ -543,7 +548,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
       <PublicSubmitShell>
         <main className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-20 lg:px-8">
           <section className="border-[3px] border-line-strong bg-surface shadow-[10px_10px_0_#171714]" aria-labelledby="submission-received-title">
-            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
+            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-ink">
               <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/65">Intake confirmation</span>
               <span className="size-3 bg-production-lime" aria-hidden="true" />
             </div>
@@ -596,7 +601,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
                 ) : null}
               </section>
               <Link
-                className="mt-7 inline-flex min-h-12 items-center justify-center border-2 border-line-strong bg-ink px-5 text-xs font-black uppercase tracking-[0.1em] text-on-accent shadow-[5px_5px_0_#7857ff] transition-transform hover:-translate-y-0.5"
+                className="mt-7 inline-flex min-h-12 items-center justify-center border-2 border-line-strong bg-ink px-5 text-xs font-black uppercase tracking-[0.1em] text-on-ink shadow-[5px_5px_0_#7857ff] transition-transform hover:-translate-y-0.5"
                 to={`/portal/events/${form.event.slug}/submissions`}
               >
                 Manage your proposals →
@@ -665,7 +670,7 @@ export default function PublicSubmitPage({ initialForm, initialSuccess = null }:
             </Alert>
           )}
           <form className="border-[3px] border-line-strong bg-surface shadow-[10px_10px_0_#171714]" noValidate onSubmit={handleSubmit}>
-            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-accent">
+            <div className="flex items-center justify-between gap-4 border-b-2 border-line-strong bg-ink px-5 py-3 text-on-ink">
               <div className="flex items-center gap-2">
                 <span className={`size-2.5 ${accepting ? "bg-production-lime" : "bg-production-yellow"}`} aria-hidden="true" />
                 <span className="text-[10px] font-black uppercase tracking-[0.16em]">Proposal intake</span>

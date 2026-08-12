@@ -3,6 +3,7 @@ import { useLocation } from "react-router";
 import { Button, Card, Input } from "@/ui";
 import { apiFetch } from "./api";
 import { validReturnTo } from "./return-to";
+import { brandAssetUrl, brandInitials, useBrand } from "@/features/branding/components/client";
 
 const demoPersonas = [
   { persona: "organizer", name: "Jordan Alvarez", email: "sbek-organizer@example.com" },
@@ -43,6 +44,7 @@ export async function requestDemoLogin(
 }
 
 export default function LoginPage() {
+  const { brand } = useBrand();
   const { search } = useLocation();
   const requestedReturnTo = validReturnTo(search);
   const returnTo = requestedReturnTo ?? "/events";
@@ -87,11 +89,11 @@ export default function LoginPage() {
     <main className="production-grid flex min-h-screen items-center justify-center bg-canvas px-6 py-12">
       <Card className="w-full max-w-lg">
         <div className="mb-6 flex items-center gap-3 border-b-2 border-line-strong pb-5">
-          <span className="grid size-11 place-items-center border-2 border-line-strong bg-production-lime text-xs font-black shadow-[3px_3px_0_#7857ff]">SP</span>
-          <p className="text-sm font-black tracking-[-0.02em] text-ink">Session Party</p>
+          {brand.logoAssetId ? <img className="max-h-12 max-w-40 object-contain" src={brandAssetUrl(brand.logoAssetId)!} alt="" /> : <span className="grid size-11 place-items-center rounded-control border-2 border-line-strong bg-accent text-xs font-black text-on-accent shadow-button">{brandInitials(brand.name)}</span>}
+          <p className="text-sm font-black tracking-[-0.02em] text-ink">{brand.name}</p>
         </div>
         <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Account access</p>
-        <h1 className="mt-2 text-4xl font-black tracking-[-0.055em]">Back to Session Party.</h1>
+        <h1 className="mt-2 text-4xl font-black tracking-[-0.055em]">Back to {brand.name}.</h1>
         <section className="mt-6 border-2 border-line-strong bg-production-sky p-4" aria-labelledby="demo-access-heading">
           <p className="text-[10px] font-black uppercase tracking-[0.16em] text-accent-deep">Hackathon demo access</p>
           <h2 id="demo-access-heading" className="mt-1 text-xl font-black tracking-[-0.035em]">Choose a role</h2>

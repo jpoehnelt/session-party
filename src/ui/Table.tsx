@@ -20,12 +20,12 @@ export function Table<T>({ columns, rows, empty, rowKey }: TableProps<T>) {
     <div className="overflow-x-auto rounded-card border-2 border-line-strong bg-surface shadow-card">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b-2 border-line-strong bg-ink text-on-accent">
+          <tr className="border-b-2 border-line-strong bg-ink text-on-ink">
             {columns.map((column) => (
               <th
                 key={column.key}
                 scope="col"
-                className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-[0.12em] text-on-accent/70"
+                className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-[0.12em] text-on-ink/70"
               >
                 {column.header}
               </th>
