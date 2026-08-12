@@ -7,17 +7,21 @@ import { loginPathForLocation } from "@/client/return-to";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger, Badge, Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Table, Textarea, Toaster, toast } from "@/ui";
 import {
   AddEventMemberOutput,
+  ApplyTeamCopyOutput,
   CreateEventApiKeyOutput,
   EventApiKey,
   EventAccess,
   EventMember,
   EventOutput,
   RemoveEventMemberOutput,
+  TeamCopyPreview,
   UpdateEventInput,
   UpdateEventMemberOutput,
   type EventMember as EventMemberRecord,
+  type EventAccess as EventAccessRecord,
   type EventApiKey as EventApiKeyRecord,
   type EventOutput as EventMetadata,
+  type TeamCopyPreview as TeamCopyPreviewRecord,
   type UpdateEventInput as EventPatch,
 } from "../schema";
 
@@ -68,6 +72,33 @@ export async function fetchCurrentUserId(): Promise<string> {
 async function fetchCurrentStaffAccess(eventId: string): Promise<boolean> {
   const access = await apiFetch("/api/v1/me/events", { schema: Schema.Array(EventAccess) });
   return access.some((item) => item.event.id === eventId && item.staff);
+}
+
+export function eligibleTeamCopySources(
+  access: readonly EventAccessRecord[],
+  targetEventId: string,
+): readonly EventAccessRecord[] {
+  return access.filter((item) => item.event.id !== targetEventId && (
+    item.staff || item.memberRole === "owner" || item.memberRole === "admin"
+  ));
+}
+
+export async function fetchTeamCopySources(targetEventId: string): Promise<readonly EventAccessRecord[]> {
+  const access = await apiFetch("/api/v1/me/events", { schema: Schema.Array(EventAccess) });
+  return eligibleTeamCopySources(access, targetEventId);
+}
+
+export function fetchTeamCopyPreview(eventId: string, sourceEventId: string): Promise<TeamCopyPreviewRecord> {
+  const query = new URLSearchParams({ sourceEventId });
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/team-copy/preview?${query}`, { schema: TeamCopyPreview });
+}
+
+export function applyEventTeamCopy(eventId: string, sourceEventId: string, idempotencyKey: string) {
+  return apiFetch(`/api/v1/events/${encodeURIComponent(eventId)}/team-copy`, {
+    method: "POST",
+    body: { sourceEventId, idempotencyKey },
+    schema: ApplyTeamCopyOutput,
+  });
 }
 
 export function canManageMember(
@@ -617,6 +648,12 @@ export function EventSettingsForm({
   const [memberSaving, setMemberSaving] = useState(false);
   const [pendingRoles, setPendingRoles] = useState<Record<string, EventMemberRecord["role"]>>({});
   const [memberMutationId, setMemberMutationId] = useState<string | null>(null);
+  const [teamCopySources, setTeamCopySources] = useState<readonly EventAccessRecord[] | null>(null);
+  const [teamCopySourceId, setTeamCopySourceId] = useState("");
+  const [teamCopyPreview, setTeamCopyPreview] = useState<TeamCopyPreviewRecord | null>(null);
+  const [teamCopyKey, setTeamCopyKey] = useState<string | null>(null);
+  const [teamCopyError, setTeamCopyError] = useState<string | null>(null);
+  const [teamCopyLoading, setTeamCopyLoading] = useState(false);
 
   const refreshMembers = () => {
     setMembers(null);
@@ -634,6 +671,20 @@ export function EventSettingsForm({
   };
 
   useEffect(() => { refreshMembers(); }, [event.id]);
+
+  useEffect(() => {
+    setTeamCopySources(null);
+    setTeamCopySourceId("");
+    setTeamCopyPreview(null);
+    setTeamCopyKey(null);
+    void fetchTeamCopySources(event.id).then((sources) => {
+      setTeamCopySources(sources);
+      setTeamCopySourceId(sources[0]?.event.id ?? "");
+    }).catch((error) => {
+      setTeamCopySources([]);
+      setTeamCopyError(error instanceof Error ? error.message : "Could not load source events");
+    });
+  }, [event.id]);
 
   const setValue = (field: keyof EventFormValues, value: string) => {
     setValues((current) => ({ ...current, [field]: value }));
@@ -722,6 +773,40 @@ export function EventSettingsForm({
       refreshMembers();
     } finally {
       setMemberMutationId(null);
+    }
+  };
+
+  const handleTeamCopyPreview = async () => {
+    if (!teamCopySourceId) return;
+    setTeamCopyError(null);
+    setTeamCopyLoading(true);
+    try {
+      setTeamCopyPreview(await fetchTeamCopyPreview(event.id, teamCopySourceId));
+      setTeamCopyKey(idempotencyKey());
+    } catch (error) {
+      setTeamCopyPreview(null);
+      setTeamCopyKey(null);
+      setTeamCopyError(error instanceof Error ? error.message : "Could not preview the team copy");
+    } finally {
+      setTeamCopyLoading(false);
+    }
+  };
+
+  const handleTeamCopyApply = async () => {
+    if (!teamCopyPreview || !teamCopyKey) return;
+    setTeamCopyError(null);
+    setTeamCopyLoading(true);
+    try {
+      const result = await applyEventTeamCopy(event.id, teamCopyPreview.sourceEventId, teamCopyKey);
+      toast(`Copied ${result.createdCount} team member${result.createdCount === 1 ? "" : "s"}; skipped ${result.skippedCount}.`, { tone: "success" });
+      refreshMembers();
+      setTeamCopyPreview(await fetchTeamCopyPreview(event.id, teamCopyPreview.sourceEventId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not copy the event team";
+      setTeamCopyError(message);
+      toast(message, { tone: "danger" });
+    } finally {
+      setTeamCopyLoading(false);
     }
   };
 
@@ -837,6 +922,57 @@ export function EventSettingsForm({
             rowKey={(member) => member.id}
             empty="No additional members yet."
           />
+        </div>
+      )}
+    </Card>
+    <Card className="[&>header]:bg-surface-muted [&>header]:text-ink [&>header_h3]:text-ink" title="Copy team from another event">
+      <p className="mb-4 text-sm text-ink-secondary">Preview the exact owner, admin, and reviewer memberships that will be added. Existing members are skipped without changing their role.</p>
+      {teamCopySources === null ? <Skeleton className="h-24" /> : teamCopySources.length === 0 ? (
+        <EmptyState title="No source event available" description="You need owner or admin authority over another event before its team can be copied." />
+      ) : (
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+            <Select label="Source event" value={teamCopySourceId} onChange={(change) => {
+              setTeamCopySourceId(change.target.value);
+              setTeamCopyPreview(null);
+              setTeamCopyKey(null);
+            }}>
+              {teamCopySources.map((source) => <option key={source.event.id} value={source.event.id}>{source.event.name}</option>)}
+            </Select>
+            <Button type="button" variant="secondary" loading={teamCopyLoading} onClick={() => void handleTeamCopyPreview()}>Preview team</Button>
+          </div>
+          {teamCopyError ? <p role="alert" className="text-sm text-danger">{teamCopyError}</p> : null}
+          {teamCopyPreview ? (
+            <div className="space-y-4 rounded-control border-2 border-line-strong bg-surface-muted p-4">
+              <div className="flex flex-wrap gap-2">
+                <Badge>{teamCopyPreview.create.length} to create</Badge>
+                <Badge>{teamCopyPreview.skip.length} existing</Badge>
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-ink">Will be created</h4>
+                {teamCopyPreview.create.length === 0 ? <p className="mt-1 text-sm text-ink-secondary">Every source member already belongs to this event.</p> : (
+                  <ul className="mt-2 space-y-1 text-sm text-ink">
+                    {teamCopyPreview.create.map((member) => <li key={member.sourceMemberId}>{member.name ?? member.email} · {member.role} <span className="text-ink-faint">({member.email})</span></li>)}
+                  </ul>
+                )}
+              </div>
+              {teamCopyPreview.skip.length > 0 ? (
+                <div>
+                  <h4 className="text-sm font-bold text-ink">Will be skipped</h4>
+                  <ul className="mt-2 space-y-1 text-sm text-ink-secondary">
+                    {teamCopyPreview.skip.map((member) => <li key={member.sourceMemberId}>{member.name ?? member.email} · already {member.existingRole}</li>)}
+                  </ul>
+                </div>
+              ) : null}
+              <AlertDialog>
+                <AlertDialogTrigger asChild><Button type="button" disabled={teamCopyPreview.create.length === 0} loading={teamCopyLoading}>Copy {teamCopyPreview.create.length} members</Button></AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader><AlertDialogTitle>Copy team from {teamCopyPreview.sourceEventName}?</AlertDialogTitle><AlertDialogDescription>This creates {teamCopyPreview.create.length} memberships in {teamCopyPreview.targetEventName}. It does not remove anyone or change existing roles.</AlertDialogDescription></AlertDialogHeader>
+                  <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void handleTeamCopyApply()}>Copy team</AlertDialogAction></AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          ) : null}
         </div>
       )}
     </Card>

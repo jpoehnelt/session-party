@@ -40,6 +40,9 @@ import {
   AddEventMemberOutput,
   type AddEventMemberInput,
   type AddEventMemberOutput as AddEventMemberOutputType,
+  ApplyTeamCopyOutput,
+  type ApplyTeamCopyInput,
+  type ApplyTeamCopyOutput as ApplyTeamCopyOutputType,
   CreateReviewerInvitationOutput,
   type CreateReviewerInvitationInput,
   type CreateReviewerInvitationOutput as CreateReviewerInvitationOutputType,
@@ -51,11 +54,14 @@ import {
   type ListEventApiKeysInput,
   type ListEventMembersInput,
   type ListReviewerInvitationsInput,
+  type PreviewTeamCopyInput,
   RemoveEventMemberOutput,
   type RemoveEventMemberInput,
   type RemoveEventMemberOutput as RemoveEventMemberOutputType,
   type RevokeEventApiKeyInput,
   type ReviewerInvitation as ReviewerInvitationType,
+  type TeamCopyMembership as TeamCopyMembershipType,
+  type TeamCopyPreview as TeamCopyPreviewType,
   UpdateEventMemberOutput,
   type UpdateEventMemberInput,
   type UpdateEventMemberOutput as UpdateEventMemberOutputType,
@@ -854,6 +860,202 @@ export const removeEventMember = (
     ]));
     return output;
   });
+
+const loadTeamCopyPlan = (
+  input: PreviewTeamCopyInput,
+): Effect.Effect<{
+  readonly actor: MemberActor;
+  readonly preview: TeamCopyPreviewType;
+}, AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    if (input.sourceEventId === input.eventId) {
+      return yield* Effect.fail(new Validation({ message: "Choose a different source event" }));
+    }
+    const target = yield* findEvent(input.eventId);
+    const actor = yield* requireMemberManager(target.id);
+    yield* requireMemberManager(input.sourceEventId);
+    const source = yield* findEvent(input.sourceEventId);
+    const { db } = yield* Db;
+    const [sourceRows, targetRows] = yield* Effect.all([
+      database(() => db
+        .select({ membership: eventMembers, user: { email: users.email, name: users.name } })
+        .from(eventMembers)
+        .innerJoin(users, eq(users.id, eventMembers.userId))
+        .where(eq(eventMembers.eventId, source.id))
+        .orderBy(asc(users.email), asc(eventMembers.id))),
+      database(() => db
+        .select({ userId: eventMembers.userId, role: eventMembers.role })
+        .from(eventMembers)
+        .where(eq(eventMembers.eventId, target.id))),
+    ]);
+    const targetRoles = new Map(targetRows.map((row) => [row.userId, row.role]));
+    const memberships: readonly TeamCopyMembershipType[] = sourceRows.map((row) => ({
+      sourceMemberId: row.membership.id,
+      userId: row.membership.userId,
+      email: normalizedEmail(row.user.email),
+      name: row.user.name,
+      role: row.membership.role,
+      existingRole: targetRoles.get(row.membership.userId) ?? null,
+    }));
+    return {
+      actor,
+      preview: {
+        sourceEventId: source.id,
+        sourceEventName: source.name,
+        targetEventId: target.id,
+        targetEventName: target.name,
+        create: memberships.filter((membership) => membership.existingRole === null),
+        skip: memberships.filter((membership) => membership.existingRole !== null),
+      },
+    };
+  });
+
+export const previewTeamCopy = (
+  input: PreviewTeamCopyInput,
+): Effect.Effect<TeamCopyPreviewType, AppError, Authorizer | CurrentUser | Db> =>
+  loadTeamCopyPlan(input).pipe(Effect.map(({ preview }) => preview));
+
+const applyTeamCopyAttempt = (
+  input: ApplyTeamCopyInput,
+  retryOnConcurrentChange: boolean,
+): Effect.Effect<ApplyTeamCopyOutputType, AppError, Authorizer | CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const { actor, preview } = yield* loadTeamCopyPlan(input);
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      sourceEventId: preview.sourceEventId,
+      targetEventId: preview.targetEventId,
+    }));
+    const prior = yield* replay(
+      preview.targetEventId,
+      "events.copyTeam",
+      actor.userId,
+      keyHash,
+      requestHash,
+      ApplyTeamCopyOutput,
+    );
+    if (prior) return { ...prior, idempotent: true };
+
+    const occurredAt = new Date();
+    const created = preview.create.map((candidate): EventMemberType => ({
+      id: commandId("member"),
+      userId: candidate.userId,
+      email: candidate.email,
+      name: candidate.name,
+      role: candidate.role,
+      version: 1,
+      createdAt: occurredAt,
+      updatedAt: occurredAt,
+    }));
+    const output: ApplyTeamCopyOutputType = {
+      sourceEventId: preview.sourceEventId,
+      targetEventId: preview.targetEventId,
+      created,
+      skipped: preview.skip,
+      createdCount: created.length,
+      skippedCount: preview.skip.length,
+      idempotent: false,
+    };
+    const recordId = commandId("idempotency");
+    const requestId = `event-team-copy:${recordId}`;
+    const { db } = yield* Db;
+    const statements = [
+      db.insert(idempotencyRecords).values({
+        id: recordId,
+        eventId: preview.targetEventId,
+        operationId: "events.copyTeam",
+        principalId: actor.userId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 200,
+        responseBody: output,
+        expiresAt: new Date(occurredAt.getTime() + 86_400_000),
+        completedAt: occurredAt,
+        createdAt: occurredAt,
+      }),
+      ...created.flatMap((member) => [
+        db.insert(eventMembers).values({
+          id: member.id,
+          eventId: preview.targetEventId,
+          userId: member.userId,
+          role: member.role,
+          version: member.version,
+          createdAt: occurredAt,
+          updatedAt: occurredAt,
+        }),
+        db.insert(domainChanges).values({
+          id: commandId("change"),
+          eventId: preview.targetEventId,
+          aggregateType: "eventMember",
+          aggregateId: member.id,
+          aggregateVersion: 1,
+          eventType: "events.member.added",
+          audiences: [{ kind: "admins" }],
+          payload: member,
+          actorUserId: actor.userId,
+          actorApiKeyId: null,
+          requestId,
+          idempotencyRecordId: recordId,
+          occurredAt,
+        }),
+        db.insert(auditLog).values({
+          id: commandId("audit"),
+          eventId: preview.targetEventId,
+          requestId,
+          actorUserId: actor.userId,
+          actorApiKeyId: null,
+          action: "events.copyTeam.member",
+          resourceType: "eventMember",
+          resourceId: member.id,
+          before: null,
+          after: member,
+          metadata: { sourceEventId: preview.sourceEventId, sourceMemberId: preview.create.find((candidate) => candidate.userId === member.userId)?.sourceMemberId, idempotencyRecordId: recordId },
+          occurredAt,
+        }),
+      ]),
+      db.insert(auditLog).values({
+        id: commandId("audit"),
+        eventId: preview.targetEventId,
+        requestId,
+        actorUserId: actor.userId,
+        actorApiKeyId: null,
+        action: "events.copyTeam",
+        resourceType: "event",
+        resourceId: preview.targetEventId,
+        before: null,
+        after: { createdCount: output.createdCount, skippedCount: output.skippedCount },
+        metadata: {
+          sourceEventId: preview.sourceEventId,
+          createdUserIds: created.map((member) => member.userId),
+          skippedUserIds: preview.skip.map((member) => member.userId),
+          idempotencyRecordId: recordId,
+        },
+        occurredAt,
+      }),
+    ];
+    const committed = yield* database(() => db.batch(statements as never)).pipe(Effect.either);
+    if (committed._tag === "Left") {
+      return yield* replay(
+        preview.targetEventId,
+        "events.copyTeam",
+        actor.userId,
+        keyHash,
+        requestHash,
+        ApplyTeamCopyOutput,
+      ).pipe(Effect.flatMap((stored) => stored
+        ? Effect.succeed({ ...stored, idempotent: true })
+        : retryOnConcurrentChange
+          ? applyTeamCopyAttempt(input, false)
+          : Effect.fail(committed.left)));
+    }
+    return output;
+  });
+
+export const applyTeamCopy = (
+  input: ApplyTeamCopyInput,
+): Effect.Effect<ApplyTeamCopyOutputType, AppError, Authorizer | CurrentUser | Db> =>
+  applyTeamCopyAttempt(input, true);
 
 type ReviewerInvitationRow = {
   readonly invitation: typeof reviewerInvitations.$inferSelect;

@@ -9,6 +9,7 @@ import EventSettingsPage, {
   buildEventPatch,
   canManageMember,
   createEventApiKey,
+  eligibleTeamCopySources,
   EventSettingsForm,
   fetchEventMetadata,
   fetchEventApiKeys,
@@ -18,7 +19,7 @@ import EventSettingsPage, {
   revokeEventApiKey,
   updateEventMetadata,
 } from "./event-settings";
-import type { EventApiKey, EventOutput, UpdateEventInput } from "../schema";
+import type { EventAccess, EventApiKey, EventOutput, UpdateEventInput } from "../schema";
 
 const eventPayload = {
   id: "event_123",
@@ -68,6 +69,25 @@ describe("event metadata settings route", () => {
     expect(canManageMember("admin", "reviewer")).toBe(true);
     expect(canManageMember("reviewer", "reviewer")).toBe(false);
     expect(canManageMember(null, "reviewer")).toBe(false);
+  });
+
+  it("offers only other events where the browser can manage both sides of a team copy", () => {
+    const access = (
+      id: string,
+      memberRole: EventAccess["memberRole"],
+      staff = false,
+    ): EventAccess => ({
+      event: { ...event, id, slug: id, name: id },
+      memberRole,
+      staff,
+      speakerPortal: false,
+    });
+    expect(eligibleTeamCopySources([
+      access(event.id, "owner"),
+      access("admin-source", "admin"),
+      access("reviewer-source", "reviewer"),
+      access("staff-source", null, true),
+    ], event.id).map((item) => item.event.id)).toEqual(["admin-source", "staff-source"]);
   });
 
   it("resolves the URL slug through events.get and decodes the canonical event", async () => {
@@ -131,6 +151,7 @@ describe("event metadata settings route", () => {
     expect(markup).toContain('value="America/Los_Angeles"');
     expect(markup).toContain('type="datetime-local"');
     expect(markup).toContain('value="#2255aa"');
+    expect(markup).toContain("Copy team from another event");
     expect(markup).not.toContain("Status");
     expect(markup).not.toContain("Team");
     expect(markup).not.toContain("Security");

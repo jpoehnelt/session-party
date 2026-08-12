@@ -31,6 +31,7 @@ import {
 } from "@/server/services";
 import {
   addEventMember,
+  applyTeamCopy,
   acceptReviewerInvitation,
   createEventApiKey,
   createEvent,
@@ -41,6 +42,7 @@ import {
   listEventApiKeys,
   listEvents,
   listReviewerInvitations,
+  previewTeamCopy,
   removeEventMember,
   revokeEventApiKey,
   updateEvent,
@@ -405,6 +407,77 @@ describe("events service", () => {
     const audits = await db.select().from(auditLog).where(eq(auditLog.eventId, created.id));
     expect(changes.some((change) => change.eventType === "events.member.added")).toBe(true);
     expect(audits.some((audit) => audit.action === "events.addMember")).toBe(true);
+  });
+
+  it("previews exact team creates, skips every existing member, and replays the audited copy", async () => {
+    const previewOperation = operations.find((candidate) => candidate.id === "events.previewTeamCopy");
+    const applyOperation = operations.find((candidate) => candidate.id === "events.applyTeamCopy");
+    if (!previewOperation || !applyOperation) throw new Error("Team-copy operations missing");
+    expect([previewOperation, applyOperation].every((operation) => !("mcp" in operation) && !("party" in operation))).toBe(true);
+
+    const source = await runAs(owner, createEvent({ name: "Prior committee", slug: "prior-committee" }));
+    const target = await runAs(owner, createEvent({ name: "Next committee", slug: "next-committee" }));
+    await runAs(owner, addEventMember({ eventId: source.id, email: admin.email, role: "admin", idempotencyKey: "copy-source-admin" }));
+    await runAs(owner, addEventMember({ eventId: source.id, email: reviewer.email, role: "reviewer", idempotencyKey: "copy-source-reviewer" }));
+    await runAs(owner, addEventMember({ eventId: target.id, email: admin.email, role: "reviewer", idempotencyKey: "copy-target-existing-admin" }));
+
+    const preview = await runAs(owner, previewTeamCopy({ eventId: target.id, sourceEventId: source.id }));
+    expect(preview.create).toEqual([
+      expect.objectContaining({ userId: reviewer.userId, email: reviewer.email, role: "reviewer", existingRole: null }),
+    ]);
+    expect(preview.skip).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: owner.userId, role: "owner", existingRole: "owner" }),
+      expect.objectContaining({ userId: admin.userId, role: "admin", existingRole: "reviewer" }),
+    ]));
+
+    const input = { eventId: target.id, sourceEventId: source.id, idempotencyKey: "copy-prior-committee" } as const;
+    const copied = await runAs(owner, applyTeamCopy(input));
+    const replayed = await runAs(owner, applyTeamCopy(input));
+    expect(copied).toMatchObject({ createdCount: 1, skippedCount: 2, idempotent: false });
+    expect(copied.created).toEqual([expect.objectContaining({ userId: reviewer.userId, role: "reviewer" })]);
+    expect(replayed).toEqual({ ...copied, idempotent: true });
+    const members = await runAs(owner, listEventMembers({ eventId: target.id }));
+    expect(members.find((member) => member.userId === admin.userId)?.role).toBe("reviewer");
+    expect(members.filter((member) => member.userId === reviewer.userId)).toHaveLength(1);
+    const audits = await drizzle(env.DB).select().from(auditLog).where(eq(auditLog.eventId, target.id));
+    expect(audits.map((row) => row.action)).toEqual(expect.arrayContaining([
+      "events.copyTeam.member",
+      "events.copyTeam",
+    ]));
+  });
+
+  it("allows an admin over both events, denies cross-event authority gaps and API keys, and serializes a copy race", async () => {
+    const source = await runAs(owner, createEvent({ name: "Admin copy source", slug: "admin-copy-source" }));
+    const target = await runAs(owner, createEvent({ name: "Admin copy target", slug: "admin-copy-target" }));
+    await runAs(owner, addEventMember({ eventId: source.id, email: admin.email, role: "admin", idempotencyKey: "admin-copy-source-admin" }));
+    await runAs(owner, addEventMember({ eventId: target.id, email: admin.email, role: "admin", idempotencyKey: "admin-copy-target-admin" }));
+    await runAs(owner, addEventMember({ eventId: source.id, email: reviewer.email, role: "reviewer", idempotencyKey: "admin-copy-source-reviewer" }));
+    await expect(runAs(admin, previewTeamCopy({ eventId: target.id, sourceEventId: source.id }))).resolves.toMatchObject({ create: [expect.objectContaining({ userId: reviewer.userId })] });
+
+    const raceInput = { eventId: target.id, sourceEventId: source.id, idempotencyKey: "admin-copy-race" } as const;
+    const raced = await Promise.all([runAs(admin, applyTeamCopy(raceInput)), runAs(admin, applyTeamCopy(raceInput))]);
+    expect(raced.map((result) => result.idempotent).sort()).toEqual([false, true]);
+    expect(raced[0]?.createdCount).toBe(1);
+    expect(await runAs(admin, listEventMembers({ eventId: target.id }))).toContainEqual(expect.objectContaining({ userId: reviewer.userId, role: "reviewer" }));
+
+    const competingSource = await runAs(owner, createEvent({ name: "Competing copy source", slug: "competing-copy-source" }));
+    const competingTarget = await runAs(owner, createEvent({ name: "Competing copy target", slug: "competing-copy-target" }));
+    await runAs(owner, addEventMember({ eventId: competingSource.id, email: outsider.email, role: "reviewer", idempotencyKey: "competing-copy-reviewer" }));
+    const competing = await Promise.all([
+      runAs(owner, applyTeamCopy({ eventId: competingTarget.id, sourceEventId: competingSource.id, idempotencyKey: "competing-copy-a" })),
+      runAs(owner, applyTeamCopy({ eventId: competingTarget.id, sourceEventId: competingSource.id, idempotencyKey: "competing-copy-b" })),
+    ]);
+    expect(competing.map((result) => result.createdCount).sort()).toEqual([0, 1]);
+    const competingMembers = await runAs(owner, listEventMembers({ eventId: competingTarget.id }));
+    expect(competingMembers.filter((member) => member.userId === outsider.userId)).toHaveLength(1);
+
+    const inaccessibleSource = await runAs(secondOwner, createEvent({ name: "Private copy source", slug: "private-copy-source" }));
+    await expectFailure(admin, previewTeamCopy({ eventId: target.id, sourceEventId: inaccessibleSource.id }), "Forbidden");
+    await expectFailure(
+      apiKeyPrincipal("team-copy-key", target.id, ["event:read", "event:write"]),
+      previewTeamCopy({ eventId: target.id, sourceEventId: source.id }),
+      "Forbidden",
+    );
   });
 
   it("queues a reviewer invitation and securely accepts it into the existing reviewer membership", async () => {
