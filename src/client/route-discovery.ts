@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { ContentWidth } from "@/ui";
+import { generatedClientRoutes } from "./routes.gen";
 
 export type RouteModule = {
   path: string;
@@ -8,19 +9,9 @@ export type RouteModule = {
   default: ComponentType;
 };
 
-const routeModules = import.meta.glob(
-  [
-    "../features/*/routes/*.tsx",
-    "!../features/*/routes/*.test.tsx",
-    "!../features/*/routes/*.test.ts",
-    "!../features/*/routes/*.browser.tsx",
-    "!../features/*/routes/*.stories.tsx",
-    "!../features/*/routes/*.stories.ts",
-  ],
-  {
-    eager: true,
-  },
-) as Record<string, RouteModule>;
+export type ClientRouteDefinition = Omit<RouteModule, "default"> & {
+  load: () => Promise<RouteModule>;
+};
 
-export const discoveredClientRoutePaths = Object.keys(routeModules);
-export const discoveredClientRouteModules = Object.values(routeModules);
+export const discoveredClientRoutePaths = generatedClientRoutes.map(({ path }) => path);
+export const discoveredClientRouteModules: readonly ClientRouteDefinition[] = generatedClientRoutes;

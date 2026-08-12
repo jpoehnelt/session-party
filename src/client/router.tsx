@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, type ComponentType, type ReactNode, useEffect, useRef, useState } from "react";
 import {
   Link,
   NavLink,
@@ -7,7 +7,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router";
-import { AppShell, Button, EmptyState, Sheet } from "@/ui";
+import { AppShell, Button, EmptyState, Sheet, Spinner } from "@/ui";
 import {
   apiFetch,
   invalidateAuthGeneration,
@@ -304,10 +304,17 @@ function RouteCoordinator({ children }: { children: ReactNode }) {
       }
       return true;
     };
-    apply();
-    const observer = new MutationObserver(apply);
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
+    if (apply()) return undefined;
+    const target = document.querySelector("main") ?? document.body;
+    const observer = new MutationObserver(() => {
+      if (apply()) observer.disconnect();
+    });
+    observer.observe(target, { childList: true, subtree: true });
+    const timeout = window.setTimeout(() => observer.disconnect(), 10_000);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timeout);
+    };
   }, [location.pathname]);
 
   return <>
@@ -317,19 +324,28 @@ function RouteCoordinator({ children }: { children: ReactNode }) {
 }
 
 function routeElement(Component: ComponentType, layout?: RouteModule["layout"], contentWidth?: RouteModule["contentWidth"]) {
-  const page = <Component />;
+  const page = (
+    <Suspense fallback={<div className="flex min-h-48 items-center justify-center gap-3 text-sm text-ink-secondary" role="status"><Spinner /> Loading page…</div>}>
+      <Component />
+    </Suspense>
+  );
   return <RouteCoordinator>{layout === "bare" ? page : <Layout contentWidth={contentWidth}>{page}</Layout>}</RouteCoordinator>;
 }
+
+const discoveredRoutes = discoveredClientRouteModules.map(({ path, layout, contentWidth, load }) => {
+  const Component = lazy(load);
+  return {
+    path,
+    element: routeElement(Component, layout, contentWidth),
+  };
+});
 
 export const router = createBrowserRouter([
   {
     path: "/login",
     element: <RouteCoordinator><LoginPage /></RouteCoordinator>,
   },
-  ...discoveredClientRouteModules.map(({ path, layout, contentWidth, default: Component }) => ({
-    path,
-    element: routeElement(Component, layout, contentWidth),
-  })),
+  ...discoveredRoutes,
   {
     path: "*",
     element: <RouteCoordinator><NotFound /></RouteCoordinator>,

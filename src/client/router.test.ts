@@ -9,6 +9,9 @@ describe("client route discovery", () => {
       !path.includes(".browser.") &&
       !path.includes(".stories.")
     )).toBe(true);
+    expect(discoveredClientRouteModules.every((route) =>
+      typeof route.load === "function" && !("default" in route)
+    )).toBe(true);
   });
 
   it("assigns an intentional content width to every organizer page", () => {
