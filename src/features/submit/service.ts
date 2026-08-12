@@ -373,6 +373,11 @@ type NormalizedSpeaker = {
   readonly organization: string | null;
 };
 
+type NormalizedPublicSpeakers = {
+  readonly primary: Pick<NormalizedSpeaker, "title" | "organization">;
+  readonly coSpeakers: readonly NormalizedSpeaker[];
+};
+
 const normalizeOptionalText = (value: string | undefined): string | null => {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
@@ -381,7 +386,7 @@ const normalizeOptionalText = (value: string | undefined): string | null => {
 const normalizePublicSpeakers = (
   input: Pick<CreatePublicSubmissionInput, "coSpeakers" | "primarySpeakerTitle" | "primarySpeakerOrganization">,
   primaryEmail: string | null,
-): Effect.Effect<{ readonly primary: Pick<NormalizedSpeaker, "title" | "organization">; readonly coSpeakers: readonly NormalizedSpeaker[] }, Validation> =>
+): Effect.Effect<NormalizedPublicSpeakers, Validation> =>
   Effect.gen(function* () {
     const normalizedPrimaryEmail = primaryEmail === null ? null : normalizePublicEmail(primaryEmail);
     const emails = new Set<string>();
@@ -520,7 +525,7 @@ const loadReplay = (
   operationId: "submit.create" | "submit.createTask",
   principalId: string,
   keyHash: string,
-  requestHash: string,
+  requestHash: Effect.Effect<string, External>,
 ): Effect.Effect<typeof CreatePublicSubmissionOutput.Type | null, AppError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
@@ -539,7 +544,7 @@ const loadReplay = (
         .limit(1),
     );
     if (!record) return null;
-    if (record.requestHash !== requestHash) {
+    if (record.requestHash !== (yield* requestHash)) {
       return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used with different submission answers." }));
     }
     if (record.status !== "completed" || record.responseBody === null) {
@@ -564,21 +569,19 @@ export const createPublicSubmission = (
         message: "Public submissions are only available for CFP forms.",
       }));
     }
-    const [keyHash, requestHash] = yield* Effect.all([
-      sha256(input.idempotencyKey),
-      sha256(stableStringify({
-        answers: input.answers,
-        primarySpeakerTitle: input.primarySpeakerTitle ?? null,
-        primarySpeakerOrganization: input.primarySpeakerOrganization ?? null,
-        coSpeakers: input.coSpeakers ?? [],
-      })),
-    ]);
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHashEffect = Effect.suspend(() => sha256(stableStringify({
+      answers: input.answers,
+      primarySpeakerTitle: input.primarySpeakerTitle ?? null,
+      primarySpeakerOrganization: input.primarySpeakerOrganization ?? null,
+      coSpeakers: input.coSpeakers ?? [],
+    })));
     const replay = yield* loadReplay(
       loaded.eventId,
       "submit.create",
       `public-form:${input.formId}`,
       keyHash,
-      requestHash,
+      requestHashEffect,
     );
     const mailQueue = yield* MailQueue;
     if (replay) {
@@ -596,6 +599,7 @@ export const createPublicSubmission = (
       turnstileToken: input.turnstileToken,
       remoteIp: request.remoteIp,
     });
+    const requestHash = yield* requestHashEffect;
     const { db } = yield* Db;
     const now = new Date();
     const submissionId = nanoid();
@@ -959,7 +963,7 @@ export const createPublicSubmission = (
         "submit.create",
         `public-form:${input.formId}`,
         keyHash,
-        requestHash,
+        Effect.succeed(requestHash),
       );
       if (concurrentReplay) return concurrentReplay;
       return yield* Effect.fail(new External({ service: "database", detail: "Idempotent submission replay was not found" }));
@@ -1077,7 +1081,7 @@ export const createTaskSubmission = (
       "submit.createTask",
       principalId,
       keyHash,
-      requestHash,
+      Effect.succeed(requestHash),
     );
     if (replay) return replay;
     const validated = yield* validateAnswers(loaded, input);
@@ -1316,7 +1320,7 @@ export const createTaskSubmission = (
         "submit.createTask",
         principalId,
         keyHash,
-        requestHash,
+        Effect.succeed(requestHash),
       );
       if (concurrentReplay) return concurrentReplay;
       return yield* Effect.fail(new External({

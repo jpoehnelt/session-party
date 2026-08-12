@@ -7,7 +7,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import worker, { recoverMailScheduler } from "../index";
 import { sendMail, sessionSecret } from "../services";
-import { MAIL_SCHEDULER_NAME, reserveDispatchBudget } from "./Scheduler";
+import { DEMO_RATE_SOURCE_LIMIT, MAIL_SCHEDULER_NAME, reserveDispatchBudget } from "./Scheduler";
 
 type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -52,6 +52,7 @@ afterAll(async () => {
     MAIL_SCHEDULER_NAME,
     "mail-recovery-wrong-name",
     "auth-rate-limit-proof",
+    "demo-rate-limit-proof",
     "cfp-rate-limit-proof",
   ]) {
     const scheduler = env.SCHEDULER.get(env.SCHEDULER.idFromName(name));
@@ -523,6 +524,23 @@ describe("Scheduler durable delivery recovery", () => {
     expect(await env.DB.prepare(
       "SELECT status, attempt_count FROM mail_deliveries WHERE id = 'auth-limiter-guard-delivery'",
     ).first()).toEqual({ status: "pending", attempt_count: 0 });
+  });
+  it("rate-limits demo login attempts per source without consuming other sources", async () => {
+    const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("demo-rate-limit-proof"));
+    const authorize = (sourceHash: string) => stub.fetch("https://scheduler/auth/demo/authorize", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-session-party-internal": sessionSecret(env),
+      },
+      body: JSON.stringify({ sourceHash }),
+    });
+    const source = "a".repeat(64);
+    for (let index = 0; index < DEMO_RATE_SOURCE_LIMIT; index += 1) {
+      expect((await authorize(source)).status).toBe(200);
+    }
+    expect((await authorize(source)).status).toBe(429);
+    expect((await authorize("b".repeat(64))).status).toBe(200);
   });
   it("atomically enforces CFP hourly source and daily recipient budgets", async () => {
     const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("cfp-rate-limit-proof"));

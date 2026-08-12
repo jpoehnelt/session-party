@@ -25,6 +25,9 @@ import {
 } from "./services";
 
 export type AppHono = { Bindings: Env };
+export const MAX_PUBLIC_SUBMISSION_BODY_BYTES = 256 * 1_024;
+
+class RequestBodyTooLarge extends Error {}
 export type RuntimeServices =
   | Db
   | SecretResolver
@@ -130,9 +133,39 @@ const valuesFor = (input: Record<string, string[]>, name: string): string | read
   return !values || values.length === 0 ? undefined : values.length === 1 ? values[0] : values;
 };
 
+const readJsonBody = async (request: Request, maxBytes?: number): Promise<unknown> => {
+  if (maxBytes === undefined) return request.json<unknown>();
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new RequestBodyTooLarge();
+  }
+  if (!request.body) return null;
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new RequestBodyTooLarge();
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body));
+};
+
 export const restInput = async (
   c: Context<AppHono>,
   locations: RestInputLocations,
+  options?: { readonly maxBodyBytes?: number },
 ): Promise<Record<string, unknown>> => {
   const input: Record<string, unknown> = {};
   for (const field of locations.path ?? []) input[field] = c.req.param(field);
@@ -145,7 +178,10 @@ export const restInput = async (
       : value;
   }
   if (locations.body) {
-    const body = await c.req.json<unknown>().catch(() => null);
+    const body = await readJsonBody(c.req.raw, options?.maxBodyBytes).catch((error) => {
+      if (error instanceof RequestBodyTooLarge) throw error;
+      return null;
+    });
     if (locations.body === "all") return body && typeof body === "object" && !Array.isArray(body)
       ? { ...body as Record<string, unknown> }
       : { body };
@@ -164,7 +200,9 @@ export const runRestOperation = async (
 ): Promise<Response> => {
   const requestId = requestIdFor(c.req.raw);
   try {
-    const rawInput = await restInput(c, locations);
+    const rawInput = await restInput(c, locations, {
+      maxBodyBytes: operation.id === "submit.create" ? MAX_PUBLIC_SUBMISSION_BODY_BYTES : undefined,
+    });
     const trustedRequest = {
       remoteIp: c.req.header("CF-Connecting-IP")?.trim() || null,
     };
@@ -202,6 +240,13 @@ export const runRestOperation = async (
     }
     console.error(JSON.stringify({ message: "REST operation defect", requestId, cause: Cause.pretty(exit.cause) }));
   } catch (error) {
+    if (error instanceof RequestBodyTooLarge) {
+      return c.json({
+        error: "PayloadTooLarge",
+        message: "Public submission request body is too large",
+        requestId,
+      }, 413);
+    }
     console.error(JSON.stringify({
       message: "REST operation adapter failed",
       requestId,

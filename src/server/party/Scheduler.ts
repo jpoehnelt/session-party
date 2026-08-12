@@ -17,6 +17,10 @@ const AUTH_RATE_GLOBAL_LIMIT = 100;
 const AUTH_RATE_SOURCE_LIMIT = 10;
 const AUTH_RATE_RECIPIENT_LIMIT = 5;
 const AUTH_RATE_PREFIX = "auth-rate:";
+const DEMO_RATE_WINDOW_MS = 15 * 60_000;
+const DEMO_RATE_GLOBAL_LIMIT = 1_000;
+export const DEMO_RATE_SOURCE_LIMIT = 30;
+const DEMO_RATE_PREFIX = "demo-rate:";
 const CFP_RATE_PREFIX = "cfp-rate:";
 const CFP_RATE_SOURCE_LIMIT = 10;
 const CFP_RATE_RECIPIENT_LIMIT = 3;
@@ -204,6 +208,20 @@ export class Scheduler extends DurableObject<Env> {
       const allowed = await this.authorizeAuthRequest(input.sourceHash, input.recipientHash);
       return Response.json({ ok: allowed }, { status: allowed ? 200 : 429 });
     }
+    if (url.pathname === "/auth/demo/authorize") {
+      const input = await request.json<unknown>().catch(() => null);
+      if (
+        typeof input !== "object"
+        || input === null
+        || !("sourceHash" in input)
+        || typeof input.sourceHash !== "string"
+        || !/^[a-f0-9]{64}$/.test(input.sourceHash)
+      ) {
+        return new Response("Invalid request", { status: 400 });
+      }
+      const allowed = await this.authorizeDemoLogin(input.sourceHash);
+      return Response.json({ ok: allowed }, { status: allowed ? 200 : 429 });
+    }
     if (url.pathname === "/cfp/authorize") {
       const input = await request.json<unknown>().catch(() => null);
       if (
@@ -299,10 +317,44 @@ export class Scheduler extends DurableObject<Env> {
     return allowed;
   }
 
+  private async authorizeDemoLogin(sourceHash: string): Promise<boolean> {
+    const now = Date.now();
+    const windowStartedAt = Math.floor(now / DEMO_RATE_WINDOW_MS) * DEMO_RATE_WINDOW_MS;
+    const rules = [
+      { key: `${DEMO_RATE_PREFIX}global`, limit: DEMO_RATE_GLOBAL_LIMIT },
+      { key: `${DEMO_RATE_PREFIX}source:${sourceHash}`, limit: DEMO_RATE_SOURCE_LIMIT },
+    ] as const;
+    const allowed = await this.ctx.storage.transaction(async (transaction) => {
+      const next: Array<readonly [string, AuthRateCounter]> = [];
+      for (const { key, limit } of rules) {
+        const current = await transaction.get<AuthRateCounter>(key);
+        const count = current?.windowStartedAt === windowStartedAt ? current.count + 1 : 1;
+        if (count > limit) return false;
+        next.push([key, { windowStartedAt, count }]);
+      }
+      for (const [key, counter] of next) await transaction.put(key, counter);
+      return true;
+    });
+    const cleanupAt = windowStartedAt + DEMO_RATE_WINDOW_MS;
+    const existingAlarm = await this.ctx.storage.getAlarm();
+    if (existingAlarm === null || existingAlarm > cleanupAt) {
+      await this.ctx.storage.setAlarm(cleanupAt);
+    }
+    return allowed;
+  }
+
   private async purgeAuthRateCounters(now: number): Promise<void> {
     const counters = await this.ctx.storage.list<AuthRateCounter>({ prefix: AUTH_RATE_PREFIX });
     const stale = [...counters]
       .filter(([, counter]) => counter.windowStartedAt + AUTH_RATE_WINDOW_MS <= now)
+      .map(([key]) => key);
+    if (stale.length > 0) await this.ctx.storage.delete(stale);
+  }
+
+  private async purgeDemoRateCounters(now: number): Promise<void> {
+    const counters = await this.ctx.storage.list<AuthRateCounter>({ prefix: DEMO_RATE_PREFIX });
+    const stale = [...counters]
+      .filter(([, counter]) => counter.windowStartedAt + DEMO_RATE_WINDOW_MS <= now)
       .map(([key]) => key);
     if (stale.length > 0) await this.ctx.storage.delete(stale);
   }
@@ -321,6 +373,7 @@ export class Scheduler extends DurableObject<Env> {
       const now = new Date();
       const nowMs = now.getTime();
       await this.purgeAuthRateCounters(nowMs);
+      await this.purgeDemoRateCounters(nowMs);
       await this.purgeCfpRateCounters(nowMs);
       mailSchedulerEnabled = this.isCanonicalMailScheduler()
         && await this.ctx.storage.get<boolean>(MAIL_SCHEDULER_ENABLED_KEY) === true;
