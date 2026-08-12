@@ -667,10 +667,13 @@ describe("communications immutable delivery workflow", () => {
       completedAt: deliveries[100]!.createdAt,
     });
 
-    const history = await runAs(seeded.owner, listDeliveries({ eventId: seeded.eventId }));
+    const firstPage = await runAs(seeded.owner, listDeliveries({ eventId: seeded.eventId, page: 1, pageSize: 100 }));
+    const secondPage = await runAs(seeded.owner, listDeliveries({ eventId: seeded.eventId, page: 2, pageSize: 100 }));
 
-    expect(history.deliveries).toHaveLength(historySize);
-    expect(history.deliveries.find(({ id }) => id === deliveries[100]!.id)?.attempts).toEqual([
+    expect(firstPage.deliveries).toHaveLength(100);
+    expect(firstPage.pagination).toEqual({ page: 1, pageSize: 100, total: historySize, pageCount: 2 });
+    expect(secondPage.deliveries).toHaveLength(1);
+    expect(firstPage.deliveries.find(({ id }) => id === deliveries[100]!.id)?.attempts).toEqual([
       expect.objectContaining({ attemptNumber: 1, status: "failed", error: "temporary failure" }),
     ]);
   });

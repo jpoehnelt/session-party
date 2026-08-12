@@ -399,6 +399,7 @@ export function CommunicationsWorkspace({
   const [scheduledWallTime, setScheduledWallTime] = useState("");
   const [confirmedCampaignIdentity, setConfirmedCampaignIdentity] = useState<string>();
   const [busy, setBusy] = useState<"save" | "preview" | "enqueue" | `retry:${string}` | null>(null);
+  const [loadingMore, setLoadingMore] = useState<"audience" | "history" | null>(null);
   const [queueResult, setQueueResult] = useState<EnqueueCommunicationResultValue | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pendingDraftDestination, setPendingDraftDestination] = useState<PendingDraftDestination | null>(null);
@@ -420,8 +421,8 @@ export function CommunicationsWorkspace({
     const root = `/api/v1/events/${encodeURIComponent(event.id)}/comms`;
     const [nextTemplates, nextAudience, nextHistory] = await Promise.all([
       apiFetch(`${root}/templates`, { schema: Schema.Array(CommunicationTemplate) }),
-      apiFetch(`${root}/audience`, { schema: AudienceSnapshot }),
-      apiFetch(`${root}/deliveries`, { schema: DeliveryHistory }),
+      apiFetch(`${root}/audience?page=1&pageSize=100`, { schema: AudienceSnapshot }),
+      apiFetch(`${root}/deliveries?page=1&pageSize=100`, { schema: DeliveryHistory }),
     ]);
     setTemplates(nextTemplates);
     setAudience(nextAudience);
@@ -440,12 +441,40 @@ export function CommunicationsWorkspace({
       const message = error instanceof Error ? error.message : "Could not load communications";
       setLoadError(message);
       setTemplates([]);
-      setAudience({ eventId: event.id, recipients: [], eligibleCount: 0, dependency: "decidedApplicants" });
-      setHistory({ eventId: event.id, deliveries: [], localCaptureCount: 0 });
+      setAudience({ eventId: event.id, recipients: [], eligibleCount: 0, dependency: "decidedApplicants", pagination: { page: 1, pageSize: 100, total: 0, pageCount: 0 } });
+      setHistory({ eventId: event.id, deliveries: [], localCaptureCount: 0, pagination: { page: 1, pageSize: 100, total: 0, pageCount: 0 } });
       toast(message, { tone: "danger" });
     });
     return () => { active = false; };
   }, [loadWorkspace, refresh, event.id]);
+
+  const loadMoreAudience = async () => {
+    if (!audience || audience.pagination.page >= audience.pagination.pageCount) return;
+    setLoadingMore("audience");
+    try {
+      const page = audience.pagination.page + 1;
+      const next = await apiFetch(`/api/v1/events/${encodeURIComponent(event.id)}/comms/audience?page=${page}&pageSize=${audience.pagination.pageSize}`, { schema: AudienceSnapshot });
+      setAudience((current) => current ? { ...next, recipients: [...current.recipients, ...next.recipients] } : next);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not load more recipients", { tone: "danger" });
+    } finally {
+      setLoadingMore(null);
+    }
+  };
+
+  const loadMoreHistory = async () => {
+    if (!history || history.pagination.page >= history.pagination.pageCount) return;
+    setLoadingMore("history");
+    try {
+      const page = history.pagination.page + 1;
+      const next = await apiFetch(`/api/v1/events/${encodeURIComponent(event.id)}/comms/deliveries?page=${page}&pageSize=${history.pagination.pageSize}`, { schema: DeliveryHistory });
+      setHistory((current) => current ? { ...next, deliveries: [...current.deliveries, ...next.deliveries] } : next);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not load more delivery history", { tone: "danger" });
+    } finally {
+      setLoadingMore(null);
+    }
+  };
 
   const eligibleRecipients = audience?.recipients.filter((recipient) => recipient.eligibility === "eligible") ?? [];
   const selectedTemplate = templates?.find((template) => template.id === selectedTemplateId) ?? null;
@@ -752,7 +781,7 @@ export function CommunicationsWorkspace({
         className="border-[3px] border-line-strong bg-ink p-5 text-on-accent shadow-[7px_7px_0_#7857ff] sm:p-7 [&_h1]:text-4xl [&_h1]:font-black [&_h1]:uppercase [&_h1]:leading-[0.88] [&_h1]:tracking-[-0.055em] [&_h1]:text-on-accent sm:[&_h1]:text-5xl [&_p]:mt-4 [&_p]:max-w-2xl [&_p]:font-semibold [&_p]:text-on-accent/70"
         actions={(
           <div className="border-2 border-line-strong bg-production-lime px-4 py-3 text-ink shadow-[4px_4px_0_#fffdf7]">
-            <p className="text-3xl font-black leading-none tracking-[-0.06em] !text-ink">{eligibleRecipients.length}</p>
+            <p className="text-3xl font-black leading-none tracking-[-0.06em] !text-ink">{audience.eligibleCount}</p>
             <p className="mt-1 text-[9px] font-black uppercase tracking-[0.14em] !text-ink">Speakers on comms</p>
             <p className="mt-2 text-[9px] font-black uppercase tracking-[0.12em] !text-ink">{history.localCaptureCount} local captures</p>
           </div>
@@ -762,8 +791,8 @@ export function CommunicationsWorkspace({
       <dl className="-mt-3 mb-8 ml-3 grid max-w-4xl grid-cols-2 border-2 border-line-strong bg-surface shadow-[5px_5px_0_#171714] md:grid-cols-4" aria-label="Communications production totals">
         {[
           [String(templates.length).padStart(2, "0"), "Message templates", "bg-surface-muted"],
-          [String(eligibleRecipients.length).padStart(2, "0"), "Audience ready", "bg-surface-muted"],
-          [String(history.deliveries.length).padStart(2, "0"), "Delivery records", "bg-surface-muted"],
+          [String(audience.eligibleCount).padStart(2, "0"), "Audience ready", "bg-surface-muted"],
+          [String(history.pagination.total).padStart(2, "0"), "Delivery records", "bg-surface-muted"],
           [String(retryCount).padStart(2, "0"), "Needs a retry", retryCount > 0 ? "bg-production-yellow" : "bg-surface-muted"],
         ].map(([value, label, color], index) => (
           <div className={`px-4 py-3 ${color} ${index % 2 > 0 ? "border-l-2 border-line-strong" : ""} ${index >= 2 ? "border-t-2 border-line-strong md:border-t-0" : ""} ${index === 2 ? "md:border-l-2" : ""}`} key={label}>
@@ -978,6 +1007,11 @@ export function CommunicationsWorkspace({
                   </div>
                 ))}
                 </div>
+                {audience.pagination.page < audience.pagination.pageCount && (
+                  <Button className="mt-4 w-full" variant="secondary" loading={loadingMore === "audience"} onClick={() => void loadMoreAudience()}>
+                    Load more recipients
+                  </Button>
+                )}
               </div>
             )}
           </Card>
@@ -1108,6 +1142,11 @@ export function CommunicationsWorkspace({
             rowKey={(delivery) => delivery.id}
             empty="No communication deliveries have been queued."
           />
+          {history.pagination.page < history.pagination.pageCount && (
+            <Button className="w-full" variant="secondary" loading={loadingMore === "history"} onClick={() => void loadMoreHistory()}>
+              Load more delivery history
+            </Button>
+          )}
         </div>
       )}
       <AlertDialog open={pendingDraftDestination !== null} onOpenChange={(open) => { if (!open) cancelPendingDraftDestination(); }}>
