@@ -53,9 +53,10 @@ Scenes are intentionally independent. A failure in review should not invalidate 
 
 ## Expected commands
 
-The recorder should expose these repository-level entry points once its orchestration code is present:
+The recorder exposes these repository-level entry points:
 
 ```sh
+pnpm walkthrough           # record every scene, then assemble both cuts
 pnpm walkthrough:record
 pnpm walkthrough:assemble
 ```
@@ -67,7 +68,7 @@ WALKTHROUGH_BASE_URL=https://sessionparty.com \
 pnpm walkthrough:record -- --output=artifacts/walkthrough
 ```
 
-No credential environment variables should be needed. Use `pnpm exec tsx scripts/walkthrough/record.ts --scene=review --output=artifacts/walkthrough` for a fast scene retry; the recorder replaces that scene in an existing manifest without discarding the others. Use `--smoke` to skip authored hold times during selector preflight. The default run records every scene in narration order.
+No credential environment variables should be needed. Use `pnpm walkthrough:record -- --scene=review` for a fast scene retry; the recorder replaces that scene in an existing manifest without discarding the others. Use `--smoke` to skip authored hold times during selector preflight. The default run records every scene in narration order; a failing scene is skipped after saving its diagnostics, the remaining scenes still record, and the run exits non-zero listing the scenes to retry.
 
 ## Output contract
 
@@ -80,17 +81,18 @@ artifacts/walkthrough/
 │   ├── workspace.webm
 │   ├── cfp.webm
 │   ├── review.webm
-│   ├── speaker-portal.webm
+│   ├── speaker_portal.webm
 │   ├── agenda.webm
-│   ├── live-show.webm
+│   ├── live_show.webm
 │   ├── publication.webm
-│   └── widgets-and-close.webm
-├── diagnostics/
-│   └── <scene-name>/
-│       ├── failure.png
-│       └── trace.zip
-├── narration.txt
+│   └── widgets_and_close.webm
+├── screenshots/
+│   └── <scene-name>.png            (<scene-name>-failure.png on failure)
+├── traces/
+│   └── <scene-name>.zip            (<scene-name>-failure.zip on failure)
+├── manifest.json
 ├── session-party-walkthrough.srt
+├── session-party-walkthrough-short.srt
 ├── session-party-walkthrough.mp4
 └── session-party-walkthrough-short.mp4
 ```

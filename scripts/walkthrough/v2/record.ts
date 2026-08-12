@@ -1,15 +1,10 @@
-import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
+import { arg, ensureTools, mediaDurationSeconds } from "../shared";
 import { anchor, clearFocus, click, focus, install, showTrace } from "./presentation";
 import { shots } from "./shots";
 import type { RecordedShot } from "./types";
-
-const arg = (name: string, fallback: string) => {
-  const prefix = `--${name}=`;
-  return process.argv.find((value) => value.startsWith(prefix))?.slice(prefix.length) ?? fallback;
-};
 
 const baseUrl = arg("base-url", process.env.WALKTHROUGH_BASE_URL ?? "https://sessionparty.com").replace(/\/$/, "");
 const eventSlug = arg("event", process.env.WALKTHROUGH_EVENT_SLUG ?? "ai-engineer-sandbox");
@@ -18,6 +13,11 @@ const only = arg("shot", "");
 const from = arg("from", "");
 const smoke = process.argv.includes("--smoke");
 const headed = process.argv.includes("--headed");
+
+ensureTools(["ffprobe"]);
+if (only && !shots.some((shot) => shot.id === only)) {
+  throw new Error(`Unknown shot: ${only}. Valid shots: ${shots.map((shot) => shot.id).join(", ")}`);
+}
 
 await Promise.all([
   mkdir(resolve(outputDir, "raw"), { recursive: true }),
@@ -28,6 +28,7 @@ await Promise.all([
 const browser = await chromium.launch({ headless: !headed });
 const state = new Map<string, string>();
 const recorded: RecordedShot[] = [];
+const failures: { readonly id: string; readonly message: string }[] = [];
 
 try {
   const fromIndex = from ? shots.findIndex((candidate) => candidate.id === from) : 0;
@@ -87,10 +88,7 @@ try {
       if (!video) throw new Error(`Playwright did not create a video for ${shot.id}`);
       const videoPath = resolve(outputDir, "raw", `${shot.id}.webm`);
       await video.saveAs(videoPath);
-      const encodedDuration = Number(execFileSync("ffprobe", [
-        "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", videoPath,
-      ], { encoding: "utf8" }).trim());
+      const encodedDuration = mediaDurationSeconds(videoPath);
       if (encodedDuration < trimStartSeconds + Math.min(trimDurationSeconds, 0.5)) {
         throw new Error(`Encoded video is shorter than the requested trim for ${shot.id}`);
       }
@@ -110,7 +108,9 @@ try {
       await page.screenshot({ path: resolve(outputDir, "diagnostics", `${shot.id}-failure.png`), fullPage: true }).catch(() => undefined);
       if (!traceStopped) await context.tracing.stop({ path: resolve(outputDir, "diagnostics", `${shot.id}-failure.zip`) }).catch(() => undefined);
       await context.close().catch(() => undefined);
-      throw new Error(`${shot.id} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      const message = `${shot.id} failed: ${error instanceof Error ? error.message : String(error)}`;
+      failures.push({ id: shot.id, message });
+      process.stderr.write(`${message}\nContinuing with the remaining shots.\n`);
     }
   }
 } finally {
@@ -118,12 +118,11 @@ try {
 }
 
 const manifestPath = resolve(outputDir, "manifest.json");
-const previous = only
-  ? await readFile(manifestPath, "utf8").then((value) => JSON.parse(value) as { readonly shots?: readonly RecordedShot[] }).catch(() => null)
-  : null;
-const merged = previous?.shots
-  ? shots.flatMap((shot) => recorded.find((candidate) => candidate.id === shot.id) ?? previous.shots!.find((candidate) => candidate.id === shot.id) ?? [])
-  : recorded;
+const previous = await readFile(manifestPath, "utf8")
+  .then((value) => JSON.parse(value) as { readonly shots?: readonly RecordedShot[] })
+  .catch(() => null);
+const merged = shots.flatMap((shot) =>
+  recorded.find((candidate) => candidate.id === shot.id) ?? previous?.shots?.find((candidate) => candidate.id === shot.id) ?? []);
 await writeFile(manifestPath, `${JSON.stringify({
   version: 2,
   baseUrl,
@@ -132,3 +131,7 @@ await writeFile(manifestPath, `${JSON.stringify({
   shots: merged,
 }, null, 2)}\n`);
 process.stdout.write(`Recorded ${recorded.length} proof shots; manifest contains ${merged.length}.\n`);
+if (failures.length) {
+  process.stderr.write(`${failures.length} shot(s) failed: ${failures.map((failure) => failure.id).join(", ")}. Retry each with --shot=<id>; successful shots are already in the manifest.\n`);
+  process.exitCode = 1;
+}

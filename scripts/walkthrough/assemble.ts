@@ -1,17 +1,16 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { arg, ensureTools, mediaDurationSeconds } from "./shared";
 import type { RecordedScene } from "./types";
 
-const arg = (name: string, fallback: string) => {
-  const prefix = `--${name}=`;
-  return process.argv.find((value) => value.startsWith(prefix))?.slice(prefix.length) ?? fallback;
-};
+ensureTools(["ffmpeg", "ffprobe"]);
 const outputDir = resolve(arg("output", "artifacts/walkthrough"));
 const manifest = JSON.parse(await readFile(resolve(outputDir, "manifest.json"), "utf8")) as {
   readonly disclosure: string;
   readonly scenes: readonly RecordedScene[];
 };
+if (!manifest.scenes.length) throw new Error(`manifest.json in ${outputDir} contains no scenes; run pnpm walkthrough:record first`);
 const authoredNarration = JSON.parse(await readFile(resolve("scripts/walkthrough/narration.json"), "utf8")) as {
   readonly short: {
     readonly scenes: readonly { readonly durationSeconds: number; readonly narration: string }[];
@@ -30,13 +29,6 @@ const concatFile = async (name: string, files: readonly string[]) => {
   await writeFile(path, files.map((file) => `file '${file.replaceAll("'", "'\\''")}'`).join("\n") + "\n");
   return path;
 };
-
-const mediaDuration = (path: string) => Number(spawnSync("ffprobe", [
-  "-v", "error",
-  "-show_entries", "format=duration",
-  "-of", "default=noprint_wrappers=1:nokey=1",
-  path,
-], { encoding: "utf8" }).stdout.trim());
 
 const normalized: string[] = [];
 const shortClips: string[] = [];
@@ -79,7 +71,7 @@ for (const [index, spec] of hookSpecs.entries()) {
 const hook = resolve(normalizedDir, "cold-open.mp4");
 run("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", await concatFile("cold-open.txt", hookClips), "-c", "copy", hook]);
 normalized[0] = hook;
-const hookDuration = mediaDuration(hook);
+const hookDuration = mediaDurationSeconds(hook);
 const hookShort = resolve(normalizedDir, "intro-short.mp4");
 run("ffmpeg", ["-y", "-i", hook, "-t", String(manifest.scenes[0]?.shortSeconds ?? 7), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-an", hookShort]);
 shortClips[0] = hookShort;
