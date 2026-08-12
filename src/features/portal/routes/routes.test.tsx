@@ -827,6 +827,8 @@ describe("organizer content and workflows", () => {
   it("renders complete create, edit, and versioned delete controls for tasks and resources", () => {
     const taskMarkup = renderToStaticMarkup(createElement(OrganizerTasksContent, {
       tasks: [task],
+      speakers: directory.speakers,
+      eventSlug: event.slug,
       onCreate: noop,
       onUpdate: noop,
       onDelete: noop,
@@ -836,6 +838,10 @@ describe("organizer content and workflows", () => {
     expect(taskMarkup).toContain("Delete task");
     expect(taskMarkup).toContain("Review speaker profile");
     expect(taskMarkup).not.toContain('name="formId"');
+    expect(taskMarkup).toContain(`href="/e/${event.slug}/speakers/${profile.id}"`);
+    expect(taskMarkup).toMatch(new RegExp(`href="/e/${event.slug}/speakers/${profile.id}"[^>]*>${profile.displayName}</a>`));
+    expect(taskMarkup).toContain(`aria-label="Assign task to ${profile.displayName}"`);
+    expect(taskMarkup).not.toContain(">Profile</a>");
 
     const formTaskMarkup = renderToStaticMarkup(createElement(OrganizerTasksContent, {
       tasks: [{ ...task, id: "task-form", kind: "form", formId: "form-travel", name: "Travel details" }],

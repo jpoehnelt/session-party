@@ -292,23 +292,32 @@ function TaskFields({
       <fieldset className="space-y-2 border-2 border-[#171714] bg-[#fffdf7] p-3">
         <legend className="px-2 text-xs font-black uppercase tracking-wide">Assigned speakers</legend>
         <p className="text-xs text-ink-muted">Leave every speaker unchecked to assign this task to all current and future speakers.</p>
-        <div className="grid max-h-48 gap-2 overflow-auto sm:grid-cols-2">
+        <div className="grid max-h-56 gap-1.5 overflow-auto sm:grid-cols-2">
           {speakers.map((item) => (
-            <div className="flex items-start justify-between gap-2" key={item.speaker.id}>
+            <div
+              className="flex min-w-0 items-center gap-2.5 border border-[#171714]/20 bg-white/50 px-2.5 py-2"
+              key={item.speaker.id}
+            >
               <Checkbox
+                aria-label={`Assign task to ${item.speaker.displayName}`}
+                className="shrink-0"
                 name="speakerIds"
                 value={item.speaker.id}
-                label={`${item.speaker.displayName} · ${item.speaker.workflowStatus}`}
                 defaultChecked={task?.speakerIds.includes(item.speaker.id) ?? false}
               />
-              {eventSlug && (
-                <a
-                  className="inline-flex min-h-6 shrink-0 items-center text-xs font-black uppercase tracking-wide text-accent-deep underline underline-offset-2"
-                  href={`/e/${encodeURIComponent(eventSlug)}/speakers/${encodeURIComponent(item.speaker.id)}`}
-                >
-                  Profile
-                </a>
-              )}
+              <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
+                {eventSlug ? (
+                  <a
+                    className="min-w-0 truncate text-sm font-bold text-accent-deep underline decoration-2 underline-offset-2 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                    href={`/e/${encodeURIComponent(eventSlug)}/speakers/${encodeURIComponent(item.speaker.id)}`}
+                  >
+                    {item.speaker.displayName}
+                  </a>
+                ) : (
+                  <span className="truncate text-sm font-bold text-ink">{item.speaker.displayName}</span>
+                )}
+                <span className="text-xs font-medium text-ink-muted">· {item.speaker.workflowStatus}</span>
+              </div>
             </div>
           ))}
         </div>
