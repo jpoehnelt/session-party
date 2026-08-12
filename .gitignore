@@ -11,6 +11,7 @@ playwright-report/
 playwright-report-qa/
 test-results/
 artifacts/walkthrough/
+artifacts/walkthrough-v2/
 .rubric/
 vitest-rubric.json
 .wrangler/

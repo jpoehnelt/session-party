@@ -1,0 +1,134 @@
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { chromium } from "playwright";
+import { anchor, clearFocus, click, focus, install, showTrace } from "./presentation";
+import { shots } from "./shots";
+import type { RecordedShot } from "./types";
+
+const arg = (name: string, fallback: string) => {
+  const prefix = `--${name}=`;
+  return process.argv.find((value) => value.startsWith(prefix))?.slice(prefix.length) ?? fallback;
+};
+
+const baseUrl = arg("base-url", process.env.WALKTHROUGH_BASE_URL ?? "https://sessionparty.com").replace(/\/$/, "");
+const eventSlug = arg("event", process.env.WALKTHROUGH_EVENT_SLUG ?? "ai-engineer-sandbox");
+const outputDir = resolve(arg("output", "artifacts/walkthrough-v2"));
+const only = arg("shot", "");
+const from = arg("from", "");
+const smoke = process.argv.includes("--smoke");
+const headed = process.argv.includes("--headed");
+
+await Promise.all([
+  mkdir(resolve(outputDir, "raw"), { recursive: true }),
+  mkdir(resolve(outputDir, "screenshots"), { recursive: true }),
+  mkdir(resolve(outputDir, "diagnostics"), { recursive: true }),
+]);
+
+const browser = await chromium.launch({ headless: !headed });
+const state = new Map<string, string>();
+const recorded: RecordedShot[] = [];
+
+try {
+  const fromIndex = from ? shots.findIndex((candidate) => candidate.id === from) : 0;
+  if (from && fromIndex < 0) throw new Error(`Unknown starting shot: ${from}`);
+  for (const shot of shots.filter((candidate, index) => (!only || candidate.id === only) && index >= fromIndex)) {
+    process.stdout.write(`Preparing ${shot.id}: ${shot.title}\n`);
+    const context = await browser.newContext({
+      viewport: { width: 1920, height: 1080 },
+      deviceScaleFactor: 1,
+      colorScheme: "light",
+      reducedMotion: "reduce",
+      recordVideo: { dir: resolve(outputDir, "raw"), size: { width: 1920, height: 1080 } },
+    });
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    await page.addInitScript(() => {
+      localStorage.setItem("session-party-walkthrough", "v2");
+    });
+    const video = page.video();
+    const videoClock = performance.now();
+    let traceStopped = false;
+    try {
+      const shotContext = {
+        page,
+        baseUrl,
+        eventSlug,
+        state,
+        pause: (milliseconds: number) => page.waitForTimeout(smoke ? Math.min(80, milliseconds) : milliseconds),
+        anchor: (target: Parameters<typeof anchor>[1], ratio?: number) => anchor(page, target, ratio),
+        trace: (details: Parameters<typeof showTrace>[1]) => showTrace(page, details),
+        focus: (target: Parameters<typeof focus>[1], label: string) => focus(page, target, label),
+        clearFocus: () => clearFocus(page),
+        click: (target: Parameters<typeof click>[1], label: string) => click(page, target, label),
+      };
+      await shot.prepare(shotContext);
+      await page.evaluate(async () => {
+        const doc = (globalThis as any).document;
+        await doc.fonts.ready;
+        doc.querySelectorAll("[data-wt-v2-layer]").forEach((node: any) => node.remove());
+        doc.querySelectorAll("[data-wt-v2-style]").forEach((node: any) => node.remove());
+      });
+      await page.waitForTimeout(650);
+      const trimStartSeconds = (performance.now() - videoClock) / 1_000;
+      const captureStarted = performance.now();
+      await install(page);
+      await shot.capture(shotContext);
+      const minimumMilliseconds = smoke ? 250 : shot.durationSeconds * 1_000;
+      const remainder = minimumMilliseconds - (performance.now() - captureStarted);
+      if (remainder > 0) await page.waitForTimeout(remainder);
+      const trimDurationSeconds = (performance.now() - captureStarted) / 1_000;
+      const screenshotPath = resolve(outputDir, "screenshots", `${shot.id}.png`);
+      await page.screenshot({ path: screenshotPath });
+      await context.tracing.stop({ path: resolve(outputDir, "diagnostics", `${shot.id}.zip`) });
+      traceStopped = true;
+      await context.close();
+      if (!video) throw new Error(`Playwright did not create a video for ${shot.id}`);
+      const videoPath = resolve(outputDir, "raw", `${shot.id}.webm`);
+      await video.saveAs(videoPath);
+      const encodedDuration = Number(execFileSync("ffprobe", [
+        "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", videoPath,
+      ], { encoding: "utf8" }).trim());
+      if (encodedDuration < trimStartSeconds + Math.min(trimDurationSeconds, 0.5)) {
+        throw new Error(`Encoded video is shorter than the requested trim for ${shot.id}`);
+      }
+      recorded.push({
+        id: shot.id,
+        chapter: shot.chapter,
+        title: shot.title,
+        durationSeconds: shot.durationSeconds,
+        shortSeconds: shot.shortSeconds,
+        videoPath,
+        trimStartSeconds,
+        trimDurationSeconds: Math.min(trimDurationSeconds, encodedDuration - trimStartSeconds),
+        screenshotPath,
+      });
+      process.stdout.write(`Captured ${shot.id}: ${trimDurationSeconds.toFixed(1)}s retained\n`);
+    } catch (error) {
+      await page.screenshot({ path: resolve(outputDir, "diagnostics", `${shot.id}-failure.png`), fullPage: true }).catch(() => undefined);
+      if (!traceStopped) await context.tracing.stop({ path: resolve(outputDir, "diagnostics", `${shot.id}-failure.zip`) }).catch(() => undefined);
+      await context.close().catch(() => undefined);
+      throw new Error(`${shot.id} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  }
+} finally {
+  await browser.close();
+}
+
+const manifestPath = resolve(outputDir, "manifest.json");
+const previous = only
+  ? await readFile(manifestPath, "utf8").then((value) => JSON.parse(value) as { readonly shots?: readonly RecordedShot[] }).catch(() => null)
+  : null;
+const merged = previous?.shots
+  ? shots.flatMap((shot) => recorded.find((candidate) => candidate.id === shot.id) ?? previous.shots!.find((candidate) => candidate.id === shot.id) ?? [])
+  : recorded;
+await writeFile(manifestPath, `${JSON.stringify({
+  version: 2,
+  baseUrl,
+  eventSlug,
+  recordedAt: new Date().toISOString(),
+  shots: merged,
+}, null, 2)}\n`);
+process.stdout.write(`Recorded ${recorded.length} proof shots; manifest contains ${merged.length}.\n`);
