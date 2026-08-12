@@ -60563,10 +60563,8 @@ export const openApi = {
             "name": "page",
             "required": false,
             "schema": {
-              "$ref": "#/$defs/Int",
-              "description": "a positive number",
-              "exclusiveMinimum": 0,
-              "title": "positive"
+              "description": "a string to be decoded into a number",
+              "type": "string"
             }
           },
           {
@@ -60574,11 +60572,8 @@ export const openApi = {
             "name": "pageSize",
             "required": false,
             "schema": {
-              "$ref": "#/$defs/Int",
-              "description": "a number less than or equal to 100",
-              "exclusiveMinimum": 0,
-              "maximum": 100,
-              "title": "lessThanOrEqualTo(100)"
+              "description": "a string to be decoded into a number",
+              "type": "string"
             }
           }
         ],

@@ -623,6 +623,7 @@ auth.post("/demo", async (c) => {
   try {
     const identity = DEMO_IDENTITIES[parsed.persona];
     const seed = await ensureDemoSeed(c.env);
+    await ensureExistingBootstrapStaff(c.env, seed.users[parsed.persona], identity.email);
     const session = await issueDemoBrowserSession(c.env, seed.users[parsed.persona]);
     setBrowserSessionCookie(c, session);
     return c.json({
