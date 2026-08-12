@@ -21,6 +21,15 @@ const COLLAPSED_TASK_COUNT = 3;
 
 type SpeakerDirectoryFilter = "all" | "needs_attention" | "ready" | "unprovisioned" | "hidden";
 
+const scheduleResponses = (item: SpeakerDirectoryItem) =>
+  item.sessions.flatMap((session) => session.scheduleAcknowledgment ? [{ session, acknowledgment: session.scheduleAcknowledgment }] : []);
+
+const hasScheduleAttention = (item: SpeakerDirectoryItem) =>
+  scheduleResponses(item).some(({ acknowledgment }) => acknowledgment.status !== "acknowledged");
+
+const isSpeakerReady = (item: SpeakerDirectoryItem) =>
+  item.readiness.state === "ready" && !hasScheduleAttention(item);
+
 export function filterSpeakerDirectory(
   speakers: readonly SpeakerDirectoryItem[],
   query: string,
@@ -30,8 +39,8 @@ export function filterSpeakerDirectory(
   const normalizedQuery = query.trim().toLocaleLowerCase();
   return speakers.filter((item) => {
     const matchesFilter = filter === "all"
-      || (filter === "needs_attention" && item.readiness.state !== "ready")
-      || (filter === "ready" && item.readiness.state === "ready")
+      || (filter === "needs_attention" && (item.readiness.state !== "ready" || hasScheduleAttention(item)))
+      || (filter === "ready" && isSpeakerReady(item))
       || (filter === "unprovisioned" && item.provisioningStatus !== "provisioned")
       || (filter === "hidden" && !item.speaker.visible);
     if (!matchesFilter || (workflowStatus !== "all" && item.speaker.workflowStatus !== workflowStatus)) return false;
@@ -71,7 +80,11 @@ const fileBase64 = async (file: File): Promise<string> => {
   return btoa(binary);
 };
 
-const readinessTone = (item: SpeakerDirectoryItem) => item.readiness.state === "ready"
+const readinessTone = (item: SpeakerDirectoryItem) => scheduleResponses(item).some(({ acknowledgment }) => acknowledgment.status === "conflict")
+  ? "danger" as const
+  : hasScheduleAttention(item)
+    ? "warning" as const
+    : item.readiness.state === "ready"
   ? "success" as const
   : item.readiness.overdueCount > 0
     ? "danger" as const
@@ -79,7 +92,13 @@ const readinessTone = (item: SpeakerDirectoryItem) => item.readiness.state === "
       ? "accent" as const
       : "warning" as const;
 
-const readinessLabel = (item: SpeakerDirectoryItem) => item.readiness.state === "ready"
+const readinessLabel = (item: SpeakerDirectoryItem) => scheduleResponses(item).some(({ acknowledgment }) => acknowledgment.status === "conflict")
+  ? "Schedule conflict"
+  : scheduleResponses(item).some(({ acknowledgment }) => acknowledgment.status === "stale")
+    ? "Schedule changed"
+    : scheduleResponses(item).some(({ acknowledgment }) => acknowledgment.status === "pending")
+      ? "Schedule pending"
+      : item.readiness.state === "ready"
   ? "Ready"
   : item.readiness.overdueCount > 0
     ? `${item.readiness.overdueCount} overdue`
@@ -283,7 +302,10 @@ export function OrganizerSpeakersContent({
   const [focusedSpeakerId, setFocusedSpeakerId] = useState<string | null>(null);
   const [expandedTaskSpeakerId, setExpandedTaskSpeakerId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const readyCount = directory.speakers.filter((item) => item.readiness.state === "ready").length;
+  const readyCount = directory.speakers.filter(isSpeakerReady).length;
+  const scheduleConflictCount = directory.speakers.filter((item) =>
+    scheduleResponses(item).some(({ acknowledgment }) => acknowledgment.status === "conflict")
+  ).length;
   const provisionedCount = directory.speakers.filter((item) => item.provisioningStatus === "provisioned").length;
   const visibleCount = directory.speakers.filter((item) => item.speaker.visible).length;
   const filteredSpeakers = useMemo(
@@ -308,7 +330,7 @@ export function OrganizerSpeakersContent({
       <ProductionHeader
         eyebrow="Organizer control room / Cast"
         title="Speakers"
-        description={`Production directory for ${directory.event.name}. Readiness is derived from completed event tasks.`}
+        description={`Production directory for ${directory.event.name}. Readiness includes onboarding tasks and each speaker's response to the published schedule.`}
         accent="coral"
         actions={
           <span className="border-2 border-[#171714] bg-[#ff714f] px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] shadow-[3px_3px_0_#171714]">
@@ -321,6 +343,7 @@ export function OrganizerSpeakersContent({
           { label: "Speakers", value: directory.speakers.length, tone: "paper" },
           { label: "Provisioned", value: provisionedCount, tone: "sky" },
           { label: "Ready", value: readyCount, tone: "lime" },
+          { label: "Schedule conflicts", value: scheduleConflictCount, tone: "coral" },
           { label: "Public", value: visibleCount, tone: "purple" },
         ]}
       />
@@ -496,7 +519,7 @@ export function OrganizerSpeakersContent({
                       {nextTask ? <span className="mt-1.5 block truncate text-xs font-semibold text-ink-secondary">Next: {nextTask.name}</span> : null}
                     </span>
                     <span className="flex flex-wrap items-center gap-1.5 lg:block lg:space-y-1.5">
-                      <Badge tone={item.readiness.state === "ready" ? "success" : "neutral"}>{item.speaker.workflowStatus}</Badge>
+                      <Badge tone={isSpeakerReady(item) ? "success" : hasScheduleAttention(item) ? "warning" : "neutral"}>{item.speaker.workflowStatus}</Badge>
                       <span className="block text-[11px] font-bold text-ink-faint">{item.speaker.visible ? "Public" : "Hidden"}</span>
                     </span>
                     <span aria-hidden="true" className="absolute right-3 top-3 text-xl font-black text-ink lg:top-1/2 lg:-translate-y-1/2">→</span>
@@ -591,9 +614,38 @@ export function OrganizerSpeakersContent({
                         <Link className="block font-black text-ink underline decoration-2 underline-offset-4 hover:text-accent-deep" to={`/e/${encodeURIComponent(directory.event.slug)}/review?selectedSubmissionId=${encodeURIComponent(focusedSpeaker.submission.id)}`}>
                           {focusedSpeaker.submission.title}
                         </Link>
-                      ) : focusedSpeaker.sessions.length > 0 ? (
-                        <ul className="space-y-2">{focusedSpeaker.sessions.map((session) => <li key={session.id}><a className="font-black underline decoration-2 underline-offset-3 hover:text-accent-deep" href={organizerAgendaTalkPath(directory.event.slug, session.id)}>{session.title}</a>{session.startsAt ? <span className="block text-xs text-ink-faint">{new Date(session.startsAt).toLocaleString()}</span> : null}</li>)}</ul>
-                      ) : <p className="text-ink-faint">No session linked</p>}
+                      ) : null}
+                      {focusedSpeaker.sessions.length > 0 ? (
+                        <ul className="space-y-3">{focusedSpeaker.sessions.map((session) => {
+                          const acknowledgment = session.scheduleAcknowledgment;
+                          const label = acknowledgment?.status === "acknowledged"
+                            ? "Acknowledged"
+                            : acknowledgment?.status === "conflict"
+                              ? "Conflict reported"
+                              : acknowledgment?.status === "stale"
+                                ? "Changed — response needed"
+                                : acknowledgment?.status === "pending"
+                                  ? "Response pending"
+                                  : "Not published";
+                          const tone = acknowledgment?.status === "acknowledged"
+                            ? "success" as const
+                            : acknowledgment?.status === "conflict"
+                              ? "danger" as const
+                              : acknowledgment === null
+                                ? "neutral" as const
+                                : "warning" as const;
+                          return (
+                            <li key={session.id} className="border-2 border-line-strong bg-white p-3">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <a className="font-black underline decoration-2 underline-offset-3 hover:text-accent-deep" href={organizerAgendaTalkPath(directory.event.slug, session.id)}>{session.title}</a>
+                                <Badge tone={tone}>{label}</Badge>
+                              </div>
+                              {session.startsAt ? <span className="mt-1 block text-xs font-semibold text-ink-faint">{new Date(session.startsAt).toLocaleString()} · {session.durationMin} min{session.roomName ? ` · ${session.roomName}` : ""}</span> : null}
+                              {acknowledgment?.status === "conflict" && acknowledgment.note ? <p className="mt-2 border-l-4 border-danger pl-2 text-xs font-semibold text-ink">{acknowledgment.note}</p> : null}
+                            </li>
+                          );
+                        })}</ul>
+                      ) : focusedSpeaker.submission ? null : <p className="text-ink-faint">No session linked</p>}
                       <div className="flex flex-wrap gap-2">
                         <Badge tone={focusedSpeaker.speaker.profileReviewStatus === "approved" ? "success" : focusedSpeaker.speaker.profileReviewStatus === "changes_requested" ? "danger" : "neutral"}>
                           Profile {focusedSpeaker.speaker.profileReviewStatus.replace("_", " ")}

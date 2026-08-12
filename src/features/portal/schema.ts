@@ -208,8 +208,53 @@ export const SpeakerSession = Schema.Struct({
   startsAt: Schema.NullOr(Timestamp),
   durationMin: Schema.Int.pipe(Schema.positive()),
   status: Schema.Literal("draft", "confirmed", "cancelled"),
+  version: Schema.Int.pipe(Schema.positive()),
+  roomName: NullableText,
+  publicationRevision: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
+  scheduleAcknowledgment: Schema.NullOr(Schema.Struct({
+    status: Schema.Literal("pending", "acknowledged", "conflict", "stale"),
+    note: NullableText,
+    respondedAt: Schema.NullOr(Timestamp),
+    respondedPublicationRevision: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
+  })),
 });
 export type SpeakerSession = typeof SpeakerSession.Type;
+
+export const RecordedScheduleAcknowledgment = Schema.Struct({
+  talkId: EntityId,
+  speakerId: EntityId,
+  response: Schema.Literal("acknowledged", "conflict"),
+  publicationRevision: Schema.Int.pipe(Schema.positive()),
+  talkVersion: Schema.Int.pipe(Schema.positive()),
+  startsAt: Timestamp,
+  durationMin: Schema.Int.pipe(Schema.positive()),
+  roomId: Schema.NullOr(EntityId),
+  note: NullableText,
+  respondedAt: Timestamp,
+});
+export type RecordedScheduleAcknowledgment = typeof RecordedScheduleAcknowledgment.Type;
+
+export const RespondToPublishedScheduleInput = Schema.Struct({
+  eventId: EntityId,
+  talkId: EntityId,
+  expectedTalkVersion: Schema.Int.pipe(Schema.positive()),
+  expectedPublicationRevision: Schema.Int.pipe(Schema.positive()),
+  response: Schema.Literal("acknowledged", "conflict"),
+  note: Schema.NullOr(Schema.String.pipe(Schema.maxLength(2_000))),
+  idempotencyKey: IdempotencyKey,
+});
+export type RespondToPublishedScheduleInput = typeof RespondToPublishedScheduleInput.Type;
+
+export const RespondToPublishedScheduleOutput = Schema.Struct({
+  eventId: EntityId,
+  talkId: EntityId,
+  speakerId: EntityId,
+  response: Schema.Literal("acknowledged", "conflict"),
+  publicationRevision: Schema.Int.pipe(Schema.positive()),
+  talkVersion: Schema.Int.pipe(Schema.positive()),
+  respondedAt: Timestamp,
+});
+export type RespondToPublishedScheduleOutput = typeof RespondToPublishedScheduleOutput.Type;
 
 export const ReadinessSummary = Schema.Struct({
   tasksTotal: Schema.Int.pipe(Schema.nonNegative()),
@@ -245,6 +290,7 @@ export const PortalSnapshot = Schema.Struct({
   event: PortalEvent,
   speaker: SpeakerProfile,
   submission: Schema.NullOr(AcceptedSubmission),
+  sessions: Schema.Array(SpeakerSession),
   provisioningStatus: Schema.Literal("provisioned"),
   tasks: Schema.Array(PortalTask),
   resources: Schema.Array(PortalResource),

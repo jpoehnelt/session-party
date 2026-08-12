@@ -35,6 +35,8 @@ import {
   RestoreContentVersionInput,
   RespondToAcceptedSessionInput,
   RespondToAcceptedSessionOutput,
+  RespondToPublishedScheduleInput,
+  RespondToPublishedScheduleOutput,
   ReviewSpeakerProfileInput,
   SendSpeakerMessagesInput,
   SendSpeakerMessagesOutput,
@@ -75,6 +77,7 @@ import {
   logSpeakerContact,
   provisionSpeaker,
   respondToAcceptedSession,
+  respondToPublishedSchedule,
   restoreContentVersion,
   reviewSpeakerProfile,
   sendSpeakerMessages,
@@ -381,6 +384,28 @@ const respondToAcceptedSessionOperation = {
   emits: ["portal.session.confirmed", "portal.session.withdrawn"],
 } as const satisfies AnyOperationDef;
 
+const respondToPublishedScheduleOperation = {
+  id: "portal.respondToPublishedSchedule",
+  kind: "command",
+  input: RespondToPublishedScheduleInput,
+  output: RespondToPublishedScheduleOutput,
+  authorize: browserSessionAuthorization,
+  invoke: respondToPublishedSchedule,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/portal/schedule/:talkId/respond",
+    input: {
+      path: ["eventId", "talkId"],
+      body: ["expectedTalkVersion", "expectedPublicationRevision", "response", "note", "idempotencyKey"],
+    },
+    summary: "Acknowledge or report a conflict with the signed-in speaker's published session time",
+    successStatus: 200,
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["portal.schedule.acknowledged", "portal.schedule.conflict-reported"],
+} as const satisfies AnyOperationDef;
+
 const listResourcesOperation = {
   id: "portal.listResources",
   kind: "query",
@@ -611,6 +636,7 @@ export const operations = [
   manageOnboardingOperation,
   provisionSpeakerOperation,
   respondToAcceptedSessionOperation,
+  respondToPublishedScheduleOperation,
   restoreContentVersionOperation,
   reviewSpeakerProfileOperation,
   sendSpeakerMessagesOperation,
