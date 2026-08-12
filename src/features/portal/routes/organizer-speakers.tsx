@@ -11,6 +11,7 @@ import {
   ProductionStats,
   productionButtonClass,
 } from "../components/production-ui";
+import { preferredHeadshotUrl, useDownloadedHeadshot } from "./headshot";
 
 export const path = "/e/:eventSlug/speakers";
 export const contentWidth = "wide" as const;
@@ -83,6 +84,25 @@ const readinessLabel = (item: SpeakerDirectoryItem) => item.readiness.state === 
   : item.readiness.overdueCount > 0
     ? `${item.readiness.overdueCount} overdue`
     : `${item.readiness.outstandingTaskIds.length} open`;
+
+function OrganizerSpeakerAvatar({
+  eventId,
+  item,
+  size,
+}: {
+  readonly eventId: string;
+  readonly item: SpeakerDirectoryItem;
+  readonly size: "md" | "lg";
+}) {
+  const downloadedHeadshotUrl = useDownloadedHeadshot(eventId, item.speaker.headshotAssetId);
+  return (
+    <Avatar
+      name={item.speaker.displayName}
+      src={preferredHeadshotUrl(downloadedHeadshotUrl, item.speaker.headshotUrl)}
+      size={size}
+    />
+  );
+}
 
 function ReadinessMeter({ item, compact = false }: { readonly item: SpeakerDirectoryItem; readonly compact?: boolean }) {
   const percent = item.readiness.tasksTotal === 0
@@ -460,7 +480,7 @@ export function OrganizerSpeakersContent({
                     onClick={() => setFocusedSpeakerId(item.speaker.id)}
                   >
                     <span className="flex min-w-0 items-center gap-3">
-                      <Avatar name={item.speaker.displayName} size="md" />
+                      <OrganizerSpeakerAvatar eventId={directory.event.id} item={item} size="md" />
                       <span className="min-w-0">
                         <span className="block truncate font-black text-ink">{item.speaker.displayName}</span>
                         <span className="block truncate text-xs text-ink-faint">
@@ -506,7 +526,7 @@ export function OrganizerSpeakersContent({
                     <Button size="sm" variant="ghost" className="text-white xl:hidden" onClick={() => setFocusedSpeakerId(null)}>Close</Button>
                   </div>
                   <div className="mt-3 flex items-center gap-3">
-                    <Avatar name={focusedSpeaker.speaker.displayName} size="lg" />
+                    <OrganizerSpeakerAvatar eventId={directory.event.id} item={focusedSpeaker} size="lg" />
                     <div className="min-w-0">
                       <a className="block truncate text-lg font-black underline decoration-2 underline-offset-4" href={`/e/${encodeURIComponent(directory.event.slug)}/speakers/${encodeURIComponent(focusedSpeaker.speaker.id)}`}>{focusedSpeaker.speaker.displayName}</a>
                       <p className="truncate text-xs font-semibold text-white/65">
