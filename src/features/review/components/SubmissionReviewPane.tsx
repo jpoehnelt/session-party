@@ -5,6 +5,7 @@ import {
   appendReviewCommentRequest,
   assignReviewerRequest,
   recuseAssignmentRequest,
+  removeAssignmentRequest,
   rejectSubmissionRequest,
   revokeAcceptanceRequest,
   requestAiSuggestionRequest,
@@ -13,6 +14,7 @@ import {
 import type {
   CriterionScore,
   HumanReview,
+  ReviewerAssignment,
   ReviewMember,
   SubmissionReviewDetail,
 } from "../schema";
@@ -177,7 +179,7 @@ export function SubmissionReviewPane({
   const [threadBody, setThreadBody] = useState("");
   const [recusalReason, setRecusalReason] = useState("");
   const [confirmedAiSuggestionId, setConfirmedAiSuggestionId] = useState<string>();
-  const [pendingOperation, setPendingOperation] = useState<"assign" | "recuse" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject">();
+  const [pendingOperation, setPendingOperation] = useState<"assign" | "remove" | "recuse" | "score" | "comment" | "ai" | "accept" | "revoke" | "reject">();
   const [mutationError, setMutationError] = useState<string>();
   const decisionKeysRef = useRef<SubmissionDecisionKeys | undefined>(undefined);
   const decisionKeys = decisionKeysForSubmission(
@@ -187,6 +189,7 @@ export function SubmissionReviewPane({
   decisionKeysRef.current = decisionKeys;
   const commentKey = useRef(`review-comment-${crypto.randomUUID()}`);
   const recusalKey = useRef(`review-recusal-${crypto.randomUUID()}`);
+  const removalKeys = useRef(new Map<string, string>());
 
   useEffect(() => {
     setScores(currentReview?.scores ?? []);
@@ -200,6 +203,7 @@ export function SubmissionReviewPane({
     setRecusalReason("");
     commentKey.current = `review-comment-${crypto.randomUUID()}`;
     recusalKey.current = `review-recusal-${crypto.randomUUID()}`;
+    removalKeys.current.clear();
   }, [submission.id]);
 
   const runMutation = async (
@@ -249,6 +253,24 @@ export function SubmissionReviewPane({
       });
       recusalKey.current = `review-recusal-${crypto.randomUUID()}`;
       setRecusalReason("");
+    });
+  };
+
+  const removeAssignment = (assignment: ReviewerAssignment) => {
+    if (!organizer) return;
+    if (!window.confirm(`Remove ${assignment.reviewerName} from this reviewer queue? Any saved review and its audit history will remain available.`)) return;
+    const idempotencyKey = removalKeys.current.get(assignment.id)
+      ?? `review-remove-assignment-${crypto.randomUUID()}`;
+    removalKeys.current.set(assignment.id, idempotencyKey);
+    void runMutation("remove", async () => {
+      await removeAssignmentRequest({
+        eventId,
+        assignmentId: assignment.id,
+        expectedVersion: assignment.version,
+        idempotencyKey,
+        requestId: operationRequestId("review-remove-assignment"),
+      });
+      removalKeys.current.delete(assignment.id);
     });
   };
 
@@ -448,6 +470,17 @@ export function SubmissionReviewPane({
                     {assignment.recusalReason || "No reason provided"}
                     {assignment.recusedAt ? ` · ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(assignment.recusedAt)} ${timezone}` : ""}
                   </span>
+                ) : null}
+                {organizer && assignment.status === "assigned" ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={pendingOperation === "remove"}
+                    disabled={pendingOperation !== undefined}
+                    onClick={() => removeAssignment(assignment)}
+                  >
+                    Remove from reviewer queue
+                  </Button>
                 ) : null}
               </li>
             ))}

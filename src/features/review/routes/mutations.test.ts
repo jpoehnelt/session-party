@@ -7,6 +7,7 @@ import {
   createReviewRoundRequest,
   rejectSubmissionRequest,
   recuseAssignmentRequest,
+  removeAssignmentRequest,
   revokeAcceptanceRequest,
   requestAiSuggestionRequest,
   saveScoreRequest,
@@ -19,6 +20,40 @@ const jsonResponse = (payload: unknown, status = 200) => new Response(JSON.strin
 afterEach(() => vi.unstubAllGlobals());
 
 describe("review mutation client", () => {
+  it("deletes one assignment with version and idempotency evidence", async () => {
+    const output = {
+      assignmentId: "assignment_stale",
+      roundId: "round_one",
+      submissionId: "submission_stale",
+      reviewerUserId: "reviewer_sam",
+      removedAt: 1_700_000_000_000,
+      preservedReviewCount: 1,
+      idempotent: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(output));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(removeAssignmentRequest({
+      eventId: "event_one",
+      assignmentId: "assignment_stale",
+      expectedVersion: 2,
+      idempotencyKey: "remove-assignment-stale",
+      requestId: "request-remove-assignment",
+    })).resolves.toEqual(output);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/events/event_one/review/assignments/assignment_stale",
+      {
+        method: "DELETE",
+        headers: {
+          "x-request-id": "request-remove-assignment",
+          "idempotency-key": "remove-assignment-stale",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ expectedVersion: 2 }),
+      },
+    );
+  });
+
   it("posts append-only committee messages with required idempotency", async () => {
     const output = {
       comment: {

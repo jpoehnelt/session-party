@@ -58,6 +58,7 @@ import {
   getWorkbench,
   recuseAssignment,
   rejectSubmission,
+  removeAssignment,
   revokeAcceptance,
   requestAiSuggestion,
   saveScore,
@@ -488,6 +489,7 @@ describe("review and acceptance slice", () => {
       "review.getWorkbench",
       "review.recuseAssignment",
       "review.rejectSubmission",
+      "review.removeAssignment",
       "review.requestAiSuggestion",
       "review.revokeAcceptance",
       "review.saveScore",
@@ -1416,6 +1418,163 @@ describe("review and acceptance slice", () => {
       eq(domainChanges.aggregateType, "reviewAssignment"),
       eq(domainChanges.aggregateId, assigned.assignment.id),
     ))).toContainEqual(expect.objectContaining({ eventType: "review.assignment.recused" }));
+  });
+
+  it("lets an organizer remove one completed assignment from the active queue without deleting its review history", async () => {
+    const cleanupReviewerId = "user_reviewer_assignment_cleanup";
+    const createdAt = new Date(fixtureClock);
+    await db.insert(users).values({
+      id: cleanupReviewerId,
+      email: "cleanup-reviewer@example.com",
+      name: "Sam Queue Cleanup",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values({
+      id: "member_reviewer_assignment_cleanup",
+      eventId: fixtureEventId,
+      userId: cleanupReviewerId,
+      role: "reviewer",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const cleanupReviewer: Principal = {
+      kind: "browser-session",
+      userId: cleanupReviewerId,
+      email: "cleanup-reviewer@example.com",
+      name: "Sam Queue Cleanup",
+      sessionId: "session_reviewer_assignment_cleanup",
+      expiresAt: fixtureClock + 86_400_000,
+    };
+    const { submissionId: targetOneId } = await seedTransitionSubmission("submitted");
+    const { submissionId: targetTwoId } = await seedTransitionSubmission("submitted");
+    const { submissionId: staleId } = await seedTransitionSubmission("submitted");
+    const [targetOne, targetTwo, stale] = await Promise.all([
+      runAs(owner, assignReviewer({
+        eventId: fixtureEventId,
+        roundId: activeRoundFixture.id,
+        submissionId: targetOneId,
+        reviewerUserId: cleanupReviewerId,
+        expectedVersion: 0,
+        requestId: "request_assign_cleanup_target_one",
+      })),
+      runAs(owner, assignReviewer({
+        eventId: fixtureEventId,
+        roundId: activeRoundFixture.id,
+        submissionId: targetTwoId,
+        reviewerUserId: cleanupReviewerId,
+        expectedVersion: 0,
+        requestId: "request_assign_cleanup_target_two",
+      })),
+      runAs(owner, assignReviewer({
+        eventId: fixtureEventId,
+        roundId: activeRoundFixture.id,
+        submissionId: staleId,
+        reviewerUserId: cleanupReviewerId,
+        expectedVersion: 0,
+        requestId: "request_assign_cleanup_stale",
+      })),
+    ]);
+    const completedReview = await runAs(cleanupReviewer, saveScore({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: staleId,
+      expectedVersion: 0,
+      scores: [
+        { criterionKey: "relevance", score: 4 },
+        { criterionKey: "specificity", score: 5 },
+        { criterionKey: "delivery", score: 4 },
+      ],
+      comment: "Historical rationale must survive queue cleanup.",
+      requestId: "request_score_cleanup_stale",
+    }));
+    const before = await runAs(cleanupReviewer, getWorkbench({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      assignedToMe: true,
+      page: 1,
+      pageSize: 100,
+    }));
+    expect(new Set(before.queue.map(({ id: submissionId }) => submissionId))).toEqual(
+      new Set([targetOneId, targetTwoId, staleId]),
+    );
+
+    const input = {
+      eventId: fixtureEventId,
+      assignmentId: stale.assignment.id,
+      expectedVersion: stale.assignment.version,
+      idempotencyKey: "remove-stale-completed-assignment",
+      requestId: "request_remove_stale_completed_assignment",
+    } as const;
+    const reviewerAttempt = await runEitherAs(cleanupReviewer, removeAssignment({
+      ...input,
+      idempotencyKey: "reviewer-cannot-remove-assignment",
+      requestId: "request_reviewer_cannot_remove_assignment",
+    }));
+    expect(reviewerAttempt._tag).toBe("Left");
+    if (reviewerAttempt._tag === "Left") expect(reviewerAttempt.left._tag).toBe("Forbidden");
+    const removed = await runAs(owner, removeAssignment(input));
+    const replayed = await runAs(owner, removeAssignment(input));
+    expect(removed).toMatchObject({
+      assignmentId: stale.assignment.id,
+      roundId: activeRoundFixture.id,
+      submissionId: staleId,
+      reviewerUserId: cleanupReviewerId,
+      preservedReviewCount: 1,
+      idempotent: false,
+    });
+    expect(replayed).toEqual({ ...removed, idempotent: true });
+
+    const after = await runAs(cleanupReviewer, getWorkbench({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      assignedToMe: true,
+      page: 1,
+      pageSize: 100,
+    }));
+    expect(after.queue.map(({ id: submissionId }) => submissionId).sort()).toEqual([targetOneId, targetTwoId].sort());
+    const activeRows = await db.select().from(reviewAssignments).where(and(
+      eq(reviewAssignments.eventId, fixtureEventId),
+      eq(reviewAssignments.reviewerUserId, cleanupReviewerId),
+      eq(reviewAssignments.status, "assigned"),
+    ));
+    expect(activeRows.map(({ id: assignmentId }) => assignmentId).sort()).toEqual(
+      [targetOne.assignment.id, targetTwo.assignment.id].sort(),
+    );
+    const preserved = await db.select().from(reviews).where(eq(reviews.id, completedReview.review.id));
+    expect(preserved).toHaveLength(1);
+    expect(preserved[0]).toMatchObject({
+      submissionId: staleId,
+      reviewerUserId: cleanupReviewerId,
+      comment: "Historical rationale must survive queue cleanup.",
+    });
+    const organizerHistory = await runAs(owner, getWorkbench({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      selectedSubmissionId: staleId,
+      page: 1,
+      pageSize: 100,
+    }));
+    expect(organizerHistory.selected?.reviews).toContainEqual(expect.objectContaining({
+      id: completedReview.review.id,
+      reviewerUserId: cleanupReviewerId,
+      comment: "Historical rationale must survive queue cleanup.",
+    }));
+    expect(await db.select().from(auditLog).where(and(
+      eq(auditLog.action, "review.removeAssignment"),
+      eq(auditLog.resourceId, stale.assignment.id),
+    ))).toContainEqual(expect.objectContaining({
+      before: expect.objectContaining({
+        submissionId: staleId,
+        reviewerUserId: cleanupReviewerId,
+        status: "assigned",
+      }),
+      after: null,
+    }));
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventType, "review.assignment.removed"),
+      eq(domainChanges.aggregateId, stale.assignment.id),
+    ))).toHaveLength(1);
   });
 
   it("bulk-balances an independent round pool and reports per-reviewer completion", async () => {

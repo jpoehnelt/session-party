@@ -375,6 +375,43 @@ describe("review workbench route", () => {
     expect(markup).not.toContain("Durable acceptance");
   });
 
+  it("offers organizers queue removal for active assignments while keeping reviewer recusal distinct", () => {
+    const assignedWorkbench: ReviewWorkbench = {
+      ...workbench,
+      selected: workbench.selected && {
+        ...workbench.selected,
+        assignments: [{
+          id: "assignment_stale",
+          reviewerUserId: "user_reviewer",
+          reviewerName: "Grace Reviewer",
+          status: "assigned",
+          recusalReason: null,
+          recusedAt: null,
+          version: 2,
+        }],
+        reviews: [{
+          id: "review_historical",
+          reviewerUserId: "user_reviewer",
+          reviewerName: "Grace Reviewer",
+          score: 4,
+          scores: [{ criterionKey: "clarity", score: 4 }],
+          comment: "Historical rationale",
+          version: 1,
+          updatedAt: 1_700_000_000_000,
+        }],
+      },
+    };
+    const markup = renderToStaticMarkup(createElement(ReviewWorkbenchContent, {
+      workbench: assignedWorkbench,
+      onSelectSubmission: () => undefined,
+    }));
+
+    expect(markup).toContain("Assigned · Grace Reviewer");
+    expect(markup).toContain("Remove from reviewer queue");
+    expect(markup).toContain("Historical rationale");
+    expect(markup).not.toContain("Recuse from this submission");
+  });
+
   it("renders scoring and the private committee conversation for an assigned event reviewer", () => {
     const reviewerWorkbench: ReviewWorkbench = {
       ...workbench,
