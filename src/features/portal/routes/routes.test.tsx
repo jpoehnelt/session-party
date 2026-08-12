@@ -136,7 +136,7 @@ const profile = {
 const snapshot: PortalSnapshot = {
   event,
   speaker: profile,
-  submission: { id: "submission-stage", title: "The calm show call", category: "Operations", version: 2 },
+  submission: { id: "submission-stage", title: "The calm show call", category: "Operations", version: 2, confirmationStatus: "awaiting_confirmation" },
   provisioningStatus: "provisioned",
   tasks: [{
     ...task,
@@ -519,6 +519,8 @@ describe("speaker portal content", () => {
       onSubmitTaskForm: succeeds,
     }));
     expect(markup).toContain("The calm show call");
+    expect(markup).toContain("Confirm this session");
+    expect(markup).toContain("Withdraw session");
     expect(markup).toContain("River Okafor");
     expect(markup).toContain("Review speaker profile");
     expect(markup).not.toContain("Production thread");
@@ -535,6 +537,22 @@ describe("speaker portal content", () => {
     expect(markup).not.toContain("Cues complete");
     expect(markup).not.toContain("Cues remaining");
     expect(markup).not.toContain("0 of 1 complete");
+  });
+
+  it("projects a confirmed accepted session without offering a second confirmation", () => {
+    const markup = renderToStaticMarkup(createElement(SpeakerPortalContent, {
+      snapshot: {
+        ...snapshot,
+        submission: snapshot.submission && { ...snapshot.submission, confirmationStatus: "confirmed" },
+      },
+      onSaveProfile: noop,
+      onToggleTask: noop,
+      onUpload: noop,
+      onSubmitTaskForm: succeeds,
+    }));
+    expect(markup).toContain("Attendance confirmed");
+    expect(markup).not.toContain("Confirm this session");
+    expect(markup).toContain("Withdraw session");
   });
 
   it("renders the persisted uploaded headshot ahead of a stale profile URL", () => {

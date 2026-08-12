@@ -4,6 +4,15 @@ import type { AnswerValue } from "contracts/types";
 import { ApiError } from "@/client/api";
 import {
   Alert,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
   AlertDescription,
   AlertTitle,
   Avatar,
@@ -42,6 +51,7 @@ import {
   getSpeakerPortal,
   importReusableProfile,
   setSpeakerTaskCompletion,
+  respondToAcceptedSession,
   submitSpeakerTaskForm,
   submitProfileReview,
   updateSpeakerProfile,
@@ -133,6 +143,7 @@ export default function SpeakerPortalRoute() {
   const [claim, setClaim] = useState<ClaimSpeakerOutput | null>(null);
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
+  const [withdrawnSessionTitle, setWithdrawnSessionTitle] = useState<string | null>(null);
   const claimKeyRef = useRef<string | null>(null);
 
   async function claimAccess() {
@@ -179,6 +190,22 @@ export default function SpeakerPortalRoute() {
   }
   const snapshot = state.data;
 
+  if (withdrawnSessionTitle !== null) {
+    return (
+      <SpeakerPortalFrame>
+        <div className="mx-auto max-w-xl pt-12">
+          <Card className={productionCardClass}>
+            <EmptyState
+              title="Session withdrawn"
+              description={`“${withdrawnSessionTitle}” has been withdrawn and removed from the event schedule. The event team can see the change immediately.`}
+            />
+          </Card>
+        </div>
+        <Toaster />
+      </SpeakerPortalFrame>
+    );
+  }
+
   async function mutate(label: string, action: () => Promise<unknown>) {
     setMutation(label);
     setMutationError(null);
@@ -223,6 +250,34 @@ export default function SpeakerPortalRoute() {
     }
   }
 
+  async function respondToSession(action: "confirm" | "withdraw") {
+    if (!snapshot.submission) return;
+    setMutation(action === "confirm" ? "Session confirmation" : "Session withdrawal");
+    setMutationError(null);
+    try {
+      await respondToAcceptedSession(eventSlug, {
+        eventId: snapshot.event.id,
+        submissionId: snapshot.submission.id,
+        expectedVersion: snapshot.submission.version,
+        action,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      if (action === "withdraw") {
+        setWithdrawnSessionTitle(snapshot.submission.title);
+        toast("Session withdrawn and schedule cleared", { tone: "success" });
+      } else {
+        toast("Session attendance confirmed", { tone: "success" });
+        retry();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Session response could not be saved";
+      setMutationError(message);
+      toast(message, { tone: "danger" });
+    } finally {
+      setMutation(null);
+    }
+  }
+
   return (
     <SpeakerPortalFrame>
       <SpeakerPortalContent
@@ -248,6 +303,7 @@ export default function SpeakerPortalRoute() {
             }),
           )
         }
+        onRespondToSession={(action) => void respondToSession(action)}
         onUpload={(input) => mutate("Upload", () => uploadSpeakerAsset(eventSlug, input))}
         onAddComment={(assetId, body) => mutate("Comment", () => addContentComment(snapshot.event.id, {
           eventId: snapshot.event.id,
@@ -314,6 +370,7 @@ export interface SpeakerPortalContentProps {
   readonly onImportReusableProfile?: () => void;
   readonly onSubmitProfileReview?: () => void;
   readonly onToggleTask: (task: PortalTask, completed: boolean) => void;
+  readonly onRespondToSession?: (action: "confirm" | "withdraw") => void;
   readonly onUpload: (input: UploadPortalAssetInput) => void;
   readonly onAddComment?: (assetId: string, body: string) => void;
   readonly onSubmitTaskForm: (
@@ -332,6 +389,7 @@ export function SpeakerPortalContent({
   onImportReusableProfile = () => undefined,
   onSubmitProfileReview = () => undefined,
   onToggleTask,
+  onRespondToSession = () => undefined,
   onUpload,
   onAddComment = () => undefined,
   onSubmitTaskForm,
@@ -384,6 +442,52 @@ export function SpeakerPortalContent({
               {snapshot.submission.category && (
                 <p className="mt-3 inline-block border-2 border-[#171714] bg-[#fffdf7] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[#171714]">{snapshot.submission.category}</p>
               )}
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                {snapshot.submission.confirmationStatus === "confirmed" ? (
+                  <Badge tone="success" className="rounded-none border-2 border-[#171714] bg-[#caff4a] font-black uppercase text-[#171714]">
+                    Attendance confirmed
+                  </Badge>
+                ) : (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button type="button" className={`${productionButtonClass} bg-[#caff4a] text-[#171714]`} disabled={busyAction !== null}>
+                        Confirm this session
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Confirm you will present this session?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This tells the event team that you accept the invitation to present “{snapshot.submission.title}”.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Not yet</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => onRespondToSession("confirm")}>Confirm attendance</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button type="button" variant="ghost" className={`${productionButtonClass} text-[#171714] hover:text-[#171714]`} disabled={busyAction !== null}>
+                      Withdraw session
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Withdraw this accepted session?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This cannot be undone from the speaker portal. “{snapshot.submission.title}” will be removed from the schedule, and any assigned room and start time will be cleared immediately.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Keep session</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => onRespondToSession("withdraw")}>Withdraw and clear schedule</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
             </section>
           )}
 

@@ -60,7 +60,7 @@ const speakerItem = (id: string, displayName: string, taskId: string): SpeakerDi
     version: 1,
     pendingSyncFields: [],
   },
-  submission: { id: `submission-${id}`, title: `${displayName}'s session`, category: "systems", version: 2 },
+  submission: { id: `submission-${id}`, title: `${displayName}'s session`, category: "systems", version: 2, confirmationStatus: "awaiting_confirmation" },
   source: "accepted",
   acceptanceEventId: `acceptance-${id}`,
   provisioningId: `provisioning-${id}`,

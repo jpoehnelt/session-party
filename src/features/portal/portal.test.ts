@@ -64,6 +64,7 @@ import {
   uploadManagedSpeakerHeadshot,
   restoreContentVersion,
   reviewSpeakerProfile,
+  respondToAcceptedSession,
   downloadContent,
   sendSpeakerMessages,
   enqueueAutomatedDueTaskReminders,
@@ -271,6 +272,12 @@ describe("portal service", () => {
     expect(operations.find(({ id }) => id === "portal.claimSpeaker")).toMatchObject({
       authorize: { kind: "browser-session" },
       rest: { method: "post", path: "/events/:eventId/portal/claim" },
+      idempotency: "required",
+      concurrency: "required",
+    });
+    expect(operations.find(({ id }) => id === "portal.respondToAcceptedSession")).toMatchObject({
+      authorize: { kind: "browser-session" },
+      rest: { method: "post", path: "/events/:eventId/portal/sessions/:submissionId/respond" },
       idempotency: "required",
       concurrency: "required",
     });
@@ -675,6 +682,127 @@ describe("portal service", () => {
     const publicGallery = await Effect.runPromise(getPublicSpeakers({ eventSlug: setup.eventSlug }).pipe(Effect.provide(AppLayer(env))));
     expect(JSON.stringify(publicGallery)).not.toContain(exactLogistics);
     expect(JSON.stringify(publicGallery)).not.toContain("Dietary preference");
+  });
+
+  it("lets only the linked speaker confirm an accepted session and completes confirmation readiness idempotently", async () => {
+    const setup = await fixture();
+    const confirmationTask = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Confirm attendance",
+      description: "Accept the invitation to present.",
+      kind: "confirm",
+      formId: null,
+      dueAt: null,
+      order: 1,
+    }));
+    const unrelatedConfirmation = await runAs(owner, createPortalTask({
+      eventId: setup.eventId,
+      name: "Employer approval",
+      description: "Confirm the travel authorization separately.",
+      kind: "confirm",
+      formId: null,
+      dueAt: null,
+      order: 2,
+    }));
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const input = {
+      eventId: setup.eventSlug,
+      submissionId: setup.submissionId,
+      expectedVersion: 1,
+      action: "confirm",
+      idempotencyKey: `confirm-session-${setup.eventId}`,
+    } as const;
+
+    await expectFailure(otherUser, respondToAcceptedSession(input), "Forbidden");
+    await expectFailure(speakerUser, respondToAcceptedSession({ ...input, expectedVersion: 2 }), "Conflict");
+    const confirmed = await runAs(speakerUser, respondToAcceptedSession(input));
+    expect(confirmed).toEqual({
+      eventId: setup.eventId,
+      submissionId: setup.submissionId,
+      action: "confirm",
+      status: "confirmed",
+      submissionVersion: 1,
+      clearedTalkIds: [],
+    });
+    await expect(runAs(speakerUser, respondToAcceptedSession(input))).resolves.toEqual(confirmed);
+
+    const snapshot = await runAs(speakerUser, getPortalSnapshot({ eventId: setup.eventSlug }));
+    expect(snapshot.submission).toMatchObject({
+      id: setup.submissionId,
+      confirmationStatus: "confirmed",
+      version: 1,
+    });
+    expect(snapshot.tasks.find(({ id }) => id === confirmationTask.id)).toMatchObject({ completed: true });
+    expect(snapshot.tasks.find(({ id }) => id === unrelatedConfirmation.id)).toMatchObject({ completed: false });
+    expect(snapshot.readiness).toMatchObject({ tasksDone: 1, tasksTotal: 2, state: "in_progress" });
+
+    const db = drizzle(env.DB);
+    expect(await db.select().from(taskCompletions).where(and(
+      eq(taskCompletions.eventId, setup.eventId),
+      eq(taskCompletions.taskId, confirmationTask.id),
+      eq(taskCompletions.speakerId, setup.speakerId),
+    ))).toHaveLength(1);
+    expect(await db.select().from(domainChanges).where(and(
+      eq(domainChanges.eventId, setup.eventId),
+      eq(domainChanges.aggregateId, setup.submissionId),
+      eq(domainChanges.eventType, "portal.session.confirmed"),
+    ))).toHaveLength(1);
+  });
+
+  it("withdraws atomically, revokes provisioning, and clears every linked agenda slot", async () => {
+    const setup = await fixture();
+    await runAs(owner, provisionSpeaker({
+      eventId: setup.eventId,
+      speakerId: setup.speakerId,
+      provisioningId: setup.provisioningId,
+      expectedVersion: 1,
+    }));
+    const roomId = `withdraw-room-${setup.eventId}`;
+    const talkId = `withdraw-talk-${setup.eventId}`;
+    const scheduledAt = Date.now() + 86_400_000;
+    await env.DB.batch([
+      env.DB.prepare("insert into rooms (id, event_id, name, version, created_at, updated_at) values (?, ?, 'Main stage', 1, ?, ?)").bind(roomId, setup.eventId, scheduledAt, scheduledAt),
+      env.DB.prepare("insert into talks (id, event_id, submission_id, title, room_id, starts_at, duration_min, status, version, created_at, updated_at) values (?, ?, ?, 'Accepted talk', ?, ?, 45, 'confirmed', 3, ?, ?)").bind(talkId, setup.eventId, setup.submissionId, roomId, scheduledAt, scheduledAt, scheduledAt),
+      env.DB.prepare("insert into talk_speakers (id, event_id, talk_id, speaker_id, created_at) values (?, ?, ?, ?, ?)").bind(`withdraw-talk-speaker-${setup.eventId}`, setup.eventId, talkId, setup.speakerId, scheduledAt),
+    ]);
+    const input = {
+      eventId: setup.eventId,
+      submissionId: setup.submissionId,
+      expectedVersion: 1,
+      action: "withdraw",
+      idempotencyKey: `withdraw-session-${setup.eventId}`,
+    } as const;
+
+    await expectFailure(reviewer, respondToAcceptedSession(input), "Forbidden");
+    await expectFailure(speakerUser, respondToAcceptedSession({ ...input, expectedVersion: 2 }), "Conflict");
+    const withdrawn = await runAs(speakerUser, respondToAcceptedSession(input));
+    expect(withdrawn).toEqual({
+      eventId: setup.eventId,
+      submissionId: setup.submissionId,
+      action: "withdraw",
+      status: "withdrawn",
+      submissionVersion: 2,
+      clearedTalkIds: [talkId],
+    });
+    await expect(runAs(speakerUser, respondToAcceptedSession(input))).resolves.toEqual(withdrawn);
+    await expectFailure(speakerUser, getPortalSnapshot({ eventId: setup.eventId }), "Forbidden");
+
+    const [storedSubmission, storedProvisioning, storedTalk, latestAcceptance] = await Promise.all([
+      env.DB.prepare("select status, accepted_at, version from submissions where event_id = ? and id = ?").bind(setup.eventId, setup.submissionId).first<{ status: string; accepted_at: number | null; version: number }>(),
+      env.DB.prepare("select status, version from speaker_provisioning where event_id = ? and id = ?").bind(setup.eventId, setup.provisioningId).first<{ status: string; version: number }>(),
+      env.DB.prepare("select status, room_id, starts_at, version from talks where event_id = ? and id = ?").bind(setup.eventId, talkId).first<{ status: string; room_id: string | null; starts_at: number | null; version: number }>(),
+      env.DB.prepare("select type, submission_version from acceptance_events where event_id = ? and submission_id = ? order by occurred_at desc, id desc limit 1").bind(setup.eventId, setup.submissionId).first<{ type: string; submission_version: number }>(),
+    ]);
+    expect(storedSubmission).toEqual({ status: "withdrawn", accepted_at: null, version: 2 });
+    expect(storedProvisioning).toEqual({ status: "revoked", version: 3 });
+    expect(storedTalk).toEqual({ status: "cancelled", room_id: null, starts_at: null, version: 4 });
+    expect(latestAcceptance).toEqual({ type: "revoked", submission_version: 2 });
+    expect(await env.DB.prepare("select id from audit_log where event_id = ? and action = 'portal.session.withdrawn' and resource_id = ?").bind(setup.eventId, setup.submissionId).all()).toMatchObject({ results: [{ id: expect.any(String) }] });
   });
 
   it("persists completion and transitions readiness after provisioning", async () => {

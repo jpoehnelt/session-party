@@ -21,6 +21,7 @@ import {
   ImportSpeakersCsvOutput,
   SendSpeakerMessagesOutput,
   SpeakerProfile,
+  RespondToAcceptedSessionOutput,
   type AddContentCommentInput,
   type CreateManagedSpeakerInput,
   type CreateResourceInput,
@@ -41,6 +42,7 @@ import {
   type UploadPortalAssetInput,
   type ProvisionSpeakerInput,
   type RestoreContentVersionInput,
+  type RespondToAcceptedSessionInput,
   type ReviewSpeakerProfileInput,
   type SendSpeakerMessagesInput,
   type SubmitProfileReviewInput,
@@ -180,6 +182,15 @@ export function setSpeakerTaskCompletion(eventSlug: string, input: SetTaskComple
   return apiFetch<unknown>(`${api}/events/${segment(eventSlug)}/portal/tasks/${segment(input.taskId)}/completion`, {
     method: "PUT",
     body,
+  });
+}
+
+export function respondToAcceptedSession(eventSlug: string, input: RespondToAcceptedSessionInput) {
+  const body = requestBody(input, "eventId", "submissionId");
+  return apiFetch(`${api}/events/${segment(eventSlug)}/portal/sessions/${segment(input.submissionId)}/respond`, {
+    method: "POST",
+    body,
+    schema: RespondToAcceptedSessionOutput,
   });
 }
 

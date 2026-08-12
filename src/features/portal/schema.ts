@@ -179,8 +179,28 @@ export const AcceptedSubmission = Schema.Struct({
   title: Schema.String,
   category: NullableText,
   version: Schema.Int.pipe(Schema.positive()),
+  confirmationStatus: Schema.Literal("awaiting_confirmation", "confirmed"),
 });
 export type AcceptedSubmission = typeof AcceptedSubmission.Type;
+
+export const RespondToAcceptedSessionInput = Schema.Struct({
+  eventId: EntityId,
+  submissionId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  action: Schema.Literal("confirm", "withdraw"),
+  idempotencyKey: IdempotencyKey,
+});
+export type RespondToAcceptedSessionInput = typeof RespondToAcceptedSessionInput.Type;
+
+export const RespondToAcceptedSessionOutput = Schema.Struct({
+  eventId: EntityId,
+  submissionId: EntityId,
+  action: Schema.Literal("confirm", "withdraw"),
+  status: Schema.Literal("confirmed", "withdrawn"),
+  submissionVersion: Schema.Int.pipe(Schema.positive()),
+  clearedTalkIds: Schema.Array(EntityId),
+});
+export type RespondToAcceptedSessionOutput = typeof RespondToAcceptedSessionOutput.Type;
 
 export const SpeakerSession = Schema.Struct({
   id: EntityId,
