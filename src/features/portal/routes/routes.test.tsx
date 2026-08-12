@@ -43,6 +43,7 @@ import { path as resourcesPath, OrganizerResourcesContent } from "./organizer-re
 import { filterSpeakerDirectory, path as speakersPath, OrganizerSpeakersContent } from "./organizer-speakers";
 import { path as tasksPath, OrganizerTasksContent } from "./organizer-tasks";
 import { buildStoredZip, path as contentPath, OrganizerContentLibrary } from "./organizer-content";
+import { OrganizerSpeakerDetailContent } from "./organizer-speaker-detail";
 import { layout as embedLayout, path as embedPath, PublicSpeakerEmbedContent } from "./public-speakers";
 import {
   allowlistedEmbedUrl,
@@ -697,6 +698,35 @@ describe("speaker portal content", () => {
 });
 
 describe("organizer content and workflows", () => {
+  it("renders the synced reusable bio and headshot on the organizer speaker record", () => {
+    const syncedBio = "SBEK-PORTAL-BIO-01";
+    const syncedHeadshot = "https://images.example.com/headshot.png";
+    const syncedDirectory: SpeakerDirectory = {
+      ...directory,
+      speakers: directory.speakers.map((item) => ({
+        ...item,
+        speaker: {
+          ...item.speaker,
+          bio: syncedBio,
+          headshotUrl: syncedHeadshot,
+          profileSourceId: "reusable-profile-river",
+          profileSourceVersion: 7,
+        },
+      })),
+    };
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null,
+      createElement(OrganizerSpeakerDetailContent, {
+        directory: syncedDirectory,
+        eventSlug: event.slug,
+        speakerId: profile.id,
+      }),
+    ));
+    expect(markup).toContain(syncedBio);
+    expect(markup).toContain(`src="${syncedHeadshot}"`);
+    expect(markup).toContain("approved");
+    expect(markup).toContain("reusable headshot stay synced");
+  });
+
   it("renders a dense speaker directory and readiness matrix from returned state", () => {
     const speakersMarkup = renderToStaticMarkup(createElement(MemoryRouter, null,
       createElement(OrganizerSpeakersContent, {

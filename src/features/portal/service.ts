@@ -848,6 +848,115 @@ const safeHttpUrl = (value: string): boolean => {
   }
 };
 
+/**
+ * Copies speaker-owned reusable fields into event records when either side of
+ * the portal is opened. Organizer workflow, visibility, and review decisions
+ * remain event-owned; Airtable-backed event records retain field authority.
+ */
+const syncReusableProfileSnapshots = (
+  eventId: string,
+  speakerId?: string,
+): Effect.Effect<void, External, Db> => Effect.gen(function* () {
+  const { db } = yield* Db;
+  const [airtable] = yield* database(() => db.select({ id: integrations.id }).from(integrations).where(and(
+    eq(integrations.eventId, eventId),
+    eq(integrations.kind, "airtable"),
+  )).limit(1));
+  if (airtable) return;
+
+  const candidates = yield* database(() => db.select({
+    speaker: speakers,
+    profile: speakerProfiles,
+  }).from(speakers).innerJoin(speakerProfiles, and(
+    eq(speakerProfiles.userId, speakers.userId),
+    or(
+      isNull(speakers.profileSourceId),
+      ne(speakers.profileSourceId, speakerProfiles.id),
+      isNull(speakers.profileSourceVersion),
+      sql`${speakerProfiles.version} > ${speakers.profileSourceVersion}`,
+    ),
+  )).where(and(
+    eq(speakers.eventId, eventId),
+    ne(speakers.profileReviewStatus, "in_review"),
+    ...(speakerId ? [eq(speakers.id, speakerId)] : []),
+  )));
+
+  yield* Effect.forEach(candidates, ({ speaker, profile }) => Effect.gen(function* () {
+    const reusableHeadshotUrl = profile.headshotUrl !== null
+      && profile.headshotUrl.startsWith("https://")
+      && safeHttpUrl(profile.headshotUrl)
+      ? profile.headshotUrl
+      : null;
+    const nextHeadshotUrl = reusableHeadshotUrl ?? speaker.headshotUrl;
+    const replacesHeadshot = reusableHeadshotUrl !== null && reusableHeadshotUrl !== speaker.headshotUrl;
+    const updatedAt = now();
+    const version = speaker.version + 1;
+    const values = {
+      bio: profile.bio,
+      links: profile.links ?? [],
+      headshotAssetId: replacesHeadshot ? null : speaker.headshotAssetId,
+      headshotUrl: nextHeadshotUrl,
+      profileSourceId: profile.id,
+      profileSourceVersion: profile.version,
+      version,
+      updatedAt,
+    };
+    const before = speakerView(speaker);
+    const after = speakerView({ ...speaker, ...values });
+    const actor: PrincipalActor = { userId: profile.userId, actorUserId: profile.userId, actorApiKeyId: null };
+    const requestId = id("portal_request");
+    const guard = and(
+      eq(speakers.eventId, eventId),
+      eq(speakers.id, speaker.id),
+      eq(speakers.userId, profile.userId),
+      eq(speakers.version, speaker.version),
+      ne(speakers.profileReviewStatus, "in_review"),
+    );
+    const fields = ["bio", "links", ...(replacesHeadshot ? ["headshot"] : [])];
+    const synced = writeChange(
+      eventId,
+      "speaker",
+      speaker.id,
+      version,
+      "portal.profile.reusable-synced",
+      { speakerId: speaker.id, profileId: profile.id, profileVersion: profile.version, fields },
+      actor,
+      updatedAt,
+      requestId,
+    );
+    const versionClaim = writeChange(
+      eventId,
+      "speaker",
+      speaker.id,
+      version,
+      "speaker.versionClaim",
+      { version },
+      actor,
+      updatedAt,
+      requestId,
+    );
+    yield* database(() => db.batch([
+      db.insert(domainChanges).select(db.select(changeSelection(versionClaim)).from(speakers).where(guard)),
+      db.insert(domainChanges).select(db.select(changeSelection(synced)).from(speakers).where(guard)),
+      db.insert(auditLog).select(db.select({
+        id: sql<string>`${id("audit")}`.as("id"),
+        eventId: speakers.eventId,
+        requestId: sql<string>`${requestId}`.as("request_id"),
+        actorUserId: sql<string | null>`${profile.userId}`.as("actor_user_id"),
+        actorApiKeyId: sql<null>`null`.as("actor_api_key_id"),
+        action: sql<string>`${"portal.profile.reusable-synced"}`.as("action"),
+        resourceType: sql<string>`${"speaker"}`.as("resource_type"),
+        resourceId: speakers.id,
+        before: sql<unknown>`${JSON.stringify(before)}`.as("before"),
+        after: sql<unknown>`${JSON.stringify(after)}`.as("after"),
+        metadata: sql<unknown>`${JSON.stringify({ profileId: profile.id, profileVersion: profile.version, fields })}`.as("metadata"),
+        occurredAt: sql<Date>`${updatedAt.getTime()}`.as("occurred_at"),
+      }).from(speakers).where(guard)),
+      db.update(speakers).set(values).where(guard).returning({ id: speakers.id }),
+    ]));
+  }), { concurrency: 1, discard: true });
+});
+
 const uploadPolicy = (
   purpose: UploadPortalAssetInput["purpose"],
   contentType: string,
@@ -978,6 +1087,7 @@ export const getSpeakerDirectory = (input: { readonly eventId: string }): Effect
   yield* organizer(input.eventId, "speakers:read");
   const { db } = yield* Db;
   const event = yield* requireEvent(input.eventId);
+  yield* syncReusableProfileSnapshots(input.eventId);
   const [speakerRows, acceptedRows, acceptanceHistory] = yield* Effect.all([
     database(() => db.select().from(speakers).where(eq(speakers.eventId, input.eventId)).orderBy(asc(speakers.displayName), asc(speakers.id))),
     database(() => db
@@ -1798,6 +1908,8 @@ export const claimSpeaker = (
 
 export const getPortalSnapshot = (input: { readonly eventId: string }): Effect.Effect<PortalSnapshot, AppError, Db | CurrentUser | Files> => Effect.gen(function* () {
   const event = yield* resolveEvent(input.eventId);
+  const current = yield* selfSpeaker(event.id);
+  yield* syncReusableProfileSnapshots(event.id, current.speaker.id);
   const { speaker, acceptance } = yield* selfSpeaker(event.id);
   const { db } = yield* Db;
   const progress = yield* currentTasks(event.id, speaker.id);
