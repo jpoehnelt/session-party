@@ -400,7 +400,17 @@ export default function LandingPage() {
       <footer className="bg-[#f3efe3]">
         <div className="mx-auto flex max-w-[90rem] flex-col gap-5 px-5 py-9 text-sm font-semibold text-[#665f52] sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-10">
           <Brand />
-          <p>Conference production, without the spreadsheet sprawl.</p>
+          <div className="flex flex-col gap-3 sm:items-end">
+            <p>Conference production, without the spreadsheet sprawl.</p>
+            <a
+              className="font-black uppercase tracking-[0.08em] text-[#171714] underline decoration-2 underline-offset-4 hover:text-[#3e268f]"
+              href="https://github.com/jpoehnelt/session-party"
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub ↗
+            </a>
+          </div>
         </div>
       </footer>
     </div>
