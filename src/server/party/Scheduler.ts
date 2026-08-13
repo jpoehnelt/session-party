@@ -6,7 +6,13 @@ import {
 import { DurableObject } from "cloudflare:workers";
 import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import { internalServiceToken, sendMail } from "../services";
+import {
+  internalServiceToken,
+  isExplicitLocalEnvironment,
+  isExplicitPreviewEnvironment,
+  sendMail,
+} from "../services";
+import { drainWebhookDeliveries, enqueueWebhookDeliveries } from "./webhook-dispatch";
 
 const INTERVAL_MS = 60_000;
 const LEASE_MS = 5 * 60_000;
@@ -873,6 +879,24 @@ export class Scheduler extends DurableObject<Env> {
           }
         }
       });
+
+      // Outbound webhooks ride the same beat: advance endpoint cursors over
+      // the change log, then push what is due. A webhook failure must never
+      // take mail delivery down with it, so the pass is contained.
+      try {
+        const webhookNow = new Date();
+        await enqueueWebhookDeliveries(db, webhookNow);
+        await drainWebhookDeliveries(db, {
+          now: webhookNow,
+          leaseOwner: `webhooks-${crypto.randomUUID()}`,
+          fake: isExplicitLocalEnvironment(this.env) || isExplicitPreviewEnvironment(this.env),
+        });
+      } catch (error) {
+        console.error(JSON.stringify({
+          message: "Webhook dispatch pass failed",
+          detail: error instanceof Error ? error.message : String(error),
+        }));
+      }
     } finally {
       if (mailSchedulerEnabled) {
         await setSchedulerAlarmNoLaterThan(this.ctx.storage, Date.now() + INTERVAL_MS);
