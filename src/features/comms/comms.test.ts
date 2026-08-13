@@ -1282,8 +1282,11 @@ describe("communications immutable delivery workflow", () => {
     }), queue);
     expect(replay).toMatchObject({ deliveryId, replayed: true });
 
-    await seeded.db.update(mailDeliveries).set({ status: "sent", sentAt: now })
-      .where(eq(mailDeliveries.id, deliveryId));
+    await seeded.db.update(mailDeliveries).set({
+      status: "sent",
+      sentAt: now,
+      providerMessageId: "local-fake:expedite-conflict-check",
+    }).where(eq(mailDeliveries.id, deliveryId));
     const conflicted = await runAsEither(seeded.owner, retryDelivery({
       eventId: seeded.eventId,
       deliveryId,
