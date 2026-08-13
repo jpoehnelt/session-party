@@ -3204,6 +3204,57 @@ describe("review and acceptance slice", () => {
     }));
     expect(organizerWithdrawal.conflict.status).toBe("withdrawn");
   });
+
+  it("routes auto-distribution around declared conflicts even without prior assignment history", async () => {
+    const eventId = "event_coi_autodist";
+    const createdAt = new Date(fixtureClock);
+    await db.insert(events).values({
+      id: eventId, slug: "coi-autodist", name: "COI auto-distribution", timezone: "UTC", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values([
+      { id: "member_coi_autodist_owner", eventId, userId: fixtureOwnerId, role: "owner", createdAt, updatedAt: createdAt },
+      { id: "member_coi_autodist_ada", eventId, userId: fixtureReviewerId, role: "reviewer", createdAt, updatedAt: createdAt },
+      { id: "member_coi_autodist_dev", eventId, userId: "user_reviewer_dev", role: "reviewer", createdAt, updatedAt: createdAt },
+    ]);
+    await db.insert(forms).values({
+      id: "form_coi_autodist", eventId, kind: "cfp", name: "COI autodist CFP", status: "closed", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(formVersions).values({
+      id: "form_version_coi_autodist", eventId, formId: "form_coi_autodist", versionNumber: 1,
+      name: "COI autodist CFP", publishedAt: createdAt, createdAt,
+    });
+    await db.insert(submissions).values({
+      id: "submission_coi_autodist", eventId, formId: "form_coi_autodist", formVersionId: "form_version_coi_autodist",
+      title: "Conflicted proposal", status: "submitted", submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviewRounds).values({
+      id: "round_coi_autodist", eventId, name: "COI autodist round", order: 1, status: "active",
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] }, version: 1, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviewConflicts).values({
+      id: "conflict_coi_autodist", eventId, submissionId: "submission_coi_autodist",
+      reviewerUserId: fixtureReviewerId, status: "active", version: 1, createdAt, updatedAt: createdAt,
+    });
+
+    const distributed = await runAs(owner, autoDistributeReviewers({
+      eventId,
+      roundId: "round_coi_autodist",
+      reviewsPerSubmission: 2,
+      idempotencyKey: "coi-autodist-001",
+      requestId: "request_coi_autodist",
+    }));
+    expect(distributed).toMatchObject({
+      createdCount: 1,
+      satisfiedCount: 0,
+      unfilled: [{ submissionId: "submission_coi_autodist", missing: 1 }],
+    });
+    const assignments = await db.select({ reviewerUserId: reviewAssignments.reviewerUserId })
+      .from(reviewAssignments).where(and(
+        eq(reviewAssignments.eventId, eventId),
+        eq(reviewAssignments.submissionId, "submission_coi_autodist"),
+      ));
+    expect(assignments).toEqual([{ reviewerUserId: "user_reviewer_dev" }]);
+  });
 });
 
 describe("deterministic reviewer auto-distribution", () => {

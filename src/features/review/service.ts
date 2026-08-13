@@ -1968,7 +1968,7 @@ export const autoDistributeReviewers = (
       return yield* Effect.fail(new Validation({ message: "Reviews per submission cannot exceed the available reviewers" }));
     }
 
-    const [submissionRows, assignmentRows] = yield* Effect.all([
+    const [submissionRows, assignmentRows, conflictRows] = yield* Effect.all([
       database(() => db.select({ id: submissions.id }).from(submissions).innerJoin(
         forms,
         and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
@@ -1985,10 +1985,20 @@ export const autoDistributeReviewers = (
         eq(reviewAssignments.eventId, input.eventId),
         eq(reviewAssignments.roundId, input.roundId),
       ))),
+      database(() => db.select({
+        submissionId: reviewConflicts.submissionId,
+        reviewerUserId: reviewConflicts.reviewerUserId,
+      }).from(reviewConflicts).where(and(
+        eq(reviewConflicts.eventId, input.eventId),
+        eq(reviewConflicts.status, "active"),
+      ))),
     ]);
 
     const pairKey = (submissionId: string, reviewerUserId: string) => `${submissionId}\u0000${reviewerUserId}`;
-    const paired = new Set(assignmentRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+    const paired = new Set([
+      ...assignmentRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)),
+      ...conflictRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)),
+    ]);
     const load = new Map<string, number>(reviewerPool.map((userId) => [userId, 0]));
     const coverage = new Map<string, number>();
     for (const row of assignmentRows) {
