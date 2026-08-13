@@ -7,6 +7,7 @@ interface __BaseEnv_Env {
 	ASSETS: Fetcher;
 	PREVIEW_MODE?: "1";
 	APP_URL: "https://preview.invalid" | "https://sessionparty.com";
+	DEMO_LOGIN: "";
 	INITIAL_ADMIN_EMAIL: "";
 	MAIL_FROM: "Session Party Preview <welcome@sessionparty.com>" | "Session Party <welcome@sessionparty.com>";
 	POSTHOG_KEY: "";
@@ -34,6 +35,7 @@ declare namespace Cloudflare {
 		ASSETS: Fetcher;
 		PREVIEW_MODE: "1";
 		APP_URL: "https://preview.invalid";
+		DEMO_LOGIN: "";
 		INITIAL_ADMIN_EMAIL: "";
 		MAIL_FROM: "Session Party Preview <welcome@sessionparty.com>";
 		POSTHOG_KEY: "";
@@ -53,7 +55,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "PREVIEW_MODE" | "APP_URL" | "INITIAL_ADMIN_EMAIL" | "MAIL_FROM" | "POSTHOG_KEY" | "POSTHOG_HOST" | "TURNSTILE_SITE_KEY" | "TURNSTILE_HOSTNAMES" | "SESSION_SECRET" | "TURNSTILE_SECRET">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "PREVIEW_MODE" | "APP_URL" | "DEMO_LOGIN" | "INITIAL_ADMIN_EMAIL" | "MAIL_FROM" | "POSTHOG_KEY" | "POSTHOG_HOST" | "TURNSTILE_SITE_KEY" | "TURNSTILE_HOSTNAMES" | "SESSION_SECRET" | "TURNSTILE_SECRET">> {}
 }
 
 // Begin runtime types

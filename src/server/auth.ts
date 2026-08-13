@@ -10,6 +10,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { nanoid } from "nanoid";
 import {
   internalServiceToken,
+  isDemoLoginEnabled,
   isExplicitLocalEnvironment,
   mailFrom,
   sessionSecret,
@@ -254,6 +255,10 @@ const configuredInitialAdminEmail = (env: Env): string | null => {
 };
 
 const ensureExistingBootstrapStaff = async (env: Env, userId: string, email: string): Promise<void> => {
+  // Synthetic demo identities never hold install authority: anyone can become
+  // one through the demo route, so a bootstrap address that matches a demo
+  // email must not turn that route into a staff-minting path.
+  if (Object.values(DEMO_IDENTITIES).some((identity) => identity.email === email)) return;
   if (configuredInitialAdminEmail(env) !== email) return;
   const nowMs = Date.now();
   await env.DB.prepare(
@@ -602,8 +607,14 @@ const auth = new Hono<AppHono>();
  * The public hackathon deployment is also the evaluator's demo tenant. These
  * fixed synthetic identities let browser agents switch roles without access to
  * an email inbox while preserving the normal session and authorization paths.
+ *
+ * The route only exists where an operator opted in (DEMO_LOGIN="1") or in
+ * explicit local development; everywhere else it is indistinguishable from an
+ * unregistered path. Demo sessions carry event-scoped roles on the seeded
+ * sandbox only and can never mint install-level authority.
  */
 auth.post("/demo", async (c) => {
+  if (!isDemoLoginEnabled(c.env)) return c.notFound();
   const requestId = requestIdFor(c);
   const body = await readBoundedJson(c.req.raw).catch(() => null);
   const parsed = body === BODY_TOO_LARGE
@@ -623,7 +634,6 @@ auth.post("/demo", async (c) => {
   try {
     const identity = DEMO_IDENTITIES[parsed.persona];
     const seed = await ensureDemoSeed(c.env);
-    await ensureExistingBootstrapStaff(c.env, seed.users[parsed.persona], identity.email);
     const session = await issueDemoBrowserSession(c.env, seed.users[parsed.persona]);
     setBrowserSessionCookie(c, session);
     return c.json({

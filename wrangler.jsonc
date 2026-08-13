@@ -37,6 +37,9 @@
   "send_email": [{ "name": "EMAIL" }],
   "vars": {
     "APP_URL": "https://sessionparty.com",
+    // Demo persona sign-in is opt-in per deployment. Set to "1" only on an
+    // instance that is meant to be a public sandbox; keep blank when self-hosting.
+    "DEMO_LOGIN": "",
     // Set this to the self-hosted owner email to disable open registration.
     "INITIAL_ADMIN_EMAIL": "sbek-organizer@example.com",
     "MAIL_FROM": "Session Party <welcome@sessionparty.com>",
@@ -71,6 +74,7 @@
       "vars": {
         "PREVIEW_MODE": "1",
         "APP_URL": "https://preview.invalid",
+        "DEMO_LOGIN": "",
         "INITIAL_ADMIN_EMAIL": "",
         "MAIL_FROM": "Session Party Preview <welcome@sessionparty.com>",
         "POSTHOG_KEY": "",

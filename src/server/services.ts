@@ -177,6 +177,14 @@ export const isExplicitLocalEnvironment = (env: object): boolean =>
 export const isExplicitPreviewEnvironment = (env: object): boolean =>
   "PREVIEW_MODE" in env && env.PREVIEW_MODE === "1";
 
+/**
+ * Demo persona sign-in is a deployment decision, never a default. Outside
+ * explicit local development the route behaves as unregistered (404) unless
+ * the installation owner opts in with DEMO_LOGIN="1".
+ */
+export const isDemoLoginEnabled = (env: object): boolean =>
+  ("DEMO_LOGIN" in env && env.DEMO_LOGIN === "1") || isExplicitLocalEnvironment(env);
+
 const usesFakeExternalServices = (env: object): boolean =>
   isExplicitLocalEnvironment(env) || isExplicitPreviewEnvironment(env);
 
