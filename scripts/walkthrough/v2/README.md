@@ -1,11 +1,13 @@
 # Walkthrough v2
 
-Walkthrough v2 records independent proof shots and trims all authentication, navigation, loading, and pre-positioning before assembly. The final body stays at normal speed. Only the roughly three-and-a-half-second, 50-view opening is accelerated.
+Walkthrough v2 records independent proof shots and trims all authentication, navigation, loading, and pre-positioning before assembly. The final body stays at normal speed. Only the roughly four-second opening is accelerated. Its 50 frames come from 50 dedicated routes or visibly distinct UI states; the recorder rejects pixel-identical captures instead of cycling the body shots.
 
 ```sh
 pnpm walkthrough:v2
 pnpm walkthrough:v2:record -- --smoke
 pnpm walkthrough:v2:record -- --shot=review-workbench
+pnpm walkthrough:v2:record -- --opening-only
+pnpm walkthrough:v2:record -- --opening-only --opening-from=48
 pnpm walkthrough:v2:assemble
 ```
 

@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 import { arg, ensureTools, mediaDurationSeconds } from "../shared";
+import { captureOpeningViews } from "./opening";
 import { anchor, clearFocus, click, focus, install, showTrace } from "./presentation";
 import { shots } from "./shots";
 import type { RecordedShot } from "./types";
@@ -13,6 +14,10 @@ const only = arg("shot", "");
 const from = arg("from", "");
 const smoke = process.argv.includes("--smoke");
 const headed = process.argv.includes("--headed");
+const openingOnly = process.argv.includes("--opening-only");
+const skipOpening = process.argv.includes("--skip-opening") || Boolean(only || from);
+const openingFrom = Number(arg("opening-from", "1"));
+if (!Number.isInteger(openingFrom) || openingFrom < 1 || openingFrom > 50) throw new Error("--opening-from must be an integer from 1 through 50");
 
 ensureTools(["ffprobe"]);
 if (only && !shots.some((shot) => shot.id === only)) {
@@ -22,6 +27,7 @@ if (only && !shots.some((shot) => shot.id === only)) {
 await Promise.all([
   mkdir(resolve(outputDir, "raw"), { recursive: true }),
   mkdir(resolve(outputDir, "screenshots"), { recursive: true }),
+  mkdir(resolve(outputDir, "opening"), { recursive: true }),
   mkdir(resolve(outputDir, "diagnostics"), { recursive: true }),
 ]);
 
@@ -29,11 +35,13 @@ const browser = await chromium.launch({ headless: !headed });
 const state = new Map<string, string>();
 const recorded: RecordedShot[] = [];
 const failures: { readonly id: string; readonly message: string }[] = [];
+let opening = null as Awaited<ReturnType<typeof captureOpeningViews>> | null;
 
 try {
+  opening = skipOpening ? null : await captureOpeningViews({ browser, baseUrl, eventSlug, outputDir, startAt: openingFrom });
   const fromIndex = from ? shots.findIndex((candidate) => candidate.id === from) : 0;
   if (from && fromIndex < 0) throw new Error(`Unknown starting shot: ${from}`);
-  for (const shot of shots.filter((candidate, index) => (!only || candidate.id === only) && index >= fromIndex)) {
+  for (const shot of (openingOnly ? [] : shots).filter((candidate, index) => (!only || candidate.id === only) && index >= fromIndex)) {
     process.stdout.write(`Preparing ${shot.id}: ${shot.title}\n`);
     const context = await browser.newContext({
       viewport: { width: 1920, height: 1080 },
@@ -119,7 +127,7 @@ try {
 
 const manifestPath = resolve(outputDir, "manifest.json");
 const previous = await readFile(manifestPath, "utf8")
-  .then((value) => JSON.parse(value) as { readonly shots?: readonly RecordedShot[] })
+  .then((value) => JSON.parse(value) as { readonly shots?: readonly RecordedShot[]; readonly openingViews?: readonly unknown[] })
   .catch(() => null);
 const merged = shots.flatMap((shot) =>
   recorded.find((candidate) => candidate.id === shot.id) ?? previous?.shots?.find((candidate) => candidate.id === shot.id) ?? []);
@@ -128,6 +136,7 @@ await writeFile(manifestPath, `${JSON.stringify({
   baseUrl,
   eventSlug,
   recordedAt: new Date().toISOString(),
+  openingViews: opening ?? previous?.openingViews ?? [],
   shots: merged,
 }, null, 2)}\n`);
 process.stdout.write(`Recorded ${recorded.length} proof shots; manifest contains ${merged.length}.\n`);

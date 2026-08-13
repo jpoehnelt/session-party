@@ -40,3 +40,10 @@ export type RecordedShot = {
   readonly trimDurationSeconds: number;
   readonly screenshotPath: string;
 };
+
+export type RecordedOpeningView = {
+  readonly id: string;
+  readonly path: string;
+  readonly screenshotPath: string;
+  readonly sha256: string;
+};

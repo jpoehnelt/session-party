@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { arg, ensureTools } from "../shared";
-import type { RecordedShot } from "./types";
+import type { RecordedOpeningView, RecordedShot } from "./types";
 
 ensureTools(["ffmpeg", "ffprobe"]);
 const outputDir = resolve(arg("output", "artifacts/walkthrough-v2"));
@@ -11,8 +11,10 @@ await mkdir(normalizedDir, { recursive: true });
 
 const manifest = JSON.parse(await readFile(resolve(outputDir, "manifest.json"), "utf8")) as {
   readonly shots: readonly RecordedShot[];
+  readonly openingViews?: readonly RecordedOpeningView[];
 };
 if (!manifest.shots.length) throw new Error(`manifest.json in ${outputDir} contains no shots; run pnpm walkthrough:v2:record first`);
+if (manifest.openingViews?.length !== 50) throw new Error(`manifest.json must contain 50 dedicated opening views; run pnpm walkthrough:v2:record -- --opening-only`);
 
 function run(command: string, args: readonly string[]) {
   const commandArgs = command === "ffmpeg" ? ["-hide_banner", "-loglevel", "error", ...args] : args;
@@ -38,13 +40,10 @@ for (const shot of manifest.shots) {
   normalized.set(shot.id, target);
 }
 
-const hookFrames = Array.from({ length: 50 }, (_, index) => manifest.shots[index % manifest.shots.length]!);
 const hookClips: string[] = [];
-for (const [index, shot] of hookFrames.entries()) {
-  const still = resolve(normalizedDir, `hook-${String(index + 1).padStart(2, "0")}.png`);
+for (const [index, view] of manifest.openingViews.entries()) {
   const clip = resolve(normalizedDir, `hook-${String(index + 1).padStart(2, "0")}.mp4`);
-  run("ffmpeg", ["-y", "-ss", String(Math.max(0, shot.trimStartSeconds - 1)), "-i", shot.videoPath, "-frames:v", "1", still]);
-  run("ffmpeg", ["-y", "-loop", "1", "-i", still, "-t", "0.08", "-r", "30", "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", clip]);
+  run("ffmpeg", ["-y", "-loop", "1", "-i", view.screenshotPath, "-t", "0.08", "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2", "-r", "30", "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", clip]);
   hookClips.push(clip);
 }
 const hook = resolve(normalizedDir, "opening-50-views.mp4");
@@ -71,6 +70,6 @@ await writeFile(resolve(outputDir, "outputs.json"), `${JSON.stringify({
   full: finalPath,
   short: shortPath,
   shotCount: manifest.shots.length,
-  openingViews: hookFrames.length,
+  openingViews: manifest.openingViews.length,
 }, null, 2)}\n`);
 process.stdout.write(`Created ${finalPath}\nCreated ${shortPath}\n`);
