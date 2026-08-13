@@ -13,9 +13,13 @@ import {
   BulkAssignReviewersOutput,
   CreateReviewRoundInput,
   CreateReviewRoundOutput,
+  DeclareReviewConflictInput,
+  DeclareReviewConflictOutput,
   ExportReviewResultsInput,
   ExportReviewResultsOutput,
   GetWorkbenchInput,
+  ListReviewConflictsInput,
+  ListReviewConflictsOutput,
   RequestAiSuggestionInput,
   RequestAiSuggestionOutput,
   ReleaseDecisionsInput,
@@ -35,6 +39,8 @@ import {
   SendReviewRemindersOutput,
   UpdateReviewRoundInput,
   UpdateReviewRoundOutput,
+  WithdrawReviewConflictInput,
+  WithdrawReviewConflictOutput,
 } from "./schema";
 import {
   advanceReviewRound,
@@ -43,8 +49,10 @@ import {
   autoDistributeReviewers,
   bulkAssignReviewers,
   createReviewRound,
+  declareReviewConflict,
   exportReviewResults,
   getWorkbench,
+  listReviewConflicts,
   requestAiSuggestion,
   releaseDecisions,
   recuseAssignment,
@@ -54,6 +62,7 @@ import {
   stageDecision,
   sendReviewReminders,
   updateReviewRound,
+  withdrawReviewConflict,
 } from "./service";
 
 const organizerWrite = eventAuthorization(
@@ -257,6 +266,30 @@ const createRoundOperation = {
   emits: ["review.round.created"],
 } as const satisfies AnyOperationDef;
 
+const declareConflictOperation = {
+  id: "review.declareConflict",
+  kind: "command",
+  input: DeclareReviewConflictInput,
+  output: DeclareReviewConflictOutput,
+  authorize: humanReviewWrite,
+  invoke: declareReviewConflict,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/conflicts",
+    input: {
+      path: ["eventId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["submissionId", "reviewerUserId", "reason"],
+    },
+    summary: "Declare a reviewer conflict of interest that blocks assignments for the pair",
+    successStatus: 201,
+  },
+  party: { intentType: "review/declareConflict" },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["review.conflict.declared"],
+} as const satisfies AnyOperationDef;
+
 const exportReviewResultsOperation = {
   id: "review.exportResults",
   kind: "query",
@@ -300,6 +333,32 @@ const getWorkbenchOperation = {
   mcp: {
     name: "review_get_workbench",
     description: "List the event-authorized review queue and selected proposal detail, optionally filtered to the caller's assignments and ordered for coverage or decisions.",
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} as const satisfies AnyOperationDef;
+
+const listConflictsOperation = {
+  id: "review.listConflicts",
+  kind: "query",
+  input: ListReviewConflictsInput,
+  output: ListReviewConflictsOutput,
+  authorize: reviewRead,
+  invoke: listReviewConflicts,
+  rest: {
+    method: "get",
+    path: "/events/:eventId/review/conflicts",
+    input: {
+      path: ["eventId"],
+      query: ["submissionId", "status"],
+    },
+    summary: "List declared reviewer conflicts of interest, scoped to the caller's role",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "review_list_conflicts",
+    description: "List declared reviewer conflicts of interest; reviewers see only their own declarations.",
   },
   idempotency: "none",
   concurrency: "none",
@@ -529,6 +588,30 @@ const updateReviewRoundOperation = {
   emits: ["review.round.updated"],
 } as const satisfies AnyOperationDef;
 
+const withdrawConflictOperation = {
+  id: "review.withdrawConflict",
+  kind: "command",
+  input: WithdrawReviewConflictInput,
+  output: WithdrawReviewConflictOutput,
+  authorize: humanReviewWrite,
+  invoke: withdrawReviewConflict,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/conflicts/:conflictId/withdrawal",
+    input: {
+      path: ["eventId", "conflictId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["expectedVersion"],
+    },
+    summary: "Withdraw a declared conflict of interest so the pair can be assigned again",
+    successStatus: 200,
+  },
+  party: { intentType: "review/withdrawConflict" },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["review.conflict.withdrawn"],
+} as const satisfies AnyOperationDef;
+
 /** Bytewise operation-id order; registry generation must preserve this sequence. */
 export const operations = [
   advanceRoundOperation,
@@ -537,8 +620,10 @@ export const operations = [
   autoDistributeReviewersOperation,
   bulkAssignReviewersOperation,
   createRoundOperation,
+  declareConflictOperation,
   exportReviewResultsOperation,
   getWorkbenchOperation,
+  listConflictsOperation,
   recuseAssignmentOperation,
   releaseDecisionsOperation,
   removeAssignmentOperation,
@@ -548,4 +633,5 @@ export const operations = [
   sendReviewRemindersOperation,
   stageDecisionOperation,
   updateReviewRoundOperation,
+  withdrawConflictOperation,
 ] as const satisfies readonly AnyOperationDef[];
