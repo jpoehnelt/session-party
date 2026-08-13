@@ -1360,7 +1360,7 @@ export const listDeliveries = (
       sentAt: toMillis(row.sentAt),
       deadLetteredAt: toMillis(row.deadLetteredAt),
       createdAt: row.createdAt.getTime(),
-      canRetry: row.status === "dead_letter",
+      canRetry: row.status === "dead_letter" || row.status === "retry",
       retryOfDeliveryId: retrySourceId(row.idempotencyKey),
       attempts: attemptsByDelivery.get(row.id) ?? [],
     }));
@@ -1403,11 +1403,66 @@ export const retryDelivery = (
         .limit(1),
     );
     if (!source) return yield* Effect.fail(new NotFound({ entity: "mailDelivery", id: input.deliveryId }));
-    if (source.delivery.status !== "dead_letter") {
-      return yield* Effect.fail(new Conflict({ message: "Only dead-letter deliveries can be retried manually" }));
+    if (source.delivery.status !== "dead_letter" && source.delivery.status !== "retry") {
+      return yield* Effect.fail(new Conflict({
+        message: "Only scheduled retries and dead-letter deliveries can be retried manually",
+      }));
     }
     if (source.snapshot.redactedAt !== null || source.snapshot.renderedHtml === null) {
       return yield* Effect.fail(new Conflict({ message: "This delivery snapshot has been redacted and cannot be retried" }));
+    }
+    if (source.delivery.status === "retry") {
+      // Expediting reschedules the same delivery row rather than cloning it:
+      // a clone would double-send the moment the original backoff elapsed.
+      // The status flip is compare-and-swapped on 'retry', so a delivery the
+      // dispatcher claimed in the meantime is left alone — it is already on
+      // its way, which is what the operator asked for.
+      const output: RetryDeliveryResultValue = {
+        eventId: input.eventId,
+        sourceDeliveryId: input.deliveryId,
+        deliveryId: input.deliveryId,
+        snapshotId: source.snapshot.id,
+        queuedAt: prepared.now.getTime(),
+        status: "pending",
+        dispatchState: "deferred",
+        schedulerWake: "requested",
+        replayed: false,
+      };
+      const principalActor = actor(prepared.principal);
+      const commit = yield* Effect.either(database(() => db.batch([
+        db.insert(idempotencyRecords).values(idempotencyStart(prepared, input.eventId, "comms.retryDelivery")),
+        db.update(mailDeliveries)
+          .set({ status: "pending", availableAt: prepared.now })
+          .where(and(
+            eq(mailDeliveries.id, input.deliveryId),
+            eq(mailDeliveries.status, "retry"),
+          )),
+        db.insert(domainChanges).values({
+          id: id("change"), eventId: input.eventId, aggregateType: "mailDelivery", aggregateId: input.deliveryId,
+          aggregateVersion: source.delivery.attemptCount + 1, eventType: "comms.delivery.expedited", audiences: [{ kind: "admins" }],
+          payload: {
+            deliveryId: input.deliveryId,
+            dispatchState: "deferred",
+            schedulerWake: "deferred",
+          },
+          ...principalActor,
+          requestId: prepared.requestId,
+          idempotencyRecordId: prepared.idempotencyId,
+          occurredAt: prepared.now,
+        }),
+        db.insert(auditLog).values({
+          id: id("audit"), eventId: input.eventId, requestId: prepared.requestId, ...principalActor,
+          action: "comms.delivery.retry", resourceType: "mailDelivery", resourceId: input.deliveryId,
+          before: { sourceDeliveryId: input.deliveryId, status: source.delivery.status },
+          after: output,
+          metadata: { idempotencyRecordId: prepared.idempotencyId, expedited: true, schedulerWake: "deferred" },
+          occurredAt: prepared.now,
+        }),
+        db.update(idempotencyRecords).set(idempotencyComplete(prepared, output as unknown as JsonValue)).where(eq(idempotencyRecords.id, prepared.idempotencyId)),
+      ])));
+      if (commit._tag === "Left") return yield* Effect.fail(commit.left);
+      yield* requestMailQueueWake(queue.wake);
+      return output;
     }
     const sourceCalendarEvents = yield* database(() => db.select()
       .from(mailCalendarEvents)
