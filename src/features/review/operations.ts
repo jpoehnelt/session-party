@@ -7,6 +7,8 @@ import {
   AppendReviewCommentOutput,
   AssignReviewerInput,
   AssignReviewerOutput,
+  AutoDistributeReviewersInput,
+  AutoDistributeReviewersOutput,
   BulkAssignReviewersInput,
   BulkAssignReviewersOutput,
   CreateReviewRoundInput,
@@ -38,6 +40,7 @@ import {
   advanceReviewRound,
   appendReviewComment,
   assignReviewer,
+  autoDistributeReviewers,
   bulkAssignReviewers,
   createReviewRound,
   exportReviewResults,
@@ -198,6 +201,33 @@ const bulkAssignReviewersOperation = {
   idempotency: "required",
   concurrency: "none",
   emits: ["review.assignments.bulkCreated"],
+} as const satisfies AnyOperationDef;
+
+const autoDistributeReviewersOperation = {
+  id: "review.autoDistributeReviewers",
+  kind: "command",
+  input: AutoDistributeReviewersInput,
+  output: AutoDistributeReviewersOutput,
+  authorize: organizerWrite,
+  invoke: autoDistributeReviewers,
+  rest: {
+    method: "post",
+    path: "/events/:eventId/review/assignments/auto-distribute",
+    input: {
+      path: ["eventId"],
+      headers: { idempotencyKey: "idempotency-key", requestId: "x-request-id" },
+      body: ["roundId", "reviewsPerSubmission", "perReviewerCap", "reviewerUserIds"],
+    },
+    summary: "Top up round coverage from the reviewer pool with caps and load balancing",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "review_auto_distribute_reviewers",
+    description: "Deterministically top up every pipeline proposal to a coverage target, always picking the least-loaded reviewer, honoring per-reviewer caps and standing recusals.",
+  },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["review.assignments.autoDistributed"],
 } as const satisfies AnyOperationDef;
 
 const createRoundOperation = {
@@ -504,6 +534,7 @@ export const operations = [
   advanceRoundOperation,
   appendCommentOperation,
   assignReviewerOperation,
+  autoDistributeReviewersOperation,
   bulkAssignReviewersOperation,
   createRoundOperation,
   exportReviewResultsOperation,

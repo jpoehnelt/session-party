@@ -36,6 +36,8 @@ import {
   type AdvanceReviewRoundInput,
   type AssignReviewerInput,
   type AssignReviewerOutput,
+  type AutoDistributeReviewersInput,
+  AutoDistributeReviewersOutput,
   type BulkAssignReviewersInput,
   BulkAssignReviewersOutput,
   type CriterionScore,
@@ -1865,6 +1867,203 @@ export const bulkAssignReviewers = (
     }
     const stored = yield* decodeCompleted(completed.responseBody);
     return { ...stored, idempotent: resumed };
+  });
+
+/**
+ * Deterministic load-balanced assignment: every pipeline proposal is topped up
+ * to the target coverage from the reviewer pool, always choosing the least
+ * loaded reviewer, never exceeding the per-reviewer cap, and never recreating
+ * a pair the committee has already held in any state — a recusal permanently
+ * excludes that reviewer from that proposal.
+ */
+export const autoDistributeReviewers = (
+  input: AutoDistributeReviewersInput,
+): Effect.Effect<AutoDistributeReviewersOutput, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    yield* requireOrganizer(viewer);
+    const round = yield* loadRound(input.eventId, input.roundId);
+    if (round.status === "complete") {
+      return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot receive new assignments" }));
+    }
+    const { db } = yield* Db;
+    const principalId = roundCommandPrincipalId(viewer);
+    const requestedReviewerIds = input.reviewerUserIds ? [...new Set(input.reviewerUserIds)] : null;
+    if (requestedReviewerIds && requestedReviewerIds.length !== input.reviewerUserIds!.length) {
+      return yield* Effect.fail(new Validation({ message: "Reviewer selections cannot contain duplicates" }));
+    }
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      roundId: input.roundId,
+      reviewsPerSubmission: input.reviewsPerSubmission,
+      perReviewerCap: input.perReviewerCap ?? null,
+      reviewerUserIds: requestedReviewerIds ? [...requestedReviewerIds].sort() : null,
+    }));
+    const readRecord = () => database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, input.eventId),
+      eq(idempotencyRecords.operationId, "review.autoDistributeReviewers"),
+      eq(idempotencyRecords.principalId, principalId),
+      eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1)).pipe(Effect.map((rows) => rows[0] ?? null));
+    const decodeCompleted = (body: unknown) => Schema.decodeUnknown(AutoDistributeReviewersOutput)(body).pipe(
+      Effect.mapError((error) => new External({ service: "database", detail: `Invalid auto-distribution replay: ${String(error)}` })),
+    );
+    const replayFrom = (record: NonNullable<Effect.Effect.Success<ReturnType<typeof readRecord>>>) =>
+      Effect.gen(function* () {
+        if (record.requestHash !== requestHash) {
+          return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different auto-distribution" }));
+        }
+        if (record.status !== "completed" || record.responseBody === null) {
+          return yield* Effect.fail(new Conflict({ message: "An equivalent auto-distribution is in progress" }));
+        }
+        const replay = yield* decodeCompleted(record.responseBody);
+        return { ...replay, idempotent: true };
+      });
+    const existingRecord = yield* readRecord();
+    if (existingRecord) return yield* replayFrom(existingRecord);
+
+    const memberRows = yield* database(() => db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(
+      eq(eventMembers.eventId, input.eventId),
+      eq(eventMembers.role, "reviewer"),
+    )));
+    const memberIds = new Set(memberRows.map((row) => row.userId));
+    if (requestedReviewerIds && requestedReviewerIds.some((userId) => !memberIds.has(userId))) {
+      return yield* Effect.fail(new Validation({ message: "Every selected reviewer must be an event member with the reviewer role" }));
+    }
+    const reviewerPool = (requestedReviewerIds ?? [...memberIds]).sort();
+    if (reviewerPool.length === 0) {
+      return yield* Effect.fail(new Validation({ message: "This event has no reviewers to distribute assignments across" }));
+    }
+    if (input.reviewsPerSubmission > reviewerPool.length) {
+      return yield* Effect.fail(new Validation({ message: "Reviews per submission cannot exceed the available reviewers" }));
+    }
+
+    const [submissionRows, assignmentRows] = yield* Effect.all([
+      database(() => db.select({ id: submissions.id }).from(submissions).innerJoin(
+        forms,
+        and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+      ).where(and(
+        eq(submissions.eventId, input.eventId),
+        eq(forms.kind, "cfp"),
+        inArray(submissions.status, ["submitted", "in_review"]),
+      ))),
+      database(() => db.select({
+        submissionId: reviewAssignments.submissionId,
+        reviewerUserId: reviewAssignments.reviewerUserId,
+        status: reviewAssignments.status,
+      }).from(reviewAssignments).where(and(
+        eq(reviewAssignments.eventId, input.eventId),
+        eq(reviewAssignments.roundId, input.roundId),
+      ))),
+    ]);
+
+    const pairKey = (submissionId: string, reviewerUserId: string) => `${submissionId}\u0000${reviewerUserId}`;
+    const paired = new Set(assignmentRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+    const load = new Map<string, number>(reviewerPool.map((userId) => [userId, 0]));
+    const coverage = new Map<string, number>();
+    for (const row of assignmentRows) {
+      if (row.status !== "assigned") continue;
+      coverage.set(row.submissionId, (coverage.get(row.submissionId) ?? 0) + 1);
+      if (load.has(row.reviewerUserId)) load.set(row.reviewerUserId, load.get(row.reviewerUserId)! + 1);
+    }
+
+    const cap = input.perReviewerCap ?? Number.POSITIVE_INFINITY;
+    const targets = submissionRows.map((row) => row.id).sort((left, right) =>
+      (coverage.get(left) ?? 0) - (coverage.get(right) ?? 0) || (left < right ? -1 : left > right ? 1 : 0)
+    );
+    const planned: { readonly id: string; readonly submissionId: string; readonly reviewerUserId: string }[] = [];
+    const unfilled: { readonly submissionId: string; readonly missing: number }[] = [];
+    for (const submissionId of targets) {
+      let have = coverage.get(submissionId) ?? 0;
+      while (have < input.reviewsPerSubmission) {
+        let candidate: string | null = null;
+        for (const userId of reviewerPool) {
+          if (paired.has(pairKey(submissionId, userId))) continue;
+          const current = load.get(userId) ?? 0;
+          if (current >= cap) continue;
+          if (candidate === null || current < load.get(candidate)!) candidate = userId;
+        }
+        if (candidate === null) break;
+        planned.push({ id: id("review_assignment"), submissionId, reviewerUserId: candidate });
+        paired.add(pairKey(submissionId, candidate));
+        load.set(candidate, (load.get(candidate) ?? 0) + 1);
+        have += 1;
+      }
+      if (have < input.reviewsPerSubmission) {
+        unfilled.push({ submissionId, missing: input.reviewsPerSubmission - have });
+      }
+    }
+
+    const output: AutoDistributeReviewersOutput = {
+      roundId: input.roundId,
+      createdCount: planned.length,
+      satisfiedCount: targets.length - unfilled.length,
+      unfilled,
+      perReviewerLoad: reviewerPool.map((userId) => ({
+        reviewerUserId: userId,
+        assignedCount: load.get(userId) ?? 0,
+      })),
+      idempotent: false,
+    };
+    const createdAt = now();
+    const recordId = id("idempotency");
+    const commit = yield* Effect.either(database(() => db.batch([
+      db.insert(idempotencyRecords).values({
+        id: recordId,
+        eventId: input.eventId,
+        operationId: "review.autoDistributeReviewers",
+        principalId,
+        keyHash,
+        requestHash,
+        status: "completed",
+        responseStatus: 200,
+        responseBody: output,
+        expiresAt: new Date(createdAt.getTime() + 86_400_000),
+        completedAt: createdAt,
+        createdAt,
+      }),
+      ...(planned.length > 0 ? [db.insert(reviewAssignments).values(planned.map((assignment) => ({
+        ...assignment,
+        eventId: input.eventId,
+        roundId: input.roundId,
+        version: 1,
+        createdAt,
+        updatedAt: createdAt,
+      }))).onConflictDoNothing()] : []),
+      db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewAssignmentBatch", aggregateId: recordId,
+        aggregateVersion: 1, eventType: "review.assignments.autoDistributed",
+        audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: reviewerPool }],
+        payload: {
+          roundId: input.roundId,
+          createdCount: output.createdCount,
+          satisfiedCount: output.satisfiedCount,
+          unfilledCount: unfilled.length,
+        },
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        requestId: input.requestId, idempotencyRecordId: recordId, occurredAt: createdAt,
+      }),
+      db.insert(auditLog).values({
+        id: id("audit"), eventId: input.eventId, requestId: input.requestId,
+        actorUserId: viewer.actorUserId, actorApiKeyId: viewer.actorApiKeyId,
+        action: "review.autoDistributeReviewers", resourceType: "reviewRound", resourceId: input.roundId,
+        before: null,
+        after: {
+          reviewsPerSubmission: input.reviewsPerSubmission,
+          perReviewerCap: input.perReviewerCap ?? null,
+          createdCount: output.createdCount,
+          unfilledCount: unfilled.length,
+        },
+        metadata: { idempotencyRecordId: recordId }, occurredAt: createdAt,
+      }),
+    ])));
+    if (commit._tag === "Left") {
+      const concurrent = yield* readRecord();
+      if (!concurrent) return yield* Effect.fail(commit.left);
+      return yield* replayFrom(concurrent);
+    }
+    return output;
   });
 
 export const removeAssignment = (
