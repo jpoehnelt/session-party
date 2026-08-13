@@ -14,6 +14,7 @@ import worker from "./index";
 import {
   AppLayer,
   internalServiceToken,
+  isDemoLoginEnabled,
   isExplicitLocalEnvironment,
   isExplicitPreviewEnvironment,
   mailFrom,
@@ -219,7 +220,7 @@ describe("hackathon demo authentication", () => {
     });
   });
 
-  it("bootstraps the configured demo organizer as install staff", async () => {
+  it("never grants install staff to a demo persona, even when the bootstrap address matches", async () => {
     const closedDemoEnv = new Proxy(env, {
       get(target, property, receiver) {
         return property === "INITIAL_ADMIN_EMAIL"
@@ -243,7 +244,47 @@ describe("hackathon demo authentication", () => {
        FROM install_grants g JOIN users u ON u.id = g.user_id
        WHERE u.email = 'sbek-organizer@example.com'
          AND g.role = 'staff' AND g.revoked_at IS NULL`,
-    ).first()).toEqual({ count: 1 });
+    ).first()).toEqual({ count: 0 });
+  });
+
+  it("behaves as an unregistered route unless demo login is explicitly enabled", async () => {
+    const withoutLocalMode = (overrides: Record<string, string>): Env =>
+      new Proxy(env, {
+        get(target, property, receiver) {
+          if (property === "LOCAL_MODE") return undefined;
+          if (typeof property === "string" && property in overrides) return overrides[property];
+          return Reflect.get(target, property, receiver);
+        },
+        has(target, property) {
+          if (property === "LOCAL_MODE") return false;
+          if (typeof property === "string" && property in overrides) return true;
+          return Reflect.has(target, property);
+        },
+      }) as Env;
+
+    const login = (loginEnv: Env) => worker.fetch(
+      new Request("https://events.example.com/api/v1/auth/demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ persona: "organizer" }),
+      }),
+      loginEnv,
+      createExecutionContext(),
+    );
+
+    const gated = await login(withoutLocalMode({}));
+    expect(gated.status).toBe(404);
+    expect(gated.headers.get("set-cookie")).toBeNull();
+
+    const blank = await login(withoutLocalMode({ DEMO_LOGIN: "" }));
+    expect(blank.status).toBe(404);
+
+    // With the flag set the gate opens and the request reaches the normal
+    // authorization stage; without production secrets in the test env that
+    // stage cannot mint a session, so the assertion is only that the route
+    // no longer behaves as unregistered.
+    const enabled = await login(withoutLocalMode({ DEMO_LOGIN: "1" }));
+    expect(enabled.status).not.toBe(404);
   });
 
   it("rejects unknown personas without creating a session", async () => {
@@ -939,6 +980,14 @@ describe("durable magic-link authentication", () => {
       text: "Sensitive body",
       idempotencyKey: "local-no-egress",
     })).provider).toBe("local-fake");
+  });
+  it("enables demo login only by explicit opt-in or explicit local mode", () => {
+    expect(isDemoLoginEnabled({})).toBe(false);
+    expect(isDemoLoginEnabled({ DEMO_LOGIN: "" })).toBe(false);
+    expect(isDemoLoginEnabled({ DEMO_LOGIN: "true" })).toBe(false);
+    expect(isDemoLoginEnabled({ DEMO_LOGIN: "1" })).toBe(true);
+    expect(isDemoLoginEnabled({ LOCAL_MODE: "1" })).toBe(true);
+    expect(isDemoLoginEnabled({ PREVIEW_MODE: "1" })).toBe(false);
   });
   it("uses fake external services in preview while requiring an explicit session secret", async () => {
     const previewEnv = {
