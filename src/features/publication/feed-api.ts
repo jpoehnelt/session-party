@@ -144,6 +144,36 @@ const agentHeaders = (
   "X-Session-Party-Revision": String(agenda.revision),
 });
 
+/**
+ * The complete generated API description, previously build-time only. The
+ * document is static per deployment, so it is serialized once per isolate and
+ * varied only by the request origin baked into its servers entry.
+ */
+const fullOpenApiBodyByOrigin = new Map<string, string>();
+const fullOpenApiBody = (origin: string): string => {
+  const cached = fullOpenApiBodyByOrigin.get(origin);
+  if (cached) return cached;
+  const body = JSON.stringify({
+    ...openApi,
+    servers: [{ url: `${origin}/api/v1` }],
+  });
+  fullOpenApiBodyByOrigin.set(origin, body);
+  return body;
+};
+
+app.get("/api/v1/openapi.json", (c) => {
+  const body = fullOpenApiBody(new URL(c.req.url).origin);
+  const headers = new Headers({
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": CACHE_CONTROL,
+    "Content-Disposition": 'inline; filename="openapi.json"',
+    "Content-Type": "application/json; charset=utf-8",
+    ETag: `"openapi:c${stringFingerprint(body)}"`,
+    "X-Content-Type-Options": "nosniff",
+  });
+  return notModified(c, headers) ?? new Response(body, { status: 200, headers });
+});
+
 app.get("/events/:eventSlug/llms.txt", async (c) => {
   const loaded = await loadPublishedEvent(c);
   if ("response" in loaded) return loaded.response;
