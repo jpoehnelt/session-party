@@ -90,6 +90,7 @@ export const renderEventLlmsText = (
     "- Dates are ISO 8601 timestamps; interpret them in the event timezone for display.",
     "- Only published, confirmed sessions and approved public speakers appear here.",
     `- Agent docs and public OpenAPI subset: ${absoluteUrl(origin, paths.agentDocs)}`,
+    `- Complete REST API description (OpenAPI 3.1, authenticated operations included): ${absoluteUrl(origin, "/api/v1/openapi.json")}`,
     "",
     "## Public data feeds",
     "",
@@ -144,6 +145,7 @@ export const eventAgentDocument = (
       speakers: absoluteUrl(origin, paths.speakers),
       llms: absoluteUrl(origin, paths.llms),
       agentDocs: absoluteUrl(origin, paths.agentDocs),
+      openApi: absoluteUrl(origin, "/api/v1/openapi.json"),
     },
     resources: [
       { rel: "schedule", mediaType: "application/json", url: absoluteUrl(origin, paths.scheduleJson) },
