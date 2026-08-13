@@ -24,6 +24,7 @@ import {
   updateEvent,
   updateEventMember,
 } from "./service";
+import { getEventOverview } from "./overview";
 import {
   AcceptReviewerInvitationInput,
   AcceptReviewerInvitationOutput,
@@ -41,6 +42,8 @@ import {
   EventAccess,
   EventMember,
   EventOutput,
+  EventOverviewMetrics,
+  GetEventOverviewInput,
   ListEventMembersInput,
   ListReviewerInvitationsInput,
   ListEventApiKeysInput,
@@ -97,6 +100,12 @@ export const operations = [
     id: "events.listAccess", kind: "query", input: Schema.Struct({}), output: Schema.Array(EventAccess),
     authorize: browserSessionAuthorization, invoke: listEventAccess,
     rest: { method: "get", path: "/me/events", input: {}, summary: "List event-scoped browser destinations for the signed-in user", successStatus: 200 },
+    idempotency: "none", concurrency: "none", emits: [],
+  } satisfies AnyOperationDef,
+  {
+    id: "events.overview", kind: "query", input: GetEventOverviewInput, output: EventOverviewMetrics,
+    authorize: memberManagementAuthorization, invoke: getEventOverview,
+    rest: { method: "get", path: "/events/:eventId/overview", input: { path: ["eventId"] }, summary: "Load event overview metrics", successStatus: 200 },
     idempotency: "none", concurrency: "none", emits: [],
   } satisfies AnyOperationDef,
   {
