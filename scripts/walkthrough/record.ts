@@ -1,0 +1,124 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { chromium } from "playwright";
+import { clearSpotlight, clearTechnicalOverlay, scrollBy, spotlight, titleCard } from "./presentation";
+import { scenes } from "./scenes";
+import { arg, ensureTools, mediaDurationSeconds } from "./shared";
+import type { RecordedScene } from "./types";
+
+const baseUrl = arg("base-url", process.env.WALKTHROUGH_BASE_URL ?? "https://sessionparty.com").replace(/\/$/, "");
+const eventSlug = arg("event", process.env.WALKTHROUGH_EVENT_SLUG ?? "ai-engineer-sandbox");
+const outputDir = resolve(arg("output", "artifacts/walkthrough"));
+const headed = process.argv.includes("--headed");
+const smoke = process.argv.includes("--smoke");
+const only = arg("scene", "");
+const from = arg("from", "");
+
+ensureTools(["ffprobe"]);
+if (only && !scenes.some((scene) => scene.id === only)) {
+  throw new Error(`Unknown scene: ${only}. Valid scenes: ${scenes.map((scene) => scene.id).join(", ")}`);
+}
+
+await mkdir(resolve(outputDir, "scenes"), { recursive: true });
+await mkdir(resolve(outputDir, "traces"), { recursive: true });
+await mkdir(resolve(outputDir, "screenshots"), { recursive: true });
+
+const narrationPath = resolve("scripts/walkthrough/narration.json");
+const authoredNarration = JSON.parse(await readFile(narrationPath, "utf8")) as {
+  readonly disclosure: string;
+  readonly full: { readonly scenes: readonly { readonly id: string; readonly durationSeconds: number; readonly narration: string }[] };
+};
+const targetDurationByScene = new Map(authoredNarration.full.scenes.map((scene) => [scene.id, scene.durationSeconds]));
+const narrationByScene = new Map(authoredNarration.full.scenes.map((scene) => [scene.id, scene.narration]));
+const browser = await chromium.launch({ headless: !headed });
+const recorded: RecordedScene[] = [];
+const failures: { readonly id: string; readonly message: string }[] = [];
+const state = new Map<string, string>();
+
+try {
+  const fromIndex = from ? scenes.findIndex((scene) => scene.id === from) : 0;
+  if (from && fromIndex < 0) throw new Error(`Unknown starting scene: ${from}`);
+  for (const scene of scenes.filter((candidate, index) => (!only || candidate.id === only) && index >= fromIndex)) {
+    process.stdout.write(`Recording ${scene.id}: ${scene.title}\n`);
+    const context = await browser.newContext({
+      viewport: { width: 1920, height: 1080 },
+      deviceScaleFactor: 1,
+      colorScheme: "light",
+      reducedMotion: "reduce",
+      recordVideo: { dir: resolve(outputDir, "scenes"), size: { width: 1920, height: 1080 } },
+    });
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    await page.addInitScript(() => {
+      localStorage.setItem("session-party-walkthrough", "true");
+    });
+    const video = page.video();
+    const startedAt = performance.now();
+    try {
+      try {
+        await scene.run({
+          page,
+          state,
+          baseUrl,
+          eventSlug,
+          outputDir,
+          headed,
+          pause: (milliseconds) => page.waitForTimeout(smoke ? Math.min(80, milliseconds) : milliseconds),
+          titleCard: (title, subtitle, technicalDetails) => titleCard(page, title, subtitle, technicalDetails),
+          clearTechnicalOverlay: () => clearTechnicalOverlay(page),
+          spotlight: (selector, label) => spotlight(page, selector, label),
+          clearSpotlight: () => clearSpotlight(page),
+          scrollBy: (pixels) => scrollBy(page, pixels),
+        });
+        const targetMilliseconds = smoke ? 0 : (targetDurationByScene.get(scene.id) ?? 15) * 1_000;
+        const remaining = targetMilliseconds - (performance.now() - startedAt);
+        if (remaining > 0) await page.waitForTimeout(remaining);
+        await page.screenshot({ path: resolve(outputDir, "screenshots", `${scene.id}.png`), fullPage: false });
+        await context.tracing.stop({ path: resolve(outputDir, "traces", `${scene.id}.zip`) });
+      } catch (error) {
+        await page.screenshot({ path: resolve(outputDir, "screenshots", `${scene.id}-failure.png`), fullPage: true }).catch(() => undefined);
+        await context.tracing.stop({ path: resolve(outputDir, "traces", `${scene.id}-failure.zip`) }).catch(() => undefined);
+        throw new Error(`${scene.id} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      } finally {
+        await context.close();
+      }
+      if (!video) throw new Error(`No video was created for ${scene.id}`);
+      const videoPath = resolve(outputDir, "scenes", `${scene.id}.webm`);
+      await video.saveAs(videoPath);
+      recorded.push({
+        id: scene.id,
+        title: scene.title,
+        narration: narrationByScene.get(scene.id) ?? scene.narration,
+        shortSeconds: scene.shortSeconds,
+        videoPath,
+        durationSeconds: mediaDurationSeconds(videoPath),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({ id: scene.id, message });
+      process.stderr.write(`${message}\nContinuing with the remaining scenes.\n`);
+    }
+  }
+} finally {
+  await browser.close();
+}
+
+const manifestPath = resolve(outputDir, "manifest.json");
+const previous = await readFile(manifestPath, "utf8")
+  .then((value) => JSON.parse(value) as { readonly scenes?: readonly RecordedScene[] })
+  .catch(() => null);
+const mergedRecorded = scenes.flatMap((scene) =>
+  recorded.find((candidate) => candidate.id === scene.id) ?? previous?.scenes?.find((candidate) => candidate.id === scene.id) ?? []);
+await writeFile(manifestPath, `${JSON.stringify({
+  baseUrl,
+  eventSlug,
+  recordedAt: new Date().toISOString(),
+  disclosure: authoredNarration.disclosure,
+  scenes: mergedRecorded,
+}, null, 2)}\n`);
+process.stdout.write(`Recorded ${recorded.length} scenes; manifest contains ${mergedRecorded.length} scenes in ${outputDir}\n`);
+if (failures.length) {
+  process.stderr.write(`${failures.length} scene(s) failed: ${failures.map((failure) => failure.id).join(", ")}. Retry each with --scene=<id>; successful scenes are already in the manifest.\n`);
+  process.exitCode = 1;
+}

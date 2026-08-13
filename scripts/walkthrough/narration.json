@@ -1,0 +1,193 @@
+{
+  "project": "Session Party",
+  "title": "From call for proposals to a published program",
+  "audience": "Hackathon judges and event organizers",
+  "disclosure": "Human verification, including Turnstile, is disabled for this automated hackathon demo and can be re-enabled for a production event.",
+  "voice": {
+    "style": "clear, confident, conversational",
+    "paceWordsPerMinute": 132,
+    "notes": "Lead with organizer value. Let important UI state remain visible for at least two seconds after each action. Do not narrate routine navigation."
+  },
+  "full": {
+    "targetDurationSeconds": 410,
+    "scenes": [
+      {
+        "id": "intro",
+        "title": "One connected event workflow",
+        "startSeconds": 0,
+        "durationSeconds": 5,
+        "role": "all roles",
+        "visuals": [
+          "Flip through the CFP builder and anonymous submission form",
+          "Cut through blind review, speaker portal, agenda, and PartyServer live desk",
+          "End on publication and the stable anonymous embed"
+        ],
+        "narration": "Fifty views, one connected event workflow."
+      },
+      {
+        "id": "workspace",
+        "title": "The organizer's operational home",
+        "startSeconds": 11,
+        "durationSeconds": 35,
+        "role": "organizer",
+        "visuals": [
+          "Use the visible demo-role control to continue as Organizer",
+          "Open AI Engineer Sandbox",
+          "Show the event overview and left navigation",
+          "Briefly pause on readiness counts"
+        ],
+        "narration": "The organizer surface is a React Router application over registered, typed operations. Effect services enforce authorization and domain errors; D1 stores event-scoped records. The result replaces a collection of admin SaaS dashboards with one operational graph where proposals, speakers, tasks, content, agenda, communications, and publication share identity and audit history."
+      },
+      {
+        "id": "cfp",
+        "title": "Structured proposal intake",
+        "startSeconds": 46,
+        "durationSeconds": 60,
+        "role": "organizer and anonymous submitter",
+        "visuals": [
+          "Open Forms and the primary CFP",
+          "Show fields, semantic roles, tracks or formats, routing, and publication state",
+          "Open the public CFP in an anonymous context",
+          "Demonstrate a conditional question changing with an earlier answer",
+          "Pause on the submit action without exposing personal information"
+        ],
+        "narration": "This replaces form SaaS with a typed domain model. Semantic field roles identify canonical title, abstract, track, and speaker data; conditional rules drive the public form; Effect Schema validates the operation boundary. Submissions land in D1 and abuse budgets remain durable. Human verification is disabled only for this automated hackathon replay and can be restored for a production event."
+      },
+      {
+        "id": "review",
+        "title": "Committee review with human control",
+        "startSeconds": 106,
+        "durationSeconds": 65,
+        "role": "reviewer and organizer",
+        "visuals": [
+          "Switch through the visible demo-role control to Reviewer",
+          "Open an assigned proposal in the review workbench",
+          "Show rubric scores, rationale, committee comments, and the optional AI suggestion",
+          "Save a human score or show an already saved review",
+          "Return as Organizer and show the acceptance decision"
+        ],
+        "narration": "This replaces review SaaS with role-scoped projections and versioned evidence. The reviewer receives only assigned proposals; blind rounds redact identity; rubric scores, rationale, and comments remain separate records. An AI suggestion is optional and non-authoritative. The human override and final organizer decision are explicit, persisted, and auditable rather than disappearing into a spreadsheet cell."
+      },
+      {
+        "id": "speaker_portal",
+        "title": "A reusable speaker portal",
+        "startSeconds": 171,
+        "durationSeconds": 65,
+        "role": "speaker",
+        "visuals": [
+          "Continue as the synthetic Speaker account",
+          "Show the accepted Taming 40-Minute CI session",
+          "Open tasks and due dates",
+          "Show the reusable profile and event-specific biography and social links",
+          "Show the uploaded headshot preview after reload",
+          "Show task-linked files, logistics, and readiness"
+        ],
+        "narration": "This replaces speaker-management SaaS with a projection over the accepted session, task workflow, reusable profile, and reviewed event snapshot. D1 keeps the workflow metadata; R2 stores versioned uploads. The headshot and slides remain attached to the same speaker and session identity, while organizer comments, due dates, logistics, and readiness update without another integration or nightly sync."
+      },
+      {
+        "id": "agenda",
+        "title": "Acceptance becomes a schedulable talk",
+        "startSeconds": 236,
+        "durationSeconds": 65,
+        "role": "organizer",
+        "visuals": [
+          "Return as Organizer and open the accepted-proposal backlog",
+          "Create the talk for Taming 40-Minute CI without retyping it",
+          "Show Priya and the Platform & Infra track carried over",
+          "Show multi-day room and time placement",
+          "Pause on named room and speaker conflict validation",
+          "Show zero blocking conflicts and publication readiness"
+        ],
+        "narration": "This replaces scheduling SaaS with explicit agenda operations and optimistic versions. Accepted proposal fields become a talk without re-entry. A normalized speaker-identity graph catches collisions even when the demo contains multiple event-scoped speaker rows. Room and speaker conflicts are named, while the draft remains editable. With zero blocking conflicts, the agenda is ready to publish."
+      },
+      {
+        "id": "live_show",
+        "title": "PartyServer Durable Object live control",
+        "startSeconds": 301,
+        "durationSeconds": 55,
+        "role": "organizer",
+        "visuals": [
+          "Open the agenda live-show control",
+          "Select a scheduled session and move it to ready",
+          "Start the session, hold it, and resume it",
+          "Reload the organizer page while the session is running",
+          "Reopen live-show control and prove the running state survived reconnection",
+          "Reset the synthetic demo state"
+        ],
+        "narration": "This is the most interactive replacement. The React live desk connects through PartySocket to an EventRoom PartyServer Durable Object—one authoritative state machine per event for the current session, running timer, holds, and targeted cues. We transition from ready to running, hold, and resume. After a full reload and websocket reconnection, the same running state survives because it lives in the Durable Object, not one browser. The recorder resets the synthetic state afterward."
+      },
+      {
+        "id": "publication",
+        "title": "Publish once, serve every audience",
+        "startSeconds": 356,
+        "durationSeconds": 40,
+        "role": "organizer and anonymous",
+        "visuals": [
+          "Show the publication revision and publish or refresh action",
+          "Open the anonymous schedule",
+          "Show mobile width, search, filters, and a session detail",
+          "Open the matching public speaker record"
+        ],
+        "narration": "This replaces the publishing and widget SaaS layer. An agenda publish operation creates an immutable, privacy-filtered audience revision. Stable embeds resolve the current live revision, while HTML, JSON, XML, and iCalendar expose portable outputs with CORS and ETags. The event owns both the source data and the distribution contract."
+      },
+      {
+        "id": "widgets_and_close",
+        "title": "A portable, open-source result",
+        "startSeconds": 396,
+        "durationSeconds": 15,
+        "role": "organizer and anonymous",
+        "visuals": [
+          "Show the embed builder and stable widget URL",
+          "Flash the JSON, XML, and iCalendar outputs",
+          "End on the public program and repository mark"
+        ],
+        "narration": "The same open projection powers the attendee pages, speaker gallery, personal schedule, stable embeds, and standards-based feeds. Session Party kills the SaaS dependency by replacing it with inspectable operations, owned data, realtime Durable Object state, and portable public outputs."
+      }
+    ]
+  },
+  "short": {
+    "targetDurationSeconds": 80,
+    "scenes": [
+      {
+        "id": "short_hook",
+        "title": "One source of truth",
+        "startSeconds": 0,
+        "durationSeconds": 8,
+        "sourceScenes": ["intro", "workspace"],
+        "narration": "Session Party takes an event from call for proposals to a live public program in one open-source workspace."
+      },
+      {
+        "id": "short_intake_review",
+        "title": "Collect and decide",
+        "startSeconds": 8,
+        "durationSeconds": 20,
+        "sourceScenes": ["cfp", "review"],
+        "narration": "Structured CFP fields and conditional routing produce clean proposal data. Assigned reviewers score against a rubric, discuss evidence, and remain in control of clearly labeled AI suggestions. Hackathon demo verification is disabled for automated replay and can be re-enabled for production."
+      },
+      {
+        "id": "short_speaker",
+        "title": "Onboard speakers",
+        "startSeconds": 28,
+        "durationSeconds": 17,
+        "sourceScenes": ["speaker_portal"],
+        "narration": "After acceptance, the speaker sees the session, tasks, logistics, profile, and uploads in one portal. The saved headshot persists after reload and appears on the organizer's matching record."
+      },
+      {
+        "id": "short_agenda",
+        "title": "Build and run the program",
+        "startSeconds": 45,
+        "durationSeconds": 20,
+        "sourceScenes": ["agenda", "live_show"],
+        "narration": "The accepted proposal becomes a schedulable talk without retyping. A PartyServer Durable Object coordinates the live session state, timer, holds, and reconnects in real time."
+      },
+      {
+        "id": "short_publish",
+        "title": "Publish everywhere",
+        "startSeconds": 65,
+        "durationSeconds": 15,
+        "sourceScenes": ["publication", "widgets_and_close"],
+        "narration": "One immutable release powers the mobile schedule, speaker gallery, stable embeds, feeds, and calendar exports. That is the whole event workflow—connected, auditable, and portable."
+      }
+    ]
+  }
+}
