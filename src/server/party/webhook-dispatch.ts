@@ -2,33 +2,13 @@ import { domainChanges, webhookDeliveries, webhookEndpoints } from "contracts/sc
 import { and, asc, eq, gt, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { nanoid } from "nanoid";
+import { retryDelayMs } from "./retry-backoff";
 
 const ENQUEUE_BATCH = 100;
 const DRAIN_BATCH = 50;
 const DISPATCH_CONCURRENCY = 5;
 const ATTEMPT_TIMEOUT_MS = 10_000;
 const LEASE_MS = 5 * 60_000;
-const RETRY_BASE_DELAY_MS = 60_000;
-const RETRY_MAX_DELAY_MS = 60 * 60_000;
-
-/**
- * Exponential backoff with deterministic per-delivery jitter of up to +25%,
- * derived from the delivery id and attempt number so schedules stay
- * reproducible in tests while a batch of simultaneous failures spreads out.
- */
-export const webhookRetryDelayMs = (deliveryId: string, attemptCount: number): number => {
-  const exponential = Math.min(
-    RETRY_MAX_DELAY_MS,
-    RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attemptCount - 1),
-  );
-  const source = `${deliveryId}:${attemptCount}`;
-  let hash = 2_166_136_261;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return exponential + ((hash >>> 0) % (Math.floor(exponential / 4) + 1));
-};
 
 /**
  * Kinds are dotted prefixes matched per segment: "review" matches
@@ -256,7 +236,7 @@ export const drainWebhookDeliveries = async (
         status: terminal ? "dead_letter" : "retry",
         availableAt: terminal
           ? completedAt
-          : new Date(completedAt.getTime() + webhookRetryDelayMs(delivery.id, claim.attemptCount)),
+          : new Date(completedAt.getTime() + retryDelayMs(delivery.id, claim.attemptCount)),
         responseStatus,
         lastError,
         deadLetteredAt: terminal ? completedAt : null,

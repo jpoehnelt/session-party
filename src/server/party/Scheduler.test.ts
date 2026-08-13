@@ -14,11 +14,11 @@ import {
   DEMO_RATE_SOURCE_LIMIT,
   MAIL_DISPATCH_CONCURRENCY,
   MAIL_SCHEDULER_NAME,
-  mailRetryDelayMs,
   processWithBoundedConcurrency,
   reserveDispatchBudget,
   setSchedulerAlarmNoLaterThan,
 } from "./Scheduler";
+import { retryDelayMs } from "./retry-backoff";
 
 type TestEnv = Cloudflare.Env & {
   readonly TEST_MIGRATIONS: readonly D1Migration[];
@@ -79,7 +79,7 @@ describe("mail retry backoff", () => {
   const HOUR = 60 * MINUTE;
 
   it("grows exponentially from one minute and caps at one hour plus jitter", () => {
-    const delays = [1, 2, 3, 4, 5, 6, 7, 8].map((attempt) => mailRetryDelayMs("delivery-a", attempt));
+    const delays = [1, 2, 3, 4, 5, 6, 7, 8].map((attempt) => retryDelayMs("delivery-a", attempt));
     for (const [index, delay] of delays.entries()) {
       const exponential = Math.min(HOUR, MINUTE * 2 ** index);
       expect(delay).toBeGreaterThanOrEqual(exponential);
@@ -91,9 +91,9 @@ describe("mail retry backoff", () => {
   });
 
   it("is deterministic per delivery and attempt while spreading concurrent failures", () => {
-    expect(mailRetryDelayMs("delivery-a", 3)).toBe(mailRetryDelayMs("delivery-a", 3));
+    expect(retryDelayMs("delivery-a", 3)).toBe(retryDelayMs("delivery-a", 3));
     const sameAttempt = new Set(
-      ["delivery-a", "delivery-b", "delivery-c", "delivery-d"].map((id) => mailRetryDelayMs(id, 4)),
+      ["delivery-a", "delivery-b", "delivery-c", "delivery-d"].map((id) => retryDelayMs(id, 4)),
     );
     expect(sameAttempt.size).toBeGreaterThan(1);
   });
