@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { sessionSecret } from "./services";
+import { internalServiceToken } from "./services";
 
 type TemplateTestEnv = Cloudflare.Env & {
   readonly TEMPLATE_DB: D1Database;
@@ -39,7 +39,7 @@ describe("fresh self-hosting template", () => {
     const id = templateEnv.SCHEDULER.idFromName("mail");
     const response = await templateEnv.SCHEDULER.get(id).fetch("https://scheduler/poke", {
       method: "POST",
-      headers: { "x-session-party-internal": sessionSecret(templateEnv) },
+      headers: { "x-session-party-internal": await internalServiceToken(templateEnv) },
     });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
