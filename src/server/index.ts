@@ -260,6 +260,42 @@ for (const registration of restRegistrations) {
     ),
   );
 }
+/**
+ * Unauthenticated liveness/readiness probe for operators and uptime monitors.
+ * Bounded, side-effect free, and deliberately configuration-silent: it reports
+ * whether the storage bindings answer, never what the deployment contains.
+ */
+const HEALTH_PROBE_TIMEOUT_MS = 2_500;
+const boundedProbe = async (probe: () => Promise<boolean>): Promise<boolean> => {
+  try {
+    return await Promise.race([
+      probe(),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), HEALTH_PROBE_TIMEOUT_MS)),
+    ]);
+  } catch {
+    return false;
+  }
+};
+
+app.get("/health", async (c) => {
+  const [d1, r2] = await Promise.all([
+    boundedProbe(async () => {
+      const row = await c.env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
+      return row?.ok === 1;
+    }),
+    boundedProbe(async () => {
+      await c.env.FILES.head("health/readiness-probe");
+      return true;
+    }),
+  ]);
+  const healthy = d1 && r2;
+  return c.json(
+    { status: healthy ? "ok" : "degraded", d1, r2, runtime: "cloudflare-workers" },
+    healthy ? 200 : 503,
+    { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+  );
+});
+
 app.post("/__local/smoke", async (c) => {
   if (!isExplicitLocalEnvironment(c.env)) return c.notFound();
   if (c.req.header("x-local-smoke-secret") !== sessionSecret(c.env)) {
