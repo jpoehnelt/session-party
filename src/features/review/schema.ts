@@ -424,6 +424,33 @@ export const BulkAssignReviewersOutput = Schema.Struct({
 });
 export type BulkAssignReviewersOutput = typeof BulkAssignReviewersOutput.Type;
 
+export const AutoDistributeReviewersInput = Schema.Struct({
+  eventId: EntityId,
+  roundId: EntityId,
+  reviewsPerSubmission: Schema.Int.pipe(Schema.between(1, 10)),
+  perReviewerCap: Schema.optional(Schema.Int.pipe(Schema.between(1, 200))),
+  reviewerUserIds: Schema.optional(Schema.NonEmptyArray(EntityId).pipe(Schema.maxItems(50))),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type AutoDistributeReviewersInput = typeof AutoDistributeReviewersInput.Type;
+
+export const AutoDistributeReviewersOutput = Schema.Struct({
+  roundId: EntityId,
+  createdCount: Schema.Int.pipe(Schema.nonNegative()),
+  satisfiedCount: Schema.Int.pipe(Schema.nonNegative()),
+  unfilled: Schema.Array(Schema.Struct({
+    submissionId: EntityId,
+    missing: Schema.Int.pipe(Schema.positive()),
+  })),
+  perReviewerLoad: Schema.Array(Schema.Struct({
+    reviewerUserId: EntityId,
+    assignedCount: Schema.Int.pipe(Schema.nonNegative()),
+  })),
+  idempotent: Schema.Boolean,
+});
+export type AutoDistributeReviewersOutput = typeof AutoDistributeReviewersOutput.Type;
+
 export const SendReviewRemindersInput = Schema.Struct({
   eventId: EntityId,
   roundId: EntityId,

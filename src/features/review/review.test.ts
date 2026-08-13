@@ -53,6 +53,7 @@ import {
   advanceReviewRound,
   appendReviewComment,
   assignReviewer,
+  autoDistributeReviewers,
   bulkAssignReviewers,
   createReviewRound,
   demoAiSuggestionJson,
@@ -557,6 +558,7 @@ describe("review and acceptance slice", () => {
       "review.advanceRound",
       "review.appendComment",
       "review.assignReviewer",
+      "review.autoDistributeReviewers",
       "review.bulkAssignReviewers",
       "review.createRound",
       "review.exportResults",
@@ -2898,5 +2900,170 @@ describe("review and acceptance slice", () => {
     expect(new Set(results.map((result) => result.submissionVersion))).toEqual(new Set([3]));
     expect(await db.select().from(domainChanges).where(eq(domainChanges.requestId, input.requestId))).toHaveLength(1);
     expect(await db.select().from(auditLog).where(eq(auditLog.requestId, input.requestId))).toHaveLength(1);
+  });
+});
+
+describe("deterministic reviewer auto-distribution", () => {
+  it("tops up coverage with load balancing, caps, and standing recusal exclusion", async () => {
+    const createdAt = new Date();
+    const eventId = "autodist-event";
+    const roundId = "autodist-round";
+    const reviewers = ["autodist-rev-a", "autodist-rev-b", "autodist-rev-c"] as const;
+    await db.insert(users).values(reviewers.map((userId) => ({
+      id: userId,
+      email: `${userId}@example.com`,
+      name: userId,
+      createdAt,
+      updatedAt: createdAt,
+    }))).onConflictDoNothing();
+    await db.insert(events).values({
+      id: eventId, slug: eventId, name: "Auto distribution", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values([
+      { id: "autodist-member-owner", eventId, userId: owner.userId, role: "owner", createdAt, updatedAt: createdAt },
+      ...reviewers.map((userId) => ({
+        id: `autodist-member-${userId}`, eventId, userId, role: "reviewer" as const, createdAt, updatedAt: createdAt,
+      })),
+    ]);
+    await db.insert(forms).values({
+      id: "autodist-form", eventId, kind: "cfp", name: "Auto CFP", status: "closed", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(formVersions).values({
+      id: "autodist-form-v1", eventId, formId: "autodist-form", versionNumber: 1,
+      name: "Auto CFP", publishedAt: createdAt, createdAt,
+    });
+    await db.insert(reviewRounds).values({
+      id: roundId, eventId, name: "Auto round", order: 1, status: "active",
+      startsAt: createdAt, endsAt: new Date(createdAt.getTime() + 86_400_000),
+      blind: false, rubric: activeRoundFixture.rubric, version: 1, createdAt, updatedAt: createdAt,
+    });
+    const submissionIds = ["autodist-sub-1", "autodist-sub-2", "autodist-sub-3", "autodist-sub-4"];
+    await db.insert(submissions).values([
+      ...submissionIds.map((id) => ({
+        id, eventId, formId: "autodist-form", formVersionId: "autodist-form-v1",
+        title: id, status: "submitted" as const, submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+      })),
+      {
+        id: "autodist-sub-accepted", eventId, formId: "autodist-form", formVersionId: "autodist-form-v1",
+        title: "Accepted stays out", status: "accepted" as const, submittedAt: createdAt,
+        acceptedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+      },
+    ]);
+    await db.insert(reviewAssignments).values([
+      {
+        id: "autodist-existing", eventId, roundId, submissionId: "autodist-sub-1",
+        reviewerUserId: "autodist-rev-a", createdAt, updatedAt: createdAt,
+      },
+      {
+        id: "autodist-recused", eventId, roundId, submissionId: "autodist-sub-1",
+        reviewerUserId: "autodist-rev-b", status: "recused", recusalReason: "Same employer",
+        recusedAt: createdAt, createdAt, updatedAt: createdAt,
+      },
+    ]);
+
+    const input = {
+      eventId,
+      roundId,
+      reviewsPerSubmission: 2,
+      perReviewerCap: 4,
+      idempotencyKey: "autodist-command-001",
+      requestId: "request-autodist-001",
+    } as const;
+    const result = await runAs(owner, autoDistributeReviewers(input));
+    expect(result).toMatchObject({
+      roundId,
+      createdCount: 7,
+      satisfiedCount: 4,
+      unfilled: [],
+      idempotent: false,
+    });
+    expect(result.perReviewerLoad).toEqual([
+      { reviewerUserId: "autodist-rev-a", assignedCount: 3 },
+      { reviewerUserId: "autodist-rev-b", assignedCount: 2 },
+      { reviewerUserId: "autodist-rev-c", assignedCount: 3 },
+    ]);
+
+    const rows = await db.select().from(reviewAssignments).where(and(
+      eq(reviewAssignments.eventId, eventId),
+      eq(reviewAssignments.roundId, roundId),
+    ));
+    expect(rows.filter((row) => row.status === "assigned")).toHaveLength(8);
+    // The recused pair is never recreated; the remaining slot went to rev-c.
+    const subOne = rows.filter((row) => row.submissionId === "autodist-sub-1");
+    expect(subOne.filter((row) => row.status === "assigned").map((row) => row.reviewerUserId).sort())
+      .toEqual(["autodist-rev-a", "autodist-rev-c"]);
+    expect(rows.filter((row) => row.submissionId === "autodist-sub-accepted")).toHaveLength(0);
+
+    const replay = await runAs(owner, autoDistributeReviewers(input));
+    expect(replay).toMatchObject({ createdCount: 7, idempotent: true });
+
+    const conflicting = await runEitherAs(owner, autoDistributeReviewers({
+      ...input,
+      reviewsPerSubmission: 3,
+    }));
+    expect(conflicting._tag).toBe("Left");
+    if (Either.isLeft(conflicting)) expect(conflicting.left._tag).toBe("Conflict");
+
+    const secondPass = await runAs(owner, autoDistributeReviewers({
+      ...input,
+      idempotencyKey: "autodist-command-002",
+      requestId: "request-autodist-002",
+    }));
+    expect(secondPass).toMatchObject({ createdCount: 0, satisfiedCount: 4, idempotent: false });
+  });
+
+  it("reports unfilled coverage when the cap starves the pool", async () => {
+    const createdAt = new Date();
+    const eventId = "autodist-cap-event";
+    const roundId = "autodist-cap-round";
+    await db.insert(users).values({
+      id: "autodist-rev-solo", email: "autodist-rev-solo@example.com", name: "Solo",
+      createdAt, updatedAt: createdAt,
+    }).onConflictDoNothing();
+    await db.insert(events).values({
+      id: eventId, slug: eventId, name: "Cap starvation", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values([
+      { id: "autodist-cap-owner", eventId, userId: owner.userId, role: "owner", createdAt, updatedAt: createdAt },
+      { id: "autodist-cap-solo", eventId, userId: "autodist-rev-solo", role: "reviewer", createdAt, updatedAt: createdAt },
+    ]);
+    await db.insert(forms).values({
+      id: "autodist-cap-form", eventId, kind: "cfp", name: "Cap CFP", status: "closed", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(formVersions).values({
+      id: "autodist-cap-form-v1", eventId, formId: "autodist-cap-form", versionNumber: 1,
+      name: "Cap CFP", publishedAt: createdAt, createdAt,
+    });
+    await db.insert(reviewRounds).values({
+      id: roundId, eventId, name: "Cap round", order: 1, status: "active",
+      startsAt: createdAt, endsAt: new Date(createdAt.getTime() + 86_400_000),
+      blind: false, rubric: activeRoundFixture.rubric, version: 1, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(submissions).values(["autodist-cap-sub-1", "autodist-cap-sub-2"].map((id) => ({
+      id, eventId, formId: "autodist-cap-form", formVersionId: "autodist-cap-form-v1",
+      title: id, status: "submitted" as const, submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+    })));
+
+    const starved = await runAs(owner, autoDistributeReviewers({
+      eventId,
+      roundId,
+      reviewsPerSubmission: 1,
+      perReviewerCap: 1,
+      idempotencyKey: "autodist-cap-command-001",
+      requestId: "request-autodist-cap-001",
+    }));
+    expect(starved).toMatchObject({ createdCount: 1, satisfiedCount: 1 });
+    expect(starved.unfilled).toEqual([{ submissionId: "autodist-cap-sub-2", missing: 1 }]);
+    expect(starved.perReviewerLoad).toEqual([{ reviewerUserId: "autodist-rev-solo", assignedCount: 1 }]);
+
+    const impossible = await runEitherAs(owner, autoDistributeReviewers({
+      eventId,
+      roundId,
+      reviewsPerSubmission: 2,
+      idempotencyKey: "autodist-cap-command-002",
+      requestId: "request-autodist-cap-002",
+    }));
+    expect(impossible._tag).toBe("Left");
+    if (Either.isLeft(impossible)) expect(impossible.left._tag).toBe("Validation");
   });
 });
