@@ -17,9 +17,9 @@ import {
   drainWebhookDeliveries,
   enqueueWebhookDeliveries,
   webhookKindMatches,
-  webhookRetryDelayMs,
   webhookSignature,
 } from "@/server/party/webhook-dispatch";
+import { retryDelayMs } from "@/server/party/retry-backoff";
 import {
   createWebhook,
   deleteWebhook,
@@ -154,11 +154,11 @@ describe("webhook building blocks", () => {
   });
 
   it("backs off exponentially with bounded deterministic jitter", () => {
-    const first = webhookRetryDelayMs("delivery-x", 1);
+    const first = retryDelayMs("delivery-x", 1);
     expect(first).toBeGreaterThanOrEqual(60_000);
     expect(first).toBeLessThanOrEqual(75_000);
-    expect(webhookRetryDelayMs("delivery-x", 3)).toBe(webhookRetryDelayMs("delivery-x", 3));
-    const seventh = webhookRetryDelayMs("delivery-x", 7);
+    expect(retryDelayMs("delivery-x", 3)).toBe(retryDelayMs("delivery-x", 3));
+    const seventh = retryDelayMs("delivery-x", 7);
     expect(seventh).toBeGreaterThanOrEqual(3_600_000);
     expect(seventh).toBeLessThanOrEqual(4_500_000);
   });
