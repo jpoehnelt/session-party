@@ -51,6 +51,37 @@ export const EventAccess = Schema.Struct({
 });
 export type EventAccess = typeof EventAccess.Type;
 
+export const EventOverviewSubmissionCounts = Schema.Struct({
+  submitted: Schema.Int.pipe(Schema.nonNegative()),
+  inReview: Schema.Int.pipe(Schema.nonNegative()),
+  accepted: Schema.Int.pipe(Schema.nonNegative()),
+  rejected: Schema.Int.pipe(Schema.nonNegative()),
+  waitlist: Schema.Int.pipe(Schema.nonNegative()),
+  withdrawn: Schema.Int.pipe(Schema.nonNegative()),
+});
+export type EventOverviewSubmissionCounts = typeof EventOverviewSubmissionCounts.Type;
+
+export const EventOverviewAgendaMetrics = Schema.Struct({
+  activeTalkCount: Schema.Int.pipe(Schema.nonNegative()),
+  scheduledTalkCount: Schema.Int.pipe(Schema.nonNegative()),
+  backlogCount: Schema.Int.pipe(Schema.nonNegative()),
+  unplacedTalkCount: Schema.Int.pipe(Schema.nonNegative()),
+  conflictCount: Schema.Int.pipe(Schema.nonNegative()),
+  publishedTalkCount: Schema.Int.pipe(Schema.nonNegative()),
+});
+export type EventOverviewAgendaMetrics = typeof EventOverviewAgendaMetrics.Type;
+
+export const EventOverviewMetrics = Schema.Struct({
+  submissionCounts: EventOverviewSubmissionCounts,
+  agenda: EventOverviewAgendaMetrics,
+});
+export type EventOverviewMetrics = typeof EventOverviewMetrics.Type;
+
+export const GetEventOverviewInput = Schema.Struct({
+  eventId: EntityId,
+});
+export type GetEventOverviewInput = typeof GetEventOverviewInput.Type;
+
 const Email = Schema.String.pipe(Schema.minLength(3), Schema.maxLength(320));
 const IdempotencyKey = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200));
 

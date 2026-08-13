@@ -2,17 +2,19 @@ import { Suspense, lazy, type ComponentType, type ReactNode, useEffect, useRef, 
 import {
   Link,
   NavLink,
+  Outlet,
   createBrowserRouter,
   useLocation,
+  useMatches,
   useNavigate,
   useParams,
 } from "react-router";
 import { AppShell, Button, EmptyState, Sheet, Spinner } from "@/ui";
+import { apiFetch } from "./api";
 import {
-  apiFetch,
-  invalidateAuthGeneration,
-  synchronizeAuthenticatedPrincipal,
-} from "./api";
+  AuthenticatedAccessProvider,
+  useAuthenticatedAccess,
+} from "./auth-access";
 import LoginPage from "./auth";
 import { availableEventNavItems, type EventNavRole } from "./event-nav";
 import {
@@ -25,41 +27,19 @@ import { clientRouteAccess, RouteAccessBoundary } from "./route-access";
 
 export { discoveredClientRoutePaths };
 
-type AuthMeResponse = {
-  email?: string;
-  sessionId?: string;
-  userId?: string;
-  user?: { email?: string; sessionId?: string; userId?: string };
-};
-
-type SessionState =
-  | { status: "loading" }
-  | { status: "signed-out" }
-  | { status: "signed-in"; email: string };
-
 const registeredEventNavItems = availableEventNavItems(
   discoveredClientRouteModules.map(({ path }) => path),
 );
 
 function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) {
   const { eventSlug } = useParams();
-  const [memberRole, setMemberRole] = useState<EventNavRole>(undefined);
-  useEffect(() => {
-    if (!eventSlug) {
-      setMemberRole(undefined);
-      return;
-    }
-    let current = true;
-    void apiFetch<readonly { event: { slug: string }; memberRole: EventNavRole; staff: boolean }[]>("/api/v1/me/events")
-      .then((access) => {
-        const currentAccess = access.find(({ event }) => event.slug === eventSlug);
-        if (current) setMemberRole(currentAccess?.staff ? "owner" : currentAccess?.memberRole ?? null);
-      })
-      .catch(() => {
-        if (current) setMemberRole(null);
-      });
-    return () => { current = false; };
-  }, [eventSlug]);
+  const { state } = useAuthenticatedAccess();
+  const currentAccess = state.status === "signed-in"
+    ? state.events?.find(({ event }) => event.slug === eventSlug)
+    : undefined;
+  const memberRole: EventNavRole = currentAccess?.staff
+    ? "owner"
+    : currentAccess?.memberRole ?? (state.status === "loading" ? undefined : null);
   const navItems = !eventSlug
     ? registeredEventNavItems
     : memberRole === undefined || memberRole === null
@@ -137,39 +117,18 @@ function Topbar({
 }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [session, setSession] = useState<SessionState>({ status: "loading" });
+  const authenticatedAccess = useAuthenticatedAccess();
+  const { state: session } = authenticatedAccess;
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-
-  useEffect(() => {
-    let isCurrent = true;
-    void apiFetch<AuthMeResponse>("/api/v1/auth/me")
-      .then((user) => {
-        if (!isCurrent) return;
-        const email = user.user?.email ?? user.email;
-        synchronizeAuthenticatedPrincipal(user.user?.sessionId ?? user.sessionId ?? user.user?.userId ?? user.userId ?? email ?? null);
-        setSession(email ? { status: "signed-in", email } : { status: "signed-out" });
-      })
-      .catch(() => {
-        if (!isCurrent) return;
-        synchronizeAuthenticatedPrincipal(null);
-        setSession({ status: "signed-out" });
-      });
-
-    return () => {
-      isCurrent = false;
-    };
-  }, []);
 
   async function logout() {
     if (isLoggingOut) return;
 
     setIsLoggingOut(true);
-    synchronizeAuthenticatedPrincipal(null);
+    authenticatedAccess.clear();
     try {
       await apiFetch("/api/v1/auth/logout", { method: "POST" });
     } finally {
-      invalidateAuthGeneration();
-      setSession({ status: "signed-out" });
       navigate("/login", { replace: true });
     }
   }
@@ -257,14 +216,12 @@ function Layout({ children, contentWidth }: { children: ReactNode; contentWidth?
 function NotFound() {
   const navigate = useNavigate();
   return (
-    <Layout>
-      <EmptyState
-        headingLevel={1}
-        title="Page not found"
-        description="The page you requested does not exist."
-        action={<Button onClick={() => navigate("/")}>Return home</Button>}
-      />
-    </Layout>
+    <EmptyState
+      headingLevel={1}
+      title="Page not found"
+      description="The page you requested does not exist."
+      action={<Button onClick={() => navigate("/")}>Return home</Button>}
+    />
   );
 }
 
@@ -276,33 +233,36 @@ export function RouteCoordinator({ children }: { children: ReactNode }) {
     const isNavigation = previousPath.current !== location.pathname;
     previousPath.current = location.pathname;
     let settled = false;
+    let focusFrame: number | undefined;
     const apply = () => {
       const heading = document.querySelector<HTMLElement>("h1");
       if (!heading) return false;
       const main = document.querySelector<HTMLElement>("main");
       if (main) {
-        main.id ||= "main-content";
-        main.tabIndex = -1;
+        if (!main.id) main.id = "main-content";
+        if (main.tabIndex !== -1) main.tabIndex = -1;
       }
-      const name = heading.innerText.replace(/\s+/g, " ").trim();
+      const name = (heading.textContent ?? "").replace(/\s+/g, " ").trim();
       if (location.pathname === "/") document.title = "Session Party — Your whole program, ready on cue.";
       else if (name) document.title = `${name} — Session Party`;
       const canonicalUrl = `${window.location.origin}${location.pathname}`;
       for (const selector of ['meta[property="og:title"]', 'meta[name="twitter:title"]']) {
-        document.querySelector<HTMLMetaElement>(selector)?.setAttribute("content", document.title);
+        const meta = document.querySelector<HTMLMetaElement>(selector);
+        if (meta?.content !== document.title) meta?.setAttribute("content", document.title);
       }
-      document.querySelector<HTMLMetaElement>('meta[property="og:url"]')?.setAttribute("content", canonicalUrl);
+      const openGraphUrl = document.querySelector<HTMLMetaElement>('meta[property="og:url"]');
+      if (openGraphUrl?.content !== canonicalUrl) openGraphUrl?.setAttribute("content", canonicalUrl);
       let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
       if (!canonical) {
         canonical = document.createElement("link");
         canonical.rel = "canonical";
         document.head.append(canonical);
       }
-      canonical.href = canonicalUrl;
+      if (canonical.href !== canonicalUrl) canonical.href = canonicalUrl;
       if (isNavigation && !settled) {
         heading.tabIndex = -1;
-        heading.focus({ preventScroll: false });
         settled = true;
+        focusFrame = requestAnimationFrame(() => heading.focus({ preventScroll: true }));
       }
       return true;
     };
@@ -311,6 +271,7 @@ export function RouteCoordinator({ children }: { children: ReactNode }) {
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     return () => {
       observer.disconnect();
+      if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
     };
   }, [location.pathname]);
 
@@ -320,33 +281,56 @@ export function RouteCoordinator({ children }: { children: ReactNode }) {
   </>;
 }
 
-function routeElement(Component: ComponentType, path: string, layout?: RouteModule["layout"], contentWidth?: RouteModule["contentWidth"]) {
-  const page = (
+function routeElement(Component: ComponentType, path: string) {
+  return (
     <RouteAccessBoundary access={clientRouteAccess(path)}>
       <Suspense fallback={<div className="flex min-h-48 items-center justify-center gap-3 text-sm text-ink-secondary" role="status"><Spinner /> Loading page…</div>}>
         <Component />
       </Suspense>
     </RouteAccessBoundary>
   );
-  return <RouteCoordinator>{layout === "bare" ? page : <Layout contentWidth={contentWidth}>{page}</Layout>}</RouteCoordinator>;
 }
 
 const discoveredRoutes = discoveredClientRouteModules.map(({ path, layout, contentWidth, load }) => {
   const Component = lazy(load);
   return {
     path,
-    element: routeElement(Component, path, layout, contentWidth),
+    layout,
+    contentWidth,
+    element: routeElement(Component, path),
   };
 });
+
+function PersistentAppLayout() {
+  const matches = useMatches();
+  const contentWidth = [...matches].reverse().find(({ handle }) => handle)?.handle as
+    | { readonly contentWidth?: RouteModule["contentWidth"] }
+    | undefined;
+  return <Layout contentWidth={contentWidth?.contentWidth}><Outlet /></Layout>;
+}
+
+const bareRoutes = discoveredRoutes
+  .filter(({ layout }) => layout === "bare")
+  .map(({ path, element }) => ({ path, element: <RouteCoordinator>{element}</RouteCoordinator> }));
+const appRoutes = discoveredRoutes
+  .filter(({ layout }) => layout !== "bare")
+  .map(({ path, contentWidth, element }) => ({ path, element, handle: { contentWidth } }));
 
 export const router = createBrowserRouter([
   {
     path: "/login",
     element: <RouteCoordinator><LoginPage /></RouteCoordinator>,
   },
-  ...discoveredRoutes,
+  ...bareRoutes,
   {
-    path: "*",
-    element: <RouteCoordinator><NotFound /></RouteCoordinator>,
+    element: (
+      <AuthenticatedAccessProvider>
+        <RouteCoordinator><PersistentAppLayout /></RouteCoordinator>
+      </AuthenticatedAccessProvider>
+    ),
+    children: [
+      ...appRoutes,
+      { path: "*", element: <NotFound /> },
+    ],
   },
 ]);

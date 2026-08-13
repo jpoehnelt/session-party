@@ -2,12 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, apiFetch } from "@/client/api";
 import { loginPathForLocation } from "@/client/return-to";
-import { AgendaSnapshot, type AgendaSnapshot as AgendaSnapshotValue } from "@/features/agenda/schema";
-import {
-  SubmissionPage,
-  type SubmissionPage as SubmissionPageValue,
-  type SubmissionStatus,
-} from "@/features/submit/schema";
+import { useAuthenticatedAccess } from "@/client/auth-access";
+import { type SubmissionStatus } from "@/features/submit/schema";
 import {
   Alert,
   AlertDescription,
@@ -22,7 +18,12 @@ import {
   Toaster,
   toast,
 } from "@/ui";
-import { EventOutput, type EventOutput as EventOverview } from "../schema";
+import {
+  EventOverviewMetrics,
+  type EventOverviewAgendaMetrics,
+  type EventOverviewMetrics as EventOverviewMetricsValue,
+  type EventOutput as EventOverview,
+} from "../schema";
 
 export const path = "/e/:eventSlug";
 export const contentWidth = "compact" as const;
@@ -41,7 +42,7 @@ type SubmissionCounts = Record<SubmissionStatus, number>;
 export interface EventOverviewData {
   readonly event: EventOverview;
   readonly submissionCounts: SubmissionCounts | null;
-  readonly agenda: AgendaSnapshotValue | null;
+  readonly agenda: EventOverviewAgendaMetrics | null;
 }
 
 type EventLoadError =
@@ -49,46 +50,22 @@ type EventLoadError =
   | { readonly kind: "not-found" }
   | { readonly kind: "failed"; readonly message: string };
 
-const emptySubmissionCounts = (): SubmissionCounts => ({
-  submitted: 0,
-  in_review: 0,
-  accepted: 0,
-  rejected: 0,
-  waitlist: 0,
-  withdrawn: 0,
-});
-
-export async function loadEventOverview(eventSlug: string): Promise<EventOverviewData> {
-  const event = await apiFetch(`/api/v1/events/${encodeURIComponent(eventSlug)}`, {
-    schema: EventOutput,
-  });
-  const eventId = encodeURIComponent(event.id);
-  const [submissionsResult, agendaResult] = await Promise.allSettled([
-    Promise.all(
-      submissionStages.map(async (status) => {
-        const page = await apiFetch<SubmissionPageValue>(
-          `/api/v1/events/${eventId}/submissions?page=1&pageSize=1&status=${status}`,
-          { schema: SubmissionPage },
-        );
-        return [status, page.pagination.total] as const;
-      }),
-    ),
-    apiFetch<AgendaSnapshotValue>(`/api/v1/events/${eventId}/agenda?view=day`, {
-      schema: AgendaSnapshot,
-    }),
-  ]);
-
-  const submissionCounts = submissionsResult.status === "fulfilled"
-    ? submissionsResult.value.reduce<SubmissionCounts>((counts, [status, total]) => {
-        counts[status] = total;
-        return counts;
-      }, emptySubmissionCounts())
-    : null;
-
+export async function loadEventOverview(event: EventOverview): Promise<EventOverviewData> {
+  const metrics = await apiFetch<EventOverviewMetricsValue>(
+    `/api/v1/events/${encodeURIComponent(event.id)}/overview`,
+    { schema: EventOverviewMetrics },
+  );
   return {
     event,
-    submissionCounts,
-    agenda: agendaResult.status === "fulfilled" ? agendaResult.value : null,
+    submissionCounts: {
+      submitted: metrics.submissionCounts.submitted,
+      in_review: metrics.submissionCounts.inReview,
+      accepted: metrics.submissionCounts.accepted,
+      rejected: metrics.submissionCounts.rejected,
+      waitlist: metrics.submissionCounts.waitlist,
+      withdrawn: metrics.submissionCounts.withdrawn,
+    },
+    agenda: metrics.agenda,
   };
 }
 
@@ -96,6 +73,10 @@ export default function EventOverviewPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { eventSlug = "" } = useParams();
+  const { state: authenticatedAccess } = useAuthenticatedAccess();
+  const event = authenticatedAccess.status === "signed-in"
+    ? authenticatedAccess.events?.find(({ event }) => event.slug === eventSlug)?.event
+    : undefined;
   const [overview, setOverview] = useState<EventOverviewData | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<EventLoadError | null>(null);
   const [request, setRequest] = useState(0);
@@ -104,7 +85,12 @@ export default function EventOverviewPage() {
     let active = true;
     setOverview(undefined);
     setLoadError(null);
-    void loadEventOverview(eventSlug)
+    if (!event) {
+      setOverview(null);
+      setLoadError({ kind: "not-found" });
+      return;
+    }
+    void loadEventOverview(event)
       .then((loaded) => {
         if (!active) return;
         setOverview(loaded);
@@ -128,7 +114,7 @@ export default function EventOverviewPage() {
     return () => {
       active = false;
     };
-  }, [eventSlug, request]);
+  }, [event, eventSlug, request]);
 
   return (
     <>
@@ -188,13 +174,12 @@ export function EventOverviewContent({
   const proposalTotal = submissionCounts === null
     ? null
     : submissionStages.reduce((total, status) => total + submissionCounts[status], 0);
-  const activeTalks = agenda?.talks.filter((talk) => talk.status !== "cancelled") ?? [];
   const scheduledTalks = agenda === null
     ? null
-    : activeTalks.filter((talk) => talk.startsAt !== null && talk.roomId !== null).length;
+    : agenda.scheduledTalkCount;
   const needsPlacement = agenda === null
     ? null
-    : agenda.backlog.length + agenda.warnings.unplacedTalkCount;
+    : agenda.backlogCount + agenda.unplacedTalkCount;
   const metricsUnavailable = submissionCounts === null || agenda === null;
 
   return (
@@ -223,8 +208,8 @@ export function EventOverviewContent({
         <StatCard label="Scheduled" value={scheduledTalks} />
         <StatCard
           label="Conflicts"
-          value={agenda?.warnings.conflictCount ?? null}
-          tone={(agenda?.warnings.conflictCount ?? 0) > 0 ? "danger" : "success"}
+          value={agenda?.conflictCount ?? null}
+          tone={(agenda?.conflictCount ?? 0) > 0 ? "danger" : "success"}
         />
       </section>
 
@@ -354,13 +339,12 @@ function ScheduleHealth({
   needsPlacement,
   eventSlug,
 }: {
-  readonly agenda: AgendaSnapshotValue | null;
+  readonly agenda: EventOverviewAgendaMetrics | null;
   readonly scheduledTalks: number | null;
   readonly needsPlacement: number | null;
   readonly eventSlug: string;
 }) {
-  const activeTalkCount = agenda?.talks.filter((talk) => talk.status !== "cancelled").length ?? 0;
-  const programTotal = agenda === null ? 0 : activeTalkCount + agenda.backlog.length;
+  const programTotal = agenda === null ? 0 : agenda.activeTalkCount + agenda.backlogCount;
   const progress = programTotal === 0 || scheduledTalks === null ? 0 : (scheduledTalks / programTotal) * 100;
 
   return (
@@ -396,16 +380,16 @@ function ScheduleHealth({
           />
           <ScheduleRow
             label="Conflicts"
-            value={agenda.warnings.conflictCount}
-            attention={agenda.warnings.conflictCount > 0}
+            value={agenda.conflictCount}
+            attention={agenda.conflictCount > 0}
             to={`/e/${eventSlug}/agenda?view=list&filter=conflicts`}
           />
           <ScheduleRow
             label="Published sessions"
-            value={agenda.publication.talkCount}
+            value={agenda.publishedTalkCount}
             to={`/e/${eventSlug}/agenda?view=list&filter=published`}
           />
-          {needsPlacement === 0 && agenda.warnings.conflictCount === 0 ? (
+          {needsPlacement === 0 && agenda.conflictCount === 0 ? (
             <Alert tone="success" role="status">
               <AlertTitle>Schedule is clear</AlertTitle>
               <AlertDescription>No placement blockers or conflicts are currently reported.</AlertDescription>

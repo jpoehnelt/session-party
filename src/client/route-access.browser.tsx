@@ -3,22 +3,28 @@ import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const apiMocks = vi.hoisted(() => ({ apiFetch: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({ apiFetch: vi.fn(), synchronizeAuthenticatedPrincipal: vi.fn() }));
 
-vi.mock("./api", () => ({ apiFetch: apiMocks.apiFetch }));
+vi.mock("./api", () => ({
+  apiFetch: apiMocks.apiFetch,
+  synchronizeAuthenticatedPrincipal: apiMocks.synchronizeAuthenticatedPrincipal,
+}));
 
+import { AuthenticatedAccessProvider } from "./auth-access";
 import { RouteAccessBoundary } from "./route-access";
 
 const renderRoute = async (root: Root, initialEntry: string, access: "event-organizer" | "install-staff") => {
   await act(async () => root.render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <Routes>
-        <Route
-          path={access === "install-staff" ? "/staff" : "/e/:eventSlug/settings"}
-          element={<RouteAccessBoundary access={access}><button type="button">Active organizer control</button></RouteAccessBoundary>}
-        />
-        <Route path="/login" element={<p>Sign in</p>} />
-      </Routes>
+      <AuthenticatedAccessProvider>
+        <Routes>
+          <Route
+            path={access === "install-staff" ? "/staff" : "/e/:eventSlug/settings"}
+            element={<RouteAccessBoundary access={access}><button type="button">Active organizer control</button></RouteAccessBoundary>}
+          />
+          <Route path="/login" element={<p>Sign in</p>} />
+        </Routes>
+      </AuthenticatedAccessProvider>
     </MemoryRouter>,
   ));
 };
@@ -33,6 +39,7 @@ describe("route access boundary", () => {
     document.body.append(container);
     root = createRoot(container);
     apiMocks.apiFetch.mockReset();
+    apiMocks.synchronizeAuthenticatedPrincipal.mockReset();
   });
 
   afterEach(async () => {
@@ -52,13 +59,15 @@ describe("route access boundary", () => {
   });
 
   it("does not mount install controls for a signed-in non-staff user", async () => {
-    apiMocks.apiFetch.mockResolvedValue({ user: { email: "speaker@example.com" } });
+    apiMocks.apiFetch.mockImplementation((path: string) => path === "/api/v1/auth/me"
+      ? Promise.resolve({ user: { email: "speaker@example.com" } })
+      : Promise.resolve([]));
 
     await renderRoute(root, "/staff", "install-staff");
 
     await vi.waitFor(() => expect(container.textContent).toContain("Access denied"));
     expect(container.textContent).not.toContain("Active organizer control");
-    expect(apiMocks.apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiMocks.apiFetch).toHaveBeenCalledTimes(2);
   });
 
   it("mounts organizer controls for an event owner", async () => {

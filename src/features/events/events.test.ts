@@ -66,6 +66,7 @@ import {
   updateEvent,
   updateEventMember,
 } from "./service";
+import { getEventOverview } from "./overview";
 import { operations } from "./operations";
 import { operationEffect, runEffect } from "@/server/adapt";
 
@@ -211,6 +212,36 @@ describe("events service", () => {
     }]);
     await expect(runAs(owner, getEvent(created.id))).resolves.toEqual(created);
     await expect(runAs(owner, getEvent(created.slug))).resolves.toEqual(created);
+  });
+
+  it("loads overview metrics once and keeps organizer authorization at the operation boundary", async () => {
+    const created = await runAs(owner, createEvent({ name: "Overview event", slug: "overview-event" }));
+    await expect(runAs(owner, getEventOverview({ eventId: created.id }))).resolves.toEqual({
+      submissionCounts: {
+        submitted: 0,
+        inReview: 0,
+        accepted: 0,
+        rejected: 0,
+        waitlist: 0,
+        withdrawn: 0,
+      },
+      agenda: {
+        activeTalkCount: 0,
+        scheduledTalkCount: 0,
+        backlogCount: 0,
+        unplacedTalkCount: 0,
+        conflictCount: 0,
+        publishedTalkCount: 0,
+      },
+    });
+
+    await addMember(created.id, reviewer.userId, "reviewer");
+    const operation = operations.find((candidate) => candidate.id === "events.overview");
+    if (!operation) throw new Error("events.overview operation missing");
+    const ownerExit = await runEffect(env, owner, operationEffect(operation, { eventId: created.id }, owner));
+    const reviewerExit = await runEffect(env, reviewer, operationEffect(operation, { eventId: created.id }, reviewer));
+    expect(Exit.isSuccess(ownerExit)).toBe(true);
+    expect(Exit.isFailure(reviewerExit)).toBe(true);
   });
 
   it("increments the event version on every successful metadata update", async () => {
