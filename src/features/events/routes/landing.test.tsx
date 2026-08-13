@@ -32,6 +32,7 @@ describe("public landing route", () => {
     expect(markup).not.toContain('returnTo=%2Fe%2Fai-engineer-sandbox%2Fresources');
     expect(markup).toContain('href="/events"');
     expect(markup).toContain('href="/login?returnTo=%2Fevents"');
+    expect(markup).toContain('href="https://github.com/jpoehnelt/session-party"');
     expect(markup).not.toContain("Create event");
   });
 });
