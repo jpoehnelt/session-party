@@ -882,9 +882,38 @@ describe("review and acceptance slice", () => {
       "user_reviewer_dev",
       fixtureReviewerId,
     ].sort());
-    expect(reviewerView.selected?.reviews).toEqual([
-      expect.objectContaining({ reviewerUserId: "user_reviewer_dev", reviewerName: "Dev Shah", comment: "Dev private comment" }),
-    ]);
+    // Anchoring protection: peer reviews and queue averages stay hidden from a
+    // reviewer until they save their own review of the proposal.
+    expect(reviewerView.selected?.reviews).toEqual([]);
+    expect(reviewerView.queue.find((submission) => submission.id === "submission_05")?.averageScore).toBeNull();
+
+    const unlocked = await runAs(reviewer, saveScore({
+      eventId: fixtureEventId,
+      roundId: activeRoundFixture.id,
+      submissionId: "submission_05",
+      expectedVersion: 0,
+      scores: [
+        { criterionKey: "relevance", score: 3 },
+        { criterionKey: "specificity", score: 3 },
+        { criterionKey: "delivery", score: 3 },
+      ],
+      requestId: "request_score_unlock_peer_visibility",
+    }));
+    const unlockedView = await runAs(reviewer, getWorkbench({
+      eventId: fixtureEventId,
+      selectedSubmissionId: "submission_05",
+      page: 1,
+      pageSize: 60,
+    }));
+    expect(unlockedView.selected?.reviews.map((review) => review.reviewerUserId).sort()).toEqual([
+      "user_reviewer_dev",
+      fixtureReviewerId,
+    ].sort());
+    expect(
+      unlockedView.queue.find((submission) => submission.id === "submission_05")?.averageScore,
+    ).not.toBeNull();
+    // Restore the fixture state other tests in this file depend on.
+    await db.delete(reviews).where(eq(reviews.id, unlocked.review.id));
     expect(reviewerView.selected?.speakers).toEqual([
       expect.objectContaining({ displayName: "Jordan Lee", role: "Session moderator" }),
     ]);
