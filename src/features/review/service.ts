@@ -957,6 +957,20 @@ export const getWorkbench = (
       db.select().from(reviews).where(eq(reviews.eventId, input.eventId)),
     );
     const visibleHumanReviews = reviewRows.filter((review) => !review.ai);
+    // Anchoring protection: a reviewer sees peer scores on a proposal only
+    // after saving their own review of it. Organizers and admins always see
+    // the committee-wide picture.
+    const viewerIsReviewer = viewer.role === "reviewer";
+    const viewerReviewedSubmissionIds = new Set(
+      visibleHumanReviews
+        .filter((review) =>
+          review.reviewerUserId === viewer.userId &&
+          (!relevantRoundId || review.roundId === relevantRoundId),
+        )
+        .map((review) => review.submissionId),
+    );
+    const peerScoresVisible = (submissionId: string): boolean =>
+      !viewerIsReviewer || viewerReviewedSubmissionIds.has(submissionId);
     const reviewerProgress = reviewerRows.map((reviewer) => {
       const reviewerAssignments = assignmentRows.filter((assignment) =>
         assignment.reviewerUserId === reviewer.userId &&
@@ -1014,7 +1028,7 @@ export const getWorkbench = (
         assignedToMe: reviewerSubmissionIds.has(submission.id),
         assignmentCount: assignments.length,
         completedReviewCount: humanReviews.length,
-        averageScore: score,
+        averageScore: peerScoresVisible(submission.id) ? score : null,
       };
     }).sort((left, right) => compareReviewQueue(input.order ?? "coverage", left, right));
 
@@ -1113,6 +1127,9 @@ export const getWorkbench = (
         }));
       const detailHumanReviews: HumanReview[] = visibleHumanReviews
         .filter((review) => review.submissionId === submissionId && (!relevantRoundId || review.roundId === relevantRoundId))
+        .filter((review) =>
+          peerScoresVisible(submissionId) || review.reviewerUserId === viewer.userId,
+        )
         .map((review) => ({
           id: review.id,
           reviewerUserId: review.reviewerUserId!,
