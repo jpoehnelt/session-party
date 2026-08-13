@@ -13,6 +13,8 @@ import {
   SubmissionPage,
   UpdateOwnSubmissionAbstractInput,
   UpdateOwnSubmissionAbstractOutput,
+  WithdrawOwnSubmissionInput,
+  WithdrawOwnSubmissionOutput,
 } from "./schema";
 import {
   createPublicSubmission,
@@ -22,6 +24,7 @@ import {
   getTaskSubmissionForm,
   listSubmissions,
   updateOwnSubmissionAbstract,
+  withdrawOwnSubmission,
 } from "./service";
 
 const organizerReadAuthorization = eventAuthorization(
@@ -177,6 +180,29 @@ export const updateOwnSubmissionAbstractOperation = {
   emits: ["submit.abstract.updated"],
 } satisfies AnyOperationDef;
 
+export const withdrawOwnSubmissionOperation = {
+  id: "submit.withdrawOwn",
+  kind: "command",
+  input: WithdrawOwnSubmissionInput,
+  output: WithdrawOwnSubmissionOutput,
+  authorize: browserSessionAuthorization,
+  invoke: withdrawOwnSubmission,
+  rest: {
+    method: "post",
+    path: "/events/by-slug/:eventSlug/my-submissions/:submissionId/withdrawal",
+    input: {
+      path: ["eventSlug", "submissionId"],
+      headers: { idempotencyKey: "idempotency-key" },
+      body: ["reason", "expectedVersion"],
+    },
+    summary: "Withdraw an owned proposal from consideration before a decision",
+    successStatus: 200,
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["submit.withdrawn"],
+} satisfies AnyOperationDef;
+
 /** Operation IDs are kept in bytewise ascending order for deterministic registry generation. */
 export const operations = [
   createPublicSubmissionOperation,
@@ -186,4 +212,5 @@ export const operations = [
   getTaskSubmissionFormOperation,
   listSubmissionsOperation,
   updateOwnSubmissionAbstractOperation,
+  withdrawOwnSubmissionOperation,
 ] as const satisfies readonly AnyOperationDef[];

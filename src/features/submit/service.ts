@@ -47,6 +47,8 @@ import {
   type SubmissionPage,
   UpdateOwnSubmissionAbstractOutput,
   type UpdateOwnSubmissionAbstractInput,
+  WithdrawOwnSubmissionOutput,
+  type WithdrawOwnSubmissionInput,
 } from "./schema";
 
 const COMMAND_TTL_MS = 24 * 60 * 60 * 1_000;
@@ -1850,4 +1852,171 @@ export const updateOwnSubmissionAbstract = (
       }
     }
     return yield* Effect.fail(new Conflict({ message: "Submission changed or the CFP closed; reload before saving" }));
+  });
+
+const replayOwnWithdrawal = (value: unknown) =>
+  Schema.decodeUnknown(WithdrawOwnSubmissionOutput)(value).pipe(
+    Effect.mapError((error) => new External({ service: "database", detail: `Invalid stored submit.withdrawOwn response: ${String(error)}` })),
+  );
+
+/**
+ * Withdrawal stays available while a decision is pending — including after the
+ * CFP closes, since plans change during review. Accepted sessions must instead
+ * withdraw through the speaker portal, which also cancels scheduled talks and
+ * revokes provisioning.
+ */
+export const withdrawOwnSubmission = (
+  input: WithdrawOwnSubmissionInput,
+): Effect.Effect<typeof WithdrawOwnSubmissionOutput.Type, AppError, CurrentUser | Db> =>
+  Effect.gen(function* () {
+    const owner = yield* requireSubmissionOwner();
+    const { db } = yield* Db;
+    const [event] = yield* database(() =>
+      db.select({ id: events.id }).from(events).where(eq(events.slug, input.eventSlug)).limit(1),
+    );
+    if (!event) return yield* Effect.fail(new NotFound({ entity: "event", id: input.eventSlug }));
+    const reason = input.reason?.trim() || null;
+    const [keyHash, requestHash] = yield* Effect.all([
+      sha256(input.idempotencyKey),
+      sha256(stableStringify({ submissionId: input.submissionId, expectedVersion: input.expectedVersion, reason })),
+    ]);
+    const principalId = owner.userId;
+    const [replay] = yield* database(() =>
+      db.select().from(idempotencyRecords).where(and(
+        eq(idempotencyRecords.eventId, event.id),
+        eq(idempotencyRecords.operationId, "submit.withdrawOwn"),
+        eq(idempotencyRecords.principalId, principalId),
+        eq(idempotencyRecords.keyHash, keyHash),
+      )).limit(1),
+    );
+    if (replay) {
+      if (replay.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different withdrawal" }));
+      }
+      if (replay.status === "completed") {
+        const output = yield* replayOwnWithdrawal(replay.responseBody);
+        return { ...output, idempotent: true };
+      }
+      return yield* Effect.fail(new Conflict({ message: "Withdrawal with this idempotency key is already in progress" }));
+    }
+
+    const owned = yield* ownSubmissionRows(event.id, owner);
+    const row = owned.submissions.find((candidate) => candidate.id === input.submissionId);
+    if (!row) return yield* Effect.fail(new Forbidden({ reason: "This submission does not belong to the signed-in account" }));
+    if (row.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before withdrawing" }));
+    }
+    if (row.status === "accepted") {
+      return yield* Effect.fail(new Conflict({ message: "Accepted sessions are withdrawn from the speaker portal so scheduling stays consistent" }));
+    }
+    if (row.status === "rejected" || row.status === "withdrawn") {
+      return yield* Effect.fail(new Conflict({ message: "This proposal already has a final status" }));
+    }
+
+    const withdrawnAt = new Date();
+    const withdrawnAtMs = withdrawnAt.getTime();
+    const nextVersion = row.version + 1;
+    const idempotencyId = nanoid();
+    const requestId = nanoid();
+    const summary: OwnSubmissionSummary = ownSummary(
+      { ...row, status: "withdrawn", version: nextVersion },
+      owned.answers,
+      owned.participants,
+      withdrawnAtMs,
+    );
+    const output = { submission: summary, idempotent: false } as const;
+    const airtableProjection = yield* database(() => prepareAirtableSubmissionProjection(db, {
+      eventId: event.id,
+      submission: {
+        id: row.id,
+        title: row.title,
+        category: row.category,
+        status: "withdrawn",
+        submittedAt: row.submittedAt,
+        version: nextVersion,
+      },
+      changedKeys: ["status"],
+      origin: "submit.withdrawOwn",
+      idempotencyKey: `submit.withdrawOwn:${idempotencyId}`,
+      now: withdrawnAt,
+    }));
+
+    const committed = yield* database(() => db.batch([
+      db.update(submissions).set({ status: "withdrawn", version: nextVersion, updatedAt: withdrawnAt }).where(and(
+        eq(submissions.eventId, event.id),
+        eq(submissions.id, input.submissionId),
+        eq(submissions.version, input.expectedVersion),
+        inArray(submissions.status, ["submitted", "in_review", "waitlist"]),
+      )),
+      db.insert(idempotencyRecords).select(db.select({
+        id: sql<string>`${idempotencyId}`.as("id"),
+        eventId: submissions.eventId,
+        operationId: sql<string>`'submit.withdrawOwn'`.as("operation_id"),
+        principalId: sql<string>`${principalId}`.as("principal_id"),
+        keyHash: sql<string>`${keyHash}`.as("key_hash"),
+        requestHash: sql<string>`${requestHash}`.as("request_hash"),
+        status: sql<"completed">`'completed'`.as("status"),
+        responseStatus: sql<number>`200`.as("response_status"),
+        responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+        expiresAt: sql<Date>`${withdrawnAtMs + COMMAND_TTL_MS}`.as("expires_at"),
+        completedAt: sql<Date>`${withdrawnAtMs}`.as("completed_at"),
+        createdAt: sql<Date>`${withdrawnAtMs}`.as("created_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, event.id), eq(submissions.id, input.submissionId), eq(submissions.version, nextVersion), sql`changes() > 0`,
+      ))),
+      db.insert(domainChanges).select(db.select({
+        sequence: sql<number | null>`null`.as("sequence"),
+        id: sql<string>`${nanoid()}`.as("id"), eventId: submissions.eventId,
+        aggregateType: sql<string>`'submission'`.as("aggregate_type"), aggregateId: submissions.id,
+        aggregateVersion: submissions.version, eventType: sql<string>`'submit.withdrawn'`.as("event_type"),
+        audiences: sql<unknown>`${JSON.stringify([
+          { kind: "admins" },
+          ...(row.primarySpeakerId ? [{ kind: "speaker", speakerIds: [row.primarySpeakerId] }] : []),
+        ])}`.as("audiences"),
+        payload: sql<unknown>`${JSON.stringify({ submissionId: input.submissionId, submissionVersion: nextVersion, reason })}`.as("payload"),
+        actorUserId: sql<string>`${owner.userId}`.as("actor_user_id"), actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+        requestId: sql<string>`${requestId}`.as("request_id"), idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+        occurredAt: sql<Date>`${withdrawnAtMs}`.as("occurred_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, event.id), eq(submissions.id, input.submissionId),
+        exists(db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId))),
+      ))),
+      db.insert(auditLog).select(db.select({
+        id: sql<string>`${nanoid()}`.as("id"), eventId: submissions.eventId,
+        requestId: sql<string>`${requestId}`.as("request_id"), actorUserId: sql<string>`${owner.userId}`.as("actor_user_id"),
+        actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"), action: sql<string>`'submit.withdrawOwn'`.as("action"),
+        resourceType: sql<string>`'submission'`.as("resource_type"), resourceId: submissions.id,
+        before: sql<unknown>`${JSON.stringify({ status: row.status, version: row.version })}`.as("before"),
+        after: sql<unknown>`${JSON.stringify({ status: "withdrawn", version: nextVersion, reason })}`.as("after"),
+        metadata: sql<unknown>`null`.as("metadata"), occurredAt: sql<Date>`${withdrawnAtMs}`.as("occurred_at"),
+      }).from(submissions).where(and(
+        eq(submissions.eventId, event.id), eq(submissions.id, input.submissionId),
+        exists(db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId))),
+      ))),
+      ...(airtableProjection ? [airtableProjection.statement] : []),
+    ] as never)).pipe(
+      Effect.as(true),
+      Effect.catchIf(
+        (error): error is External => error.detail?.includes("idempotency_key_unique") === true || error.detail?.includes("UNIQUE constraint failed: idempotency_records.event_id") === true,
+        () => Effect.succeed(false),
+      ),
+    );
+    const [ownCommit] = yield* database(() =>
+      db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(eq(idempotencyRecords.id, idempotencyId)).limit(1),
+    );
+    if (committed && ownCommit) return output;
+    const [concurrent] = yield* database(() => db.select().from(idempotencyRecords).where(and(
+      eq(idempotencyRecords.eventId, event.id), eq(idempotencyRecords.operationId, "submit.withdrawOwn"),
+      eq(idempotencyRecords.principalId, principalId), eq(idempotencyRecords.keyHash, keyHash),
+    )).limit(1));
+    if (concurrent) {
+      if (concurrent.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different withdrawal" }));
+      }
+      if (concurrent.status === "completed") {
+        const replayed = yield* replayOwnWithdrawal(concurrent.responseBody);
+        return { ...replayed, idempotent: true };
+      }
+    }
+    return yield* Effect.fail(new Conflict({ message: "Submission changed; reload before withdrawing" }));
   });

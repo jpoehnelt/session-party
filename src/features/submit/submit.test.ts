@@ -47,6 +47,7 @@ import {
   getTaskSubmissionForm,
   listSubmissions,
   updateOwnSubmissionAbstract,
+  withdrawOwnSubmission,
 } from "./service";
 
 type TestEnv = Cloudflare.Env & { readonly TEST_MIGRATIONS: readonly D1Migration[] };
@@ -525,6 +526,7 @@ describe("submit operation descriptors", () => {
       "submit.getTaskForm",
       "submit.list",
       "submit.updateOwnAbstract",
+      "submit.withdrawOwn",
     ]);
     expect(operations.map((operation) => "rest" in operation ? [operation.rest.method, operation.rest.path] : null)).toEqual([
       ["post", "/public/events/:eventSlug/forms/:formId/submissions"],
@@ -534,6 +536,7 @@ describe("submit operation descriptors", () => {
       ["get", "/events/:eventId/portal/forms/:formId"],
       ["get", "/events/:eventId/submissions"],
       ["put", "/events/by-slug/:eventSlug/my-submissions/:submissionId/abstract"],
+      ["post", "/events/by-slug/:eventSlug/my-submissions/:submissionId/withdrawal"],
     ]);
     expect(operations.filter((operation) => "mcp" in operation).map((operation) => operation.mcp.name)).toEqual([
       "submit_list",
@@ -933,6 +936,214 @@ describe("public submission creation", () => {
     const db = drizzle(env.DB);
     const [stored] = await db.select({ version: submissions.version }).from(submissions).where(eq(submissions.id, created.submissionId));
     expect(stored?.version).toBe(2);
+  });
+
+  it("withdraws an owned pending proposal with evidence and locks it afterwards", async () => {
+    const created = await runPublic(createPublicSubmission(submissionInput(
+      "submit-own-withdraw-create",
+      OPEN_FORM_ID,
+      "A proposal to withdraw",
+    )));
+
+    const outsiderAttempt = await runEitherAs(outsider, withdrawOwnSubmission({
+      eventSlug: EVENT_SLUG,
+      submissionId: created.submissionId,
+      expectedVersion: 1,
+      idempotencyKey: "submit-own-withdraw-outsider",
+    }));
+    expect(outsiderAttempt._tag).toBe("Left");
+    if (outsiderAttempt._tag === "Left") expect(outsiderAttempt.left._tag).toBe("Forbidden");
+
+    const input = {
+      eventSlug: EVENT_SLUG,
+      submissionId: created.submissionId,
+      reason: "Schedule conflict with another commitment",
+      expectedVersion: 1,
+      idempotencyKey: "submit-own-withdraw-001",
+    } as const;
+    const withdrawn = await runAs(submittingSpeaker, withdrawOwnSubmission(input));
+    expect(withdrawn).toMatchObject({
+      submission: { id: created.submissionId, status: "withdrawn", version: 2, editable: false },
+      idempotent: false,
+    });
+    const replayed = await runAs(submittingSpeaker, withdrawOwnSubmission(input));
+    expect(replayed).toMatchObject({ submission: { status: "withdrawn", version: 2 }, idempotent: true });
+
+    const db = drizzle(env.DB);
+    const [stored] = await db.select({ status: submissions.status, version: submissions.version })
+      .from(submissions).where(eq(submissions.id, created.submissionId));
+    expect(stored).toEqual({ status: "withdrawn", version: 2 });
+    const changes = await db.select().from(domainChanges).where(and(
+      eq(domainChanges.aggregateId, created.submissionId),
+      eq(domainChanges.eventType, "submit.withdrawn"),
+    ));
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      aggregateVersion: 2,
+      payload: { submissionId: created.submissionId, submissionVersion: 2, reason: input.reason },
+    });
+    const audits = await db.select().from(auditLog).where(and(
+      eq(auditLog.resourceId, created.submissionId),
+      eq(auditLog.action, "submit.withdrawOwn"),
+    ));
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({ actorUserId: submittingSpeaker.userId });
+
+    const editAfter = await runEitherAs(submittingSpeaker, updateOwnSubmissionAbstract({
+      eventSlug: EVENT_SLUG,
+      submissionId: created.submissionId,
+      abstract: "An edit after withdrawal.",
+      expectedVersion: 2,
+      idempotencyKey: "submit-own-withdraw-edit-after",
+    }));
+    expect(editAfter._tag).toBe("Left");
+    if (editAfter._tag === "Left") expect(editAfter.left._tag).toBe("Conflict");
+
+    const secondWithdrawal = await runEitherAs(submittingSpeaker, withdrawOwnSubmission({
+      eventSlug: EVENT_SLUG,
+      submissionId: created.submissionId,
+      expectedVersion: 2,
+      idempotencyKey: "submit-own-withdraw-002",
+    }));
+    expect(secondWithdrawal._tag).toBe("Left");
+    if (secondWithdrawal._tag === "Left") expect(secondWithdrawal.left._tag).toBe("Conflict");
+  });
+
+  it("still allows withdrawal after the CFP closes but points accepted sessions to the portal", async () => {
+    const db = drizzle(env.DB);
+    const now = new Date();
+    const closedFormId = "form-withdraw-closed";
+    const closedVersionId = "form-withdraw-closed-v1";
+    await db.batch([
+      db.insert(forms).values({
+        id: closedFormId,
+        eventId: EVENT_ID,
+        kind: "cfp",
+        name: "Withdraw closed CFP",
+        status: "closed",
+        createdAt: now,
+        updatedAt: now,
+      }),
+      db.insert(formVersions).values({
+        id: closedVersionId,
+        eventId: EVENT_ID,
+        formId: closedFormId,
+        versionNumber: 1,
+        name: "Withdraw closed CFP",
+        publishedAt: now,
+        createdAt: now,
+      }),
+      db.insert(formVersionFields).values([
+        {
+          id: `${closedVersionId}-${fieldIds.abstract}`,
+          eventId: EVENT_ID,
+          formVersionId: closedVersionId,
+          sourceFieldId: fieldIds.abstract,
+          order: 1,
+          type: "textarea",
+          label: "Abstract",
+          semanticKey: "submissionAbstract",
+          required: true,
+          createdAt: now,
+        },
+        {
+          id: `${closedVersionId}-${fieldIds.speakerEmail}`,
+          eventId: EVENT_ID,
+          formVersionId: closedVersionId,
+          sourceFieldId: fieldIds.speakerEmail,
+          order: 2,
+          type: "email",
+          label: "Speaker email",
+          semanticKey: "speakerEmail",
+          required: true,
+          createdAt: now,
+        },
+      ]),
+      db.insert(submissions).values([
+        {
+          id: "submission-withdraw-closed-pending",
+          eventId: EVENT_ID,
+          formId: closedFormId,
+          formVersionId: closedVersionId,
+          title: "Pending proposal in a closed CFP",
+          status: "in_review",
+          submittedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "submission-withdraw-closed-accepted",
+          eventId: EVENT_ID,
+          formId: closedFormId,
+          formVersionId: closedVersionId,
+          title: "Accepted proposal in a closed CFP",
+          status: "accepted",
+          submittedAt: now,
+          acceptedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]),
+      db.insert(submissionSpeakers).values({
+        id: "submission-speaker-withdraw-closed-accepted",
+        eventId: EVENT_ID,
+        submissionId: "submission-withdraw-closed-accepted",
+        speakerId: "speaker-accepted-closed-edit",
+        isPrimary: true,
+        createdAt: now,
+      }),
+      db.insert(submissionAnswers).values([
+        {
+          id: "answer-withdraw-closed-pending-email",
+          eventId: EVENT_ID,
+          submissionId: "submission-withdraw-closed-pending",
+          formVersionId: closedVersionId,
+          formVersionFieldId: `${closedVersionId}-${fieldIds.speakerEmail}`,
+          value: submittingSpeaker.email!,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "answer-withdraw-closed-pending-abstract",
+          eventId: EVENT_ID,
+          submissionId: "submission-withdraw-closed-pending",
+          formVersionId: closedVersionId,
+          formVersionFieldId: `${closedVersionId}-${fieldIds.abstract}`,
+          value: "A pending abstract locked by the closed CFP.",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]),
+    ]);
+
+    const before = await runAs(submittingSpeaker, getOwnSubmissions({ eventSlug: EVENT_SLUG }));
+    expect(before.submissions.find((submission) => submission.id === "submission-withdraw-closed-pending")).toMatchObject({
+      status: "in_review",
+      editable: false,
+    });
+
+    const withdrawn = await runAs(submittingSpeaker, withdrawOwnSubmission({
+      eventSlug: EVENT_SLUG,
+      submissionId: "submission-withdraw-closed-pending",
+      expectedVersion: 1,
+      idempotencyKey: "submit-withdraw-closed-pending-001",
+    }));
+    expect(withdrawn.submission).toMatchObject({ status: "withdrawn", version: 2, editable: false });
+
+    const acceptedAttempt = await runEitherAs(submittingSpeaker, withdrawOwnSubmission({
+      eventSlug: EVENT_SLUG,
+      submissionId: "submission-withdraw-closed-accepted",
+      expectedVersion: 1,
+      idempotencyKey: "submit-withdraw-closed-accepted-001",
+    }));
+    expect(acceptedAttempt._tag).toBe("Left");
+    if (acceptedAttempt._tag === "Left") {
+      expect(acceptedAttempt.left._tag).toBe("Conflict");
+      expect(acceptedAttempt.left).toMatchObject({ message: expect.stringContaining("speaker portal") });
+    }
+    const [acceptedStored] = await db.select({ status: submissions.status, version: submissions.version })
+      .from(submissions).where(eq(submissions.id, "submission-withdraw-closed-accepted"));
+    expect(acceptedStored).toEqual({ status: "accepted", version: 1 });
   });
 
   it("passes only a bounded Turnstile token and trusted request metadata to the abuse boundary", async () => {

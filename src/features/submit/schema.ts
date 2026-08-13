@@ -210,3 +210,19 @@ export const UpdateOwnSubmissionAbstractOutput = Schema.Struct({
   idempotent: Schema.Boolean,
 });
 export type UpdateOwnSubmissionAbstractOutput = typeof UpdateOwnSubmissionAbstractOutput.Type;
+
+export const WithdrawOwnSubmissionInput = Schema.Struct({
+  eventSlug: EventSlug,
+  submissionId: EntityId,
+  /** Optional context for the organizer; recorded in the change feed and audit log. */
+  reason: Schema.optional(Schema.String.pipe(Schema.maxLength(2_000))),
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+});
+export type WithdrawOwnSubmissionInput = typeof WithdrawOwnSubmissionInput.Type;
+
+export const WithdrawOwnSubmissionOutput = Schema.Struct({
+  submission: OwnSubmissionSummary,
+  idempotent: Schema.Boolean,
+});
+export type WithdrawOwnSubmissionOutput = typeof WithdrawOwnSubmissionOutput.Type;
