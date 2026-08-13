@@ -1203,6 +1203,70 @@ export const integrations = sqliteTable(
   ],
 );
 
+// ---------- outbound webhooks (durable cursors over the domain change log) ----------
+
+export const webhookEndpoints = sqliteTable(
+  "webhook_endpoints",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    url: text("url").notNull(),
+    description: text("description"),
+    kinds: text("kinds", { mode: "json" }).$type<readonly [string, ...string[]]>().notNull(),
+    // Signing secrets must remain readable to sign every delivery, unlike
+    // bearer credentials, which are verified and therefore stored as hashes.
+    signingSecret: text("signing_secret").notNull(),
+    status: text("status", { enum: ["active", "paused"] }).notNull().default("active"),
+    cursorSequence: integer("cursor_sequence").notNull(),
+    createdBy: text("created_by").notNull().references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    version: version(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("webhook_endpoints_event_url_unique").on(t.eventId, t.url),
+    uniqueIndex("webhook_endpoints_event_id_unique").on(t.eventId, t.id),
+    index("webhook_endpoints_status_cursor").on(t.status, t.cursorSequence),
+    check("webhook_endpoints_url_https", sql`${t.url} like 'https://%'`),
+    check("webhook_endpoints_kinds_json", sql`json_valid(${t.kinds}) and json_type(${t.kinds}) = 'array' and json_array_length(${t.kinds}) > 0`),
+    check("webhook_endpoints_secret_nonempty", sql`length(${t.signingSecret}) >= 32`),
+    check("webhook_endpoints_cursor_nonnegative", sql`${t.cursorSequence} >= 0`),
+    check("webhook_endpoints_version_positive", sql`${t.version} > 0`),
+  ],
+);
+
+export const webhookDeliveries = sqliteTable(
+  "webhook_deliveries",
+  {
+    id: id(),
+    endpointId: text("endpoint_id").notNull().references(() => webhookEndpoints.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    changeSequence: integer("change_sequence").notNull(),
+    eventType: text("event_type").notNull(),
+    // The exact signed body, snapshotted so redelivery is byte-stable.
+    body: text("body").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status", { enum: ["pending", "retry", "delivered", "dead_letter"] }).notNull().default("pending"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(8),
+    availableAt: integer("available_at", { mode: "timestamp_ms" }).notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
+    responseStatus: integer("response_status"),
+    lastError: text("last_error"),
+    deliveredAt: integer("delivered_at", { mode: "timestamp_ms" }),
+    deadLetteredAt: integer("dead_lettered_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("webhook_deliveries_idempotency_unique").on(t.idempotencyKey),
+    index("webhook_deliveries_dispatch").on(t.status, t.availableAt),
+    index("webhook_deliveries_endpoint_history").on(t.endpointId, t.createdAt),
+    check("webhook_deliveries_delivered_state", sql`(${t.status} = 'delivered' and ${t.deliveredAt} is not null) or ${t.status} <> 'delivered'`),
+    check("webhook_deliveries_dead_state", sql`(${t.status} = 'dead_letter' and ${t.deadLetteredAt} is not null) or ${t.status} <> 'dead_letter'`),
+    check("webhook_deliveries_attempt_bounds", sql`${t.attemptCount} >= 0 and ${t.maxAttempts} > 0`),
+  ],
+);
+
 export const acceleventsExternalIdentities = sqliteTable(
   "accelevents_external_identities",
   {

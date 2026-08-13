@@ -44,7 +44,7 @@ export const integrationsWriteAuthorization = eventAuthorization(
   { kind: "api-key", scopes: ["integrations:write"] },
 );
 
-const authorizeCurrent = (policy: AuthorizationPolicy, eventId: string) =>
+export const authorizeCurrent = (policy: AuthorizationPolicy, eventId: string) =>
   Effect.gen(function* () {
     const principal = yield* CurrentUser;
     const { authorize } = yield* Authorizer;
@@ -52,7 +52,7 @@ const authorizeCurrent = (policy: AuthorizationPolicy, eventId: string) =>
     return principal;
   });
 
-const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
+export const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
   Effect.tryPromise({
     try: run,
     catch: (error) =>
@@ -62,7 +62,7 @@ const database = <A>(run: () => Promise<A>): Effect.Effect<A, External> =>
       }),
   });
 
-const resolveEventId = (idOrSlug: string) =>
+export const resolveEventId = (idOrSlug: string) =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     const [event] = yield* database(() =>
@@ -82,11 +82,11 @@ const importActor = (principal: Principal) => principal.kind === "api-key"
   ? { kind: "api-key" as const, id: principal.apiKeyId }
   : { kind: "user" as const, id: principal.userId };
 
-const actorColumns = (principal: Principal) => principal.kind === "api-key"
+export const actorColumns = (principal: Principal) => principal.kind === "api-key"
   ? { actorUserId: null, actorApiKeyId: principal.apiKeyId }
   : { actorUserId: principal.userId, actorApiKeyId: null };
 
-const sha256 = (value: string): Effect.Effect<string, External> =>
+export const sha256 = (value: string): Effect.Effect<string, External> =>
   Effect.tryPromise({
     try: async () => {
       const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));

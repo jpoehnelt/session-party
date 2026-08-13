@@ -7,6 +7,18 @@ import {
 } from "contracts/types";
 import { Schema } from "effect";
 import {
+  CreateWebhookInput,
+  CreateWebhookResult,
+  DeleteWebhookInput,
+  DeleteWebhookResult,
+  ListWebhookDeliveriesInput,
+  ListWebhookDeliveriesResult,
+  ListWebhooksInput,
+  ListWebhooksResult,
+  RedeliverWebhookInput,
+  RedeliverWebhookResult,
+  UpdateWebhookInput,
+  UpdateWebhookResult,
   ConfigureAcceleventsInput,
   ConfigureAcceleventsResult,
   AcceleventsConfiguration,
@@ -16,6 +28,14 @@ import {
   RequestAirtableRefreshInput,
   RequestAirtableRefreshResult,
 } from "./schema";
+import {
+  createWebhook,
+  deleteWebhook,
+  listWebhookDeliveries,
+  listWebhooks,
+  redeliverWebhook,
+  updateWebhook,
+} from "./webhooks";
 import {
   configureAirtable,
   configureAccelevents,
@@ -246,6 +266,160 @@ export const requestAirtableRefreshOperation = {
   emits: [],
 } as const;
 
+
+export const createWebhookOperation = {
+  id: "integrations.createWebhook",
+  kind: "command",
+  input: CreateWebhookInput,
+  output: CreateWebhookResult,
+  authorize: authenticatedAuthorization,
+  invoke: createWebhook,
+  rest: {
+    method: "post",
+    path: "/events/:idOrSlug/webhooks",
+    input: { path: ["idOrSlug"], body: ["url", "description", "kinds", "idempotencyKey"] },
+    summary: "Create an outbound webhook",
+    description: "Registers a signed HTTPS endpoint that receives notifications for matching domain changes; the signing secret is returned once.",
+    successStatus: 201,
+  },
+  mcp: {
+    name: "create_webhook",
+    description: "Register an outbound webhook endpoint for matching domain-change notifications.",
+    scopes: ["integrations:write"],
+  },
+  idempotency: "required",
+  concurrency: "none",
+  emits: ["integrations.webhook.created"],
+} as const;
+
+export const listWebhooksOperation = {
+  id: "integrations.listWebhooks",
+  kind: "query",
+  input: ListWebhooksInput,
+  output: ListWebhooksResult,
+  authorize: authenticatedAuthorization,
+  invoke: ({ idOrSlug }: typeof ListWebhooksInput.Type) => listWebhooks(idOrSlug),
+  rest: {
+    method: "get",
+    path: "/events/:idOrSlug/webhooks",
+    input: { path: ["idOrSlug"] },
+    summary: "List outbound webhooks",
+    description: "Lists the event's webhook endpoints with delivery statistics; signing secrets are never returned.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "list_webhooks",
+    description: "List outbound webhook endpoints and their delivery statistics for an event.",
+    scopes: ["integrations:read"],
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} as const;
+
+export const updateWebhookOperation = {
+  id: "integrations.updateWebhook",
+  kind: "command",
+  input: UpdateWebhookInput,
+  output: UpdateWebhookResult,
+  authorize: authenticatedAuthorization,
+  invoke: updateWebhook,
+  rest: {
+    method: "patch",
+    path: "/events/:idOrSlug/webhooks/:webhookId",
+    input: {
+      path: ["idOrSlug", "webhookId"],
+      body: ["expectedVersion", "url", "description", "kinds", "status", "rotateSecret", "idempotencyKey"],
+    },
+    summary: "Update or pause an outbound webhook",
+    description: "Updates URL, kinds, status, or description under optimistic concurrency; rotateSecret returns a fresh signing secret once.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "update_webhook",
+    description: "Update, pause, resume, or rotate the secret of an outbound webhook endpoint.",
+    scopes: ["integrations:write"],
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["integrations.webhook.updated"],
+} as const;
+
+export const deleteWebhookOperation = {
+  id: "integrations.deleteWebhook",
+  kind: "command",
+  input: DeleteWebhookInput,
+  output: DeleteWebhookResult,
+  authorize: authenticatedAuthorization,
+  invoke: deleteWebhook,
+  rest: {
+    method: "delete",
+    path: "/events/:idOrSlug/webhooks/:webhookId",
+    input: { path: ["idOrSlug", "webhookId"], body: ["expectedVersion", "idempotencyKey"] },
+    summary: "Delete an outbound webhook",
+    description: "Deletes the endpoint and its delivery history under optimistic concurrency.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "delete_webhook",
+    description: "Delete an outbound webhook endpoint and its delivery history.",
+    scopes: ["integrations:write"],
+  },
+  idempotency: "required",
+  concurrency: "required",
+  emits: ["integrations.webhook.deleted"],
+} as const;
+
+export const listWebhookDeliveriesOperation = {
+  id: "integrations.listWebhookDeliveries",
+  kind: "query",
+  input: ListWebhookDeliveriesInput,
+  output: ListWebhookDeliveriesResult,
+  authorize: authenticatedAuthorization,
+  invoke: listWebhookDeliveries,
+  rest: {
+    method: "get",
+    path: "/events/:idOrSlug/webhooks/:webhookId/deliveries",
+    input: { path: ["idOrSlug", "webhookId"], query: ["page", "pageSize"] },
+    summary: "List webhook deliveries",
+    description: "Pages through delivery evidence for one endpoint, newest first.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "list_webhook_deliveries",
+    description: "List delivery attempts and their outcomes for a webhook endpoint.",
+    scopes: ["integrations:read"],
+  },
+  idempotency: "none",
+  concurrency: "none",
+  emits: [],
+} as const;
+
+export const redeliverWebhookOperation = {
+  id: "integrations.redeliverWebhook",
+  kind: "command",
+  input: RedeliverWebhookInput,
+  output: RedeliverWebhookResult,
+  authorize: authenticatedAuthorization,
+  invoke: redeliverWebhook,
+  rest: {
+    method: "post",
+    path: "/events/:idOrSlug/webhooks/deliveries/:deliveryId/redeliver",
+    input: { path: ["idOrSlug", "deliveryId"], body: ["idempotencyKey"] },
+    summary: "Redeliver a webhook delivery",
+    description: "Requeues a scheduled-retry or dead-letter delivery for immediate dispatch with its original signed body.",
+    successStatus: 200,
+  },
+  mcp: {
+    name: "redeliver_webhook",
+    description: "Requeue a failed webhook delivery for immediate dispatch.",
+    scopes: ["integrations:write"],
+  },
+  idempotency: "required",
+  concurrency: "none",
+  emits: [],
+} as const;
+
 export const operations = [
   getAcceleventsImportStatusOperation,
   listIntegrationConfigurationsOperation,
@@ -255,4 +429,10 @@ export const operations = [
   getAirtableSyncStatusOperation,
   configureAirtableOperation,
   requestAirtableRefreshOperation,
+  createWebhookOperation,
+  listWebhooksOperation,
+  updateWebhookOperation,
+  deleteWebhookOperation,
+  listWebhookDeliveriesOperation,
+  redeliverWebhookOperation,
 ] as const;
