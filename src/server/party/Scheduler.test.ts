@@ -14,6 +14,7 @@ import {
   DEMO_RATE_SOURCE_LIMIT,
   MAIL_DISPATCH_CONCURRENCY,
   MAIL_SCHEDULER_NAME,
+  mailRetryDelayMs,
   processWithBoundedConcurrency,
   reserveDispatchBudget,
   setSchedulerAlarmNoLaterThan,
@@ -71,6 +72,31 @@ afterAll(async () => {
       await state.storage.deleteAll();
     });
   }
+});
+
+describe("mail retry backoff", () => {
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+
+  it("grows exponentially from one minute and caps at one hour plus jitter", () => {
+    const delays = [1, 2, 3, 4, 5, 6, 7, 8].map((attempt) => mailRetryDelayMs("delivery-a", attempt));
+    for (const [index, delay] of delays.entries()) {
+      const exponential = Math.min(HOUR, MINUTE * 2 ** index);
+      expect(delay).toBeGreaterThanOrEqual(exponential);
+      expect(delay).toBeLessThanOrEqual(exponential + Math.floor(exponential / 4));
+    }
+    // Strictly increasing until the cap region so late attempts genuinely wait longer.
+    expect(delays[1]).toBeGreaterThan(delays[0]!);
+    expect(delays[3]).toBeGreaterThan(delays[2]!);
+  });
+
+  it("is deterministic per delivery and attempt while spreading concurrent failures", () => {
+    expect(mailRetryDelayMs("delivery-a", 3)).toBe(mailRetryDelayMs("delivery-a", 3));
+    const sameAttempt = new Set(
+      ["delivery-a", "delivery-b", "delivery-c", "delivery-d"].map((id) => mailRetryDelayMs(id, 4)),
+    );
+    expect(sameAttempt.size).toBeGreaterThan(1);
+  });
 });
 
 describe("Scheduler durable delivery recovery", () => {

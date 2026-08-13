@@ -10,6 +10,30 @@ import { internalServiceToken, sendMail } from "../services";
 
 const INTERVAL_MS = 60_000;
 const LEASE_MS = 5 * 60_000;
+const RETRY_BASE_DELAY_MS = INTERVAL_MS;
+const RETRY_MAX_DELAY_MS = 60 * 60_000;
+
+/**
+ * Exponential backoff with deterministic per-delivery jitter of up to +25%.
+ * The jitter derives from the delivery id and attempt number rather than
+ * randomness, so retry schedules stay reproducible in tests and stable across
+ * replays while deliveries that failed in the same batch still spread out
+ * instead of hammering a struggling provider in lockstep.
+ */
+export const mailRetryDelayMs = (deliveryId: string, attemptCount: number): number => {
+  const exponential = Math.min(
+    RETRY_MAX_DELAY_MS,
+    RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attemptCount - 1),
+  );
+  const source = `${deliveryId}:${attemptCount}`;
+  let hash = 2_166_136_261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  const jitter = (hash >>> 0) % (Math.floor(exponential / 4) + 1);
+  return exponential + jitter;
+};
 const MAX_BATCH = 100;
 export const MAIL_DISPATCH_CONCURRENCY = 5;
 const MAIL_SNAPSHOT_RETENTION_MS = 90 * 24 * 60 * 60_000;
@@ -825,7 +849,7 @@ export class Scheduler extends DurableObject<Env> {
               status: terminal ? "dead_letter" : "retry",
               availableAt: terminal
                 ? completedAt
-                : new Date(completedAt.getTime() + INTERVAL_MS),
+                : new Date(completedAt.getTime() + mailRetryDelayMs(delivery.id, claim.attemptCount)),
               lastError: detail,
               deadLetteredAt: terminal ? completedAt : null,
               leaseOwner: null,
