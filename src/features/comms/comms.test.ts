@@ -79,6 +79,17 @@ const runAs = <A, E>(
   ));
 };
 
+const runAsEither = <A, E>(
+  principal: Principal,
+  effect: Effect.Effect<A, E, Authorizer | CurrentUser | Db | MailQueue>,
+  mailQueue?: MailQueueStub,
+) => {
+  const withQueue = mailQueue === undefined ? effect : effect.pipe(Effect.provideService(MailQueue, mailQueue));
+  return Effect.runPromise(Effect.either(withQueue).pipe(
+    Effect.provide(Layer.merge(AppLayer(env), Layer.succeed(CurrentUser, principal))),
+  ));
+};
+
 interface SqlObservation {
   readonly sql: string;
   params: readonly unknown[];
@@ -1216,6 +1227,73 @@ describe("communications immutable delivery workflow", () => {
     expect(deliveries).toHaveLength(2);
     expect(deliveries.filter(({ id }) => id !== enqueued.deliveries[0].deliveryId)).toHaveLength(1);
     expect(snapshots.find(({ id }) => id === concurrent[0]!.snapshotId)?.fromEmail).toBe(queue.fromEmail);
+  });
+
+  it("expedites a scheduled retry in place without cloning the delivery", async () => {
+    const seeded = await seedCommunication("expedite");
+    const queue: MailQueueStub = {
+      appOrigin: "https://expedite.example.com",
+      fromEmail: "Expedite <expedite@example.com>",
+      wake: () => Effect.void,
+    };
+    const enqueued = await runAs(seeded.owner, enqueueCommunication({
+      eventId: seeded.eventId,
+      templateId: seeded.templateId,
+      expectedTemplateVersion: 1,
+      recipientKeys: [seeded.speakerId],
+      replyToEmail: null,
+      scheduledFor: null,
+      idempotencyKey: "comms-expedite-source-001",
+    }), queue);
+    const deliveryId = enqueued.deliveries[0]!.deliveryId;
+    const farFuture = new Date(now.getTime() + 45 * 60_000);
+    await seeded.db.update(mailDeliveries).set({
+      status: "retry",
+      availableAt: farFuture,
+      attemptCount: 2,
+      lastError: "Provider timed out",
+    }).where(eq(mailDeliveries.id, deliveryId));
+
+    const expedited = await runAs(seeded.owner, retryDelivery({
+      eventId: seeded.eventId,
+      deliveryId,
+      idempotencyKey: "comms-expedite-command-001",
+    }), queue);
+    expect(expedited).toMatchObject({
+      deliveryId,
+      sourceDeliveryId: deliveryId,
+      snapshotId: enqueued.deliveries[0]!.snapshotId,
+      status: "pending",
+      replayed: false,
+    });
+
+    const [row] = await seeded.db.select().from(mailDeliveries)
+      .where(eq(mailDeliveries.id, deliveryId));
+    expect(row).toMatchObject({ status: "pending", attemptCount: 2 });
+    expect(row!.availableAt.getTime()).toBe(expedited.queuedAt);
+    const snapshots = await seeded.db.select().from(mailDeliverySnapshots)
+      .where(eq(mailDeliverySnapshots.eventId, seeded.eventId));
+    expect(snapshots).toHaveLength(1);
+
+    const replay = await runAs(seeded.owner, retryDelivery({
+      eventId: seeded.eventId,
+      deliveryId,
+      idempotencyKey: "comms-expedite-command-001",
+    }), queue);
+    expect(replay).toMatchObject({ deliveryId, replayed: true });
+
+    await seeded.db.update(mailDeliveries).set({
+      status: "sent",
+      sentAt: now,
+      providerMessageId: "local-fake:expedite-conflict-check",
+    }).where(eq(mailDeliveries.id, deliveryId));
+    const conflicted = await runAsEither(seeded.owner, retryDelivery({
+      eventId: seeded.eventId,
+      deliveryId,
+      idempotencyKey: "comms-expedite-command-002",
+    }), queue);
+    expect(conflicted._tag).toBe("Left");
+    if (conflicted._tag === "Left") expect(conflicted.left._tag).toBe("Conflict");
   });
 
   it("renders camelCase wire variables from confirmed agenda data without delivery egress", async () => {
