@@ -420,6 +420,7 @@ export const BulkAssignReviewersOutput = Schema.Struct({
   createdCount: Schema.Int.pipe(Schema.nonNegative()),
   existingCount: Schema.Int.pipe(Schema.nonNegative()),
   assignmentCount: Schema.Int.pipe(Schema.nonNegative()),
+  conflictSkippedCount: Schema.optionalWith(Schema.Int.pipe(Schema.nonNegative()), { default: () => 0 }),
   idempotent: Schema.Boolean,
 });
 export type BulkAssignReviewersOutput = typeof BulkAssignReviewersOutput.Type;
@@ -450,6 +451,65 @@ export const AutoDistributeReviewersOutput = Schema.Struct({
   idempotent: Schema.Boolean,
 });
 export type AutoDistributeReviewersOutput = typeof AutoDistributeReviewersOutput.Type;
+
+export const ReviewConflict = Schema.Struct({
+  id: EntityId,
+  submissionId: EntityId,
+  submissionTitle: NonEmptyText,
+  reviewerUserId: EntityId,
+  reviewerName: NonEmptyText,
+  reason: Schema.NullOr(Schema.String.pipe(Schema.maxLength(2_000))),
+  status: Schema.Literal("active", "withdrawn"),
+  declaredAt: UnixTimestampMs,
+  withdrawnAt: Schema.NullOr(UnixTimestampMs),
+  version: Schema.Int.pipe(Schema.positive()),
+});
+export type ReviewConflict = typeof ReviewConflict.Type;
+
+export const DeclareReviewConflictInput = Schema.Struct({
+  eventId: EntityId,
+  submissionId: EntityId,
+  reviewerUserId: EntityId,
+  reason: Schema.optional(Schema.String.pipe(Schema.maxLength(2_000))),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type DeclareReviewConflictInput = typeof DeclareReviewConflictInput.Type;
+
+export const DeclareReviewConflictOutput = Schema.Struct({
+  conflict: ReviewConflict,
+  recusedAssignmentIds: Schema.Array(EntityId),
+  created: Schema.Boolean,
+  idempotent: Schema.Boolean,
+});
+export type DeclareReviewConflictOutput = typeof DeclareReviewConflictOutput.Type;
+
+export const WithdrawReviewConflictInput = Schema.Struct({
+  eventId: EntityId,
+  conflictId: EntityId,
+  expectedVersion: Schema.Int.pipe(Schema.positive()),
+  idempotencyKey: IdempotencyKey,
+  requestId: RequestId,
+});
+export type WithdrawReviewConflictInput = typeof WithdrawReviewConflictInput.Type;
+
+export const WithdrawReviewConflictOutput = Schema.Struct({
+  conflict: ReviewConflict,
+  idempotent: Schema.Boolean,
+});
+export type WithdrawReviewConflictOutput = typeof WithdrawReviewConflictOutput.Type;
+
+export const ListReviewConflictsInput = Schema.Struct({
+  eventId: EntityId,
+  submissionId: Schema.optional(EntityId),
+  status: Schema.optional(Schema.Literal("active", "withdrawn")),
+});
+export type ListReviewConflictsInput = typeof ListReviewConflictsInput.Type;
+
+export const ListReviewConflictsOutput = Schema.Struct({
+  conflicts: Schema.Array(ReviewConflict),
+});
+export type ListReviewConflictsOutput = typeof ListReviewConflictsOutput.Type;
 
 export const SendReviewRemindersInput = Schema.Struct({
   eventId: EntityId,

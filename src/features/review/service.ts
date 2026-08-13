@@ -12,6 +12,7 @@ import {
   mailDeliverySnapshots,
   reviewAssignments,
   reviewComments,
+  reviewConflicts,
   reviewRounds,
   reviews,
   speakers,
@@ -43,7 +44,11 @@ import {
   type CriterionScore,
   CreateReviewRoundOutput,
   type CreateReviewRoundInput,
+  DeclareReviewConflictOutput,
+  type DeclareReviewConflictInput,
   type GetWorkbenchInput,
+  type ListReviewConflictsInput,
+  type ListReviewConflictsOutput,
   type HumanReview,
   ExportReviewResultsOutput,
   type ExportReviewResultsInput,
@@ -75,6 +80,8 @@ import {
   type SubmissionStatus,
   UpdateReviewRoundOutput,
   type UpdateReviewRoundInput,
+  WithdrawReviewConflictOutput,
+  type WithdrawReviewConflictInput,
 } from "./schema";
 import { compareReviewQueue } from "./ordering";
 
@@ -1530,7 +1537,7 @@ export const assignReviewer = (
     if (round.status === "complete") {
       return yield* Effect.fail(new Conflict({ message: "Completed review rounds cannot receive new assignments" }));
     }
-    const [submission, reviewer, existing] = yield* Effect.all([
+    const [submission, reviewer, existing, conflict] = yield* Effect.all([
       database(() =>
         db
           .select({ id: submissions.id })
@@ -1556,9 +1563,18 @@ export const assignReviewer = (
         eq(reviewAssignments.reviewerUserId, input.reviewerUserId),
         eq(reviewAssignments.status, "assigned"),
       )).limit(1)),
+      database(() => db.select({ id: reviewConflicts.id }).from(reviewConflicts).where(and(
+        eq(reviewConflicts.eventId, input.eventId),
+        eq(reviewConflicts.submissionId, input.submissionId),
+        eq(reviewConflicts.reviewerUserId, input.reviewerUserId),
+        eq(reviewConflicts.status, "active"),
+      )).limit(1)),
     ]);
     if (!submission[0]) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
     if (!reviewer[0]) return yield* Effect.fail(new Validation({ message: "Assignments require an event member with the reviewer role" }));
+    if (conflict[0]) {
+      return yield* Effect.fail(new Conflict({ message: "A declared conflict of interest blocks this assignment" }));
+    }
     if (existing[0]) {
       if (input.expectedVersion === existing[0].version) {
         return {
@@ -1671,7 +1687,7 @@ export const bulkAssignReviewers = (
     const keyHash = yield* sha256(input.idempotencyKey);
     const requestHash = yield* sha256(JSON.stringify(normalizedRequest));
     const pairKey = (submissionId: string, reviewerUserId: string) => `${submissionId}\u0000${reviewerUserId}`;
-    const desired = normalizedSubmissionIds.flatMap((submissionId, submissionIndex) => {
+    const requested = normalizedSubmissionIds.flatMap((submissionId, submissionIndex) => {
       const selected = input.strategy === "all"
         ? normalizedReviewerUserIds
         : Array.from({ length: input.reviewsPerSubmission }, (_, offset) =>
@@ -1679,6 +1695,18 @@ export const bulkAssignReviewers = (
         );
       return selected.map((reviewerUserId) => ({ submissionId, reviewerUserId }));
     });
+    const conflictRows = yield* database(() => db.select({
+      submissionId: reviewConflicts.submissionId,
+      reviewerUserId: reviewConflicts.reviewerUserId,
+    }).from(reviewConflicts).where(and(
+      eq(reviewConflicts.eventId, input.eventId),
+      eq(reviewConflicts.status, "active"),
+      inArray(reviewConflicts.submissionId, submissionIds),
+      inArray(reviewConflicts.reviewerUserId, reviewerUserIds),
+    )));
+    const conflicted = new Set(conflictRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+    const desired = requested.filter((pair) => !conflicted.has(pairKey(pair.submissionId, pair.reviewerUserId)));
+    const conflictSkippedCount = requested.length - desired.length;
     type ReservationPlan = {
       readonly assignments: readonly { readonly id: string; readonly submissionId: string; readonly reviewerUserId: string }[];
       readonly changeId: string;
@@ -1832,6 +1860,7 @@ export const bulkAssignReviewers = (
       createdCount: createdIds.length,
       existingCount: desired.length - createdIds.length,
       assignmentCount: desired.length,
+      conflictSkippedCount,
       idempotent: false,
     };
     const completedAt = now();
@@ -1939,7 +1968,7 @@ export const autoDistributeReviewers = (
       return yield* Effect.fail(new Validation({ message: "Reviews per submission cannot exceed the available reviewers" }));
     }
 
-    const [submissionRows, assignmentRows] = yield* Effect.all([
+    const [submissionRows, assignmentRows, conflictRows] = yield* Effect.all([
       database(() => db.select({ id: submissions.id }).from(submissions).innerJoin(
         forms,
         and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
@@ -1956,10 +1985,20 @@ export const autoDistributeReviewers = (
         eq(reviewAssignments.eventId, input.eventId),
         eq(reviewAssignments.roundId, input.roundId),
       ))),
+      database(() => db.select({
+        submissionId: reviewConflicts.submissionId,
+        reviewerUserId: reviewConflicts.reviewerUserId,
+      }).from(reviewConflicts).where(and(
+        eq(reviewConflicts.eventId, input.eventId),
+        eq(reviewConflicts.status, "active"),
+      ))),
     ]);
 
     const pairKey = (submissionId: string, reviewerUserId: string) => `${submissionId}\u0000${reviewerUserId}`;
-    const paired = new Set(assignmentRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)));
+    const paired = new Set([
+      ...assignmentRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)),
+      ...conflictRows.map((row) => pairKey(row.submissionId, row.reviewerUserId)),
+    ]);
     const load = new Map<string, number>(reviewerPool.map((userId) => [userId, 0]));
     const coverage = new Map<string, number>();
     for (const row of assignmentRows) {
@@ -2395,6 +2434,399 @@ export const recuseAssignment = (
       return { ...stored, idempotent: !committedHere || storedRecord?.id !== idempotencyId };
     }
     return yield* Effect.fail(new Conflict({ message: "Reviewer assignment changed; reload before recusing" }));
+  });
+
+export const declareReviewConflict = (
+  input: DeclareReviewConflictInput,
+): Effect.Effect<DeclareReviewConflictOutput, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    if (viewer.actorApiKeyId) {
+      return yield* Effect.fail(new Forbidden({ reason: "Conflict declarations require a browser session" }));
+    }
+    if (viewer.role === "reviewer" && input.reviewerUserId !== viewer.userId) {
+      return yield* Effect.fail(new Forbidden({ reason: "Reviewers can only declare their own conflicts of interest" }));
+    }
+    const { db } = yield* Db;
+    const reason = input.reason?.trim() || null;
+    const [submissionRows, memberRows] = yield* Effect.all([
+      database(() =>
+        db
+          .select({ id: submissions.id, title: submissions.title })
+          .from(submissions)
+          .innerJoin(
+            forms,
+            and(eq(forms.eventId, submissions.eventId), eq(forms.id, submissions.formId)),
+          )
+          .where(
+            and(
+              eq(submissions.eventId, input.eventId),
+              eq(submissions.id, input.submissionId),
+              eq(forms.kind, "cfp"),
+            ),
+          )
+          .limit(1),
+      ),
+      database(() => db.select({ name: users.name }).from(eventMembers).innerJoin(users, eq(users.id, eventMembers.userId)).where(and(eq(eventMembers.eventId, input.eventId), eq(eventMembers.userId, input.reviewerUserId))).limit(1)),
+    ]);
+    if (!submissionRows[0]) return yield* Effect.fail(new NotFound({ entity: "submission", id: input.submissionId }));
+    if (!memberRows[0]) return yield* Effect.fail(new Validation({ message: "Conflicts of interest require an event member" }));
+    const submissionTitle = submissionRows[0].title;
+    const reviewerName = memberRows[0].name ?? "Reviewer";
+
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      submissionId: input.submissionId,
+      reviewerUserId: input.reviewerUserId,
+      reason,
+    }));
+    const readReplay = () => Effect.gen(function* () {
+      const [record] = yield* database(() =>
+        db.select().from(idempotencyRecords).where(and(
+          eq(idempotencyRecords.eventId, input.eventId),
+          eq(idempotencyRecords.operationId, "review.declareConflict"),
+          eq(idempotencyRecords.principalId, viewer.userId),
+          eq(idempotencyRecords.keyHash, keyHash),
+        )).limit(1),
+      );
+      if (!record) return null;
+      if (record.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different conflict declaration" }));
+      }
+      if (record.status !== "completed") {
+        return yield* Effect.fail(new Conflict({ message: "Conflict declaration with this idempotency key is still in progress" }));
+      }
+      return yield* Schema.decodeUnknown(DeclareReviewConflictOutput)(record.responseBody).pipe(
+        Effect.map((output) => ({ ...output, idempotent: true })),
+        Effect.mapError((error) => new External({ service: "database", detail: `Invalid conflict-declaration replay: ${String(error)}` })),
+      );
+    });
+    const replay = yield* readReplay();
+    if (replay) return replay;
+
+    const readActive = () => database(() => db.select().from(reviewConflicts).where(and(
+      eq(reviewConflicts.eventId, input.eventId),
+      eq(reviewConflicts.submissionId, input.submissionId),
+      eq(reviewConflicts.reviewerUserId, input.reviewerUserId),
+      eq(reviewConflicts.status, "active"),
+    )).limit(1)).pipe(Effect.map((rows) => rows[0] ?? null));
+    const existing = yield* readActive();
+    const asExisting = (row: NonNullable<Effect.Effect.Success<ReturnType<typeof readActive>>>): DeclareReviewConflictOutput => ({
+      conflict: {
+        id: row.id,
+        submissionId: row.submissionId,
+        submissionTitle,
+        reviewerUserId: row.reviewerUserId,
+        reviewerName,
+        reason: row.reason,
+        status: "active",
+        declaredAt: toMillis(row.createdAt),
+        withdrawnAt: null,
+        version: row.version,
+      },
+      recusedAssignmentIds: [],
+      created: false,
+      idempotent: false,
+    });
+    if (existing) return asExisting(existing);
+
+    const recusable = yield* database(() =>
+      db
+        .select({ id: reviewAssignments.id })
+        .from(reviewAssignments)
+        .innerJoin(reviewRounds, and(
+          eq(reviewRounds.eventId, reviewAssignments.eventId),
+          eq(reviewRounds.id, reviewAssignments.roundId),
+        ))
+        .where(and(
+          eq(reviewAssignments.eventId, input.eventId),
+          eq(reviewAssignments.submissionId, input.submissionId),
+          eq(reviewAssignments.reviewerUserId, input.reviewerUserId),
+          eq(reviewAssignments.status, "assigned"),
+          sql`${reviewRounds.status} <> 'complete'`,
+          sql`not exists (select 1 from reviews where event_id = ${input.eventId} and round_id = ${reviewAssignments.roundId} and submission_id = ${input.submissionId} and reviewer_user_id = ${input.reviewerUserId} and ai = 0)`,
+        )),
+    );
+    const recusedAssignmentIds = recusable.map((row) => row.id);
+    const declaredAt = now();
+    const declaredAtMs = declaredAt.getTime();
+    const conflictId = id("review_conflict");
+    const idempotencyId = id("idempotency");
+    const conflict = {
+      id: conflictId,
+      submissionId: input.submissionId,
+      submissionTitle,
+      reviewerUserId: input.reviewerUserId,
+      reviewerName,
+      reason,
+      status: "active" as const,
+      declaredAt: declaredAtMs,
+      withdrawnAt: null,
+      version: 1,
+    };
+    const output: DeclareReviewConflictOutput = { conflict, recusedAssignmentIds, created: true, idempotent: false };
+    const committedHere = yield* database(() => db.batch([
+      db.insert(reviewConflicts).values({
+        id: conflictId,
+        eventId: input.eventId,
+        submissionId: input.submissionId,
+        reviewerUserId: input.reviewerUserId,
+        reason,
+        status: "active",
+        withdrawnAt: null,
+        version: 1,
+        createdAt: declaredAt,
+        updatedAt: declaredAt,
+      }),
+      ...(recusedAssignmentIds.length > 0 ? [db.update(reviewAssignments).set({
+        status: "recused",
+        recusalReason: reason ?? "Conflict of interest declared",
+        recusedAt: declaredAt,
+        version: sql`${reviewAssignments.version} + 1`,
+        updatedAt: declaredAt,
+      }).where(and(
+        eq(reviewAssignments.eventId, input.eventId),
+        inArray(reviewAssignments.id, recusedAssignmentIds),
+        eq(reviewAssignments.status, "assigned"),
+      ))] : []),
+      db.insert(idempotencyRecords).values({
+        id: idempotencyId, eventId: input.eventId, operationId: "review.declareConflict", principalId: viewer.userId,
+        keyHash, requestHash, status: "completed", responseStatus: 201, responseBody: output,
+        expiresAt: new Date(declaredAtMs + 86_400_000), completedAt: declaredAt, createdAt: declaredAt,
+      }),
+      db.insert(domainChanges).values({
+        id: id("change"), eventId: input.eventId, aggregateType: "reviewConflict", aggregateId: conflictId,
+        aggregateVersion: 1, eventType: "review.conflict.declared",
+        audiences: [{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: [input.reviewerUserId] }],
+        payload: { submissionId: input.submissionId, reviewerUserId: input.reviewerUserId, reason, recusedAssignmentIds },
+        actorUserId: viewer.userId, actorApiKeyId: null, requestId: input.requestId,
+        idempotencyRecordId: idempotencyId, occurredAt: declaredAt,
+      }),
+      db.insert(auditLog).values({
+        id: id("audit"), eventId: input.eventId, requestId: input.requestId,
+        actorUserId: viewer.userId, actorApiKeyId: null,
+        action: "review.declareConflict", resourceType: "reviewConflict", resourceId: conflictId,
+        before: null, after: conflict, metadata: { idempotencyRecordId: idempotencyId, recusedAssignmentIds },
+        occurredAt: declaredAt,
+      }),
+    ])).pipe(
+      Effect.as(true),
+      Effect.catchAll((failure) => Effect.gen(function* () {
+        const stored = yield* readReplay();
+        if (stored) return false;
+        const concurrent = yield* readActive();
+        if (concurrent) return false;
+        return yield* Effect.fail(failure);
+      })),
+    );
+    if (committedHere) return output;
+    const stored = yield* readReplay();
+    if (stored) return stored;
+    const concurrent = yield* readActive();
+    if (concurrent) return asExisting(concurrent);
+    return yield* Effect.fail(new External({ service: "database", detail: "Conflict declaration did not commit" }));
+  });
+
+export const withdrawReviewConflict = (
+  input: WithdrawReviewConflictInput,
+): Effect.Effect<typeof WithdrawReviewConflictOutput.Type, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:write"]);
+    if (viewer.actorApiKeyId) {
+      return yield* Effect.fail(new Forbidden({ reason: "Conflict withdrawals require a browser session" }));
+    }
+    const { db } = yield* Db;
+    const [current] = yield* database(() =>
+      db.select({ conflict: reviewConflicts, reviewerName: users.name, submissionTitle: submissions.title })
+        .from(reviewConflicts)
+        .innerJoin(users, eq(users.id, reviewConflicts.reviewerUserId))
+        .innerJoin(submissions, and(
+          eq(submissions.eventId, reviewConflicts.eventId),
+          eq(submissions.id, reviewConflicts.submissionId),
+        ))
+        .where(and(
+          eq(reviewConflicts.eventId, input.eventId),
+          eq(reviewConflicts.id, input.conflictId),
+        ))
+        .limit(1),
+    );
+    if (!current) return yield* Effect.fail(new NotFound({ entity: "reviewConflict", id: input.conflictId }));
+    if (viewer.role === "reviewer" && current.conflict.reviewerUserId !== viewer.userId) {
+      return yield* Effect.fail(new Forbidden({ reason: "Reviewers can only withdraw their own conflicts of interest" }));
+    }
+
+    const keyHash = yield* sha256(input.idempotencyKey);
+    const requestHash = yield* sha256(JSON.stringify({
+      eventId: input.eventId,
+      conflictId: input.conflictId,
+      expectedVersion: input.expectedVersion,
+    }));
+    const readReplay = () => Effect.gen(function* () {
+      const [record] = yield* database(() =>
+        db.select().from(idempotencyRecords).where(and(
+          eq(idempotencyRecords.eventId, input.eventId),
+          eq(idempotencyRecords.operationId, "review.withdrawConflict"),
+          eq(idempotencyRecords.principalId, viewer.userId),
+          eq(idempotencyRecords.keyHash, keyHash),
+        )).limit(1),
+      );
+      if (!record) return null;
+      if (record.requestHash !== requestHash) {
+        return yield* Effect.fail(new Conflict({ message: "Idempotency key was already used for a different conflict withdrawal" }));
+      }
+      if (record.status !== "completed") {
+        return yield* Effect.fail(new Conflict({ message: "Conflict withdrawal with this idempotency key is still in progress" }));
+      }
+      return yield* Schema.decodeUnknown(WithdrawReviewConflictOutput)(record.responseBody).pipe(
+        Effect.map((output) => ({ ...output, idempotent: true })),
+        Effect.mapError((error) => new External({ service: "database", detail: `Invalid conflict-withdrawal replay: ${String(error)}` })),
+      );
+    });
+    const replay = yield* readReplay();
+    if (replay) return replay;
+    if (current.conflict.status !== "active" || current.conflict.version !== input.expectedVersion) {
+      return yield* Effect.fail(new Conflict({ message: "Conflict of interest changed; reload before withdrawing" }));
+    }
+
+    const withdrawnAt = now();
+    const withdrawnAtMs = withdrawnAt.getTime();
+    const nextVersion = current.conflict.version + 1;
+    const idempotencyId = id("idempotency");
+    const conflict = {
+      id: current.conflict.id,
+      submissionId: current.conflict.submissionId,
+      submissionTitle: current.submissionTitle,
+      reviewerUserId: current.conflict.reviewerUserId,
+      reviewerName: current.reviewerName ?? "Reviewer",
+      reason: current.conflict.reason,
+      status: "withdrawn" as const,
+      declaredAt: toMillis(current.conflict.createdAt),
+      withdrawnAt: withdrawnAtMs,
+      version: nextVersion,
+    };
+    const output = { conflict, idempotent: false } as const;
+    const committedMarker = and(
+      eq(reviewConflicts.eventId, input.eventId),
+      eq(reviewConflicts.id, input.conflictId),
+      eq(reviewConflicts.status, "withdrawn"),
+      eq(reviewConflicts.version, nextVersion),
+      eq(reviewConflicts.updatedAt, withdrawnAt),
+    );
+    const commit = database(() => db.batch([
+      db.update(reviewConflicts).set({
+        status: "withdrawn",
+        withdrawnAt,
+        version: nextVersion,
+        updatedAt: withdrawnAt,
+      }).where(and(
+        eq(reviewConflicts.eventId, input.eventId),
+        eq(reviewConflicts.id, input.conflictId),
+        eq(reviewConflicts.status, "active"),
+        eq(reviewConflicts.version, input.expectedVersion),
+      )),
+      db.insert(idempotencyRecords).select(db.select({
+        id: sql<string>`${idempotencyId}`.as("id"),
+        eventId: reviewConflicts.eventId,
+        operationId: sql<string>`'review.withdrawConflict'`.as("operation_id"),
+        principalId: sql<string>`${viewer.userId}`.as("principal_id"),
+        keyHash: sql<string>`${keyHash}`.as("key_hash"),
+        requestHash: sql<string>`${requestHash}`.as("request_hash"),
+        status: sql<"completed">`'completed'`.as("status"),
+        responseStatus: sql<number>`200`.as("response_status"),
+        responseBody: sql<unknown>`${JSON.stringify(output)}`.as("response_body"),
+        expiresAt: sql<Date>`${withdrawnAtMs + 86_400_000}`.as("expires_at"),
+        completedAt: sql<Date>`${withdrawnAtMs}`.as("completed_at"),
+        createdAt: sql<Date>`${withdrawnAtMs}`.as("created_at"),
+      }).from(reviewConflicts).where(committedMarker)),
+      db.insert(domainChanges).select(db.select({
+        sequence: sql<number | null>`null`.as("sequence"),
+        id: sql<string>`${id("change")}`.as("id"),
+        eventId: reviewConflicts.eventId,
+        aggregateType: sql<string>`'reviewConflict'`.as("aggregate_type"),
+        aggregateId: reviewConflicts.id,
+        aggregateVersion: reviewConflicts.version,
+        eventType: sql<string>`'review.conflict.withdrawn'`.as("event_type"),
+        audiences: sql<unknown>`${JSON.stringify([{ kind: "admins" }, { kind: "reviewers", reviewerUserIds: [current.conflict.reviewerUserId] }])}`.as("audiences"),
+        payload: sql<unknown>`${JSON.stringify({ conflictId: input.conflictId, submissionId: current.conflict.submissionId, reviewerUserId: current.conflict.reviewerUserId })}`.as("payload"),
+        actorUserId: sql<string>`${viewer.userId}`.as("actor_user_id"),
+        actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+        requestId: sql<string>`${input.requestId}`.as("request_id"),
+        idempotencyRecordId: sql<string>`${idempotencyId}`.as("idempotency_record_id"),
+        occurredAt: sql<Date>`${withdrawnAtMs}`.as("occurred_at"),
+      }).from(reviewConflicts).where(committedMarker)),
+      db.insert(auditLog).select(db.select({
+        id: sql<string>`${id("audit")}`.as("id"),
+        eventId: reviewConflicts.eventId,
+        requestId: sql<string>`${input.requestId}`.as("request_id"),
+        actorUserId: sql<string>`${viewer.userId}`.as("actor_user_id"),
+        actorApiKeyId: sql<string | null>`null`.as("actor_api_key_id"),
+        action: sql<string>`'review.withdrawConflict'`.as("action"),
+        resourceType: sql<string>`'reviewConflict'`.as("resource_type"),
+        resourceId: reviewConflicts.id,
+        before: sql<unknown>`${JSON.stringify({ status: "active", version: current.conflict.version })}`.as("before"),
+        after: sql<unknown>`${JSON.stringify(conflict)}`.as("after"),
+        metadata: sql<unknown>`${JSON.stringify({ idempotencyRecordId: idempotencyId })}`.as("metadata"),
+        occurredAt: sql<Date>`${withdrawnAtMs}`.as("occurred_at"),
+      }).from(reviewConflicts).where(committedMarker)),
+    ] as never));
+    const committedHere = yield* commit.pipe(
+      Effect.as(true),
+      Effect.catchAll((failure) => readReplay().pipe(
+        Effect.flatMap((stored) => stored ? Effect.succeed(false) : Effect.fail(failure)),
+      )),
+    );
+    const stored = yield* readReplay();
+    if (stored) {
+      const [storedRecord] = yield* database(() =>
+        db.select({ id: idempotencyRecords.id }).from(idempotencyRecords).where(and(
+          eq(idempotencyRecords.eventId, input.eventId),
+          eq(idempotencyRecords.operationId, "review.withdrawConflict"),
+          eq(idempotencyRecords.principalId, viewer.userId),
+          eq(idempotencyRecords.keyHash, keyHash),
+        )).limit(1),
+      );
+      return { ...stored, idempotent: !committedHere || storedRecord?.id !== idempotencyId };
+    }
+    return yield* Effect.fail(new Conflict({ message: "Conflict of interest changed; reload before withdrawing" }));
+  });
+
+export const listReviewConflicts = (
+  input: ListReviewConflictsInput,
+): Effect.Effect<ListReviewConflictsOutput, AppError, Db | CurrentUser> =>
+  Effect.gen(function* () {
+    const viewer = yield* requireEventAccess(input.eventId, ["reviews:read"]);
+    const { db } = yield* Db;
+    const rows = yield* database(() =>
+      db.select({ conflict: reviewConflicts, reviewerName: users.name, submissionTitle: submissions.title })
+        .from(reviewConflicts)
+        .innerJoin(users, eq(users.id, reviewConflicts.reviewerUserId))
+        .innerJoin(submissions, and(
+          eq(submissions.eventId, reviewConflicts.eventId),
+          eq(submissions.id, reviewConflicts.submissionId),
+        ))
+        .where(and(
+          eq(reviewConflicts.eventId, input.eventId),
+          ...(viewer.role === "reviewer" ? [eq(reviewConflicts.reviewerUserId, viewer.userId)] : []),
+          ...(input.submissionId !== undefined ? [eq(reviewConflicts.submissionId, input.submissionId)] : []),
+          ...(input.status !== undefined ? [eq(reviewConflicts.status, input.status)] : []),
+        ))
+        .orderBy(desc(reviewConflicts.createdAt), asc(reviewConflicts.id)),
+    );
+    return {
+      conflicts: rows.map((row) => ({
+        id: row.conflict.id,
+        submissionId: row.conflict.submissionId,
+        submissionTitle: row.submissionTitle,
+        reviewerUserId: row.conflict.reviewerUserId,
+        reviewerName: row.reviewerName ?? "Reviewer",
+        reason: row.conflict.reason,
+        status: row.conflict.status,
+        declaredAt: toMillis(row.conflict.createdAt),
+        withdrawnAt: row.conflict.withdrawnAt === null ? null : toMillis(row.conflict.withdrawnAt),
+        version: row.conflict.version,
+      })),
+    };
   });
 
 export const saveScore = (

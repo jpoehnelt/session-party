@@ -17,6 +17,7 @@ import {
   integrations,
   reviewAssignments,
   reviewComments,
+  reviewConflicts,
   reviewRounds,
   reviews,
   speakers,
@@ -56,9 +57,11 @@ import {
   autoDistributeReviewers,
   bulkAssignReviewers,
   createReviewRound,
+  declareReviewConflict,
   demoAiSuggestionJson,
   exportReviewResults,
   getWorkbench,
+  listReviewConflicts,
   recuseAssignment,
   rejectSubmission,
   releaseDecisions,
@@ -69,6 +72,7 @@ import {
   sendReviewReminders,
   stageDecision,
   updateReviewRound,
+  withdrawReviewConflict,
 } from "./service";
 
 it("builds a substantive deterministic AI suggestion for the disposable demo event", () => {
@@ -561,8 +565,10 @@ describe("review and acceptance slice", () => {
       "review.autoDistributeReviewers",
       "review.bulkAssignReviewers",
       "review.createRound",
+      "review.declareConflict",
       "review.exportResults",
       "review.getWorkbench",
+      "review.listConflicts",
       "review.recuseAssignment",
       "review.releaseDecisions",
       "review.removeAssignment",
@@ -572,6 +578,7 @@ describe("review and acceptance slice", () => {
       "review.sendReminders",
       "review.stageDecision",
       "review.updateRound",
+      "review.withdrawConflict",
     ]);
     for (const operation of operations) {
       expect(operation.authorize.kind).toBe("event");
@@ -1738,7 +1745,7 @@ describe("review and acceptance slice", () => {
       reviewerUserIds: [fixtureReviewerId, "user_reviewer_dev"],
       requestId: "request_bulk_assignment_replay",
     }));
-    expect(assigned).toEqual({ createdCount: 3, existingCount: 0, assignmentCount: 3, idempotent: false });
+    expect(assigned).toEqual({ createdCount: 3, existingCount: 0, assignmentCount: 3, conflictSkippedCount: 0, idempotent: false });
     expect(replayed).toEqual({ ...assigned, idempotent: true });
 
     const rows = await db.select().from(reviewAssignments).where(and(
@@ -2900,6 +2907,353 @@ describe("review and acceptance slice", () => {
     expect(new Set(results.map((result) => result.submissionVersion))).toEqual(new Set([3]));
     expect(await db.select().from(domainChanges).where(eq(domainChanges.requestId, input.requestId))).toHaveLength(1);
     expect(await db.select().from(auditLog).where(eq(auditLog.requestId, input.requestId))).toHaveLength(1);
+  });
+
+  it("declares a conflict of interest that recuses active assignments and blocks the pair until withdrawal", async () => {
+    const eventId = "event_coi_lifecycle";
+    const createdAt = new Date(fixtureClock);
+    const devReviewer: Principal = {
+      kind: "browser-session",
+      userId: "user_reviewer_dev",
+      email: "dev@example.com",
+      name: "Dev Shah",
+      sessionId: "session_dev",
+      expiresAt: fixtureClock + 86_400_000,
+    };
+    await db.insert(events).values({
+      id: eventId, slug: "coi-lifecycle", name: "COI lifecycle", timezone: "UTC", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values([
+      { id: "member_coi_owner", eventId, userId: fixtureOwnerId, role: "owner", createdAt, updatedAt: createdAt },
+      { id: "member_coi_ada", eventId, userId: fixtureReviewerId, role: "reviewer", createdAt, updatedAt: createdAt },
+      { id: "member_coi_dev", eventId, userId: "user_reviewer_dev", role: "reviewer", createdAt, updatedAt: createdAt },
+    ]);
+    await db.insert(forms).values({
+      id: "form_coi", eventId, kind: "cfp", name: "COI CFP", status: "closed", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(formVersions).values({
+      id: "form_version_coi", eventId, formId: "form_coi", versionNumber: 1, name: "COI CFP", publishedAt: createdAt, createdAt,
+    });
+    await db.insert(submissions).values([
+      {
+        id: "submission_coi_a", eventId, formId: "form_coi", formVersionId: "form_version_coi",
+        title: "Colleague proposal", status: "submitted", submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+      },
+      {
+        id: "submission_coi_b", eventId, formId: "form_coi", formVersionId: "form_version_coi",
+        title: "Unrelated proposal", status: "submitted", submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+      },
+    ]);
+    await db.insert(reviewRounds).values({
+      id: "round_coi", eventId, name: "COI round", order: 1, status: "active",
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] }, version: 1, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviewAssignments).values({
+      id: "assignment_coi_ada_a", eventId, roundId: "round_coi", submissionId: "submission_coi_a",
+      reviewerUserId: fixtureReviewerId, createdAt, updatedAt: createdAt,
+    });
+
+    const declared = await runAs(reviewer, declareReviewConflict({
+      eventId,
+      submissionId: "submission_coi_a",
+      reviewerUserId: fixtureReviewerId,
+      reason: "The presenter is my direct teammate",
+      idempotencyKey: "coi-declare-ada-a",
+      requestId: "request_coi_declare_ada_a",
+    }));
+    expect(declared.created).toBe(true);
+    expect(declared.idempotent).toBe(false);
+    expect(declared.recusedAssignmentIds).toEqual(["assignment_coi_ada_a"]);
+    expect(declared.conflict).toMatchObject({
+      submissionId: "submission_coi_a",
+      submissionTitle: "Colleague proposal",
+      reviewerUserId: fixtureReviewerId,
+      reviewerName: "Ada Rivera",
+      reason: "The presenter is my direct teammate",
+      status: "active",
+      withdrawnAt: null,
+      version: 1,
+    });
+    const [recused] = await db.select().from(reviewAssignments).where(and(
+      eq(reviewAssignments.eventId, eventId),
+      eq(reviewAssignments.id, "assignment_coi_ada_a"),
+    ));
+    expect(recused).toMatchObject({
+      status: "recused",
+      recusalReason: "The presenter is my direct teammate",
+      version: 2,
+    });
+    const [declaredChange] = await db.select().from(domainChanges).where(eq(domainChanges.requestId, "request_coi_declare_ada_a"));
+    expect(declaredChange).toMatchObject({ eventType: "review.conflict.declared", aggregateId: declared.conflict.id });
+
+    const replayed = await runAs(reviewer, declareReviewConflict({
+      eventId,
+      submissionId: "submission_coi_a",
+      reviewerUserId: fixtureReviewerId,
+      reason: "The presenter is my direct teammate",
+      idempotencyKey: "coi-declare-ada-a",
+      requestId: "request_coi_declare_ada_a_retry",
+    }));
+    expect(replayed).toEqual({ ...declared, idempotent: true });
+
+    const duplicate = await runAs(owner, declareReviewConflict({
+      eventId,
+      submissionId: "submission_coi_a",
+      reviewerUserId: fixtureReviewerId,
+      idempotencyKey: "coi-declare-ada-a-duplicate",
+      requestId: "request_coi_declare_ada_a_duplicate",
+    }));
+    expect(duplicate.created).toBe(false);
+    expect(duplicate.conflict.id).toBe(declared.conflict.id);
+    expect(await db.select().from(reviewConflicts).where(eq(reviewConflicts.eventId, eventId))).toHaveLength(1);
+
+    const blocked = await runEitherAs(owner, assignReviewer({
+      eventId,
+      roundId: "round_coi",
+      submissionId: "submission_coi_a",
+      reviewerUserId: fixtureReviewerId,
+      expectedVersion: 0,
+      requestId: "request_coi_blocked_assign",
+    }));
+    expect(blocked._tag).toBe("Left");
+    if (blocked._tag === "Left") expect(blocked.left._tag).toBe("Conflict");
+
+    const bulk = await runAs(owner, bulkAssignReviewers({
+      eventId,
+      roundId: "round_coi",
+      submissionIds: ["submission_coi_a", "submission_coi_b"] as const,
+      reviewerUserIds: [fixtureReviewerId, "user_reviewer_dev"] as const,
+      reviewsPerSubmission: 2,
+      strategy: "all",
+      idempotencyKey: "coi-bulk-assign",
+      requestId: "request_coi_bulk_assign",
+    }));
+    expect(bulk).toEqual({
+      createdCount: 3,
+      existingCount: 0,
+      assignmentCount: 3,
+      conflictSkippedCount: 1,
+      idempotent: false,
+    });
+    expect(await db.select().from(reviewAssignments).where(and(
+      eq(reviewAssignments.eventId, eventId),
+      eq(reviewAssignments.submissionId, "submission_coi_a"),
+      eq(reviewAssignments.reviewerUserId, fixtureReviewerId),
+      eq(reviewAssignments.status, "assigned"),
+    ))).toHaveLength(0);
+
+    const ownerList = await runAs(owner, listReviewConflicts({ eventId }));
+    expect(ownerList.conflicts).toHaveLength(1);
+    const adaList = await runAs(reviewer, listReviewConflicts({ eventId }));
+    expect(adaList.conflicts.map((conflict) => conflict.id)).toEqual([declared.conflict.id]);
+    const devList = await runAs(devReviewer, listReviewConflicts({ eventId }));
+    expect(devList.conflicts).toHaveLength(0);
+
+    const foreignWithdrawal = await runEitherAs(devReviewer, withdrawReviewConflict({
+      eventId,
+      conflictId: declared.conflict.id,
+      expectedVersion: 1,
+      idempotencyKey: "coi-withdraw-foreign",
+      requestId: "request_coi_withdraw_foreign",
+    }));
+    expect(foreignWithdrawal._tag).toBe("Left");
+    if (foreignWithdrawal._tag === "Left") expect(foreignWithdrawal.left._tag).toBe("Forbidden");
+
+    const withdrawn = await runAs(reviewer, withdrawReviewConflict({
+      eventId,
+      conflictId: declared.conflict.id,
+      expectedVersion: 1,
+      idempotencyKey: "coi-withdraw-ada-a",
+      requestId: "request_coi_withdraw_ada_a",
+    }));
+    expect(withdrawn.idempotent).toBe(false);
+    expect(withdrawn.conflict).toMatchObject({ id: declared.conflict.id, status: "withdrawn", version: 2 });
+    expect(withdrawn.conflict.withdrawnAt).not.toBeNull();
+    const withdrawnReplay = await runAs(reviewer, withdrawReviewConflict({
+      eventId,
+      conflictId: declared.conflict.id,
+      expectedVersion: 1,
+      idempotencyKey: "coi-withdraw-ada-a",
+      requestId: "request_coi_withdraw_ada_a_retry",
+    }));
+    expect(withdrawnReplay).toEqual({ ...withdrawn, idempotent: true });
+    const staleWithdrawal = await runEitherAs(reviewer, withdrawReviewConflict({
+      eventId,
+      conflictId: declared.conflict.id,
+      expectedVersion: 1,
+      idempotencyKey: "coi-withdraw-ada-a-stale",
+      requestId: "request_coi_withdraw_ada_a_stale",
+    }));
+    expect(staleWithdrawal._tag).toBe("Left");
+    if (staleWithdrawal._tag === "Left") expect(staleWithdrawal.left._tag).toBe("Conflict");
+
+    const reassigned = await runAs(owner, assignReviewer({
+      eventId,
+      roundId: "round_coi",
+      submissionId: "submission_coi_a",
+      reviewerUserId: fixtureReviewerId,
+      expectedVersion: 0,
+      requestId: "request_coi_reassign",
+    }));
+    expect(reassigned.created).toBe(true);
+    expect(reassigned.assignment.status).toBe("assigned");
+  });
+
+  it("preserves completed reviews when an organizer declares a conflict on the committee's behalf", async () => {
+    const eventId = "event_coi_preserve";
+    const createdAt = new Date(fixtureClock);
+    await db.insert(events).values({
+      id: eventId, slug: "coi-preserve", name: "COI preserve", timezone: "UTC", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values([
+      { id: "member_coi_preserve_owner", eventId, userId: fixtureOwnerId, role: "owner", createdAt, updatedAt: createdAt },
+      { id: "member_coi_preserve_ada", eventId, userId: fixtureReviewerId, role: "reviewer", createdAt, updatedAt: createdAt },
+    ]);
+    await db.insert(forms).values({
+      id: "form_coi_preserve", eventId, kind: "cfp", name: "COI preserve CFP", status: "closed", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(formVersions).values({
+      id: "form_version_coi_preserve", eventId, formId: "form_coi_preserve", versionNumber: 1,
+      name: "COI preserve CFP", publishedAt: createdAt, createdAt,
+    });
+    await db.insert(submissions).values({
+      id: "submission_coi_preserve", eventId, formId: "form_coi_preserve", formVersionId: "form_version_coi_preserve",
+      title: "Scored proposal", status: "in_review", submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviewRounds).values({
+      id: "round_coi_preserve", eventId, name: "COI preserve round", order: 1, status: "active",
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] }, version: 1, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviewAssignments).values({
+      id: "assignment_coi_preserve", eventId, roundId: "round_coi_preserve", submissionId: "submission_coi_preserve",
+      reviewerUserId: fixtureReviewerId, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviews).values({
+      id: "review_coi_preserve", eventId, roundId: "round_coi_preserve", submissionId: "submission_coi_preserve",
+      reviewerUserId: fixtureReviewerId, ai: false, score: 4, scores: { clarity: 4 },
+      comment: "Completed before the conflict surfaced", createdAt, updatedAt: createdAt,
+    });
+
+    const selfOnly = await runEitherAs(reviewer, declareReviewConflict({
+      eventId,
+      submissionId: "submission_coi_preserve",
+      reviewerUserId: fixtureOwnerId,
+      idempotencyKey: "coi-preserve-self-only",
+      requestId: "request_coi_preserve_self_only",
+    }));
+    expect(selfOnly._tag).toBe("Left");
+    if (selfOnly._tag === "Left") expect(selfOnly.left._tag).toBe("Forbidden");
+
+    const nonMember = await runEitherAs(owner, declareReviewConflict({
+      eventId,
+      submissionId: "submission_coi_preserve",
+      reviewerUserId: speakerOnly.userId,
+      idempotencyKey: "coi-preserve-non-member",
+      requestId: "request_coi_preserve_non_member",
+    }));
+    expect(nonMember._tag).toBe("Left");
+    if (nonMember._tag === "Left") expect(nonMember.left._tag).toBe("Validation");
+
+    const apiKeyDeclaration = await runEitherAs(reviewApiKey, declareReviewConflict({
+      eventId: fixtureEventId,
+      submissionId: "submission_05",
+      reviewerUserId: fixtureReviewerId,
+      idempotencyKey: "coi-preserve-api-key",
+      requestId: "request_coi_preserve_api_key",
+    }));
+    expect(apiKeyDeclaration._tag).toBe("Left");
+    if (apiKeyDeclaration._tag === "Left") expect(apiKeyDeclaration.left._tag).toBe("Forbidden");
+
+    const declared = await runAs(owner, declareReviewConflict({
+      eventId,
+      submissionId: "submission_coi_preserve",
+      reviewerUserId: fixtureReviewerId,
+      reason: "Reported after scoring",
+      idempotencyKey: "coi-preserve-declare",
+      requestId: "request_coi_preserve_declare",
+    }));
+    expect(declared.created).toBe(true);
+    expect(declared.recusedAssignmentIds).toEqual([]);
+    const [assignment] = await db.select().from(reviewAssignments).where(and(
+      eq(reviewAssignments.eventId, eventId),
+      eq(reviewAssignments.id, "assignment_coi_preserve"),
+    ));
+    expect(assignment).toMatchObject({ status: "assigned", version: 1 });
+    expect(await db.select().from(reviews).where(and(
+      eq(reviews.eventId, eventId),
+      eq(reviews.submissionId, "submission_coi_preserve"),
+    ))).toHaveLength(1);
+
+    const blocked = await runEitherAs(owner, assignReviewer({
+      eventId,
+      roundId: "round_coi_preserve",
+      submissionId: "submission_coi_preserve",
+      reviewerUserId: fixtureReviewerId,
+      expectedVersion: 1,
+      requestId: "request_coi_preserve_blocked",
+    }));
+    expect(blocked._tag).toBe("Left");
+    if (blocked._tag === "Left") expect(blocked.left._tag).toBe("Conflict");
+
+    const organizerWithdrawal = await runAs(owner, withdrawReviewConflict({
+      eventId,
+      conflictId: declared.conflict.id,
+      expectedVersion: 1,
+      idempotencyKey: "coi-preserve-withdraw",
+      requestId: "request_coi_preserve_withdraw",
+    }));
+    expect(organizerWithdrawal.conflict.status).toBe("withdrawn");
+  });
+
+  it("routes auto-distribution around declared conflicts even without prior assignment history", async () => {
+    const eventId = "event_coi_autodist";
+    const createdAt = new Date(fixtureClock);
+    await db.insert(events).values({
+      id: eventId, slug: "coi-autodist", name: "COI auto-distribution", timezone: "UTC", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(eventMembers).values([
+      { id: "member_coi_autodist_owner", eventId, userId: fixtureOwnerId, role: "owner", createdAt, updatedAt: createdAt },
+      { id: "member_coi_autodist_ada", eventId, userId: fixtureReviewerId, role: "reviewer", createdAt, updatedAt: createdAt },
+      { id: "member_coi_autodist_dev", eventId, userId: "user_reviewer_dev", role: "reviewer", createdAt, updatedAt: createdAt },
+    ]);
+    await db.insert(forms).values({
+      id: "form_coi_autodist", eventId, kind: "cfp", name: "COI autodist CFP", status: "closed", createdAt, updatedAt: createdAt,
+    });
+    await db.insert(formVersions).values({
+      id: "form_version_coi_autodist", eventId, formId: "form_coi_autodist", versionNumber: 1,
+      name: "COI autodist CFP", publishedAt: createdAt, createdAt,
+    });
+    await db.insert(submissions).values({
+      id: "submission_coi_autodist", eventId, formId: "form_coi_autodist", formVersionId: "form_version_coi_autodist",
+      title: "Conflicted proposal", status: "submitted", submittedAt: createdAt, version: 1, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviewRounds).values({
+      id: "round_coi_autodist", eventId, name: "COI autodist round", order: 1, status: "active",
+      rubric: { criteria: [{ key: "clarity", label: "Clarity", max: 5 }] }, version: 1, createdAt, updatedAt: createdAt,
+    });
+    await db.insert(reviewConflicts).values({
+      id: "conflict_coi_autodist", eventId, submissionId: "submission_coi_autodist",
+      reviewerUserId: fixtureReviewerId, status: "active", version: 1, createdAt, updatedAt: createdAt,
+    });
+
+    const distributed = await runAs(owner, autoDistributeReviewers({
+      eventId,
+      roundId: "round_coi_autodist",
+      reviewsPerSubmission: 2,
+      idempotencyKey: "coi-autodist-001",
+      requestId: "request_coi_autodist",
+    }));
+    expect(distributed).toMatchObject({
+      createdCount: 1,
+      satisfiedCount: 0,
+      unfilled: [{ submissionId: "submission_coi_autodist", missing: 1 }],
+    });
+    const assignments = await db.select({ reviewerUserId: reviewAssignments.reviewerUserId })
+      .from(reviewAssignments).where(and(
+        eq(reviewAssignments.eventId, eventId),
+        eq(reviewAssignments.submissionId, "submission_coi_autodist"),
+      ));
+    expect(assignments).toEqual([{ reviewerUserId: "user_reviewer_dev" }]);
   });
 });
 

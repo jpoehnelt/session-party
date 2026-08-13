@@ -148,6 +148,13 @@
       "when": 1786564213723,
       "tag": "0020_wooden_forgotten_one",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1786596804252,
+      "tag": "0021_lame_whiplash",
+      "breakpoints": true
     }
   ]
 }

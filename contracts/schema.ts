@@ -698,6 +698,44 @@ export const reviewAssignments = sqliteTable(
   ],
 );
 
+/**
+ * Declared conflicts of interest between a reviewer and a submission. A
+ * conflict is round-independent: while active it blocks every assignment
+ * command for the pair, and declaring one recuses existing active
+ * assignments that have not produced a completed review.
+ */
+export const reviewConflicts = sqliteTable(
+  "review_conflicts",
+  {
+    id: id(),
+    eventId: eventId().references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    submissionId: text("submission_id").notNull(),
+    reviewerUserId: text("reviewer_user_id").notNull(),
+    reason: text("reason"),
+    status: text("status", { enum: ["active", "withdrawn"] }).notNull().default("active"),
+    withdrawnAt: integer("withdrawn_at", { mode: "timestamp_ms" }),
+    version: version(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("review_conflicts_event_id_unique").on(t.eventId, t.id),
+    uniqueIndex("review_conflicts_active_pair_unique")
+      .on(t.eventId, t.submissionId, t.reviewerUserId)
+      .where(sql`${t.status} = 'active'`),
+    index("review_conflicts_reviewer").on(t.eventId, t.reviewerUserId, t.status),
+    index("review_conflicts_submission").on(t.eventId, t.submissionId, t.status),
+    foreignKey({ columns: [t.eventId, t.submissionId], foreignColumns: [submissions.eventId, submissions.id], name: "review_conflicts_submission_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
+    foreignKey({ columns: [t.eventId, t.reviewerUserId], foreignColumns: [eventMembers.eventId, eventMembers.userId], name: "review_conflicts_member_fk" })
+      .onDelete("cascade").onUpdate("cascade"),
+    check("review_conflicts_version_positive", sql`${t.version} > 0`),
+    check(
+      "review_conflicts_withdrawal_state",
+      sql`(${t.status} = 'active' and ${t.withdrawnAt} is null) or (${t.status} = 'withdrawn' and ${t.withdrawnAt} is not null)`,
+    ),
+  ],
+);
+
 export const reviews = sqliteTable(
   "reviews",
   {
