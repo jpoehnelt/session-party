@@ -17,6 +17,7 @@ import {
 import {
   OwnSubmissions,
   UpdateOwnSubmissionAbstractOutput,
+  WithdrawOwnSubmissionOutput,
   type OwnSubmissions as OwnSubmissionsValue,
 } from "../schema";
 
@@ -55,6 +56,29 @@ export async function updateOwnAbstract(input: {
   if (!response.ok) throw new ApiError(response.status, await responseMessage(response));
   return decodeApiResponse(response, UpdateOwnSubmissionAbstractOutput);
 }
+
+export async function withdrawOwnSubmission(input: {
+  readonly eventSlug: string;
+  readonly submissionId: string;
+  readonly expectedVersion: number;
+  readonly idempotencyKey: string;
+}) {
+  const response = await fetch(
+    `/api/v1/events/by-slug/${segment(input.eventSlug)}/my-submissions/${segment(input.submissionId)}/withdrawal`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "idempotency-key": input.idempotencyKey },
+      body: JSON.stringify({ expectedVersion: input.expectedVersion }),
+    },
+  );
+  if (!response.ok) throw new ApiError(response.status, await responseMessage(response));
+  return decodeApiResponse(response, WithdrawOwnSubmissionOutput);
+}
+
+const WITHDRAWABLE_STATUSES = ["submitted", "in_review", "waitlist"] as const;
+const isWithdrawable = (status: string): boolean =>
+  (WITHDRAWABLE_STATUSES as readonly string[]).includes(status);
 
 const statusTone = {
   submitted: "neutral",
@@ -118,6 +142,7 @@ export default function MySubmissionsPage({ initialData }: MySubmissionsPageProp
     Object.fromEntries(initialData?.submissions.map((submission) => [submission.id, submission.abstract]) ?? []),
   );
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [confirmingWithdrawalId, setConfirmingWithdrawalId] = useState<string | null>(null);
   const idempotencyKeys = useRef<Record<string, string>>({});
 
   useEffect(() => {
@@ -173,6 +198,35 @@ export default function MySubmissionsPage({ initialData }: MySubmissionsPageProp
       toast("Proposal updated", { tone: "success" });
     } catch (cause) {
       toast(cause instanceof Error ? cause.message : "Proposal could not be updated", { tone: "danger" });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function withdraw(submissionId: string) {
+    const current = data?.submissions.find((submission) => submission.id === submissionId);
+    if (!current) return;
+    setSavingId(submissionId);
+    try {
+      const keyId = `withdraw:${submissionId}`;
+      const idempotencyKey = idempotencyKeys.current[keyId] ?? crypto.randomUUID();
+      idempotencyKeys.current[keyId] = idempotencyKey;
+      const result = await withdrawOwnSubmission({
+        eventSlug,
+        submissionId,
+        expectedVersion: current.version,
+        idempotencyKey,
+      });
+      delete idempotencyKeys.current[keyId];
+      setData((value) => value && ({
+        ...value,
+        submissions: value.submissions.map((submission) =>
+          submission.id === submissionId ? result.submission : submission),
+      }));
+      setConfirmingWithdrawalId(null);
+      toast("Proposal withdrawn", { tone: "success" });
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "Proposal could not be withdrawn", { tone: "danger" });
     } finally {
       setSavingId(null);
     }
@@ -298,14 +352,52 @@ export default function MySubmissionsPage({ initialData }: MySubmissionsPageProp
                   Save proposal changes
                 </Button>
               ) : (
-                <Alert className="mt-4" tone={submission.status === "rejected" ? "danger" : submission.status === "accepted" ? "success" : "warning"}>
-                  <AlertTitle>{submission.status === "accepted" ? "Proposal accepted" : submission.status === "rejected" ? "Proposal not selected" : "Editing is locked"}</AlertTitle>
+                <Alert className="mt-4" tone={submission.status === "rejected" ? "danger" : submission.status === "accepted" ? "success" : submission.status === "withdrawn" ? "neutral" : "warning"}>
+                  <AlertTitle>{submission.status === "accepted" ? "Proposal accepted" : submission.status === "rejected" ? "Proposal not selected" : submission.status === "withdrawn" ? "Proposal withdrawn" : "Editing is locked"}</AlertTitle>
                   <AlertDescription>
                     {submission.status === "accepted" || submission.status === "rejected"
                       ? "The organizer decision is now reflected here."
-                      : "The call for proposals is closed, so this proposal is read-only."}
+                      : submission.status === "withdrawn"
+                        ? "You withdrew this proposal from consideration."
+                        : "The call for proposals is closed, so this proposal is read-only."}
                   </AlertDescription>
                 </Alert>
+              )}
+              {isWithdrawable(submission.status) && (
+                <div className="mt-4 border-t-2 border-line-strong pt-4">
+                  {confirmingWithdrawalId === submission.id ? (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <p className="text-[11px] font-black uppercase tracking-[0.08em] text-ink-secondary">
+                        Withdraw this proposal from consideration?
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        loading={savingId === submission.id}
+                        onClick={() => void withdraw(submission.id)}
+                      >
+                        Yes, withdraw
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={savingId !== null}
+                        onClick={() => setConfirmingWithdrawalId(null)}
+                      >
+                        Keep it
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={savingId !== null}
+                      onClick={() => setConfirmingWithdrawalId(submission.id)}
+                    >
+                      Withdraw proposal
+                    </Button>
+                  )}
+                </div>
               )}
             </Card>
           ))}
