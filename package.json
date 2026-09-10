@@ -67,7 +67,7 @@
     "cmdk": "^1.1.1",
     "drizzle-orm": "^0.45.2",
     "effect": "^3.22.1",
-    "hono": "^4.13.1",
+    "hono": "^4.13.5",
     "lucide-react": "^1.30.0",
     "nanoid": "^6.0.1",
     "partyserver": "^0.5.10",
